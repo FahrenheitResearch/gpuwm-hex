@@ -1,0 +1,67 @@
+name: publish
+
+# The publish half ci.yml deliberately left unwritten, written now that a cut
+# is authorised.  It is still not a standing pre-authorisation: the only
+# automatic trigger is `release: published`, and publishing a GitHub release
+# is a human act performed deliberately on a specific tag.  Nothing here fires
+# on a push or on a tag alone.
+#
+# THE FILENAME IS LOAD-BEARING.  A PyPI trusted publisher binds four things --
+# owner, repository, workflow FILENAME and environment name -- and the token
+# PyPI issues is scoped to exactly that tuple:
+#
+#     FahrenheitResearch / gpuwm-hex / publish.yml / release
+#
+# Renaming this file, moving the job to another workflow, or changing the
+# environment breaks the binding and the upload is rejected with a message
+# about a missing API token, which reads like a secrets problem and is not
+# one.  Change the registration on PyPI first, then this file.
+#
+# No API token, no password, no secret of any kind is read here.  OIDC means
+# the runner proves its identity to PyPI directly, so there is no long-lived
+# credential to leak, rotate, or accidentally print.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+
+    # Both halves are required by the trusted-publisher registration:
+    # `environment` must match the name registered on PyPI, and
+    # `id-token: write` is what lets the runner mint the OIDC token that
+    # replaces an API token.  Without the second, the publish step fails
+    # having never contacted PyPI.
+    environment: release
+    permissions:
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # pyproject.toml is at `tree/`, not the repository root, so the build
+      # runs there and the artefacts land in `tree/dist/`.  Both paths are
+      # stated explicitly rather than defaulted: a publish step that guesses
+      # `dist/` finds an empty directory and uploads nothing, successfully.
+      - name: build the sdist and the wheel
+        working-directory: tree
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          ls -l dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: tree/dist

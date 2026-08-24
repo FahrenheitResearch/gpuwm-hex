@@ -1,0 +1,29 @@
+# The sdist is a source distribution: it must be able to reproduce the
+# battery, not just the import.
+#
+# setuptools' default file set picked up tests/test_*.py and left out
+# tests/conftest.py, which is where all three tier gates live.  An sdist in
+# that shape ships tests that no longer know why they cannot run: the four
+# authority tests go back to raising FileNotFoundError on a path inside the
+# checkout that has never existed on the reader's machine, which is exactly
+# the confusion the gates were built to end.  Docs and tools/battery were
+# absent for the same reason, so README's links pointed at nothing.
+graft tests
+graft docs
+graft tools
+
+# `verification` joins them for the same reason and it is the same defect
+# caught one directory later: docs/obs-referee.md tells a reader to run
+# `verification/fixtures/build_synthetic_suite.py` and to pass
+# `verification/manifests/...json` and `verification/vertical-specs/...json`
+# on four separate command lines, and docs/native-free-init-admission.md
+# passes a vertical spec from the same tree.  Without this line every one of
+# those paths is a file the reader does not have, in a document that reads
+# as though they should.  Ten files, 66 KB; the schemas and the vertical
+# specs are contracts, not receipts.
+graft verification
+
+# Compiled bytecode is a build product of the sources beside it, never an
+# input; the same rule the working tree follows.
+global-exclude *.pyc
+prune **/__pycache__

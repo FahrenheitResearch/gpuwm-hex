@@ -1,0 +1,21 @@
+# Compiled bytecode is a build product of the tracked sources, never an input.
+# Tracking it made every test run dirty 37 files, which aborted a real merge
+# with "local changes would be overwritten", and let committed bytecode drift
+# stale against its own source (three .pyc at 340bd3e recorded a source size
+# their committed .py no longer had).
+__pycache__/
+*.pyc
+
+# Build products of pyproject.toml, for the same reason: a committed wheel
+# drifts stale against the sources it claims to package, and the artefact a
+# cut publishes must be the one CI just built, never one found in the tree.
+/tree/dist/
+/tree/build/
+/tree/src/*.egg-info/
+
+# Live git worktrees are checkouts, never content: a `git add -A` swept three
+# of them in as gitlinks once, which makes a clone unusable.  Lanes create them
+# under both spellings, so both are ignored -- three `wt-*` worktrees sat
+# untracked at the root of this repo while only `.worktrees/` was covered.
+.worktrees/
+wt-*/

@@ -1,0 +1,72 @@
+{
+  "expected_measurement": {
+    "audit_kernel_count": 95,
+    "compile_manifest_canonical_sha256": "2a1b822a1ae149bca7339764f06b0604a3ecfa3a059933ffdf3666112e812349",
+    "compile_manifest_file_sha256": "a85a17c810de4b14f5054746b7ac125b9b0e92fd0b5bd7bb73643dcbe0001800",
+    "compile_manifest_pin_provenance": {
+      "evidence_kind": "preexisting-work-only-real-sm120-manifest",
+      "measured_canonical_sha256": "2a1b822a1ae149bca7339764f06b0604a3ecfa3a059933ffdf3666112e812349",
+      "measured_file_sha256": "a85a17c810de4b14f5054746b7ac125b9b0e92fd0b5bd7bb73643dcbe0001800",
+      "source_path_at_measurement": "<temp-dir>/mpas-v841-final-tool-out-7c0569cfd3564ea9b36a117482668c3b/compile-manifest.json"
+    },
+    "disabled_red_count": 78,
+    "resolved_kernel_count": 46,
+    "translation_unit_count": 8,
+    "translation_units": {
+      "mpas_port.cuda_acoustic": 1,
+      "mpas_port.cuda_acoustic_v841": 6,
+      "mpas_port.cuda_backend.recovery": 3,
+      "mpas_port.cuda_driver": 12,
+      "mpas_port.cuda_dynamics_v841": 9,
+      "mpas_port.cuda_horizontal": 4,
+      "mpas_port.cuda_horizontal_v841": 6,
+      "mpas_port.cuda_transport_v841": 5
+    }
+  },
+  "frozen_tool": {
+    "bytes": 44145,
+    "path": "tools/run_cuda_ftz_contract.py",
+    "sha256": "9be59ef180ae3e562d363081ffa9bd6c9872799c3998631d149045d2d5f66abe"
+  },
+  "gpuwm_receipt": {
+    "bitpatterns.csv": {
+      "bytes": 31413,
+      "sha256": "3070d3ccad8005b06b22dc09bf91e0cc17af98b8ba5c4c26deecc210999a7a82"
+    },
+    "file_count": 26,
+    "files_sha256": "17f883d725bf3ed09c9125993b9f63efdad9fc7a14d3cf6f089e2df2a0fdba3e",
+    "receipt.json": {
+      "bytes": 32891,
+      "sha256": "4ae8b69e4081d28bc472f924251d454ad0b687c021e45f4439a1be4a47a668bc"
+    }
+  },
+  "gpuwm_sources": {
+    "file_count": 4,
+    "files": {
+      "gpuwm/certify/compile_platform.py": {
+        "bytes": 9388,
+        "sha256": "2eff8e2e2826e9c5962e3399af280cd859b06acdb58686cca12ff61c61e560fa"
+      },
+      "gpuwm/core/kernels/ftz_probe.cu": {
+        "bytes": 4968,
+        "sha256": "a8c76a2f19dce3eb9ce545f2caacd1891ac35c3de56c7d57e39e787f37e1717f"
+      },
+      "tools/ftz_receipt/probe.py": {
+        "bytes": 36070,
+        "sha256": "3676166f1184363a80793bfbe361b6668a128dbb0f9cf79402f463d4a10e1098"
+      },
+      "tools/ftz_receipt/route_inventory.py": {
+        "bytes": 11180,
+        "sha256": "fa325288e85bd53ac43c3fdf7b4cf8d6c71b8e7205f8704262c5902b9949b476"
+      }
+    },
+    "files_sha256": "c9d20eb3f5c65de2fe113f55d9f4e3ed8e8a4ce9b5fdda467fbead6673458653",
+    "git_head": "4152fcb318d7a17ae39967632a788319d64913e3",
+    "root": "<gpuwm-checkout>"
+  },
+  "mpas_core_tests": {
+    "file_count": 131,
+    "files_sha256": "29c5cb5890cacbfbc631e1f429a2cbc6173ac09132b1b6eb007a0526d862a01b"
+  },
+  "schema": "mpas-port.cuda-ftz-v841-authority-pins/v1"
+}

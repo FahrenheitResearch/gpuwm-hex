@@ -1,0 +1,201 @@
+name: battery
+
+# What can run without a big card MUST run here.  What genuinely needs one is
+# declared as an external tier with its reason named -- never silently skipped,
+# because a silently skipped tier reports green while proving nothing.
+#
+# There is no publish job in this workflow, and that is deliberate.  A
+# workflow that can publish on a push or on a tag is a standing
+# pre-authorisation.  Publishing lives in `publish.yml`, whose only automatic
+# trigger is `release: published` -- a deliberate human act on a specific tag.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: battery-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: tree
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Tier 1.  The surface a public cut can break on a GPU-less runner.
+  # -------------------------------------------------------------------------
+  battery:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the declared floor and 3.13 is what the tree runs on today.
+        # Testing only one of them means the other breaks in a user's hands.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: install the runtime dependencies that exist on PyPI today
+        # NOT `pip install -e ".[dev]"`, and the reason is a real blocker
+        # rather than a workaround: gpuwm-hex declares `gpuwm>=2.5.3`, which is
+        # the first gpuwm that both carries the physics-seam bytes this port
+        # pins by SHA-256 and stages the four MPAS bridge binaries both front
+        # doors drive.  Until that version is on PyPI a resolver run fails on
+        # it and takes the whole battery with it, hiding every other result
+        # behind a blocker the battery is not there to test.
+        #
+        # So the dependencies that DO exist are installed by name and the
+        # package goes in with --no-deps.  The publish-ordering blocker is
+        # gated on its own, below, where its failure means what it says.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "numpy>=2.0" "netCDF4>=1.6" "scipy>=1.11" "pytest>=8.0"
+
+      - name: install gpuwm-hex from the tree, without resolving the engine
+        run: python -m pip install --no-deps -e .
+
+      - name: tier 1 -- the CPU battery
+        env:
+          # Belt and braces on a runner that has no device anyway: if one ever
+          # appears, this tier still must not reach for it.
+          GPUWM_HEX_NO_LOCAL_GPU: "1"
+        run: |
+          files=$(grep -v '^#' tools/battery/cpu_files.txt | grep -v '^$')
+          python -m pytest -q -rs \
+            -m "not gpu and not bigcard and not assets" \
+            $files
+
+      - name: report what the other tiers would have covered
+        if: always()
+        run: |
+          {
+            echo "### Tiers not run here"
+            echo ""
+            echo "**assets** -- about 6.9 GiB of byte-pinned mesh/static/init/native-history"
+            echo "files with no fetch path; they live on the dedicated node."
+            echo ""
+            echo "**bigcard** -- about 26.4 GiB of free device memory for the x4.163842"
+            echo "full-physics tier. GitHub-hosted runners carry no CUDA device, so this"
+            echo "tier runs on the dedicated node. See tools/battery/gpu_gates.txt."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------------
+  # The artefact a user would actually install, exercised as a user would.
+  # -------------------------------------------------------------------------
+  packaging:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: build the wheel and the sdist
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          ls -l dist/
+
+      - name: the metadata is well formed
+        run: python -m twine check dist/*
+
+      - name: install the BUILT WHEEL into a fresh venv, not the checkout
+        # The checkout is not the artefact.  Every packaging defect worth
+        # catching -- a module that never reached the wheel, an entry point
+        # that points at nothing, a data file outside the declaration -- is
+        # invisible to a test run against src/ and obvious to one run against
+        # the installed thing.
+        run: |
+          python -m venv /tmp/fresh
+          /tmp/fresh/bin/python -m pip install --upgrade pip
+          /tmp/fresh/bin/python -m pip install "numpy>=2.0" "netCDF4>=1.6" "scipy>=1.11"
+          /tmp/fresh/bin/python -m pip install --no-deps dist/*.whl
+
+      - name: exercise it as a user would
+        run: |
+          set -x
+          cd /tmp
+          /tmp/fresh/bin/python -c "import mpas_port; print(mpas_port.DISTRIBUTION_NAME, mpas_port.__version__)"
+          /tmp/fresh/bin/gpuwm-hex version
+          /tmp/fresh/bin/gpuwm-hex --help
+          /tmp/fresh/bin/gpuwm-hex init --help
+          /tmp/fresh/bin/gpuwm-hex render --help
+
+      - name: the doors refuse by name, with the documented exit code
+        # A refusal that exits 0, or exits 2 with an unhelpful message, is the
+        # defect this step exists to catch.  Exit 2 is the documented code for
+        # a named refusal in both doors.
+        run: |
+          cd /tmp
+          set +e
+          out=$(/tmp/fresh/bin/gpuwm-hex render --history missing.nc --mesh missing.nc --out ./png 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          test "$rc" -eq 2 || { echo "expected rc 2 for a named refusal, got $rc"; exit 1; }
+          echo "$out" | grep -q "rw_mpas_convert not found" \
+            || { echo "the refusal did not name the missing converter"; exit 1; }
+
+          set +e
+          out=$(/tmp/fresh/bin/gpuwm-hex mesh-check 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          test "$rc" -eq 2 || { echo "expected rc 2 for a named refusal, got $rc"; exit 1; }
+          echo "$out" | grep -q "no default outside a source checkout" \
+            || { echo "the installed-tree mesh default did not refuse by name"; exit 1; }
+
+      - name: the version the wheel states is the version the package reports
+        run: |
+          cd /tmp
+          declared=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('${{ github.workspace }}/tree/pyproject.toml').read_text())['project']['version'])")
+          reported=$(/tmp/fresh/bin/python -c "import mpas_port;print(mpas_port.__version__)")
+          test "$declared" = "$reported" \
+            || { echo "pyproject says $declared, the installed package says $reported"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpuwm-hex-dist
+          path: tree/dist/*
+
+  # -------------------------------------------------------------------------
+  # The publish-ordering blocker, gated on its own so its failure means what
+  # it says.  Run it deliberately; do not let it red-line every push.
+  # -------------------------------------------------------------------------
+  engine_availability:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: the declared gpuwm floor must be resolvable before a cut
+        # gpuwm-hex hard-depends on gpuwm>=2.5.3.  Until that version is
+        # published, `pip install gpuwm-hex` cannot succeed for anyone -- the
+        # same ordering constraint gpuwm has with its own companion, where the
+        # companion publishes FIRST or every fresh install breaks.
+        #
+        # This job failing is not a defect in this repository.  It is the
+        # engine not having shipped yet, stated in the one place that cannot
+        # be forgotten between now and a tag.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --dry-run --ignore-installed "gpuwm>=2.5.3" \
+            || { echo "BLOCKER: gpuwm>=2.5.3 is not installable from PyPI. gpuwm-hex cannot be published before the engine version carrying the pinned seam bytes and the bridge binaries is published."; exit 1; }

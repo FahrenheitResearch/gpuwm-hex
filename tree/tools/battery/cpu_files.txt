@@ -1,0 +1,56 @@
+# Tier 1: the CPU battery.  Runs on any machine with Python and the declared
+# dependencies; this is what a GitHub-hosted runner executes on every push and
+# pull request.
+#
+# Selector: -m "not gpu and not bigcard and not assets"
+#
+# The list is files, not a bare "tests/", so that adding a test file is a
+# deliberate act of deciding which tier it belongs to.  A new file that nobody
+# added here is not silently absorbed into the tier that runs everywhere.
+#
+# Every file below also carries members of other tiers; the marker selector is
+# what separates them, and tests/conftest.py applies the gpu and assets markers
+# by AST so an unmarked test cannot leak into this tier by omission.
+
+# what the distribution declares, against what the package actually is
+tests/test_packaging_declaration.py
+
+# the checkout produces one artefact rather than one per builder: line endings
+# are pinned, so the LICENSE and NOTICE bytes inside dist-info/licenses/ do not
+# depend on the cloner's core.autocrlf
+tests/test_checkout_reproducibility.py
+
+# the two front doors: argument surfaces, executable resolution ladders,
+# product coverage, and every named refusal
+tests/test_init_door.py
+tests/test_render_door.py
+
+# the proof guards: pin structure, authority pin shapes, and the ordering law
+# that the source pins are verified before the checkout guard reads the
+# manifest module's constants
+tests/test_proof_guard_pins.py
+tests/test_proof_guard_ordering.py
+
+# the multi-GPU partition executor's pure logic (the transport and halo
+# reasoning that does not need a device to be wrong)
+tests/test_partition_executor_v841.py
+
+# the source manifests that name this tree's own files: every declared row is
+# a file that is here, and the recorded manifest refuses rather than hashing a
+# hole
+tests/test_source_manifests.py
+
+# mesh validation against a synthetic defect-free variable-resolution sphere:
+# the arc-length tolerance has to admit binary32 storage noise at fine spacing
+# and still refuse metre-scale corruption at coarse spacing.  Builds its own
+# mesh, so it belongs in the tier that needs no assets
+tests/test_mesh_validation.py
+
+# the full-physics harness's non-device surface: constructor audits, contract
+# pins, surface classification.  Its four asset-touching members are marked
+# and land in tier 2.
+tests/test_cuda_v841_full_physics_x4.py
+
+# the big-card preflight itself, which in this tier only proves that it skips
+# with a number rather than passing vacuously
+tests/test_device_capacity.py

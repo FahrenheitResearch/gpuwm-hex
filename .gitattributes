@@ -1,0 +1,49 @@
+# Every text file checks out as LF, on every platform, regardless of what the
+# person cloning has set for core.autocrlf.
+#
+# THE BREAKAGE THIS PREVENTS, measured 2026-08-21.  This repository is checked
+# out with core.autocrlf=false, so its working tree is LF.  A fresh clone on
+# Windows inherits Git-for-Windows' default core.autocrlf=true, converts the
+# whole tree to CRLF on checkout, and `python -m build` then packs those CRLF
+# bytes into the artefact.  The wheel built from the clean clone shipped a
+# LICENSE of 11,063 bytes where this tree's is 10,861 -- same text, 202 CRLF
+# bytes of difference, different SHA-256.  NOTICE moved the same way, 5,235
+# against 5,135.
+#
+# So without this file the built distribution's bytes depend on who cloned it
+# and on what platform, including the two files whose whole job is to state the
+# licence.  A licence file that hashes differently per builder cannot be pinned,
+# and `dist-info/licenses/` is exactly where a downstream consumer looks.
+#
+# The digests this now holds to, in the repository, in the sdist, inside the
+# wheel's dist-info/licenses/, and in a venv the wheel was installed into --
+# proven equal across all four from a clone made with core.autocrlf=true:
+#
+#   LICENSE  8e2a44ae339215e85e0fad7d8f0acb0d0ef91cf07ba8d215d85ef858eef8de9a
+#   NOTICE   9caa80d56d0e2bb8ea9d0d81117a575166eeabbbca7979979d207e8e517a1d9c
+#
+# Before this file existed the same clone produced a wheel whose LICENSE hashed
+# 7266f9cb821da0680f6e421e905506fa1ae8c8c5159ffffc3ebe1262f21650fe instead.
+#
+# LICENSE is Apache-2.0 verbatim and does not move.  NOTICE does: it carries
+# the derivative marking and the declared divergences, so it is restated
+# whenever those are.  Re-measure it at a cut rather than trusting this line.
+#
+# `text=auto` still lets git detect and leave alone anything genuinely binary.
+# Measured when this file was added: 181 tracked files, zero of them binary,
+# one stored with CRLF (tools/probe_partition_residency_v841.py), renormalised
+# in the same commit.  The count is a record of that measurement, not a claim
+# about the current tree, which grows.
+* text=auto eol=lf
+
+# Shell scripts must be LF or they do not run at all; state it rather than
+# relying on the wildcard above surviving an edit.
+*.sh    text eol=lf
+
+# Byte-pinned scientific data, if any ever lands here, is never line-ending
+# converted.  netCDF and NumPy payloads are pinned by SHA-256 across the port's
+# proof guards, and one substituted byte is a failed pin.
+*.nc    binary
+*.npy   binary
+*.npz   binary
+*.rwg   binary

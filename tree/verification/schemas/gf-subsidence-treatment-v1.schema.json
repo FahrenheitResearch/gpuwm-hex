@@ -1,0 +1,66 @@
+{
+  "$id": "gpuwm.gf-subsidence-treatment.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "call_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "columns_touched": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "mode": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "post_tendency_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "pre_tendency_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "producer_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "gpuwm.gf-subsidence-treatment/v1"
+    },
+    "scope": {
+      "const": "gf_subsidence_only"
+    },
+    "treatment_name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "value": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "schema",
+    "treatment_name",
+    "mode",
+    "value",
+    "enabled",
+    "scope",
+    "call_count",
+    "columns_touched",
+    "pre_tendency_sha256",
+    "post_tendency_sha256",
+    "producer_commit",
+    "metadata"
+  ],
+  "title": "gpuwm GF subsidence treatment receipt v1",
+  "type": "object"
+}

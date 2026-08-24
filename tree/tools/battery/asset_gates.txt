@@ -1,0 +1,32 @@
+# Tier 2: gates that need the byte-pinned authority assets.
+#
+# Selector: -m assets
+#
+# About 6.9 GiB of files that gpuwm-hex ships with no fetch path.  They are
+# pinned by byte count and SHA-256 in
+# tools/run_cuda_v841_full_physics_x4.py::AUTHORITY_PINS -- masked over the
+# netCDF file_id nonce for the three history files, since that nonce is random
+# per write and would otherwise make every re-mint look like corruption.
+#
+# WHERE THEY LIVE (relative to the checkout root, wherever the assets are):
+#   work/v841-vr-static/run-static-v841-conus-official-full-a/
+#       x4.163842.grid.nc                 224,139,172 bytes
+#       x4.163842.static.nc               298,860,376 bytes
+#   work/v841-vr-static/run-real-init-v841-conus-official-full-a/
+#       x4.163842.init.nc               1,489,665,020 bytes
+#   work/v841-full-physics-gf-gwdo-native-authority-20260820a/native-run-a/
+#       history.2026-08-10_12.00.00.nc  1,584,808,024 bytes   (F000)
+#       history.2026-08-10_12.30.00.nc  1,584,808,024 bytes   (F030)
+#       history.2026-08-10_13.00.00.nc  1,584,808,024 bytes   (F001)
+#       native-gwdo-authority-receipt.json
+#       native-gwdo-launch-receipt.json
+#       run-closure.status
+#
+# The four members are the tests that turn a pin into a path and open it.
+# tests/conftest.py detects them on `default_authority_paths` rather than
+# trusting a marker: reading AUTHORITY_PINS itself is deliberately NOT
+# detected, because the tests that assert on pin metadata are exactly the ones
+# that should keep running on a box with no assets -- they are what proves the
+# pins are well formed before anyone spends 6.9 GiB fetching files.
+
+tests/test_cuda_v841_full_physics_x4.py

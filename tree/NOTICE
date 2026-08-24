@@ -1,0 +1,112 @@
+gpuwm-hex (GPU-native variable-resolution atmospheric model core)
+Copyright 2026 ArWen contributors
+
+Licensed under the Apache License, Version 2.0. Vendored components and
+upstream works from which this distribution derives retain their own
+licenses and notices, reproduced below.
+
+--------------------------------------------------------------------------
+
+MPAS-Atmosphere (LANL / UCAR)
+
+gpuwm-hex reimplements the dynamical core of MPAS-Atmosphere (Model for
+Prediction Across Scales) version 8.4.1 for CUDA devices, with pinned
+source-line citations. MPAS-Atmosphere is developed by the Los Alamos
+National Laboratory and the University Corporation for Atmospheric
+Research / National Center for Atmospheric Research, and is distributed
+under the BSD-3-Clause terms reproduced at the end of this section. Those
+terms govern the MPAS-derived portions of this distribution and travel
+with every copy of it.
+
+That license separately requires that derivative works be clearly marked
+so as not to be confused with the version available from LANS and UCAR.
+This is that marking:
+
+  - The distribution, the command and the namespace are named gpuwm-hex.
+    The MPAS name is used only to state what this software derives from
+    and what it is measured against.
+  - Neither LANS, UCAR, NCAR nor their contributors endorse this
+    software.
+  - Results from gpuwm-hex are not results from MPAS-Atmosphere. Where
+    the two are known to differ, the differences are measured, and the
+    quantities are stated in README.md.
+
+The cumulus scheme is a different generation from the reference:
+gpuwm-hex carries the 2018 Grell-Freitas formulation, MPAS-A v8.4.1
+carries the 2013 ensemble fork. They differ in closure membership, in the
+rain conversion coefficient and its temperature dependence, and in
+whether shallow convection precipitates. Three further differences are
+measured and declared as divergences, judged against observations: an
+upper-band potential-temperature drift, a convective rainfall deficit,
+and a downstream condensate surplus.
+
+Two of the MPAS-derived operators carry a further upstream lineage, which
+MPAS-Model distributes inside its own tree under the terms reproduced
+below. The orographic gravity-wave-drag operator in
+src/mpas_port/cuda_gwdo_v841.py is a reimplementation of MPAS-Model's
+physics_wrf/module_bl_gwdo.F, which is WRF-derived, and of
+physics_mmm/bl_gwdo.F90, the Kim/YSU orographic gravity-wave-drag and
+flow-blocking scheme from NCAR/MMM. Those files are cited by path and line
+in the module that reimplements them. No source from either upstream is
+copied into this distribution; the citations record what the CUDA operator
+was written against.
+
+MPAS-Atmosphere license text, retained in full:
+
+Copyright (c) 2013-2019,  Los Alamos National Security, LLC (LANS) (Ocean: LA-CC-13-047;
+Land Ice: LA-CC-13-117) and the University Corporation for Atmospheric Research (UCAR).
+
+All rights reserved. 
+
+LANS is the operator of the Los Alamos National Laboratory under Contract No.
+DE-AC52-06NA25396 with the U.S. Department of Energy.  UCAR manages the National
+Center for Atmospheric Research under Cooperative Agreement ATM-0753581 with the
+National Science Foundation.  The U.S. Government has rights to use, reproduce,
+and distribute this software.  NO WARRANTY, EXPRESS OR IMPLIED IS OFFERED BY
+LANS, UCAR OR THE GOVERNMENT AND NONE OF THEM ASSUME ANY LIABILITY FOR THE USE
+OF THIS SOFTWARE.  If software is modified to produce derivative works, such
+modified software should be clearly marked, so as not to confuse it with the
+version available from LANS and UCAR.
+
+Additionally, redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1) Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2) Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+3) None of the names of LANS, UCAR or the names of its contributors, if any, may
+be used to endorse or promote products derived from this software without
+specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------
+
+ArWen (Python package "gpuwm")
+
+Every physics column in the forecast lane runs through ArWen's
+column-batch seam. ArWen is a separate distribution under the Apache
+License, Version 2.0, with its own NOTICE covering the WRF-, RRTMG- and
+RRTMGP-derived assets its physics carries. It is not vendored here; it is
+declared as a dependency and installed from its own distribution.
+
+--------------------------------------------------------------------------
+
+Data services (not redistributed)
+
+Meshes, static geographical fields and initial conditions are staged by
+the user from their providers. None of those datasets are redistributed
+by this project; their terms are between the user and the provider.

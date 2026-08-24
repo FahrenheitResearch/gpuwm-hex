@@ -1,0 +1,53 @@
+{
+  "$id": "gpuwm-hex.normalized-artifact-receipt.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_kind": {
+      "enum": [
+        "grid",
+        "stations"
+      ]
+    },
+    "artifact_name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "producer": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "producer_version": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "gpuwm-hex.normalized-artifact-receipt/v1"
+    },
+    "source_artifacts": {
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "artifact_kind",
+    "artifact_name",
+    "artifact_sha256",
+    "producer",
+    "producer_version",
+    "source_artifacts",
+    "metadata"
+  ],
+  "title": "gpuwm-hex normalized artifact receipt v1",
+  "type": "object"
+}

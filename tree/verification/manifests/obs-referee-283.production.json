@@ -1,0 +1,461 @@
+{
+  "arms": [
+    {
+      "arm_id": "arwen-current",
+      "description": "Current gpuwm-hex/ArWen behavior at the pinned base.",
+      "eligible_for_promotion": false,
+      "role": "baseline",
+      "treatment": {
+        "kind": "none"
+      }
+    },
+    {
+      "arm_id": "gf-subsidence-experiment",
+      "description": "Optional isolated GF-subsidence treatment; never default-on from this lane.",
+      "eligible_for_promotion": false,
+      "role": "experiment",
+      "treatment": {
+        "expected_mode": "multiply_tendency",
+        "expected_name": "gf-subsidence-scale",
+        "expected_value": 0.75,
+        "kind": "external-receipt-v1",
+        "receipt": "${OBS_REFEREE_DATA_ROOT}/{case_id}/gf-treatment-receipt.json"
+      }
+    },
+    {
+      "arm_id": "native-history-context",
+      "description": "Historical native-MPAS/native-GF context only; not a parity target.",
+      "eligible_for_promotion": false,
+      "role": "context",
+      "treatment": {
+        "kind": "none"
+      }
+    },
+    {
+      "arm_id": "operational-baseline",
+      "description": "Optional operational baseline when a provenance-complete bundle exists.",
+      "eligible_for_promotion": false,
+      "role": "context",
+      "treatment": {
+        "kind": "none"
+      }
+    }
+  ],
+  "base_commit": "c14bc1045b0d4516f18004f13265d900ec12563b",
+  "bootstrap": {
+    "confidence": 0.95,
+    "minimum_cases": 4,
+    "replicates": 5000,
+    "seed": 283
+  },
+  "cases": [
+    {
+      "case_id": "gfs-20260812-divergence",
+      "cycle_time": "2026-08-12T00:00:00Z",
+      "description": "Existing divergence case initialized from gfs; exact domain and product contract remain in the case-owned producer metadata.",
+      "metadata": {
+        "forcing": "gfs"
+      },
+      "model_inputs": {
+        "arwen-current": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/model-arwen-current.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/model-arwen-current.npz.receipt.json"
+        },
+        "gf-subsidence-experiment": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/model-gf-subsidence-experiment.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/model-gf-subsidence-experiment.npz.receipt.json"
+        },
+        "native-history-context": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/model-native-history-context.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/model-native-history-context.npz.receipt.json"
+        },
+        "operational-baseline": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/model-operational-baseline.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/model-operational-baseline.npz.receipt.json"
+        }
+      },
+      "observations": {
+        "asos": {
+          "adapter": "canonical-stations-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/asos.jsonl",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/asos.jsonl.receipt.json"
+        },
+        "mrms": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/mrms.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/mrms.npz.receipt.json"
+        }
+      },
+      "role": "known_divergence",
+      "selection_status": "selected",
+      "window_end": "2026-08-13T00:00:00Z",
+      "window_start": "2026-08-12T00:00:00Z"
+    },
+    {
+      "case_id": "era5-20240521-divergence",
+      "cycle_time": "2024-05-21T00:00:00Z",
+      "description": "Existing divergence case initialized from era5; exact domain and product contract remain in the case-owned producer metadata.",
+      "metadata": {
+        "forcing": "era5"
+      },
+      "model_inputs": {
+        "arwen-current": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "era5"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/model-arwen-current.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/model-arwen-current.npz.receipt.json"
+        },
+        "gf-subsidence-experiment": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "era5"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/model-gf-subsidence-experiment.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/model-gf-subsidence-experiment.npz.receipt.json"
+        },
+        "native-history-context": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "era5"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/model-native-history-context.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/model-native-history-context.npz.receipt.json"
+        },
+        "operational-baseline": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "era5"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/model-operational-baseline.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/model-operational-baseline.npz.receipt.json"
+        }
+      },
+      "observations": {
+        "asos": {
+          "adapter": "canonical-stations-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/asos.jsonl",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/asos.jsonl.receipt.json"
+        },
+        "mrms": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/mrms.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/mrms.npz.receipt.json"
+        }
+      },
+      "role": "known_divergence",
+      "selection_status": "selected",
+      "window_end": "2024-05-22T00:00:00Z",
+      "window_start": "2024-05-21T00:00:00Z"
+    },
+    {
+      "case_id": "independent-control-pending-selection",
+      "cycle_time": null,
+      "description": "A human must select and pin a genuinely independent convective control; no date is fabricated by code.",
+      "metadata": {
+        "status": "NOT_SELECTED"
+      },
+      "model_inputs": {},
+      "observations": {},
+      "role": "independent_control",
+      "selection_status": "pending",
+      "window_end": null,
+      "window_start": null
+    },
+    {
+      "case_id": "weak-convection-control-pending-selection",
+      "cycle_time": null,
+      "description": "A human must select and pin a weak-convection/null control; no date is fabricated by code.",
+      "metadata": {
+        "status": "NOT_SELECTED"
+      },
+      "model_inputs": {},
+      "observations": {},
+      "role": "weak_convection_control",
+      "selection_status": "pending",
+      "window_end": null,
+      "window_start": null
+    }
+  ],
+  "claims": [
+    {
+      "arm": "arwen-current",
+      "claim_id": "current-arwen-convective-rainfall-deficit",
+      "description": "Current ArWen has a negative one-hour precipitation bias against MRMS.",
+      "expected_sign": "negative",
+      "metric_id": "mrms-precip-bias",
+      "rule": "absolute_metric_sign"
+    },
+    {
+      "candidate_arm": "gf-subsidence-experiment",
+      "claim_id": "gf-treatment-improves-precip-placement",
+      "description": "The isolated GF treatment improves MRMS neighborhood placement versus current ArWen.",
+      "metric_id": "mrms-precip-fss-r4-1mm",
+      "reference_arm": "arwen-current",
+      "rule": "arm_delta"
+    },
+    {
+      "claim_id": "upper-band-theta-drift-cause",
+      "description": "GF subsidence causes the theta drift above level 45.",
+      "reason": "MRMS and ASOS do not observe model theta above level 45. This remains unresolved until a radiosonde or analysis-profile diagnostic is added.",
+      "rule": "outside_primary_scope"
+    },
+    {
+      "claim_id": "condensate-partition-surplus-cause",
+      "description": "The cloud-water/rain-water surplus is caused by the GF divergence.",
+      "reason": "MRMS reflectivity is only an indirect hydrometeor proxy and cannot uniquely identify condensate partition or causality.",
+      "rule": "outside_primary_scope"
+    },
+    {
+      "claim_id": "gf-causal-chain",
+      "description": "GF subsidence explains the full theta-to-condensate-to-rainfall divergence chain.",
+      "reason": "Surface/radar skill changes cannot by themselves prove the upper-level causal chain; paired vertical-process diagnostics are required.",
+      "rule": "outside_primary_scope"
+    }
+  ],
+  "description": "MRMS/ASOS observational referee for current ArWen, historical native context, optional operational context, and an isolated GF-subsidence experiment.",
+  "metadata": {
+    "known_context": {
+      "approximate_24h_theta_difference_k": 0.46,
+      "cloud_water_relative_difference_percent": "+50",
+      "rain_water_relative_difference_percent": "+62",
+      "rainc_relative_difference_percent": [
+        "-36",
+        "-34"
+      ],
+      "upper_band_theta_tendency_k_per_hour": 0.019
+    },
+    "real_scorecard_status": "NOT_MEASURED"
+  },
+  "metrics": [
+    {
+      "direction": "lower",
+      "family": "continuous",
+      "field": "precip_1h_mm",
+      "guardrail": false,
+      "metric_id": "mrms-precip-bias",
+      "minimum_valid_samples": 1000,
+      "primary": false,
+      "source": "mrms",
+      "space_tolerance_km": 5.0,
+      "statistic": "bias",
+      "time_tolerance_seconds": 900
+    },
+    {
+      "direction": "lower",
+      "family": "continuous",
+      "field": "precip_1h_mm",
+      "guardrail": false,
+      "metric_id": "mrms-precip-rmse",
+      "minimum_valid_samples": 1000,
+      "primary": true,
+      "source": "mrms",
+      "space_tolerance_km": 5.0,
+      "statistic": "rmse",
+      "time_tolerance_seconds": 900
+    },
+    {
+      "direction": "higher",
+      "family": "categorical",
+      "field": "precip_1h_mm",
+      "guardrail": false,
+      "metric_id": "mrms-precip-csi-1mm",
+      "minimum_valid_samples": 1000,
+      "primary": true,
+      "source": "mrms",
+      "space_tolerance_km": 5.0,
+      "statistic": "csi",
+      "threshold": 1.0,
+      "time_tolerance_seconds": 900
+    },
+    {
+      "direction": "higher",
+      "family": "categorical",
+      "field": "precip_1h_mm",
+      "guardrail": false,
+      "metric_id": "mrms-precip-csi-10mm",
+      "minimum_valid_samples": 1000,
+      "primary": true,
+      "source": "mrms",
+      "space_tolerance_km": 5.0,
+      "statistic": "csi",
+      "threshold": 10.0,
+      "time_tolerance_seconds": 900
+    },
+    {
+      "direction": "higher",
+      "family": "fss",
+      "field": "precip_1h_mm",
+      "guardrail": false,
+      "metric_id": "mrms-precip-fss-r4-1mm",
+      "minimum_valid_samples": 1000,
+      "neighborhood_radius_cells": 4,
+      "primary": true,
+      "source": "mrms",
+      "space_tolerance_km": 5.0,
+      "statistic": "fss",
+      "threshold": 1.0,
+      "time_tolerance_seconds": 900
+    },
+    {
+      "direction": "higher",
+      "family": "categorical",
+      "field": "reflectivity_dbz",
+      "guardrail": false,
+      "metric_id": "mrms-reflectivity-csi-20dbz",
+      "minimum_valid_samples": 1000,
+      "primary": true,
+      "source": "mrms",
+      "space_tolerance_km": 5.0,
+      "statistic": "csi",
+      "threshold": 20.0,
+      "time_tolerance_seconds": 900
+    },
+    {
+      "direction": "higher",
+      "family": "categorical",
+      "field": "reflectivity_dbz",
+      "guardrail": false,
+      "metric_id": "mrms-reflectivity-csi-40dbz",
+      "minimum_valid_samples": 1000,
+      "primary": true,
+      "source": "mrms",
+      "space_tolerance_km": 5.0,
+      "statistic": "csi",
+      "threshold": 40.0,
+      "time_tolerance_seconds": 900
+    },
+    {
+      "direction": "lower",
+      "family": "objects",
+      "field": "reflectivity_dbz",
+      "guardrail": false,
+      "maximum_object_match_km": 150.0,
+      "metric_id": "mrms-reflectivity-object-displacement",
+      "minimum_object_cells": 9,
+      "minimum_valid_samples": 1000,
+      "primary": false,
+      "source": "mrms",
+      "space_tolerance_km": 5.0,
+      "statistic": "median_centroid_error_km",
+      "threshold": 35.0,
+      "time_tolerance_seconds": 900
+    },
+    {
+      "direction": "lower",
+      "family": "continuous",
+      "field": "temperature_k",
+      "guardrail": true,
+      "metric_id": "asos-temperature-rmse",
+      "minimum_valid_samples": 20,
+      "primary": false,
+      "source": "asos",
+      "space_tolerance_km": 25.0,
+      "statistic": "rmse",
+      "time_tolerance_seconds": 1800
+    },
+    {
+      "direction": "lower",
+      "family": "continuous",
+      "field": "dewpoint_k",
+      "guardrail": true,
+      "metric_id": "asos-dewpoint-rmse",
+      "minimum_valid_samples": 20,
+      "primary": false,
+      "source": "asos",
+      "space_tolerance_km": 25.0,
+      "statistic": "rmse",
+      "time_tolerance_seconds": 1800
+    },
+    {
+      "direction": "lower",
+      "family": "continuous",
+      "field": "wind_speed_ms",
+      "guardrail": true,
+      "metric_id": "asos-wind-speed-rmse",
+      "minimum_valid_samples": 20,
+      "primary": false,
+      "source": "asos",
+      "space_tolerance_km": 25.0,
+      "statistic": "rmse",
+      "time_tolerance_seconds": 1800
+    },
+    {
+      "direction": "lower",
+      "family": "continuous",
+      "field": "surface_pressure_pa",
+      "guardrail": true,
+      "metric_id": "asos-pressure-rmse",
+      "minimum_valid_samples": 20,
+      "primary": false,
+      "source": "asos",
+      "space_tolerance_km": 25.0,
+      "statistic": "rmse",
+      "time_tolerance_seconds": 1800
+    }
+  ],
+  "mode": "production",
+  "path_variables": {},
+  "policy": {
+    "allow_automatic_default": false,
+    "candidate_arm": "gf-subsidence-experiment",
+    "guardrail_tolerance": 0.0,
+    "owner_acceptance_required": true,
+    "reference_arm": "arwen-current",
+    "required_case_roles": [
+      "known_divergence",
+      "independent_control",
+      "weak_convection_control"
+    ]
+  },
+  "producer_allowlist": [
+    "rustwx",
+    "gpuwm-hex",
+    "gpuwm",
+    "native-mpas-history",
+    "operational-baseline"
+  ],
+  "schema": "gpuwm-hex.obs-referee/v1",
+  "suite_id": "hex-obs-referee-283"
+}

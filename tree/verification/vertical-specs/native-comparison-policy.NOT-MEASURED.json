@@ -1,0 +1,21 @@
+{
+  "schema": "gpuwm-hex.vertical-comparison-policy/v1",
+  "status": "NOT_MEASURED",
+  "basis": "Provisional instrumentation-only table. Do not change status until two materially different compiled MPAS-A v8.4.1 authorities have been measured and the accepted arithmetic rationale is recorded.",
+  "fields": {
+    "ter": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "zgrid": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "zz": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "zxu": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "dss": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "rdzw": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "dzu": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "fzm": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "fzp": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "zb": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "zb3": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "cf1": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "cf2": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0},
+    "cf3": {"mode": "tolerance", "atol": 0.0, "rtol": 0.0}
+  }
+}

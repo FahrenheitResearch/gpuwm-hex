@@ -1,0 +1,56 @@
+# Tier 3: gates that need a CUDA device, and the ones that need a BIG one.
+#
+# THIS TIER IS NOT IN GITHUB ACTIONS AND WILL NOT BE.  GitHub-hosted runners
+# carry no CUDA device.  A tier that is silently skipped in CI is worse than a
+# tier that is declared external: the first reports green while proving
+# nothing, which is how a repository ends up with 389 of 1,258 tests skipping
+# on every run and nobody noticing for months.  So the tier is declared here,
+# with its device requirement named, and it runs outside CI on a CUDA host.
+#
+# Selectors:
+#   -m gpu        needs any CUDA device with a working cupy
+#   -m bigcard    needs about 26.4 GiB FREE (the x4.163842 full-physics
+#                 resident footprint).  A 24 GiB card is not enough.
+#
+# Reserve the card before running this tier, with whatever mutex the host
+# uses: a card being TIMED must be reserved, not merely found idle.  A second
+# process arriving mid-run does not corrupt the numerics, it corrupts the
+# measurement, and a timing receipt taken off a shared card is not evidence.
+
+# --- pytest members ---------------------------------------------------------
+
+# The capacity preflight.  Runs first and cheaply: on an undersized card it
+# skips with the measured free bytes instead of letting a forty-minute run
+# discover the same fact inside an allocation.
+tests/test_device_capacity.py
+
+# --- harness gates (not pytest; run as commands) ----------------------------
+#
+# These are the proof and forecast harnesses.  They are listed here rather
+# than wrapped in pytest because each is a run, not a test: they take tens of
+# minutes, they write receipts, and their verdict is the receipt.
+#
+# The full-physics F001 endpoint proof.  Needs the tier-2 assets AND a 32 GiB
+# card AND a gpuwm SOURCE CHECKOUT at the pinned commit (see below).
+#
+#   python tools/run_cuda_v841_full_physics_x4.py \
+#       --arwen-checkout <gpuwm checkout> --cache-root <scratch> --output <receipt.json>
+#
+# The arbitrary-case forecast driver.  Same checkout requirement; mesh and
+# static default to the tier-2 authority pair and can be pointed elsewhere.
+#
+#   python tools/run_cuda_v841_forecast.py \
+#       --init <init.nc> --init-source '<provenance sentence>' \
+#       --hours 24 --history-every-minutes 60 \
+#       --arwen-checkout <gpuwm checkout> --cache-root <scratch> --output <receipt.json>
+#
+#   ...and with --preflight-only it verifies the source pins, the checkout
+#   manifest and the authorities WITHOUT touching a device, which makes it a
+#   useful tier-2 gate on a box with the assets and no big card.
+#
+# THE CHECKOUT REQUIREMENT, stated once so it is not rediscovered: the port
+# pins gpuwm by the SHA-256 of sixteen individual source files, one of which
+# is docs/mpas-seam.md -- a repository document that gpuwm's packaging never
+# places in site-packages.  An installed gpuwm wheel therefore CANNOT satisfy
+# the pin no matter its version.  These harnesses need a source checkout at
+# the pinned commit, which is why neither is a console script in 0.1.0.

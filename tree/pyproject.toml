@@ -1,0 +1,229 @@
+[build-system]
+# >=77 is the PEP 639 floor, mirroring gpuwm: it is what turns a `license`
+# SPDX expression into a License-Expression metadata field rather than a
+# dumped licence body.  This distribution declares one -- `license =
+# "Apache-2.0"` under [project], with LICENSE and NOTICE in `license-files` --
+# so the floor is a hard requirement, not a forward-looking one.  Below 77 the
+# build silently emits the old `License:` field and drops
+# `dist-info/licenses/`, which is how a correct source tree produces a wheel
+# that misstates its own licence.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpuwm-hex"
+# STATIC, and this is the single place the version is stated.
+#
+# `mpas_port.__version__` reads it back out of installed metadata
+# (importlib.metadata) rather than restating it, because a hand-maintained
+# constant is a promise to update two files at every cut and gpuwm already
+# broke that promise once -- its wheel shipped 0.1.1 for four releases while
+# the runtime constant said otherwise.  tests/test_packaging_declaration.py
+# fails if a second literal ever appears in the package.
+#
+# 0.1.0 is the shape of this line: 0.1 = global variable-resolution on
+# one consumer GPU, deterministic, ArWen physics.  0.2 = multi-GPU (built and
+# proven, two-node bitwise partition-invariant).  0.3 = the regional lane,
+# which the CUDA lane refuses today.
+version = "0.1.0"
+description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.1 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
+readme = "README.md"
+requires-python = ">=3.11"
+# Apache-2.0, the same licence gpuwm ships under: this is one project and one
+# family, and a user who has cleared gpuwm has cleared this too.
+#
+# The upstream this derives from -- MPAS-Atmosphere v8.4.1 (LANL/UCAR), with
+# source-line citations pinned by tools/check_mpas_citations.py -- is
+# BSD-3-Clause.  BSD-3-Clause is permissive: it does NOT force the derivative
+# to carry the same expression, it requires that the original notice,
+# conditions and disclaimer travel with every copy.  Apache's NOTICE mechanism
+# is built for exactly that, and gpuwm already carries its own WRF, RRTMG and
+# RRTMGP attributions the same way.  So NOTICE reproduces the MPAS licence in
+# full, states that those terms govern the MPAS-derived portions, and carries
+# the marking that licence separately requires of a derivative work: that it
+# be clearly marked so as not to be confused with the version available from
+# LANS and UCAR.  Apache-2.0 section 4(c) then makes NOTICE propagate
+# downstream, which is what keeps the BSD obligation satisfied at every hop.
+#
+# Both files ship in the sdist and the wheel.  Neither is decoration.
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+#
+# The port's numerics run on NumPy and CuPy; the DATA PATH beside them is
+# Rust.  Both front doors drive Rust binaries (rw_mpas_init, rw_mpas_convert,
+# rw_wrfbatch) and neither draws a weather field in Python.
+#
+# WHY THESE THREE ARE HARD:
+#   numpy    -- 48 modules import it at module scope; nothing in the package
+#               imports without it.
+#   netCDF4  -- 6 modules import it at module scope (driver, mesh, output,
+#               regrid, dynamics_v841, rust_renderer) and the init door needs
+#               it at runtime to read a WPS intermediate.  There is no
+#               "netCDF-less" subset of this package that does useful work.
+#   scipy    -- regrid.py imports scipy.spatial.cKDTree at module scope.
+#
+# WHY gpuwm IS HARD: the port owns no physics.  Every physics column runs
+# through gpuwm's `run_mpas_column_batch` seam (the "column-batch seam"), and
+# the forecast lane refuses to start without it.  The floor clears 2.5.0
+# because the GF seam-parity work the port pins landed AFTER the 2.5.0 cut:
+# at gpuwm's published 2.5.0 tip, 5 of the 16 files in the port's Arwen
+# source manifest differ from the pinned bytes.  A `>=2.5.0` here would let
+# pip resolve an install whose physics seam the port then refuses at launch,
+# which is the worst of both worlds -- a green install and a dead run.
+#
+# AND THE FLOOR IS 2.5.3 RATHER THAN 2.5.1, for a second and independent
+# reason: the four MPAS bridge binaries (`rw_mpas_init`, `rw_mpas_convert`,
+# `rw_mpas_mesh`, `rw_mpas_static`) enter gpuwm's BUNDLE at 2.5.3.  Their
+# bundle rows landed the day after the 2.5.2 upload, so published 2.5.2
+# stages none of them through `gpuwm fetch-bridges`.  Both of this
+# distribution's front doors drive those binaries, and the gpuwm source tree
+# is private and never pushes -- so a user who resolves onto a 2.5.2 engine
+# can reach NEITHER door and has no route to build what is missing.  That is
+# a stranded install, not a degraded one, and a dependency floor is the only
+# place pip can refuse it.
+#
+# The sequencing this depends on is settled, not hoped for: gpuwm 2.5.3
+# publishes BEFORE gpuwm-hex 0.1.0, which is the one hard ordering
+# constraint the release plan carries.  Until 2.5.3 is on PyPI this floor
+# makes `pip install gpuwm-hex` unresolvable, and that is the correct
+# behaviour -- an install that cannot open a door is worse than one that
+# refuses to happen.
+#
+# AND IT IS NOT ENOUGH: satisfying this dependency is NECESSARY BUT NOT
+# SUFFICIENT for the forecast lane.  The port pins gpuwm by the
+# SHA-256 of 16 individual source files, one of which is `docs/mpas-seam.md`
+# -- a repository document that gpuwm's own packaging never places in
+# site-packages.  So the forecast lane needs a gpuwm SOURCE CHECKOUT at the
+# pinned commit in addition to the installed wheel.  The two front doors
+# (init, render) do not: they import no gpuwm at all and drive Rust binaries
+# instead.  README.md states this split where a user will read it.
+dependencies = [
+    "numpy>=2.0",
+    "netCDF4>=1.6",
+    "scipy>=1.11",
+    "gpuwm>=2.5.3",
+]
+# Search terms, which is what a keyword is: the words somebody types into
+# PyPI when they are looking for this kind of thing.  `MPAS` is here as a
+# NOMINATIVE reference -- what this software is a port of -- which is the
+# one use of the name the brand ruling leaves open, and it is the term a
+# reader searching for exactly this would use.  The distribution name, the
+# console script and the parser prog carry no MPAS token, and
+# tests/test_packaging_declaration.py is what keeps that true.
+keywords = [
+    "atmospheric-model",
+    "MPAS",
+    "CUDA",
+    "GPU",
+    "weather",
+    "simulation",
+    "unstructured-mesh",
+    "voronoi",
+    "global-model",
+]
+
+# No `License ::` classifier.  PEP 639 replaced it with the
+# License-Expression field this project declares above, and setuptools>=77
+# REFUSES a build that states both -- a licence asserted in two places is
+# two things to keep true, and the trove classifier is the one that cannot
+# express what the NOTICE arrangement actually is.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    # Stated per minor rather than left at the bare 3, because
+    # requires-python already commits to exactly these and a reader
+    # filtering PyPI by interpreter should get the same answer pip does.
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+]
+
+[project.urls]
+# The public repository this distribution is built from.  The link has to
+# resolve before or with the upload: a PyPI page whose Homepage link 404s
+# reads as an abandoned project.
+Homepage = "https://github.com/FahrenheitResearch/gpuwm-hex"
+Repository = "https://github.com/FahrenheitResearch/gpuwm-hex"
+
+[project.optional-dependencies]
+# One extra per CUDA major, mirroring gpuwm exactly.  A pip extra cannot
+# detect a CUDA major -- there is no environment marker for it -- so this
+# table does not pretend to choose; it names both and the docs tell the user
+# to match the one their driver reports.
+gpu-cu12 = ["cupy-cuda12x[ctk]>=14.0"]
+gpu-cu13 = ["cupy-cuda13x[ctk]>=14.0"]
+gpu = ["gpuwm-hex[gpu-cu12]"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+# ONE console script with subcommands, mirroring gpuwm's `gpuwm doctor` /
+# `gpuwm version` shape rather than scattering a script per door.
+#
+# The name carries no MPAS token: the brand and the user-facing spelling
+# never use it, because MPAS may be a trademark.  The spelling settled as
+# `gpuwm-hex`, superseding an earlier `gpuwm-mp`: "hex" names the
+# hexagonal Voronoi mesh that actually
+# distinguishes this engine and matches the gpuwm-data family pattern, while
+# "mp" reads as MICROPHYSICS to anyone in this field -- the wrong association
+# to plant inside a weather model.  Nominative reference in prose stays fine
+# and README/docs use it freely.
+#
+# The IMPORT namespace is still `mpas_port`, and that is a declared
+# inconsistency recorded in tests/test_packaging_declaration.py, not a
+# decision to leave it alone forever.  Renaming it is NOT cheap: eleven of the
+# seventeen modules the full-physics proof harness pins by SHA-256 carry the
+# literal string, and in five of them it is a `module_key=` NVRTC
+# compile-contract identity rather than a comment -- editing those changes the
+# kernel-cache identity as well as breaking the pin, so the rename costs a
+# re-proof on a 32 GiB card against the native authority.  That is a
+# release decision, not a tidy-up.
+#
+# The forecast runner is DELIBERATELY NOT HERE.  tools/run_cuda_v841_forecast.py
+# is a real, working, arbitrary-case driver, but it is not a door a user can
+# reach: it lives outside the package, it needs a gpuwm source checkout at a
+# pinned commit (see the dependency note above), its mesh/static defaults are
+# byte-pinned authority files that ship with no fetch path, and it needs a
+# card with about 26.4 GiB free.  Shipping it as a console script would put a
+# front door on a room with no floor.
+gpuwm-hex = "mpas_port.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+# Anchored patterns, never `mpas_port*`.  These are fnmatch over DIRECTORY
+# names walked from `src`, and gpuwm measured what a loose glob does: its
+# 2.5.0 wheel swallowed a sibling distribution's project directory because
+# `find` defaults to namespaces = true and a namespace finder does not need
+# the directory name to be a valid identifier.  There is no sibling under
+# src/ today; the anchor is what keeps that true when one appears.
+include = ["mpas_port", "mpas_port.*"]
+
+[tool.setuptools.package-data]
+# Recursive globs, never an enumeration -- gpuwm's per-file enumeration had
+# drifted 52 files behind its tree before it was rewritten this way.
+#
+# There is nothing to ship today: every non-.py file under src/mpas_port is
+# compiled bytecode, which .gitignore already excludes and which is a build
+# product of the sources beside it.  Every CUDA kernel this port launches is
+# generated as a Python string and handed to NVRTC at runtime, so there are
+# no .cu files to carry.  The declaration is kept anyway so that adding a
+# table or a kernel file is a drop-in rather than a packaging discovery, and
+# tests/test_packaging_declaration.py fails if a data file ever lands under
+# the package without matching one of these.
+mpas_port = ["*.json", "data/**/*", "*.cu", "*.cuh"]
+
+[tool.pytest.ini_options]
+markers = [
+    "gpu: needs a CUDA device and cupy; auto-applied to any test whose module imports cupy",
+    "bigcard: needs about 26.4 GiB of free device memory (the x4.163842 full-physics footprint)",
+    "assets: needs the byte-pinned mesh/static/init/native-authority files, which ship with no fetch path",
+    "slow: minutes rather than seconds",
+]
+testpaths = ["tests"]
+# No addopts.  Deselection is always explicit at the call site, exactly as
+# gpuwm does it, so that nothing is silently excluded from a bare `pytest`.
