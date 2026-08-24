@@ -7,6 +7,7 @@ written to. Those names look like paths under this directory:
 ```
 evidence/gf-pin-move-measured-20260824/
 evidence/native-free-proof-20260824/
+evidence/source-matrix/<source>/
 evidence/restart-step16-327/
 evidence/local-timestep/
 ```
@@ -14,6 +15,12 @@ evidence/local-timestep/
 **The receipt files themselves are not carried in this repository.** Treat an
 `evidence/...` reference as the *identity* of a measurement — the thing you
 quote when you ask about it — rather than as a file you can open here.
+
+Where a document's whole argument is the measurement, the document carries the
+result inline rather than deferring to the receipt. `docs/source-matrix.md` is
+the clearest case: every verdict and every refusal in it is quoted verbatim in
+the table, so the matrix is readable and checkable without opening a single
+receipt.
 
 ## Why they are not here
 

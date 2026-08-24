@@ -316,6 +316,12 @@ native namelist key it corresponds to, so a captured `namelist.init_atmosphere`
 transcribes without guessing. Full detail, including the sixteen named refusals:
 [`docs/init-door.md`](docs/init-door.md).
 
+What the door accepts is not a promise but a measured table:
+[`docs/source-matrix.md`](docs/source-matrix.md) drives every source in the
+RW-WPS registry with real bytes through intermediate, init and a
+five-composite-step forecast, and records one verdict per source — a green
+run with receipts, or the chain's refusal, verbatim.
+
 `--vertical-spec` is the native-free path (see *Assets you must supply* and
 [`docs/native-free-init-admission.md`](docs/native-free-init-admission.md));
 `--capsule`/`--reference` with a native-minted init file is the compatibility

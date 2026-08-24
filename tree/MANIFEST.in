@@ -23,6 +23,16 @@ graft tools
 # specs are contracts, not receipts.
 graft verification
 
+# One file out of `evidence`, and only one.  The receipt files themselves are
+# deliberately not distributed, but README.md and docs/source-matrix.md both
+# link to `evidence/EVIDENCE.md` -- it is what tells a reader that an
+# `evidence/...` reference names the IDENTITY of a measurement rather than a
+# file they are missing, and where the contracts those measurements are
+# written against actually live.  Without this line those two links resolve to
+# nothing in the unpacked sdist, which is exactly the "document points at a
+# file the reader does not have" defect the grafts above exist to prevent.
+include evidence/EVIDENCE.md
+
 # Compiled bytecode is a build product of the sources beside it, never an
 # input; the same rule the working tree follows.
 global-exclude *.pyc

@@ -166,6 +166,7 @@ NOTICE           MPAS-Atmosphere BSD-3-Clause verbatim + the derivative marking
 README.md        this page
 STATE.md         open items, carried forward with their measurements
 .github/         ci.yml, the battery; publish.yml, release-triggered only
+vtables/         authored RW-WPS Vtables (see tree/docs/source-matrix.md)
 tree/            the gpuwm-hex distribution
   src/mpas_port/   the port itself (import namespace is still mpas_port)
   tools/           harnesses, proof guards, comparators
