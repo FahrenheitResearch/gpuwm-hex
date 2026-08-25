@@ -10,7 +10,10 @@ The adapter is deliberately strict.  Construction requires a sealed mapping
 containing every real surface, soil, land-use, solar, and cadence input; no
 Arwen constructor default is admitted.  The imported Arwen tree is accepted
 only when all production source bytes match commit
-``0d04db71298d010a61fee3267c07277da3b8b64f``.  Every step is transactional:
+``26daaab7ef5c1104166fe61503cdd9487750f1af``
+(the seam-converge merge: the refl10cm seam commit ``6e333822e`` folded into
+the release line at ``613b681d3``, so the pinned bytes are release-line
+bytes).  Every step is transactional:
 the Arwen boundary state is exported before phase one, and an abort or any
 adapter failure rebuilds a fresh seam and restores that boundary snapshot.
 """
@@ -58,12 +61,12 @@ from .cuda_physics_v841 import (
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "0d04db71298d010a61fee3267c07277da3b8b64f"
+ARWEN_BUILD_COMMIT = "26daaab7ef5c1104166fe61503cdd9487750f1af"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
 MPAS_SEAM_CONTRACT_SURFACE_SHA256 = (
-    "823af4a55018a71ad630144fae7b21a459095249cedb1180bc9f3e1a2fbfe511"
+    "f83b16185a50667d65d90771e1f32942ff31fbfbd52ce4e29e09ea0cb11e1007"
 )
 ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
     "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -75,16 +78,16 @@ ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
 ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
     {
         "gpuwm/core/mpas_column_batch.py": (
-            "8323e38c1c4dfaa16edc98f8ee0bd6e2c1cd7fe241626a96fe75e308bb8cd8ab"
+            "f4335caa44687526089995f525c34b718465972531e75f2b8e908cc5ccbc6c7c"
         ),
         "gpuwm/core/physics.py": (
-            "5b4103ca6c13e1cdd975a113cac3f340295151d223b2dda01e2135ca8d7e77fa"
+            "f8095178b5d676ec5b758b0c030a8228257547f7b92ae0d08286d92d1566013c"
         ),
         "gpuwm/core/microphysics.py": (
             "a127585c41a0131e20b6335b0a50263b8b8b525f3939b68eebe0383778af744f"
         ),
         "gpuwm/core/gf.py": (
-            "321185f5a8bc7f85909dd2d99664a1f68178a5178ef401422694903a02ca0c0b"
+            "12e2c59564aef91075339707cc2aba019f892b2f1e4b930ff1d3f064bdc38ca7"
         ),
         "gpuwm/core/kernels/gf.cu": (
             "27019d7fdd4ad31aec2e2e4b21ec339dd512a449aea5e35ab2386ca5217aae5e"
@@ -93,7 +96,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "cb4774dbdf06d5959577e78765221e2c8f56a0db7944a0cd78c77b756d39a11c"
         ),
         "gpuwm/core/noahmp_runtime.py": (
-            "64bab5e98e86d4742031790e8c8eb707557d47c28a0acbc8341eae5c08a23bcd"
+            "990780ab87764481c463b1fa2f8c988cd9538e0833dc390203d2a0396fee66bc"
         ),
         "gpuwm/core/noahmp_glacier.py": (
             "1bb607569b5007c5d2817e879eb82112db7ed01f11931efe1802d35b3fb7b23b"
@@ -105,7 +108,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "4b2fab2ac92e93669491cbe526f81d23bc94e075859ae849f2b8c84827057538"
         ),
         "gpuwm/core/kernels/__init__.py": (
-            "b6b286c21af09d27e1aa6d6999755c980eeb302a6983bd620a96ba49a1f904e2"
+            "05102ff85fac24700858309f497694f9b3919b26cab3963b2cc35a4182c22919"
         ),
         "gpuwm/core/kernels/noahmp_leaves.cu": (
             "0ce9461705395dccbfebed3d9d27e87eebaeaca79896ae369eaa02ec1e77307f"
@@ -114,13 +117,13 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"
         ),
         "gpuwm/config.py": (
-            "af1943861548c1efe62f74ece865e7ca7a984b8c14cd8862c0f303d35081709a"
+            "d32fd3888c134a7927552cc60c4897971e4f1e8528dcc3c0abe198a393d3bd5c"
         ),
         "gpuwm/io/restart.py": (
-            "0cf962dffa1989234a7b091b2a1ff7db67abef8289ba04206e1b6051f0467cf7"
+            "2add7cc37a02852d7acbd98b690a0b1eca792eb628ff0ea4dbe5219e1ede9e94"
         ),
         "docs/mpas-seam.md": (
-            "1b08f842948de74c2591c0da8eff054e99c72c7bee483d437ead0a988e5b917b"
+            "7fe13aaa37fa944b160838c1fe5083ab79fe0d2e271da048c4dc92de8d9fc7fd"
         ),
     }
 )
@@ -689,6 +692,12 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         self._candidate_scalar_backup: Any | None = None
         self._pending_gwdo_result: CudaYsuGwdoResultV841 | None = None
         self._last_gwdo_result: CudaYsuGwdoResultV841 | None = None
+        # The one-frame refl10cm handoff (WRF diagflag semantics): staged by
+        # a due finish_step, published by commit_step, consumed exactly once
+        # by the history capture.  Never restart state -- the field is
+        # recomputed by the next due microphysics call.
+        self._pending_refl10cm: Any | None = None
+        self._committed_refl10cm: Any | None = None
         self._gwdo_calls = 0
         # True once a GF advective-forcing carrier has been consumed; a later
         # None then means the runner regressed to the zero lanes.
@@ -867,6 +876,7 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         self._candidate_scalar_target = None
         self._candidate_scalar_backup = None
         self._pending_gwdo_result = None
+        self._pending_refl10cm = None
 
     def _gf_dynamics_lanes(
         self, carrier: Any, *, start: float, dt: float
@@ -1112,9 +1122,22 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         return tuple(result)
 
     def finish_step(
-        self, *, atmosphere: Any, scalar_names: Sequence[str], dt: float
+        self,
+        *,
+        atmosphere: Any,
+        scalar_names: Sequence[str],
+        dt: float,
+        refl_10cm_due: bool = False,
     ) -> CudaPostRkWsm6UpdateV841:
-        """Invoke frozen Arwen v2 WSM6 once on the clamped endpoint and seal its outputs."""
+        """Invoke frozen Arwen v2 WSM6 once on the clamped endpoint and seal its outputs.
+
+        ``refl_10cm_due`` is WRF's history-step ``diagflag`` carried to the
+        seam: the due step's microphysics computes ``refl10cm`` from its
+        post-call temperature and unchanged prepared pressure (native MPAS-A
+        v8.4.1 computes the history field at exactly this point), and the
+        staged copy is published by ``commit_step`` for exactly one
+        ``take_history_refl10cm`` consumer.
+        """
 
         if self._phase != "begun" or self._boundary_snapshot is None:
             raise RuntimeError("finish_step requires one successful begin_step")
@@ -1165,9 +1188,22 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 pressure=prepared.pres_p,
                 rho_dry=prepared.rho_dry,
                 z_interface=prepared.z_p,
+                refl_10cm_due=bool(refl_10cm_due),
             )
             if float(self._seam.elapsed_seconds) != endpoint:
                 raise ValueError("Arwen phase two did not advance to the MPAS endpoint")
+            staged_refl = None
+            if refl_10cm_due:
+                staged_refl = receipt.get("refl_10cm")
+                require_resident_array(
+                    "history_refl10cm",
+                    staged_refl,
+                    dtype=np.float32,
+                    shape=(
+                        self._constructor.n_levels,
+                        self._constructor.n_columns,
+                    ),
+                )
             cumulative = self._seam.accumulated_precipitation()
             required = {"RAINNC", "SNOWNC", "GRAUPELNC", "RAINC"}
             if set(cumulative) != required:
@@ -1200,6 +1236,7 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 n_cells=self._constructor.n_columns,
             )
             self._phase = "finished"
+            self._pending_refl10cm = staged_refl
             self._candidate_scalar_target = atmosphere.state.scalars
             self._candidate_scalar_backup = scalar_backup
             prior = self._last_receipt
@@ -1231,6 +1268,7 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 },
                 "post_rk": {
                     "in_place_species": list(WSM6_SCALAR_NAMES),
+                    "refl_10cm_due": bool(refl_10cm_due),
                     "theta": "prepared th_p dry theta",
                     "pressure": "prepared pres_p EOS",
                     "rho": "prepared rho_dry",
@@ -1312,6 +1350,9 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             self._last_gwdo_result = self._pending_gwdo_result
             self._gwdo_calls += 1
         self._pending_gwdo_result = None
+        if self._pending_refl10cm is not None:
+            self._committed_refl10cm = self._pending_refl10cm
+        self._pending_refl10cm = None
         prior = self._last_receipt
         self._phase = "boundary"
         self._boundary_snapshot = None
@@ -1330,6 +1371,23 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 "committed_calls": self._gwdo_calls,
             },
         }
+
+    def take_history_refl10cm(self) -> Any | None:
+        """Consume the committed one-frame ``refl10cm`` exactly once.
+
+        Legal only at a committed boundary, mirroring the D2 handoff rule the
+        engine applies to its own output frames: the capture that writes the
+        history file is the single consumer, and a second read without a new
+        due step gets ``None`` rather than a stale frame.
+        """
+
+        if self._phase != "boundary":
+            raise RuntimeError(
+                "take_history_refl10cm is legal only at a committed boundary"
+            )
+        refl = self._committed_refl10cm
+        self._committed_refl10cm = None
+        return refl
 
     def diagnostic_snapshot(self) -> CudaArwenDiagnosticSnapshotV841:
         """Snapshot public frozen-v2 diagnostics at a committed boundary only."""

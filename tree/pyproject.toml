@@ -25,7 +25,7 @@ name = "gpuwm-hex"
 # one consumer GPU, deterministic, ArWen physics.  0.2 = multi-GPU (built and
 # proven, two-node bitwise partition-invariant).  0.3 = the regional lane,
 # which the CUDA lane refuses today.
-version = "0.1.0"
+version = "0.1.1"
 description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.1 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -71,23 +71,26 @@ license-files = ["LICENSE", "NOTICE"]
 # pip resolve an install whose physics seam the port then refuses at launch,
 # which is the worst of both worlds -- a green install and a dead run.
 #
-# AND THE FLOOR IS 2.5.3 RATHER THAN 2.5.1, for a second and independent
-# reason: the four MPAS bridge binaries (`rw_mpas_init`, `rw_mpas_convert`,
-# `rw_mpas_mesh`, `rw_mpas_static`) enter gpuwm's BUNDLE at 2.5.3.  Their
-# bundle rows landed the day after the 2.5.2 upload, so published 2.5.2
-# stages none of them through `gpuwm fetch-bridges`.  Both of this
-# distribution's front doors drive those binaries, and the gpuwm source tree
-# is private and never pushes -- so a user who resolves onto a 2.5.2 engine
-# can reach NEITHER door and has no route to build what is missing.  That is
-# a stranded install, not a degraded one, and a dependency floor is the only
-# place pip can refuse it.
+# AND THE FLOOR IS 2.5.5, for two further reasons stacked on that one.
+# First, the seam gap recurred at every cut: at gpuwm's published 2.5.4
+# stamp, 3 of the 16 files in the Arwen source manifest still differ from
+# the pinned bytes (docs/mpas-seam.md, gpuwm/core/mpas_column_batch.py,
+# gpuwm/io/restart.py -- the seam-convergence work this tree pins landed
+# after the 2.5.4 cut).  2.5.6 is the first published version whose bytes
+# match the manifest.  Second, the four MPAS bridge binaries
+# (`rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_static`)
+# entered gpuwm's BUNDLE at 2.5.3; published 2.5.2 stages none of them
+# through `gpuwm fetch-bridges`, both of this distribution's front doors
+# drive those binaries, and the gpuwm source tree is private and never
+# pushes -- so an engine below 2.5.3 is a stranded install, not a degraded
+# one.  The 2.5.5 floor keeps both refusals where pip can make them.
 #
-# The sequencing this depends on is settled, not hoped for: gpuwm 2.5.3
-# publishes BEFORE gpuwm-hex 0.1.0, which is the one hard ordering
-# constraint the release plan carries.  Until 2.5.3 is on PyPI this floor
-# makes `pip install gpuwm-hex` unresolvable, and that is the correct
-# behaviour -- an install that cannot open a door is worse than one that
-# refuses to happen.
+# The sequencing this depends on is settled, not hoped for: gpuwm 2.5.6
+# publishes BEFORE gpuwm-hex 0.1.1, the same hard ordering constraint the
+# 0.1.0 release plan carried.  Until 2.5.6 is on PyPI this floor makes
+# `pip install gpuwm-hex` unresolvable, and that is the correct behaviour
+# -- an install that cannot open a door is worse than one that refuses to
+# happen.
 #
 # AND IT IS NOT ENOUGH: satisfying this dependency is NECESSARY BUT NOT
 # SUFFICIENT for the forecast lane.  The port pins gpuwm by the
@@ -101,7 +104,7 @@ dependencies = [
     "numpy>=2.0",
     "netCDF4>=1.6",
     "scipy>=1.11",
-    "gpuwm>=2.5.3",
+    "gpuwm>=2.5.5",
 ]
 # Search terms, which is what a keyword is: the words somebody types into
 # PyPI when they are looking for this kind of thing.  `MPAS` is here as a
@@ -184,13 +187,22 @@ dev = ["pytest>=8.0"]
 # re-proof on a 32 GiB card against the native authority.  That is a
 # release decision, not a tidy-up.
 #
-# The forecast runner is DELIBERATELY NOT HERE.  tools/run_cuda_v841_forecast.py
-# is a real, working, arbitrary-case driver, but it is not a door a user can
-# reach: it lives outside the package, it needs a gpuwm source checkout at a
-# pinned commit (see the dependency note above), its mesh/static defaults are
-# byte-pinned authority files that ship with no fetch path, and it needs a
-# card with about 26.4 GiB free.  Shipping it as a console script would put a
-# front door on a room with no floor.
+# `forecast` IS a subcommand now, and what changed is the floor under it.
+# It was withheld while the room had none: the driver needed a card with
+# about 26.4 GiB free, its mesh/static defaults were byte-pinned authority
+# files with no fetch path, and nothing between the user and a mid-run CuPy
+# death told them their card was too small.  Since then the footprint fell to
+# a measured 6,296.5 MiB + 93,474 B/cell (the 40,962-cell global mesh peaks
+# at 9,948 MiB, inside a 12 GiB card), the registry made mesh+static explicit
+# table work, and `mpas_port.forecast_door` adds the admission decision that
+# refuses BEFORE a run starts rather than after it dies.
+#
+# What has NOT changed, and is a named refusal rather than a silent failure:
+# the lane still needs the gpuwm-hex SOURCE CHECKOUT (the drivers live in
+# tools/, outside this wheel, because they verify their own executing modules
+# by SHA-256) and a gpuwm SOURCE CHECKOUT at the pinned commit (see the
+# dependency note above).  The door names both by name, and `gpuwm-hex
+# doctor` reports the same two gaps.
 gpuwm-hex = "mpas_port.cli:main"
 
 [tool.setuptools.packages.find]

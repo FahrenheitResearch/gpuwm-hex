@@ -275,7 +275,7 @@ def remedy(spec: EngineSpec) -> str:
     if bundled is None:
         return "\n".join(
             [
-                '  pip install "gpuwm>=2.5.3"',
+                '  pip install "gpuwm>=2.5.5"',
                 "      # no gpuwm is installed in this interpreter, so its",
                 f"      # {FETCH_COMMAND} route is unavailable until one is.",
                 "",

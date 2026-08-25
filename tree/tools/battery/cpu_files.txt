@@ -20,10 +20,16 @@ tests/test_packaging_declaration.py
 # depend on the cloner's core.autocrlf
 tests/test_checkout_reproducibility.py
 
-# the two front doors: argument surfaces, executable resolution ladders,
+# the three front doors: argument surfaces, executable resolution ladders,
 # product coverage, and every named refusal
 tests/test_init_door.py
 tests/test_render_door.py
+
+# the forecast door: argument grammar, the refusal inventory, and the device
+# admission decision.  The decision is exercised at free-memory values no
+# card here has, which is the only way to test the refusal that fires when a
+# card is too small; the door's one point of device contact is substituted
+tests/test_forecast_door.py
 
 # the proof guards: pin structure, authority pin shapes, and the ordering law
 # that the source pins are verified before the checkout guard reads the
@@ -54,3 +60,19 @@ tests/test_cuda_v841_full_physics_x4.py
 # the big-card preflight itself, which in this tier only proves that it skips
 # with a number rather than passing vacuously
 tests/test_device_capacity.py
+
+# the observational referee: manifest strictness, the metric arithmetic against
+# hand-computed values, case-block bootstrap reproducibility, canonical-bundle
+# byte determinism, the fail-closed treatment receipt, and the synthetic
+# end-to-end suite run twice for identical digests.  It needs numpy and nothing
+# else -- no card, no assets, no network -- and it was in no tier list at all
+# until the referee's first real run, which meant the machinery that decides
+# whether the physics is right was not gated on any push.
+tests/test_obs_referee.py
+# the history stream's refl10cm/q2 publication: the writer surface (dims,
+# units, bitwise q2, the q2_products_allowed flip), the diagflag pass-through
+# by signature, and the model bundle's composite-reflectivity and dewpoint
+# derivations against the engine's own formula.  Dropping either field from
+# the default stream makes divergence 3's declared referee unrunnable, which
+# is exactly what the first real run reported.
+tests/test_history_refl_q2.py

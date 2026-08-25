@@ -34,7 +34,7 @@ def test_exact_release_scope_and_all_execution_sources_are_frozen() -> None:
     runner = _load_runner()
     assert str(runner.SRC) in sys.path
     assert runner.SOURCE_RELEASE == "v8.4.1"
-    assert runner.ARWEN_COMMIT == "0d04db71298d010a61fee3267c07277da3b8b64f"
+    assert runner.ARWEN_COMMIT == "26daaab7ef5c1104166fe61503cdd9487750f1af"
     assert (runner.N_CELLS, runner.N_EDGES, runner.N_LEVELS) == (
         163_842,
         491_520,
@@ -45,7 +45,7 @@ def test_exact_release_scope_and_all_execution_sources_are_frozen() -> None:
     assert runner.FULL_STEPS == 30
     assert runner.CHECKPOINT_STEP == 15
     assert runner.ARWEN_CONTRACT_SURFACE_SHA256 == (
-        "823af4a55018a71ad630144fae7b21a459095249cedb1180bc9f3e1a2fbfe511"
+        "f83b16185a50667d65d90771e1f32942ff31fbfbd52ce4e29e09ea0cb11e1007"
     )
     assert runner.ARWEN_GLACIER_COMPOSED_TU_SHA256 == (
         "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -92,7 +92,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
             "2bc878868e41ffc71491479059d3bd9165ce980a38360ed683e2717f54a8111a"
         ),
         "src/mpas_port/cuda_arwen_physics_v841.py": (
-            "20c4b22dcd36fa165d15642e45e3fac5cbe7b8de01dbffdfd0a84361c222d13b"
+            "909a66f090eb08520398d884a5ef7aca9b1539f9b394f3c0c4b1b1ba9b9e90a8"
         ),
         "src/mpas_port/mixing.py": (
             "864f0686325108100afc10a8804ea4e2dd6de81e3269ee4cbc2747be82b09e2e"
@@ -135,7 +135,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         "70d2006d4687b67fe087fd4a5c9e69a76e4a39c648703913f4d79903249bdcab"
     )
     assert runner.KNOWN_CONTRACT_PINS["adapter_contract_sha256"] == (
-        "6c3ca3bae5f92a7ffa3f9cf27db0f2329ab0506bbf5d76e362f010676a0c78e1"
+        "42b376675b681e3b5998faa9da341db6b3a214185374dabbd0351c91983c8b82"
     )
 
 

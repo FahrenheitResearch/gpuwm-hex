@@ -78,9 +78,18 @@ being right.
 
 **This is not licence to ignore a defect.** A bias that is wrong against
 *observations* is still wrong. The upper-band theta drift does not become
-acceptable because MPAS is no longer the referee; it changes referee. The
-obs-skill verification that would settle it has **not been run** — it is open
-work, tracked in [`STATE.md`](STATE.md).
+acceptable because MPAS is no longer the referee; it changes referee.
+
+The obs-skill verification **has now run** — four full-physics forecasts on the
+163,842-cell mesh scored against Stage-IV precipitation, MRMS reflectivity and
+ASOS surface reports, 2026-08-25, recorded in
+receipt `tree/evidence/obs-referee-283/` (see
+[`tree/evidence/EVIDENCE.md`](tree/evidence/EVIDENCE.md)) with the
+verdict for each divergence in
+[`tree/docs/declared-divergences.md`](tree/docs/declared-divergences.md). It
+reaches two of the three. The theta drift is not one of them: rain gauges and
+airport thermometers do not measure the stratosphere, and the profile referee
+that would settle it is still open work, tracked in [`STATE.md`](STATE.md).
 
 ---
 
@@ -91,36 +100,35 @@ files by SHA-256, and `tree/tools/run_cuda_v841_full_physics_x4.py` names the
 `gpuwm` commit they were taken from:
 
 ```
-ARWEN_COMMIT = 0d04db71298d010a61fee3267c07277da3b8b64f
+ARWEN_COMMIT = 26daaab7ef5c1104166fe61503cdd9487750f1af
 ```
 
-That commit is the seam pin `629ddb6f0` — the annotated tag
-`pin/mpas-port-arwen-seam` — carrying exactly one cherry-picked `gpuwm` commit:
-the Grell-Freitas local-memory frame cut. Two of the sixteen files move with it,
-`gpuwm/core/gf.py` and `gpuwm/core/kernels/gf.cu`; the other fourteen, including
-the whole seam contract surface, are byte-identical at both commits.
+That commit is the seam-converge merge (annotated tag
+`pin/mpas-port-arwen-seam-v4`): the refl10cm seam lineage (`6e333822e`,
+`pin/mpas-port-arwen-seam-v3`) folded into the engine release line at
+`613b681d3`. It is the first pin that sits ON the engine's release lineage
+rather than beside it, which is the property that matters: a public engine
+snapshot cut from the release line carries exactly the sixteen pinned files.
 
 All sixteen hash-match at that commit, and at no other ref checked. Measured
-2026-08-23 against the `gpuwm` object store:
+2026-08-25 against the `gpuwm` object store:
 
 | ref | files matching |
 | --- | --- |
-| `0d04db712` (this pin) | **16 / 16** |
-| annotated tag `pin/mpas-port-arwen-seam` (`629ddb6f0`) | 14 / 16 |
-| `gpuwm`'s 2.5.0 release line | 10 / 16 |
-| the earlier port-landing ref | 9 / 16 |
+| `26daaab7e` (this pin, on the release lineage) | **16 / 16** |
+| the engine release line's pre-merge tip (`613b681d3`) | 14 / 16 (the two refl-seam files) |
+| `pin/mpas-port-arwen-seam-v3` (`6e333822e`) | 9 / 16 |
+| `pin/mpas-port-arwen-seam-v2` (`0d04db712`) | 8 / 16 |
+| `pin/mpas-port-arwen-seam` (`629ddb6f0`) | 7 / 16 |
 
 The anchor is the *reachability of that object*. A commit that survives only as
 the tip of one `gpuwm` lane branch is one branch deletion away from being
 unreachable — at which point the sixteen pins could never be verified again and
-every proof built on them would become unfalsifiable. `629ddb6f0` is safe:
-`gpuwm` carries the annotated tag `pin/mpas-port-arwen-seam` on it, a local tag
-and explicitly not a release tag.
-
-**`0d04db712` has one too**: the annotated tag `pin/mpas-port-arwen-seam-v2`,
-placed 2026-08-23, whose message names exactly this obligation — deleting the
-lane branch must not orphan the sixteen pinned objects. Both pins the port has
-ever executed are therefore tag-anchored in `gpuwm`.
+every proof built on them would become unfalsifiable. Every pin the port has
+ever executed is tag-anchored in `gpuwm` — `pin/mpas-port-arwen-seam` through
+`pin/mpas-port-arwen-seam-v4`, local tags and explicitly not release tags —
+and v4 is additionally an ancestor of the release line's future tips, so
+ordinary release history keeps it reachable without the tag.
 
 ### Verifying it
 

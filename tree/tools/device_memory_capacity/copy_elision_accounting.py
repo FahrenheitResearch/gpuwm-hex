@@ -15,11 +15,49 @@ from dataclasses import asdict, dataclass
 import json
 import math
 from pathlib import Path
+import sys
 from typing import Sequence
 
 GIB = 1024**3
 MIB = 1024**2
 SCHEMA = "gpuwm-hex.copy-elision-accounting.v1"
+
+#: Emitted when the footprint model is not named on the command line.
+#:
+#: THE BREAKAGE THIS PREVENTS, measured: these two arguments used to default
+#: to 9797.8 MiB and 86630 B/cell, the 2026-08-20 ledger. The Grell-Freitas
+#: local-memory frame cut superseded that model on 2026-08-24 and moved both
+#: terms in OPPOSITE directions, so the two errors partly cancelled and a bare
+#: run kept returning a plausible budget verdict -- wrong, at exit status 0.
+#: A refusal is the only outcome that cannot be mistaken for an answer.
+MODEL_REFUSAL = """copy-elision accounting refused: the footprint model must be named.
+
+--prior-fixed-mib and --prior-bytes-per-cell are REQUIRED and have no
+defaults. Missing: {missing}
+
+WHY THERE IS NO DEFAULT. These once defaulted to the 2026-08-20 model. The
+Grell-Freitas local-memory frame cut superseded it on 2026-08-24, and both
+terms moved in OPPOSITE directions: the fixed term FELL by 3501.3 MiB and the
+slope ROSE by 6844 B/cell. The two errors partly cancel, so a bare run did not
+fail loudly -- it produced a plausible fit verdict that was wrong, and exited
+0. Naming the model is what makes the answer readable.
+
+THE TWO MODELS. Pick by the question you are asking:
+
+  prior arm   --prior-fixed-mib 9797.8  --prior-bytes-per-cell 86630
+              measured 2026-08-20, Arwen seam pin 629ddb6f0, PRE frame cut
+              docs/device-memory-ledger.md (superseded as a current account)
+              PASS THESE to reproduce the #308 copy-elision accounting as it
+              was landed, against the arm it was actually computed against.
+
+  of record   --prior-fixed-mib 6296.5  --prior-bytes-per-cell 93474
+              measured 2026-08-24, Arwen seam pin 0d04db712, POST frame cut
+              evidence/gf-pin-move-measured-20260824/
+              PASS THESE for any NEW question about what fits a card today.
+
+Whichever pair you pass is written into the report's prior_gap block, so the
+artefact records the model it was projected against instead of leaving it to
+be inferred from a file date."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,8 +224,21 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--vertical-levels", type=int, required=True)
     parser.add_argument("--scalars", type=int, default=6)
     parser.add_argument("--dtype-bytes", type=int, default=4)
-    parser.add_argument("--prior-fixed-mib", type=float, default=9797.8)
-    parser.add_argument("--prior-bytes-per-cell", type=float, default=86630.0)
+    # REQUIRED, with no default.  A default here is a footprint model chosen
+    # by whoever last edited this file rather than by the person asking the
+    # question, and it silently decides the answer.  See MODEL_REFUSAL.
+    parser.add_argument(
+        "--prior-fixed-mib",
+        type=float,
+        default=None,
+        help="REQUIRED, no default. Fixed term of the footprint model to project against",
+    )
+    parser.add_argument(
+        "--prior-bytes-per-cell",
+        type=float,
+        default=None,
+        help="REQUIRED, no default. Per-cell slope of the footprint model to project against",
+    )
     parser.add_argument("--budget-gib", type=float, default=12.0)
     parser.add_argument("--headroom-mib", type=float, default=512.0)
     parser.add_argument("--output", type=Path, required=True)
@@ -196,6 +247,21 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    missing = [
+        flag
+        for flag, value in (
+            ("--prior-fixed-mib", args.prior_fixed_mib),
+            ("--prior-bytes-per-cell", args.prior_bytes_per_cell),
+        )
+        if value is None
+    ]
+    if missing:
+        # Not argparse's own required=True: its message names the flag and
+        # stops there, which tells a reader what to type without telling them
+        # which number to type, and picking the wrong model is the whole
+        # hazard.  Exit 2 is argparse's usage-error code and is kept.
+        print(MODEL_REFUSAL.format(missing=", ".join(missing)), file=sys.stderr)
+        return 2
     geometry = Geometry(
         cells=args.cells,
         edges=args.edges,

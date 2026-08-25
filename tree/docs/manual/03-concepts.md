@@ -81,18 +81,24 @@ register; the README quantifies them):
    Grell-Freitas convection is WRF v4.6.1's 2018 generation, native's is
    the 2013 ensemble fork; about a third less convective rain, roughly half
    made up by explicit microphysics, net domain-mean precipitation about
-   15 % dry. Referee: MRMS one-hour precipitation.
+   15 % dry. Referee: hourly precipitation — declared as MRMS, run against
+   Stage-IV, because the shipped MRMS door decodes reflectivity only.
 3. **Downstream condensate surplus** — +50 % cloud water, +62 % rain water
    in the domain mean by 24 h, heavier point extrema; a consequence of (2).
    Referee: MRMS reflectivity and the precipitation extreme tail.
 
-None of the three is softened by declaring it, and none has been judged yet:
-the obs-referee machinery exists and is byte-reproducible
-([`docs/obs-referee.md`](../obs-referee.md)), and **the comparison has not
-been run**. Until it runs, each divergence reads NOT MEASURED against
-observations. A bias that is wrong against observations is still wrong —
-declaring MPAS no longer the referee changes the referee, it does not clear
-the finding. Every run receipt and every history file carries
+None of the three is softened by declaring it. Two of them have now been
+judged: the obs-referee ran for the first time on 2026-08-25, four cases
+scored against Stage-IV precipitation, MRMS reflectivity and ASOS surface
+reports ([`docs/obs-referee.md`](../obs-referee.md),
+receipt `evidence/obs-referee-283/`; see
+[`evidence/EVIDENCE.md`](../../evidence/EVIDENCE.md)). (2) is scored
+against real rainfall; (3) is scored on its precipitation-extreme half, and its
+reflectivity half cannot be scored at all against this build, because the
+history stream carries no reflectivity field to compare. (1) stays outside what
+these instruments can see. A bias that is wrong against observations is still
+wrong — declaring MPAS no longer the referee changes the referee, it does not
+clear the finding. Every run receipt and every history file carries
 `gf_native_parity_claim: false` beside `gf_declared_divergence` so the
 declaration travels with the data.
 

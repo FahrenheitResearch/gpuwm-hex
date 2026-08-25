@@ -73,8 +73,12 @@ native v8.4.1 and that pin is the correctness anchor. The physics is judged by
 **obs-skill against MRMS and ASOS**, not by agreement with another model.
 
 That changes the referee; it does not clear a finding. A bias that is wrong
-against *observations* is still wrong, and the obs-skill comparison that would
-judge these three has not been run yet.
+against *observations* is still wrong. That comparison has now been made:
+2026-08-25, four cases, Stage-IV precipitation, MRMS reflectivity and ASOS
+surface, in receipt `evidence/obs-referee-283/` (see
+[`evidence/EVIDENCE.md`](evidence/EVIDENCE.md)). The
+verdict for each divergence is in
+[`docs/declared-divergences.md`](docs/declared-divergences.md).
 
 ---
 
@@ -85,7 +89,7 @@ judge these three has not been run yet.
 | Python | 3.11 or newer |
 | GPU | A CUDA device. Memory is set by mesh size and by the card. Measured 2026-08-24 on an RTX 5090 at the current engine pin: `footprint = 6,296.5 MiB + 93,474 B/cell`. The published 40,962-cell global mesh (x1.40962, about 120 km) peaked at **9,948 MiB — inside a 12 GiB card's budget**; the 163,842-cell mesh (x4.163842, about 24 km) peaked at **20,902 MiB**, and its run path still admits at a 24 GiB free-memory floor, so it remains a 32 GiB-card configuration until that floor is re-derived. The fixed term is a property of the card, not the mesh; both smaller parts previously measured carried smaller fixed terms. Receipts: `evidence/gf-pin-move-measured-20260824/`. |
 | CUDA | CuPy matching your driver's CUDA major — there is no way for pip to detect it, so you choose (below). |
-| Engine | The `gpuwm` distribution, 2.5.3 or newer: the physics seam, and the bundle that carries the four MPAS bridge binaries both doors drive. **Plus a `gpuwm` source checkout for the forecast lane** — see *The engine pin*. |
+| Engine | The `gpuwm` distribution, 2.5.5 or newer: the physics seam, and the bundle that carries the four MPAS bridge binaries both doors drive. **Plus a `gpuwm` source checkout for the forecast lane** — see *The engine pin*. |
 | Assets | A mesh grid file, a matching static file, and (for the init door) a vertical-grid declaration — normally a `--vertical-spec` JSON; a native-minted init file as a capsule is the compatibility mode. **gpuwm-hex ships none of these and has no fetch path for them.** See *Assets you must supply*. |
 | Rust binaries | `rw_mpas_init` for the init door; `rw_mpas_convert` and `rw_wrfbatch` for the render door. They are built from the `gpuwm` source tree — see *Building the Rust engines*. |
 
@@ -133,37 +137,41 @@ directly should expect the name to change in a later release.
 
 ### The engine pin
 
-gpuwm-hex depends on `gpuwm>=2.5.3`. That floor is a coarse filter, not the
+gpuwm-hex depends on `gpuwm>=2.5.5`. That floor is a coarse filter, not the
 wall: the port pins the engine's physics seam by the SHA-256 of **sixteen
-individual gpuwm source files**, and thirteen of those sixteen differ at
-gpuwm's published 2.5.0 stamp and six at its 2.5.1 stamp — the GF seam-parity
-work the port pins, and the GF frame cut on top of it, landed after those
-cuts. A `>=2.5.0` floor would let pip resolve an install that the port then
-refuses at launch, and no published version satisfies the sixteen-file
-manifest on its own.
+individual gpuwm source files**, and the gap between published stamps and the
+pinned bytes recurred at every cut — thirteen of the sixteen differ at
+gpuwm's published 2.5.0 stamp, six at 2.5.1, and three still differ at 2.5.4
+(`docs/mpas-seam.md`, `gpuwm/core/mpas_column_batch.py`,
+`gpuwm/io/restart.py`), because the seam-convergence work this tree pins
+landed after the 2.5.4 cut. A lower floor would let pip resolve an install
+that the port then refuses at launch; 2.5.5 is the first published version
+whose bytes match the manifest.
 
-The floor sits at 2.5.3 rather than 2.5.1 for a **second and independent**
-reason. The four MPAS bridge binaries — `rw_mpas_init`, `rw_mpas_convert`,
-`rw_mpas_mesh`, `rw_mpas_static` — enter gpuwm's *bundle* at 2.5.3; their
+The floor also keeps a **second and independent** refusal where pip can make
+it. The four MPAS bridge binaries — `rw_mpas_init`, `rw_mpas_convert`,
+`rw_mpas_mesh`, `rw_mpas_static` — entered gpuwm's *bundle* at 2.5.3; their
 rows landed the day after the 2.5.2 upload, so published 2.5.2 stages none of
 them through `gpuwm fetch-bridges`. Both front doors drive those binaries, and
 the gpuwm source tree does not publish, so a user who resolved onto a 2.5.2
 engine could open **neither door** and would have no route to build what was
 missing. That is a stranded install rather than a degraded one, and a
-dependency floor is the only place pip can refuse it. gpuwm 2.5.3 publishes
+dependency floor is the only place pip can refuse it. gpuwm 2.5.5 publishes
 before this distribution does, which is the one hard ordering constraint the
 release carries.
 
 **Installing `gpuwm` is necessary but not sufficient for the forecast lane.**
 One of the sixteen pinned files is `docs/mpas-seam.md`, a repository document
 that no wheel places in `site-packages`. The forecast lane therefore needs a
-**gpuwm source checkout** at the pinned commit, passed as `--arwen-checkout`,
-in addition to the installed distribution. This is stated plainly because the
+**gpuwm source checkout** at the pinned commit, passed to `gpuwm-hex forecast`
+as `--gpuwm-checkout` (`--arwen-checkout` on the driver beneath it), in
+addition to the installed distribution. This is stated plainly because the
 alternative — discovering it as a `FileNotFoundError` deep in a launch — is the
-trap.
+trap; the `forecast` door refuses by name instead, and so does `gpuwm-hex
+doctor`.
 
-**The two front doors do not need any of that.** `init` and `render` import no
-`gpuwm` at all; they drive Rust binaries.
+**The init and render doors do not need any of that.** They import no `gpuwm`
+at all; they drive Rust binaries.
 
 ---
 
@@ -269,11 +277,12 @@ found, the refusal names every rung it searched and both commands above.
 Measured against the **published** `gpuwm` 2.5.2 wheel, not a checkout: its
 bundle carries `rw_wrfbatch` and **not** `rw_mpas_init` or `rw_mpas_convert`.
 On that engine `gpuwm fetch-bridges` gives you the renderer and nothing that
-opens either MPAS door. That measurement is why the dependency floor is
-`gpuwm>=2.5.3` and not lower: 2.5.3 is where the four MPAS bridge binaries
-enter the bundle, so pip cannot resolve you onto an engine that strands both
-doors. A conforming install therefore never sees the 2.5.2 shortfall; it is
-recorded here because it is the reason the floor moved.
+opens either MPAS door. That measurement is why the dependency floor cleared
+2.5.3 and never fell back: 2.5.3 is where the four MPAS bridge binaries
+enter the bundle, and the current `gpuwm>=2.5.5` floor keeps that guarantee,
+so pip cannot resolve you onto an engine that strands both doors. A
+conforming install therefore never sees the 2.5.2 shortfall; it is recorded
+here because it is the reason the floor first moved.
 
 You are not asked to track that. `gpuwm-hex doctor` asks the gpuwm you
 actually have which artifacts its bundle declares, and every refusal offers
@@ -551,9 +560,10 @@ from the microphysics alone.
 
 Not blockers, and not evidence of a broken dycore. They are the measured price
 of running ArWen's physics instead of MPAS's, stated so a user knows what they
-are getting. What is still owed on them is the obs-skill comparison, which is
-the verification of record for physics here. The register of all three — the
-mechanism, the magnitude and the named observational referee for each — is
+are getting. The obs-skill comparison, which is the verification of record for
+physics here, ran on 2026-08-25 and reaches two of the three; the register of
+all three — the mechanism, the magnitude, the named observational referee and
+now what that referee said — is
 [`docs/declared-divergences.md`](docs/declared-divergences.md).
 
 Measured over 24 h, two independent weather cases, two mixing regimes,

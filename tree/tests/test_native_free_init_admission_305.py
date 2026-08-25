@@ -298,16 +298,26 @@ def native_mesh_pair(tmp_path_factory, binding_mod) -> SimpleNamespace:
     # min(dcEdge)=20 km admits the registry's 120 s at 125 m/s and 0.90 safety
     # (bound 144 s), so admission passes on geometry rather than on a waiver.
     dc_edge = 20_000.0 + (np.arange(binding.n_edges, dtype=np.float64) % 5_000.0)
+    # dvEdge is genuine geometry too, at the published family's own ratio: the
+    # bind measures dual-edge amplification from this array, and a fixture that
+    # omitted it would exercise the missing-variable refusal instead of the
+    # admission the test is about.
+    dv_edge = dc_edge * 0.5
     with netCDF4.Dataset(static, "w", format="NETCDF4") as dataset:
         dataset.setncattr("sphere_radius", radius)
         dataset.createDimension("nEdges", binding.n_edges)
+        dataset.createDimension("TWO", 2)
         dataset.createDimension("nVertLevels", binding.n_levels)
         dataset.createDimension("nSoilLevels", binding.n_soil_levels)
         nominal = dataset.createVariable("nominalMinDc", "f8", ())
         nominal[...] = binding.nominal_dx_m
         dataset.createVariable("dcEdge", "f8", ("nEdges",))[:] = dc_edge
+        dataset.createVariable("dvEdge", "f8", ("nEdges",))[:] = dv_edge
+        dataset.createVariable("cellsOnEdge", "i4", ("nEdges", "TWO"))[:] = pairs
 
-    return SimpleNamespace(grid=grid, static=static, dc_edge=dc_edge)
+    return SimpleNamespace(
+        grid=grid, static=static, dc_edge=dc_edge, dv_edge=dv_edge
+    )
 
 
 def _unpinned_require_file(binding_mod):

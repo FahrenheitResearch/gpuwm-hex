@@ -53,17 +53,17 @@ if str(SRC) not in sys.path:
 
 
 SCHEMA = "mpas-port.cuda-v841-real-x4-full-physics/v2"
-SNAPSHOT_SCHEMA = "mpas-port.cuda-v841-real-x4-full-physics-snapshot/v2"
+SNAPSHOT_SCHEMA = "mpas-port.cuda-v841-real-x4-full-physics-snapshot/v3"
 CHECKPOINT_SCHEMA = "mpas-port.cuda-v841-real-x4-full-physics-checkpoint/v3"
 RESTART_WORKER_SCHEMA = "mpas-port.cuda-v841-real-x4-full-physics-restart-worker/v1"
 PROFILE = "real-x4.163842-v8.4.1-full-physics-gf-ysu-gwdo"
 SOURCE_RELEASE = "v8.4.1"
-ARWEN_COMMIT = "0d04db71298d010a61fee3267c07277da3b8b64f"
+ARWEN_COMMIT = "26daaab7ef5c1104166fe61503cdd9487750f1af"
 ARWEN_CONTRACT_DOCUMENT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
 ARWEN_CONTRACT_SURFACE_SHA256 = (
-    "823af4a55018a71ad630144fae7b21a459095249cedb1180bc9f3e1a2fbfe511"
+    "f83b16185a50667d65d90771e1f32942ff31fbfbd52ce4e29e09ea0cb11e1007"
 )
 ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
     "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -188,8 +188,9 @@ NONCLAIMS = (
     "fa35 accepts one scalar p_top_pa, so the exact F000 per-column native "
     "pres2_p top interface is reduced to its areaCell-weighted mean; native "
     "MPAS phase one retains per-column plrad/top-interface pressure",
-    "q2 is retained only as audit data; it is not required nonnegative and "
-    "must not be rendered or published",
+    "q2 is published bitwise as the scheme produced it and is not required "
+    "nonnegative (native q2 itself carries negative values); weather-field "
+    "plots of it remain Rust-renderer-only under the render law",
     "does not establish forecast skill",
 )
 
@@ -227,8 +228,12 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     "src/mpas_port/config_v841.py": (
         "2bc878868e41ffc71491479059d3bd9165ce980a38360ed683e2717f54a8111a"
     ),
+    # Re-frozen for the seam convergence (#335): the Arwen seam pin moved
+    # off the pin-only lineage onto the release line's seam-converge merge,
+    # so the pinned bytes are the bytes the next public engine snapshot
+    # carries. The adapter's own behavior is unchanged.
     "src/mpas_port/cuda_arwen_physics_v841.py": (
-        "20c4b22dcd36fa165d15642e45e3fac5cbe7b8de01dbffdfd0a84361c222d13b"
+        "909a66f090eb08520398d884a5ef7aca9b1539f9b394f3c0c4b1b1ba9b9e90a8"
     ),
     # The v8.4.1 horizontal-mixing execution boundary (2-D Smagorinsky):
     # CPU authorities and the CUDA operator modules the RK1 saved-Euler
@@ -298,7 +303,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "70d2006d4687b67fe087fd4a5c9e69a76e4a39c648703913f4d79903249bdcab"
         ),
         "adapter_contract_sha256": (
-            "6c3ca3bae5f92a7ffa3f9cf27db0f2329ab0506bbf5d76e362f010676a0c78e1"
+            "42b376675b681e3b5998faa9da341db6b3a214185374dabbd0351c91983c8b82"
         ),
         "arwen_contract_surface_sha256": ARWEN_CONTRACT_SURFACE_SHA256,
         "arwen_glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
@@ -1228,13 +1233,30 @@ def overlay_exact_init_reconstruction_coefficients(
     if not np.array_equal(init_counts, mesh_counts):
         raise RuntimeError("init/static nEdgesOnCell topology differs")
     if np.any(init_edges_raw < 0):
-        raise RuntimeError("initialized source edgesOnCell must use MPAS one-based/zero padding")
+        raise RuntimeError("initialized source edgesOnCell must use MPAS one-based indexing")
+    # Padding is canonicalized from nEdgesOnCell, not from the stored value.
+    # THE BREAKAGE THIS PREVENTS: two padding conventions exist in valid MPAS
+    # files and both are in the registry.  Native init_atmosphere zeroes the
+    # unused slots of edgesOnCell; every GRID file measured -- the published
+    # x1.40962 and x4.163842 as much as a generated one -- instead repeats a
+    # real one-based index there, and a static built by copying a grid's
+    # topology verbatim carries that through into the init minted from it.
+    # Trusting the stored value turned an unused slot into a real edge and
+    # refused a mesh whose topology is identical, which is exactly the
+    # per-file special case a registry of arbitrary meshes cannot afford.
+    # The count field is the authority for which slots are used, so this is
+    # the same rule mpas_port.mesh applies at load; on a zero-padded native
+    # init both rules agree entry for entry, so no proven trajectory moves.
+    slot_index = np.arange(init_edges_raw.shape[1], dtype=np.int32)[None, :]
+    used = slot_index < init_counts[:, None]
     init_edges = np.where(
-        init_edges_raw > np.int32(0),
+        used & (init_edges_raw > np.int32(0)),
         init_edges_raw - np.int32(1),
         np.int32(-1),
     ).astype(np.int32, copy=False)
     init_edges = np.ascontiguousarray(init_edges)
+    if np.any(used & (init_edges_raw == np.int32(0))):
+        raise RuntimeError("initialized source edgesOnCell has a zero in a USED slot")
     if not np.array_equal(init_edges, mesh_edges):
         raise RuntimeError("init/static edgesOnCell topology differs after canonicalization")
 
@@ -1250,13 +1272,33 @@ def overlay_exact_init_reconstruction_coefficients(
         )
     active_values = np.ascontiguousarray(coefficients[active])
     nonzero_components = int(np.count_nonzero(active_values))
-    if (
-        active_values.size != active_components
-        or nonzero_components != int(pin["nonzero_components"])
-    ):
+    # THE BREAKAGE THIS PREVENTS: the init carries the static's all-+0
+    # placeholder in a slot the reconstruction actually uses, so the wind
+    # reconstruction there returns the zero vector and nothing says so.  The
+    # unit of that breakage is the 3-VECTOR, not the component.  Requiring
+    # every component to be nonzero was a property of the native x4 carrier
+    # read as a law, and it is false on any mesh with exact symmetry: the
+    # generated u96.64002 has 14 exactly-zero components in 1,152,000, every
+    # one at a cell sitting exactly on a coordinate plane (lon 0/90/180/270
+    # or lat 0), where one Cartesian component is zero because the geometry
+    # says so.  A zero 3-vector is still refused, by name and by count.
+    zero_vectors = int(
+        np.count_nonzero(~np.any(active_values != np.float32(0.0), axis=-1))
+    )
+    if active_values.size != active_components:
         raise RuntimeError(
-            "every active initialized reconstruction 3-vector component "
-            "must be nonzero"
+            f"active reconstruction component count changed: {active_values.size}"
+        )
+    if zero_vectors:
+        raise RuntimeError(
+            f"{zero_vectors} active initialized reconstruction 3-vectors are the "
+            "all-+0 static placeholder; the init did not carry computed "
+            "coefficients for every used slot"
+        )
+    if nonzero_components > active_components:
+        raise RuntimeError(
+            "initialized reconstruction nonzero component count exceeds the "
+            f"active slot budget: {nonzero_components} > {active_components}"
         )
     padding_values = np.ascontiguousarray(coefficients[~active])
     if np.any(padding_values.view(np.uint32) != np.uint32(0)):
@@ -2106,8 +2148,24 @@ def execute_composite_step(
     couple: Callable[..., Any] | None = None,
     clamp: Callable[..., Any] | None = None,
     recover: Callable[..., Any] | None = None,
+    physics_park: Any = None,
+    refl_10cm_due: bool = False,
 ) -> CompositeStepResult:
-    """Execute exactly one staged two-owner full-physics transaction."""
+    """Execute exactly one staged two-owner full-physics transaction.
+
+    ``refl_10cm_due`` is WRF's history-step ``diagflag`` for this step: the
+    phase-two microphysics computes ``refl10cm`` at its own call time (the
+    native MPAS-A v8.4.1 arrangement) and the committed field is consumed by
+    the history capture that follows this step.
+
+    ``physics_park`` is an optional
+    :class:`mpas_port.cuda_physics_tier_park_v841.CudaPhysicsTierParkV841`.
+    When supplied, the physics seam's device residency is moved to pinned host
+    memory across ``driver.step_device_with_physics`` -- the dynamics half of
+    the step, which is where the run's device high-water mark is reached and
+    where nothing reads the physics tier.  Default ``None`` runs exactly as
+    before, allocation for allocation.
+    """
 
     if tuple(scalar_names) != SCALAR_NAMES:
         raise ValueError(f"exact scalar order is {SCALAR_NAMES}")
@@ -2150,6 +2208,12 @@ def execute_composite_step(
             rho_edge=edge_fields.rho_edge,
             kernel_cache=kernel_cache,
         )
+        if physics_park is not None:
+            # The seam is not read again until finish_step.  Everything still
+            # in flight -- the raw phase-1 tendencies, the coupled carriers,
+            # the driver's own state -- is named here so the park's sharing
+            # rule refuses to rebind any allocation the dycore still writes.
+            physics_park.park(shared_roots=(driver, raw, held, edge_fields))
         candidate = driver.step_device_with_physics(held)
         # Read GF's next-step advective forcing here, BEFORE publication:
         # nothing after the driver commit is allowed to raise, and a dry
@@ -2162,10 +2226,13 @@ def execute_composite_step(
             scalar_names=scalar_names,
             kernel_cache=kernel_cache,
         )
+        if physics_park is not None:
+            physics_park.unpark()
         update = backend.finish_step(
             atmosphere=candidate.atmosphere,
             scalar_names=scalar_names,
             dt=DT_SECONDS,
+            refl_10cm_due=refl_10cm_due,
         )
         if _phase_from_receipt(backend) != "finished_unpublished":
             raise RuntimeError("adapter finish did not remain staged and unpublished")
@@ -2195,6 +2262,14 @@ def execute_composite_step(
         )
     except Exception as error:
         rollback_errors: list[str] = []
+        if physics_park is not None and physics_park.is_parked:
+            # The seam's own rollback reads the arrays this park emptied.
+            # Restoring first keeps the rollback path looking at the state it
+            # was written against; a failure here is reported, never swallowed.
+            try:
+                physics_park.unpark()
+            except Exception as unpark_error:  # pragma: no cover - catastrophic
+                rollback_errors.append(f"physics tier unpark failed: {unpark_error}")
         if candidate is not None and not driver_committed:
             try:
                 driver.abort_post_wsm6_candidate(candidate)
@@ -2318,8 +2393,18 @@ def capture_snapshot(
     prep_geometry: Any,
     kernel_cache: Any,
     f000_surface_diagnostics: Mapping[str, Any],
+    expect_refl10cm: bool = False,
 ) -> dict[str, Any]:
-    """Download one committed diagnostic boundary outside step receipts."""
+    """Download one committed diagnostic boundary outside step receipts.
+
+    ``expect_refl10cm`` says this frame is a history frame whose step ran
+    microphysics with ``refl_10cm_due=True``: the committed one-frame field is
+    consumed from the backend and captured as ``refl10cm``.  Step 0 has run no
+    microphysics, so its frame carries the allocated-default zeros exactly as
+    native MPAS-A writes at the initial time.  A later frame with nothing
+    staged is refused by name -- a silent hole here is a history frame the
+    obs referee would score without the model's reflectivity.
+    """
 
     import cupy as cp
     from mpas_port.cuda_physics_prep_v841 import prepare_mpas_to_phys_cuda_v841
@@ -2371,6 +2456,22 @@ def capture_snapshot(
         backend_snapshot, cp
     )
     arrays.update(diagnostics)
+    if expect_refl10cm:
+        staged_refl = backend.take_history_refl10cm()
+        if staged_refl is not None:
+            arrays["refl10cm"] = _host_array(staged_refl, cp)
+        elif step == 0:
+            # Native MPAS-A writes the allocated default at the initial
+            # time; the first microphysics call has not happened yet.
+            arrays["refl10cm"] = np.zeros((N_LEVELS, N_CELLS), dtype=np.float32)
+        else:
+            raise RuntimeError(
+                f"history frame {label} (step {step}) expected a committed "
+                "refl10cm and the backend holds none; the step loop failed "
+                "to pass refl_10cm_due to this step's microphysics, and "
+                "writing the frame without it would hand the obs referee a "
+                "model bundle with no reflectivity"
+            )
     f000_overlay = None
     if step == 0:
         if (
@@ -2464,15 +2565,16 @@ def physical_snapshot_gate(snapshot: Mapping[str, Any], *, allow_initial_negativ
     for name in ("rainc", "rainnc", "snownc", "graupelnc"):
         if np.min(arrays[name]) < 0.0:
             raise FloatingPointError(f"negative accumulated precipitation in {name}")
-    # Native q2 has 44 negative values.  It may be retained by the adapter
-    # audit snapshot, but it is deliberately excluded from this gate.
+    # Native q2 has 44 negative values.  It is published bitwise and stays
+    # deliberately excluded from the nonnegativity gate; finiteness is still
+    # required above like every other field.
     return {
         "finite_all_fields": True,
         "positive_rho_theta_pressure": True,
         "moisture_negative_counts": moisture_negative,
         "soil_moisture_range": [float(smois.min()), float(smois.max())],
         "precipitation_nonnegative": True,
-        "q2_policy": "audit-only; not gated or publishable",
+        "q2_policy": "published bitwise; negatives allowed (native parity); finiteness gated",
     }
 
 
@@ -2833,7 +2935,19 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             "docs/declared-divergences.md)",
         )
         dataset.setncattr("gf_seam_parity_closed", "task-231 forcing-lanes+shallow+per-cell-dx")
-        dataset.setncattr("q2_products_allowed", "false")
+        dataset.setncattr("q2_products_allowed", "true")
+        dataset.setncattr(
+            "q2_negative_policy",
+            "preserved bitwise; native q2 itself carries negative values, so "
+            "consumers forming dewpoint clamp at their own boundary",
+        )
+        dataset.setncattr(
+            "refl10cm_provenance",
+            "computed inside the due step's WSM6 call from post-call "
+            "temperature and unchanged prepared pressure (gpuwm/core/refl.py "
+            "transcribing WRF mp_wsm6.F90:2275-2444 with module_mp_radar "
+            "melting); the model's field, not a renderer diagnostic",
+        )
         for name, dtype in (("indexToCellID", "i4"), ("latCell", "f4"), ("lonCell", "f4"), ("ter", "f4")):
             variable = dataset.createVariable(name, dtype, ("nCells",))
             variable[:] = static[name]
@@ -2852,6 +2966,8 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             "w": "m s^{-1}",
             "tsk": "K",
             "t2": "K",
+            "q2": "kg kg^{-1}",
+            "refl10cm": "dBZ",
             "hfx": "W m^{-2}",
             "qfx": "kg m^{-2} s^{-1}",
             "lh": "W m^{-2}",
@@ -2871,8 +2987,6 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             "rvbldiff": "m s^{-2}",
         }
         for name, value in sorted(arrays.items()):
-            if name == "q2":
-                continue
             array = np.asarray(value, dtype=np.float32)
             if array.shape == (N_LEVELS, N_CELLS):
                 dims = ("Time", "nCells", "nVertLevels")
@@ -3333,7 +3447,7 @@ def _write_baseline_diagnostic_output(
             "this diagnostic is not a release proof",
         ],
         "proof": proof,
-        "weather_plot_policy": "native Rust/Arwen renderer only; q2 forbidden",
+        "weather_plot_policy": "native Rust/Arwen renderer only; q2 ships in the history stream and its weather-field plots go through the same renderer",
     }
     payload["payload_sha256"] = canonical_json_sha256(payload)
     receipt = diagnostic_root / BASELINE_DIAGNOSTIC_RECEIPT_NAME
@@ -4133,7 +4247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "proof": proof,
         "sources_unchanged": True,
         "authorities_unchanged": True,
-        "weather_plot_policy": "native Rust/Arwen renderer only; q2 forbidden",
+        "weather_plot_policy": "native Rust/Arwen renderer only; q2 ships in the history stream and its weather-field plots go through the same renderer",
     }
     payload["payload_sha256"] = canonical_json_sha256(payload)
     receipt = output_root / RECEIPT_NAME

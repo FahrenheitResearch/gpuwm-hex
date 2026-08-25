@@ -85,8 +85,24 @@ sizes without mislabelling them as a measured peak:
 ```bash
 python tools/device_memory_capacity/copy_elision_accounting.py \
   --cells 163842 --edges 491520 --vertical-levels 55 \
+  --prior-fixed-mib 6296.5 --prior-bytes-per-cell 93474 \
   --output evidence/capacity/copy-elision-static-x4.json
 ```
+
+`--prior-fixed-mib` and `--prior-bytes-per-cell` are **required and have no
+defaults**, and the tool refuses by name without them. The pair above is the
+model of record: measured 2026-08-24 at Arwen seam pin `0d04db712`, after the
+Grell-Freitas local-memory frame cut
+(`evidence/gf-pin-move-measured-20260824/`). Use it for any new question about
+what fits a card.
+
+To reproduce the #308 copy-elision accounting as it was landed, pass the arm
+it was computed against instead — `--prior-fixed-mib 9797.8
+--prior-bytes-per-cell 86630`, the 2026-08-20 ledger at pin `629ddb6f0`. They
+are not interchangeable: the frame cut moved the fixed term down 3,501.3 MiB
+and the slope up 6,844 B/cell, and because those errors partly cancel, mixing
+the models yields a plausible verdict rather than an obvious failure. The pair
+you pass is recorded in the report's `prior_gap` block.
 
 The sum in that file must not be subtracted from `nvidia-smi` peak. Allocation
 events repeat, overlap, and interact with pool retention.

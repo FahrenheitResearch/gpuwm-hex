@@ -18,6 +18,12 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from mpas_port.dual_edge_admission import (
+    DualEdgeAdmission,
+    DualEdgeAdmissionError,
+    DualEdgePolicy,
+    admit_dual_edges,
+)
 from mpas_port.timestep_admission import (
     CourantPolicy,
     EdgeLengthAuthority,
@@ -71,6 +77,18 @@ class MeshBinding:
             max_characteristic_speed_m_s=self.courant_wave_speed_m_s,
             safety_factor=self.courant_safety_factor,
         )
+
+    def dual_edge_policy(self) -> DualEdgePolicy:
+        """One floor for every row, deliberately with no per-row override.
+
+        The Courant policy is per-row because a wave speed is a modelling
+        choice. Dual-edge amplification is not: it is a property of the mesh
+        the operators inherit, so a row cannot admit itself past it. Changing
+        the floor means editing mpas_port.dual_edge_admission, where the
+        measured anchors that set it live.
+        """
+
+        return DualEdgePolicy()
 
 
 MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
@@ -154,7 +172,47 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
                 "defc_a/defc_b and the soil-composition group; no file matching it "
                 "survives on any reachable machine. The rebuilt static carries real "
                 "defc tables, so like the published mesh this row drops them at "
-                "attach: the frozen v8.4.1 path runs deformation inactive."
+                "attach: the frozen v8.4.1 path runs deformation inactive. "
+                "REFUSED AT BIND since 2026-08-24 by the dual-edge admission, and "
+                "the row is kept because it is the measurement that sets the floor: "
+                "the density-biased Fibonacci seed this mesh was generated from is "
+                "polycrystalline, so its Delaunay carries 3,447 heptagons beside "
+                "3,459 pentagons and the near-cocircular dislocation quads collapse "
+                "dvEdge to 6.514 m at edge 19786 (dcEdge 38,657 m, ratio 1.685e-04, "
+                "TRiSK tangential amplification 5,935x). Measured consequence "
+                "(the proving node, RTX 5070 Ti): every runaway magnitude in the first outer "
+                "step sits on that edge and the run dies at composite step 0. It has "
+                "never completed a forecast and no timestep makes it able to."
+            ),
+        ),
+        "u96.64002": MeshBinding(
+            name="u96.64002",
+            n_cells=64_002,
+            n_edges=192_000,
+            n_levels=55,
+            n_interfaces=56,
+            n_soil_levels=4,
+            nominal_dx_m=96_000.0,
+            dt_seconds=120.0,
+            grid_bytes=87_560_436,
+            grid_sha256="57f4965a81d25dbc16b4fcbdb06474ca1a4b39adf406a58b04852be72f93f305",
+            static_bytes=122_381_512,
+            static_sha256="005cb9e7363283ec98a0cb027956d0245978a3a9a7c12cb3032d31e815561e27",
+            drop_carried_deformation=True,
+            notes=(
+                "Generated uniform 96 km mesh, and the first generated mesh to "
+                "complete a full-physics forecast. Both files are ours: the grid "
+                "from rw_mpas_mesh seeded on the icosahedral Goldberg subdivision "
+                "GP(80,0) -- 64,002 cells exactly, snap 0.0 percent -- and the "
+                "static from the unified rw_mpas_static against that same grid. "
+                "The seed is what separates it from v15.150.38857: coordination is "
+                "exactly 12 pentagons and no heptagons, so no dislocation quad "
+                "exists for a collapsed dual edge to form around, and "
+                "min(dvEdge/dcEdge) measures 0.394671 -- the published x1.40962's "
+                "own class. Declared dt 120 s against a measured Courant limit of "
+                "511.4 s (min dcEdge 71,031.6 m). The static carries real defc "
+                "tables, so like the other non-native rows this one drops them at "
+                "attach."
             ),
         ),
     }
@@ -240,6 +298,33 @@ def _static_edge_authority(static_path: Path) -> EdgeLengthAuthority:
         return edge_length_authority(dc_edge, source="static.dcEdge")
     except TimestepAdmissionError as error:
         raise MeshBindingMismatch(f"{static_path}: {error}") from error
+
+
+def _static_dual_edges(static_path: Path) -> tuple[Any, Any, Any]:
+    """Read the DUAL edge lengths the TRiSK tangential terms divide by.
+
+    Read from the same file the timestep authority reads, for the same reason:
+    a mapping assembled earlier can carry a minimum nothing measured.
+    """
+
+    import netCDF4
+
+    with netCDF4.Dataset(str(static_path)) as dataset:
+        missing = [
+            name
+            for name in ("dvEdge", "dcEdge")
+            if dataset.variables.get(name) is None
+        ]
+        if missing:
+            raise MeshBindingMismatch(
+                f"{static_path}: static carries no physical {', '.join(missing)}; "
+                "the dual-edge amplification the TRiSK operators inherit cannot be measured"
+            )
+        dv_edge = np.asarray(dataset.variables["dvEdge"][:])
+        dc_edge = np.asarray(dataset.variables["dcEdge"][:])
+        raw_cells = dataset.variables.get("cellsOnEdge")
+        cells_on_edge = None if raw_cells is None else np.asarray(raw_cells[:])
+    return dv_edge, dc_edge, cells_on_edge
 
 
 def _fingerprint_with_authority(
@@ -447,11 +532,36 @@ def bind_mesh(
     except TimestepAdmissionError as error:
         raise MeshBindingMismatch(f"mesh {mesh_name!r}: {error}") from error
     observed["timestep_admission"] = timestep.as_dict()
+    # Dual-edge admission runs for EVERY mesh, published or generated, frozen
+    # or not.  A mesh whose Voronoi edges collapse cannot be saved by a smaller
+    # timestep, so it is refused here rather than inside step 0 on a validation
+    # flag that names no array, no cell and no edge.
+    dv_edge, dc_edge, cells_on_edge = _static_dual_edges(
+        Path(files["static"]["path"])
+    )
+    try:
+        dual_edges = admit_dual_edges(
+            dv_edge,
+            dc_edge,
+            policy=binding.dual_edge_policy(),
+            cells_on_edge=cells_on_edge,
+            mesh_name=mesh_name,
+        )
+    except DualEdgeAdmissionError as error:
+        raise MeshBindingMismatch(str(error)) from error
+    observed["dual_edge_admission"] = dual_edges.as_dict()
     log(
         f"[mesh-binding] mesh {mesh_name}: nCells={observed['nCells']} "
         f"nEdges={observed['nEdges']} nominal={observed['nominalMinDc_f32']} m; "
         f"min(dcEdge)={authority.minimum_m:.3f} m; dt={binding.dt_seconds:.3f} s; "
         f"limit={timestep.maximum_admitted_dt_seconds:.3f} s"
+    )
+    log(
+        f"[mesh-binding] mesh {mesh_name}: min(dvEdge/dcEdge)="
+        f"{dual_edges.minimum_ratio:.6g} at edge {dual_edges.minimum_ratio_edge} "
+        f"(dvEdge={dual_edges.minimum_ratio_dv_edge_m:.3f} m), "
+        f"TRiSK tangential amplification {dual_edges.amplification:.4g}x; "
+        f"floor {dual_edges.policy.minimum_dv_over_dc:.6g}"
     )
 
     edge_sha = authority.raw_sha256
@@ -629,6 +739,31 @@ def bind_mesh(
             "NOMINAL_DX_M",
             "DT_SECONDS",
         ]
+        # THE BREAKAGE THIS PREVENTS: a receipt for a run on this mesh that
+        # says "x4.163842" in its own claim sentence and profile slug.  Both
+        # constants are written verbatim into every receipt, and a receipt
+        # that names the wrong mesh is worse than no receipt -- a reader
+        # comparing two runs would take them for the same shape.  The native
+        # row rebinds nothing, so its claim and profile stay byte-identical.
+        native_label, mesh_label = native.name, binding.name
+        if mesh_label != native_label:
+            for module, attribute in (
+                (forecast, "CLAIM"),
+                (proof, "PROFILE"),
+                (proof, "CLAIM"),
+            ):
+                text = getattr(module, attribute, None)
+                if not isinstance(text, str) or native_label not in text:
+                    continue
+                setattr(
+                    module,
+                    attribute,
+                    text.replace(native_label, mesh_label).replace(
+                        f"dt = {native.dt_seconds:g} s",
+                        f"dt = {binding.dt_seconds:g} s",
+                    ),
+                )
+                rebindings[f"{attribute}_mesh_label"] = [native_label, mesh_label]
         prepare = forecast.prepare_forecast_host
 
         def _prepare(

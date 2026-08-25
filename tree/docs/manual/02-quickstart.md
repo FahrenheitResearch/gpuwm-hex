@@ -3,8 +3,11 @@
 This chapter goes from nothing to rendered forecast products. Every command
 in it was run, in this order, on a fresh install before it was printed here —
 the door commands against the installed 0.1.0 wheel, the forecast against the
-repository checkout, the GPU steps on an RTX 5070 Ti. Where output is shown,
-it is that run's output.
+repository checkout, the GPU steps on an RTX 5070 Ti. Where output is shown
+it is that run's output, except where a block is marked as a *form* — the
+shape of a line rather than a captured one. The refusal transcript in 2.6
+comes from a second machine, a 10 GiB RTX 3080, because that is the card
+the refusal it shows requires.
 
 The true shape of the journey: the wheel installs in one command; the
 doors then need three estates the wheel cannot carry (a CUDA-matched CuPy,
@@ -107,8 +110,9 @@ gpuwm you have: the transcript above was taken against the published gpuwm
 2.5.2 wheel, whose bundle carries `rw_wrfbatch` and **not** `rw_mpas_init`
 or `rw_mpas_convert` — which is exactly the shortfall the doctor reports
 there. The four MPAS bridge binaries enter the bundle at gpuwm 2.5.3, and
-that is why this distribution's floor is `gpuwm>=2.5.3`: a conforming
-install cannot land on the engine that transcript was taken from. Doctor
+this distribution's floor is `gpuwm>=2.5.5` (raised past 2.5.3 for the seam
+bytes the port pins): a conforming install cannot land on the engine that
+transcript was taken from. Doctor
 asks the gpuwm you actually have what its bundle declares, so it never sends
 you to a staging command that cannot deliver the file.
 
@@ -162,14 +166,28 @@ is wrong. You need four things:
    have published statics; a generated mesh gets its static from the same
    `gpuwm mesh` run. Grid and static must be the same mesh — the doors
    cross-check and refuse a mismatched pair by name.
-3. **For the init door: a native-minted init-class file for this mesh, as a
-   "capsule."** The init engine reads the vertical-grid arrays out of it
-   rather than inventing them. This is the sharpest prerequisite in the
-   product — one file, once per mesh, built by native
-   `init_atmosphere_model` — and chapter 5 explains it fully, including the
-   status of the in-progress path that removes it.
+3. **For the init door: a vertical-grid declaration.** The normal path is
+   a `--vertical-spec` JSON (`gpuwm-hex.vertical-spec/v1`; examples ship in
+   the checkout under `verification/vertical-specs/`), from which the door
+   constructs the vertical grid itself — no native toolchain anywhere in
+   the loop. The compatibility mode reads the vertical out of a
+   native-minted init-class file (`--capsule`); chapter 5 explains both
+   and when to prefer which.
 4. **Meteorological input**: a WPS intermediate file from `ungrib` (GFS,
    ERA5, whatever you drive with), valid at your start time.
+
+For 1 and 2, on this mesh, the public download and the registered row are the
+same bytes — verified 2026-08-24 by fetching both archives fresh and hashing
+what came out:
+
+| file | from | bytes | SHA-256 |
+| --- | --- | --- | --- |
+| `x1.40962.grid.nc` | `x1.40962.tar.gz` | 56,039,332 | `9a9e1909a755dac209462ceb0bfffd77ac1b37503169568b7f296707ee612bb9` |
+| `x1.40962.static.nc` | `x1.40962_static.tar.gz` | 94,766,584 | `cf1a47d4168327f06a8403555d6ed8b2fe1aff7f8b916bb7f6a754c34a10ac82` |
+
+Both match `tools/mpas_mesh_binding.py` exactly, so the forecast door's byte
+check passes on what the published downloads give you. That is a fact about
+those archives, not a fetch path: gpuwm-hex still fetches nothing.
 
 Sanity-check the mesh pair before anything expensive touches it:
 
@@ -202,8 +220,7 @@ gpuwm-hex init \
   --met     <path-to-WPS-intermediate> \
   --grid    assets/x1.40962.grid.nc \
   --static  assets/x1.40962.static.nc \
-  --capsule   assets/x1.40962-native-init.nc \
-  --reference assets/x1.40962-native-init.nc \
+  --vertical-spec verification/vertical-specs/tc55-v1.json \
   --out     work/x1.40962.init.nc \
   --start-time 2026-08-12_06:00:00 \
   --nfglevels 34 --nfgsoillevels 4 \
@@ -216,67 +233,116 @@ gpuwm-hex init \
   --oned-underflow preserve
 ```
 
-`--nfglevels` must cover the levels actually in your met file; declare too
-few and the door refuses with the real count (the proving run's met file, a
-GFS intermediate, carried 34). The run above wrote a 372 MB
-`x1.40962.init.nc` plus `x1.40962.init.nc.provenance.json` — the SHA-256 of
-every input, the engine binary, the argv, the engine's own receipt, and the
-output — in 2.7 seconds, and exited 0.
+This is the native-free mint: `--vertical-spec` names a versioned JSON
+vertical declaration and no native artifact appears anywhere in the
+lineage (the receipt records `native_runtime_dependency: false`). The
+compatibility mode passes `--capsule` + `--reference` naming a
+native-minted init-class file instead; chapter 5.1 has both modes and
+their receipts. `--nfglevels` must cover the levels actually in your met
+file; declare too few and the door refuses with the real count (the
+proving run's met file, a GFS intermediate, carried 34). The run above
+wrote a 385 MB `x1.40962.init.nc` plus
+`x1.40962.init.nc.provenance.json` — the SHA-256 of every input, the
+engine binary, the argv, the engine's own receipt, and the output. The
+engine step takes about 2 s; the first mint for a mesh spends minutes in
+the door's geometry solve, and the keyed cache brings a re-mint down to
+about a minute.
 
-## 2.6 First forecast
+## 2.6 Ask the card first
 
-**The forecast lane needs the gpuwm-hex source checkout — stated plainly.**
-There is no `gpuwm-hex forecast` console script in 0.1.0, deliberately: the
-lane needs a `gpuwm` **source checkout at a pinned commit** on top of the
-installed distribution (the seam pin includes a repository document no wheel
-installs), and its authority meshes have no fetch path. Chapter 6 has the
-whole story. What that means concretely:
-
-- clone/obtain the gpuwm-hex repository and the `gpuwm` repository;
-- check the `gpuwm` checkout out at the pinned commit (the run verifies
-  the checkout's sixteen pinned files by SHA-256 at launch and refuses a
-  mismatch naming the file and both digests);
-- run the forecast driver from the gpuwm-hex checkout's `tree/` directory.
-
-The command below ran a 1-hour, 30-step full-physics forecast on the
-40,962-cell global mesh, on a 16 GiB RTX 5070 Ti, from the init built in
-2.5, in 146 s wall:
+The forecast lane is the one step whose answer depends on your hardware, so
+ask before you spend anything on it:
 
 ```sh
-cd <gpuwm-hex-checkout>/tree
-PYTHONPATH=src python tools/run_cuda_v841_forecast_mesh.py \
-  --repo <gpuwm-hex-checkout>/tree --mesh x1.40962 \
-  --receipt-json work/fc-bind.json \
-  -- \
-  --grid   assets/x1.40962.grid.nc \
-  --static assets/x1.40962.static.nc \
-  --init   work/x1.40962.init.nc \
+gpuwm-hex forecast --preflight \
+  --mesh    x1.40962 \
+  --grid    assets/x1.40962.grid.nc \
+  --static  assets/x1.40962.static.nc \
+  --init    work/x1.40962.init.nc \
+  --init-source "GFS 2026-08-12 06Z" \
+  --hours 1.0 --history-every-minutes 30 \
+  --out work/fc-01 \
+  --gpuwm-checkout <gpuwm-checkout>
+```
+
+On a card that holds the mesh, preflight binds it, admits it, runs the
+driver's own source-pin and host checks, and exits 0. On one that does not,
+it says so with numbers. This transcript is from a 10 GiB RTX 3080 with a
+desktop session on it, on a box that had the mesh pair but not yet the
+init — and preflight reports **both** blockers rather than stopping at the
+first:
+
+```
+INPUT MISSING --init names a missing file: .../x1.40962.init.nc.  Build one with `gpuwm-hex init` (chapter 5 of the manual).
+[mesh-binding] mesh x1.40962: nCells=40962 nEdges=122880 nominal=120000.0 m; min(dcEdge)=97076.508 m; dt=120.000 s; limit=698.951 s
+BIND mesh=x1.40962 rebound=True dt=120.0 s
+ADMISSION mesh=x1.40962 cells=40,962 predicted=9,948.0 MiB headroom=512.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> REFUSED
+PREFLIGHT mesh=x1.40962 problems=2 status=preflight_refused
+```
+
+The 40,962-cell mesh needs a **12 GiB** card; that 10 GiB one is 1,363 MiB
+short of it. Preflight exits 1 and touches no CUDA beyond the memory query.
+Chapter 6.2 explains the model it decides with and how to supply your own
+card's measured row.
+
+Two more things the forecast lane needs, both stated here rather than
+discovered mid-launch:
+
+- **the gpuwm-hex source checkout** — the drivers live in `tree/tools/`,
+  outside the wheel, and verify their own executing modules by SHA-256
+  before CUDA is touched. Run the door from inside a checkout, or pass
+  `--repo <gpuwm-hex-checkout>/tree`;
+- **a `gpuwm` source checkout at the pinned commit** — `--gpuwm-checkout`.
+  The seam pin includes a repository document no wheel installs, so an
+  installed gpuwm satisfies pip and not the pin. The run verifies the
+  sixteen pinned files by SHA-256 at launch and refuses a mismatch naming
+  the file and both digests.
+
+## 2.7 First forecast
+
+Same command without `--preflight`:
+
+```sh
+gpuwm-hex forecast \
+  --mesh    x1.40962 \
+  --grid    assets/x1.40962.grid.nc \
+  --static  assets/x1.40962.static.nc \
+  --init    work/x1.40962.init.nc \
   --init-source "GFS 2026-08-12 06Z" \
   --start-time 2026-08-12_06:00:00 \
   --hours 1.0 --history-every-minutes 30 \
-  --case-label quickstart \
-  --arwen-checkout <gpuwm-checkout> \
-  --cache-root work/cache --output work/out
+  --out work/fc-01 \
+  --gpuwm-checkout <gpuwm-checkout> \
+  --case-label quickstart
 ```
 
+The same integration, from the init built in 2.5, took **97.8 s of
+integration and 146 s wall on a 16 GiB RTX 5070 Ti**: 1 hour, 30 steps at
+dt = 120 s, full physics, three history files, exit 0. That measurement was
+taken through `tools/run_cuda_v841_forecast_mesh.py`, the driver this door
+now drives; the door adds the admission decision in front of it and the
+receipt and render command behind it, and changes nothing in between.
+
+When it finishes, `--out` holds three history files (analysis, +30 min,
++60 min), `cuda-v841-forecast-receipt.json` — the driver's receipt, stating
+exactly what this run claims and, at equal prominence, what it does not —
+and `forecast-receipt.json`, the door's own, carrying the admission
+decision, the mesh binding, the driver's receipt embedded whole, and the
+render command. The door's last two lines have the form:
+
 ```
-[mesh-binding] mesh x1.40962: nCells=40962 nEdges=122880 nominal=120000.0 m; min(dcEdge)=97076.508 m; dt=120.000 s; limit=698.951 s
-[mesh-binding] bound x1.40962: nCells=40962, nEdges=122880, dx=120000.0 m, dt=120.0 s; ...
-{"history_frames": 3, "integration_seconds": 97.8, ..., "status": "passed", "steps": 30}
-[mesh-run] mesh=x1.40962 rc=0 wall=145.968s
+DOOR mesh=<row> steps=<n> frames=<n> status=passed out=<out>
+NEXT gpuwm-hex render --history <out>/cuda-history.<valid-time>.nc --mesh <grid> --out <out>/png --simulation-start <start>
 ```
 
-`work/out/` now holds three history files (analysis, +30 min, +60 min) and
-`cuda-v841-forecast-receipt.json` — the receipt that states exactly what
-this run claims and, at equal prominence, what it does not (chapter 6).
+## 2.8 First rendered products
 
-## 2.7 First rendered products
-
-Back on the installed doors — `render` needs no checkout and no GPU:
+Paste the `NEXT` line, or spell it out. `render` needs no checkout and no
+GPU:
 
 ```sh
 gpuwm-hex render \
-  --history work/out/cuda-history.2026-08-12_07.00.00.nc \
+  --history work/fc-01/cuda-history.2026-08-12_07.00.00.nc \
   --mesh    assets/x1.40962.grid.nc \
   --out     work/png \
   --simulation-start 2026-08-12_06:00:00 \

@@ -219,11 +219,12 @@ def check_gpu_runtime() -> list[Finding]:
 #: The floor that pip enforces.  Stated once; the wall is the source
 #: manifest, which is a different and stricter thing (see below).
 #:
-#: 2.5.3 is the first version that both carries the seam bytes the Arwen
-#: manifest pins and bundles the four MPAS bridge binaries the front doors
-#: drive.  On 2.5.2 `gpuwm fetch-bridges` can stage none of the four, so a
-#: user resolved onto it reaches neither door.
-GPUWM_FLOOR = "2.5.3"
+#: 2.5.5 is the first published version whose bytes match the Arwen seam
+#: manifest (3 of the 16 pinned files still differ at the 2.5.4 stamp), and
+#: it keeps the bundle guarantee that arrived at 2.5.3: the four MPAS bridge
+#: binaries the front doors drive.  On 2.5.2 `gpuwm fetch-bridges` can stage
+#: none of the four, so a user resolved onto it reaches neither door.
+GPUWM_FLOOR = "2.5.5"
 
 
 def check_physics_seam() -> list[Finding]:

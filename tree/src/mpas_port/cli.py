@@ -12,31 +12,14 @@ from .errors import MpasPortError
 # ``.mesh`` and ``.oracle`` are imported inside the handlers that use them:
 # they pull numpy/netCDF4, and the ``render`` door must run on a render node
 # whose Python has neither -- its data path is entirely the two Rust
-# binaries it drives.  ``.init_door`` is stdlib-only at import; its own
-# netCDF4 need is a named runtime refusal.
+# binaries it drives.  ``.init_door`` and ``.forecast_door`` are stdlib-only
+# at import; their netCDF4/cupy/driver needs are named runtime refusals.
 from .init_door import add_init_parser
-
-
-def _checkout_root() -> Path | None:
-    """The source checkout this module was imported from, or ``None``.
-
-    ``parents[2]`` is the project root of a ``src/`` layout checkout; from an
-    installed wheel it is whatever directory happens to sit above
-    ``site-packages``, which is not a place mesh assets live.  The old
-    unconditional form handed installed users defaults pointing at
-    ``<venv>/Lib/data/meshes/...`` and the failure that followed named a
-    path nobody had ever chosen.  Probing for a file only a checkout has
-    keeps the convenience for a checkout and produces a named refusal for
-    an install.
-    """
-
-    root = Path(__file__).resolve().parents[2]
-    if (root / "tools" / "run_cuda_v841_full_physics_x4.py").is_file():
-        return root
-    return None
-
-
-PROJECT_ROOT = _checkout_root()
+# The checkout probe lives with the forecast door because that door is the
+# one that cannot open without a checkout at all.  Stated once: two copies
+# of "is this a checkout" would be two things to keep true, and the answer
+# decides both this module's mesh defaults and that door's existence.
+from .forecast_door import PROJECT_ROOT, add_forecast_parser
 DEFAULT_GRID = (
     PROJECT_ROOT / "data" / "meshes" / "x1.2562" / "x1.2562.grid.nc"
     if PROJECT_ROOT is not None
@@ -94,6 +77,7 @@ def _version(arguments: argparse.Namespace) -> int:
 
 
 def _mesh_check(arguments: argparse.Namespace) -> int:
+    from .dual_edge_admission import DualEdgeAdmissionError, admit_dual_edges
     from .oracle import sha256_file
 
     mesh = _mesh(arguments)
@@ -109,6 +93,27 @@ def _mesh_check(arguments: argparse.Namespace) -> int:
         },
         "connectivity_indexing": mesh.provenance["connectivity_indexing"],
     }
+    # THE BREAKAGE THIS PREVENTS: a pair that passes mesh-check and then dies
+    # inside step 0 of every forecast.  The registered v15.150.38857 did
+    # exactly that -- this receipt said "passed": true while its worst Voronoi
+    # edge was 6.5 m -- and mesh-check is the door a user is told to run
+    # BEFORE anything expensive touches the mesh.  The forecast bind applies
+    # the same floor; agreeing here is what makes the earlier door worth
+    # running.
+    try:
+        admission = admit_dual_edges(
+            mesh.dvEdge,
+            mesh.dcEdge,
+            cells_on_edge=mesh.cellsOnEdge,
+            cells_on_edge_base=0,
+            mesh_name=str(Path(arguments.static).name),
+        )
+    except DualEdgeAdmissionError as error:
+        receipt["passed"] = False
+        receipt["dual_edge_refusal"] = str(error)
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+        return 1
+    receipt["dual_edge_admission"] = admission.as_dict()
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0
 
@@ -177,6 +182,14 @@ def build_parser() -> argparse.ArgumentParser:
     oracle_gate.set_defaults(handler=_oracle_gate)
 
     add_init_parser(commands)
+
+    # Between init and render, because that is the order a user meets them:
+    # an init is what a forecast starts from and history is what a render
+    # consumes.  The door needs a source checkout and says so by name; it is
+    # listed here unconditionally so that `gpuwm-hex --help` on a wheel
+    # names the command and its one requirement, rather than hiding a
+    # capability the distribution has.
+    add_forecast_parser(commands)
 
     render = commands.add_parser(
         "render",

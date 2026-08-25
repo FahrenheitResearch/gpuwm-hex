@@ -51,9 +51,10 @@
   "cases": [
     {
       "case_id": "gfs-20260812-divergence",
-      "cycle_time": "2026-08-12T00:00:00Z",
+      "cycle_time": "2026-08-12T06:00:00Z",
       "description": "Existing divergence case initialized from gfs; exact domain and product contract remain in the case-owned producer metadata.",
       "metadata": {
+        "cycle_correction": "the manifest carried 00Z; the initial condition this case was measured from is the 06:00Z cycle, and the file carries that stamp",
         "forcing": "gfs"
       },
       "model_inputs": {
@@ -112,18 +113,28 @@
           "optional": false,
           "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/mrms.npz",
           "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/mrms.npz.receipt.json"
+        },
+        "stage4": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/stage4.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20260812-divergence/stage4.npz.receipt.json"
         }
       },
       "role": "known_divergence",
       "selection_status": "selected",
-      "window_end": "2026-08-13T00:00:00Z",
-      "window_start": "2026-08-12T00:00:00Z"
+      "window_end": "2026-08-13T06:00:00Z",
+      "window_start": "2026-08-12T06:00:00Z"
     },
     {
       "case_id": "era5-20240521-divergence",
-      "cycle_time": "2024-05-21T00:00:00Z",
+      "cycle_time": "2024-05-21T12:00:00Z",
       "description": "Existing divergence case initialized from era5; exact domain and product contract remain in the case-owned producer metadata.",
       "metadata": {
+        "cycle_correction": "the manifest carried 00Z; the initial condition this case was measured from is the 12:00Z cycle, and the file carries that stamp",
         "forcing": "era5"
       },
       "model_inputs": {
@@ -182,40 +193,195 @@
           "optional": false,
           "path": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/mrms.npz",
           "receipt": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/mrms.npz.receipt.json"
+        },
+        "stage4": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/stage4.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/era5-20240521-divergence/stage4.npz.receipt.json"
         }
       },
       "role": "known_divergence",
       "selection_status": "selected",
-      "window_end": "2024-05-22T00:00:00Z",
-      "window_start": "2024-05-21T00:00:00Z"
+      "window_end": "2024-05-22T12:00:00Z",
+      "window_start": "2024-05-21T12:00:00Z"
     },
     {
-      "case_id": "independent-control-pending-selection",
-      "cycle_time": null,
-      "description": "A human must select and pin a genuinely independent convective control; no date is fabricated by code.",
+      "case_id": "gfs-20250714-independent-control",
+      "cycle_time": "2025-07-14T12:00:00Z",
+      "description": "Independent convective control, selected by measured Stage-IV heavy-rain coverage rather than by taste; initialized from gfs.",
       "metadata": {
-        "status": "NOT_SELECTED"
+        "forcing": "gfs",
+        "selection_basis": {
+          "frac_ge_1mm": 0.31510644206476607,
+          "frac_ge_25mm": 0.039193573513773464,
+          "max_mm": 347.8,
+          "rule": "argmax frac_ge_25mm among covered days",
+          "screen": "screen_stage4.py against the Stage-IV archive: pool = the 15th of every month of 2025, 24 h accumulation ending 12Z; coverage guard valid_cells >= 0.9 * median, which dropped 2025-05-15 at 72,825 cells against a 590,556 median",
+          "valid_cells": 590556
+        }
       },
-      "model_inputs": {},
-      "observations": {},
+      "model_inputs": {
+        "arwen-current": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/model-arwen-current.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/model-arwen-current.npz.receipt.json"
+        },
+        "gf-subsidence-experiment": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/model-gf-subsidence-experiment.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/model-gf-subsidence-experiment.npz.receipt.json"
+        },
+        "native-history-context": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/model-native-history-context.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/model-native-history-context.npz.receipt.json"
+        },
+        "operational-baseline": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/model-operational-baseline.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/model-operational-baseline.npz.receipt.json"
+        }
+      },
+      "observations": {
+        "asos": {
+          "adapter": "canonical-stations-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/asos.jsonl",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/asos.jsonl.receipt.json"
+        },
+        "mrms": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/mrms.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/mrms.npz.receipt.json"
+        },
+        "stage4": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/stage4.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250714-independent-control/stage4.npz.receipt.json"
+        }
+      },
       "role": "independent_control",
-      "selection_status": "pending",
-      "window_end": null,
-      "window_start": null
+      "selection_status": "selected",
+      "window_end": "2025-07-15T12:00:00Z",
+      "window_start": "2025-07-14T12:00:00Z"
     },
     {
-      "case_id": "weak-convection-control-pending-selection",
-      "cycle_time": null,
-      "description": "A human must select and pin a weak-convection/null control; no date is fabricated by code.",
+      "case_id": "gfs-20250114-weak-convection-control",
+      "cycle_time": "2025-01-14T12:00:00Z",
+      "description": "Weak-convection/null control, selected by measured Stage-IV any-rain coverage rather than by taste; initialized from gfs.",
       "metadata": {
-        "status": "NOT_SELECTED"
+        "forcing": "gfs",
+        "selection_basis": {
+          "frac_ge_1mm": 0.04678811154234315,
+          "frac_ge_25mm": 0.0017288792256788517,
+          "mean_mm": 0.2875299717554305,
+          "rule": "argmin frac_ge_1mm among covered days",
+          "screen": "screen_stage4.py against the Stage-IV archive: pool = the 15th of every month of 2025, 24 h accumulation ending 12Z; coverage guard valid_cells >= 0.9 * median, which dropped 2025-05-15 at 72,825 cells against a 590,556 median",
+          "valid_cells": 590556
+        }
       },
-      "model_inputs": {},
-      "observations": {},
+      "model_inputs": {
+        "arwen-current": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/model-arwen-current.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/model-arwen-current.npz.receipt.json"
+        },
+        "gf-subsidence-experiment": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/model-gf-subsidence-experiment.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/model-gf-subsidence-experiment.npz.receipt.json"
+        },
+        "native-history-context": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/model-native-history-context.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/model-native-history-context.npz.receipt.json"
+        },
+        "operational-baseline": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "forcing": "gfs"
+          },
+          "optional": true,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/model-operational-baseline.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/model-operational-baseline.npz.receipt.json"
+        }
+      },
+      "observations": {
+        "asos": {
+          "adapter": "canonical-stations-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/asos.jsonl",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/asos.jsonl.receipt.json"
+        },
+        "mrms": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/mrms.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/mrms.npz.receipt.json"
+        },
+        "stage4": {
+          "adapter": "canonical-grid-v1",
+          "metadata": {
+            "raw_parser_boundary": "rustwx"
+          },
+          "optional": false,
+          "path": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/stage4.npz",
+          "receipt": "${OBS_REFEREE_DATA_ROOT}/gfs-20250114-weak-convection-control/stage4.npz.receipt.json"
+        }
+      },
       "role": "weak_convection_control",
-      "selection_status": "pending",
-      "window_end": null,
-      "window_start": null
+      "selection_status": "selected",
+      "window_end": "2025-01-15T12:00:00Z",
+      "window_start": "2025-01-14T12:00:00Z"
     }
   ],
   "claims": [
@@ -224,14 +390,14 @@
       "claim_id": "current-arwen-convective-rainfall-deficit",
       "description": "Current ArWen has a negative one-hour precipitation bias against MRMS.",
       "expected_sign": "negative",
-      "metric_id": "mrms-precip-bias",
+      "metric_id": "stage4-precip-bias",
       "rule": "absolute_metric_sign"
     },
     {
       "candidate_arm": "gf-subsidence-experiment",
       "claim_id": "gf-treatment-improves-precip-placement",
       "description": "The isolated GF treatment improves MRMS neighborhood placement versus current ArWen.",
-      "metric_id": "mrms-precip-fss-r4-1mm",
+      "metric_id": "stage4-precip-fss-r4-1mm",
       "reference_arm": "arwen-current",
       "rule": "arm_delta"
     },
@@ -254,7 +420,7 @@
       "rule": "outside_primary_scope"
     }
   ],
-  "description": "MRMS/ASOS observational referee for current ArWen, historical native context, optional operational context, and an isolated GF-subsidence experiment.",
+  "description": "MRMS/Stage-IV/ASOS observational referee for current ArWen, historical native context, optional operational context, and an isolated GF-subsidence experiment.",
   "metadata": {
     "known_context": {
       "approximate_24h_theta_difference_k": 0.46,
@@ -266,7 +432,11 @@
       ],
       "upper_band_theta_tendency_k_per_hour": 0.019
     },
-    "real_scorecard_status": "NOT_MEASURED"
+    "real_scorecard_status": "recorded in evidence/obs-referee-283/scorecard.json, not here: a manifest that carries its own result cannot be corrected without invalidating the manifest_sha256 every run receipt pins",
+    "substitutions": {
+      "control_case_selection": "screen_stage4.py against the Stage-IV archive: pool = the 15th of every month of 2025, 24 h accumulation ending 12Z; coverage guard valid_cells >= 0.9 * median, which dropped 2025-05-15 at 72,825 cells against a 590,556 median",
+      "precipitation_instrument": "the declared referee names MRMS one-hour precipitation; the shipped MRMS door (rw_mrms) decodes composite reflectivity only and has no QPE quantity, so the precipitation metrics are scored against NCEP/EMC Stage-IV hourly multi-sensor QPE through rw_stage4, the nearest runnable equivalent behind a shipped door"
+    }
   },
   "metrics": [
     {
@@ -274,10 +444,10 @@
       "family": "continuous",
       "field": "precip_1h_mm",
       "guardrail": false,
-      "metric_id": "mrms-precip-bias",
+      "metric_id": "stage4-precip-bias",
       "minimum_valid_samples": 1000,
       "primary": false,
-      "source": "mrms",
+      "source": "stage4",
       "space_tolerance_km": 5.0,
       "statistic": "bias",
       "time_tolerance_seconds": 900
@@ -287,10 +457,10 @@
       "family": "continuous",
       "field": "precip_1h_mm",
       "guardrail": false,
-      "metric_id": "mrms-precip-rmse",
+      "metric_id": "stage4-precip-rmse",
       "minimum_valid_samples": 1000,
       "primary": true,
-      "source": "mrms",
+      "source": "stage4",
       "space_tolerance_km": 5.0,
       "statistic": "rmse",
       "time_tolerance_seconds": 900
@@ -300,10 +470,10 @@
       "family": "categorical",
       "field": "precip_1h_mm",
       "guardrail": false,
-      "metric_id": "mrms-precip-csi-1mm",
+      "metric_id": "stage4-precip-csi-1mm",
       "minimum_valid_samples": 1000,
       "primary": true,
-      "source": "mrms",
+      "source": "stage4",
       "space_tolerance_km": 5.0,
       "statistic": "csi",
       "threshold": 1.0,
@@ -314,10 +484,10 @@
       "family": "categorical",
       "field": "precip_1h_mm",
       "guardrail": false,
-      "metric_id": "mrms-precip-csi-10mm",
+      "metric_id": "stage4-precip-csi-10mm",
       "minimum_valid_samples": 1000,
       "primary": true,
-      "source": "mrms",
+      "source": "stage4",
       "space_tolerance_km": 5.0,
       "statistic": "csi",
       "threshold": 10.0,
@@ -328,11 +498,11 @@
       "family": "fss",
       "field": "precip_1h_mm",
       "guardrail": false,
-      "metric_id": "mrms-precip-fss-r4-1mm",
+      "metric_id": "stage4-precip-fss-r4-1mm",
       "minimum_valid_samples": 1000,
       "neighborhood_radius_cells": 4,
       "primary": true,
-      "source": "mrms",
+      "source": "stage4",
       "space_tolerance_km": 5.0,
       "statistic": "fss",
       "threshold": 1.0,

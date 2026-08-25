@@ -9,16 +9,20 @@
 | `gpuwm-hex mesh-check --grid G --static S` | validate a mesh pair; print dimensions and SHA-256 digests | the pair |
 | `gpuwm-hex oracle-gate --grid G --static S --fixtures DIR` | replay the source-extracted Fortran M1 fixtures against a mesh | a source checkout's oracle fixtures |
 | `gpuwm-hex init ...` | build initial conditions (chapter 5) | `rw_mpas_init`, met file, mesh pair, capsule |
+| `gpuwm-hex forecast ...` | run the model on a registered mesh (chapter 6); `--preflight` answers "will it fit?" without integrating | a CUDA device with room for the mesh, a gpuwm-hex checkout, a `gpuwm` source checkout at the pinned commit, mesh pair, init |
 | `gpuwm-hex render ...` | history → product PNGs (chapter 7) | `rw_mpas_convert`, `rw_wrfbatch` |
 | `gpuwm mesh ...` | generate a grid + static pair (chapter 4; engine door) | `rw_mpas_mesh`, `rw_mpas_static`, WPS_GEOG |
 | `gpuwm fetch-bridges` | stage the engine's published binary bundle into `~/.gpuwm/bridges` | network |
 | `gpuwm fetch-geog --root DIR [--list]` | stage / inventory the WPS_GEOG archive | network, ~28 GiB unpacked |
 
-Forecast lane (source checkout, chapter 6):
+Under the forecast door (same checkout, chapter 6):
 `tools/run_cuda_v841_forecast_mesh.py` (registered-mesh runner, with
 `--verify-only` and `--selftest`), `tools/run_cuda_v841_forecast.py` (the
-arbitrary-case driver behind it), `tools/run_cuda_v841_full_physics_x4.py`
-(the sealed proof harness: native comparison, checkpoint/restart proof).
+arbitrary-case driver whose `execute_forecast` the door drives),
+`tools/run_cuda_v841_full_physics_x4.py` (the sealed proof harness: native
+comparison, checkpoint/restart proof),
+`tools/device_memory_ledger/hex_ledger_probe.py` (measures a card's own
+footprint row for `--device-fixed-mib` / `--device-bytes-per-cell`).
 Obs-referee: `tools/run_obs_referee.py` with manifests under
 `verification/manifests/` ([`docs/obs-referee.md`](../obs-referee.md)).
 
@@ -94,12 +98,13 @@ by omission.
 - Distribution and command: `gpuwm-hex`. Import namespace: `mpas_port` —
   declared inconsistency, scheduled against a re-proof, scripts should
   expect it to change (README, *The import namespace*).
-- Engine floor: `gpuwm>=2.5.3` is what pip enforces, and it carries two
-  reasons at once — the seam bytes the Arwen manifest pins, and the bundle
-  rows that put the four MPAS bridge binaries (`rw_mpas_init`,
-  `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_static`) within reach of
-  `gpuwm fetch-bridges`. Published 2.5.2 carries none of the four, which
-  would strand both doors. The forecast lane's real wall is stricter still:
+- Engine floor: `gpuwm>=2.5.5` is what pip enforces, and it carries two
+  reasons at once — the seam bytes the Arwen manifest pins (three of the
+  sixteen still differ at the published 2.5.4 stamp; 2.5.5 is the first
+  published version that matches), and the bundle rows that put the four
+  MPAS bridge binaries (`rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`,
+  `rw_mpas_static`) within reach of `gpuwm fetch-bridges`. Published 2.5.2
+  carries none of the four, which would strand both doors. The forecast lane's real wall is stricter still:
   the sixteen-file seam manifest and a source checkout at the pinned commit
   (chapter 6.1).
 - Licence: Apache-2.0, with the MPAS-Atmosphere BSD-3-Clause notice

@@ -6,43 +6,41 @@ Fortran `init_atmosphere_model`. The numerics are the Rust engine
 the engine runs, and writes a provenance receipt beside the init file.
 [`docs/init-door.md`](../init-door.md) is the door's own full reference.
 
-## 5.1 The two vertical modes, and which one works today
+## 5.1 The two vertical modes
 
 The init engine does not invent the vertical grid — the arrays that define
 where the model's levels sit (`zgrid, zz, fzm, fzp, dzu, rdzw, zb, zb3`)
 and the smoothed terrain have to come from somewhere. The door has two
 modes for that, selected by which flags you pass, mutually exclusive:
 
-**Capsule mode (`--capsule` + `--reference`) — the working path.** The
-vertical arrays are read out of a **native-minted init-class file** for
-this exact mesh, and the capsule's `zgrid` is asserted bit-identical
-against the reference before a single level is trusted. This is the mode
-every init in this manual was built with, and the mode behind the door's
-proof of record (92/92 carried fields bit-identical against a native
-golden; the produced init started the port in a forecast smoke —
-[`docs/init-door.md`](../init-door.md), *Proof of record*).
-
-What the capsule means in practice: **the first init for any given mesh
-requires one native `init_atmosphere_model` artifact for that mesh.** After
-that, gpuwm-hex builds every subsequent init for the mesh from its own door
-— new dates, new sources, no native tool again. This is the sharpest
-prerequisite in the product; it is stated here rather than discovered as a
-runtime error.
-
-**Native-free mode (`--vertical-spec`) — shipped, and not yet working end
-to end. Do not plan on it.** The door accepts a versioned JSON vertical
-declaration (`gpuwm-hex.vertical-spec/v1`, examples under
+**Native-free mode (`--vertical-spec`) — the normal path.** The door
+accepts a versioned JSON vertical declaration
+(`gpuwm-hex.vertical-spec/v1`, examples under
 `verification/vertical-specs/`), constructs the v8.4.1 vertical contract
-itself, writes a durable vertical artifact — and then the engine refuses
-every native-free mint, correctly and by name, because the constructed
-artifact does not yet carry the 35 init-stream variable slots the engine
-derives its output schema from. **As of this manual no native-free init has
-ever been emitted end to end**
-[`evidence/statics-330-unified-rebuild/RECEIPT.md`, "A third defect"]. The
-admission design is documented in
-[`docs/native-free-init-admission.md`](../native-free-init-admission.md);
-treat that page as the design record of an in-progress lane, and this
-paragraph as the current truth.
+itself, and writes a durable vertical artifact the engine consumes. No
+native artifact appears anywhere in the mesh's lineage at runtime; the
+provenance receipt records `native_runtime_dependency: false`. Proven end
+to end on x1.40962 against the native golden: the mint is
+schema-complete (all 134 native variables, 0 missing), 75 carried fields
+bit-identical, the constructed vertical within millimetres of the native
+one (`zgrid` max 3.9 mm over a 30 km column), and the produced init
+starts the dycore
+[`evidence/native-free-proof-20260824/RECEIPT.md`]. The constructed
+vertical is not the native vertical byte for byte; the quantified deltas
+live in that receipt.
+
+**Capsule mode (`--capsule` + `--reference`) — the compatibility mode,
+and the byte-anchored one.** The vertical arrays are read out of a
+**native-minted init-class file** for this exact mesh, and the capsule's
+`zgrid` is asserted bit-identical against the reference before a single
+level is trusted. This is the mode behind the door's bit-parity proof of
+record (92/92 carried fields bit-identical against a native golden —
+[`docs/init-door.md`](../init-door.md), *Proof of record*), and the mode
+to choose when the run must reproduce a native vertical exactly. It is
+the only mode that needs a native `init_atmosphere_model` artifact.
+
+The admission design behind native-free mode is documented in
+[`docs/native-free-init-admission.md`](../native-free-init-admission.md).
 
 ## 5.2 The invocation
 
@@ -51,8 +49,7 @@ gpuwm-hex init \
   --met     <WPS-intermediate, or a directory holding exactly one> \
   --grid    assets/x1.40962.grid.nc \
   --static  assets/x1.40962.static.nc \
-  --capsule   assets/x1.40962-native-init.nc \
-  --reference assets/x1.40962-native-init.nc \
+  --vertical-spec verification/vertical-specs/tc55-v1.json \
   --out     work/x1.40962.init.nc \
   --start-time 2026-08-12_06:00:00 \
   --nfglevels 34 --nfgsoillevels 4 \
@@ -65,11 +62,17 @@ gpuwm-hex init \
   --oned-underflow preserve
 ```
 
+Capsule mode replaces the `--vertical-spec` line with `--capsule` and
+`--reference`, both naming the native-minted init-class file; everything
+else is identical.
+
 On success: the init file, `<out>.provenance.json` (SHA-256 of every input,
 the engine binary, the argv, the engine's own receipt, and the output), a
-JSON summary on stdout, exit 0. The proving run built a 372 MB init for
-`x1.40962` from a GFS intermediate in 2.7 s, and chapter 2's forecast ran
-from it.
+JSON summary on stdout, exit 0. The capsule proving run built a 372 MB
+init for `x1.40962` from a GFS intermediate with 2.7 s in the engine, and
+chapter 2's forecast ran from it; the native-free mint of the same mesh
+and met spends about 2 s in the engine, minutes in the door's first-mint
+geometry solve, and about a minute on a re-mint from the keyed cache.
 
 ## 5.3 Every switch is explicit, and why
 

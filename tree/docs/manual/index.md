@@ -26,9 +26,9 @@ independent port and is not affiliated with or endorsed by them.)*
 4. [Meshes and static fields](04-meshes-and-static.md) — validate a mesh pair,
    generate a new mesh and build its static, capacity planning with the
    measured footprint model.
-5. [Initial conditions](05-initial-conditions.md) — the init door: the working
-   capsule mode, every physics switch and its native namelist key, and the
-   status of the native-free vertical path.
+5. [Initial conditions](05-initial-conditions.md) — the init door: the
+   native-free vertical path, the capsule compatibility mode, and every
+   physics switch with its native namelist key.
 6. [Running a forecast](06-forecast.md) — the source-checkout requirement,
    registered meshes and timestep admission, local time stepping and its
    measured cost, restart, and what a run receipt claims and does not claim.

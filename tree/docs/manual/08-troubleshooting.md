@@ -74,8 +74,8 @@ the two files are from different meshes. Get the matching static for the
 grid (or vice versa); chapter 4.2's `mesh-check` digests identify which
 registered bytes you hold.
 
-**`unknown mesh 'NAME'; registered meshes are ['v15.150.38857',
-'x1.40962', 'x4.163842']`** — the forecast runner only binds registered
+**`unknown mesh 'NAME'; registered meshes are ['u96.64002',
+'v15.150.38857', 'x1.40962', 'x4.163842']`** — the forecast runner only binds registered
 meshes. Register the pair (table work in `tools/mpas_mesh_binding.py`) or
 name a registered one.
 
@@ -114,10 +114,12 @@ maps each to its native namelist key). Transcribe from a captured
 the port's own checkout`** (`oracle-gate`) — the fixtures do not ship in
 the wheel; pass `--fixtures` pointing at a checkout's oracle directory.
 
-**Engine refusal on a native-free mint (`--vertical-spec`)** — expected in
-this release: the constructed vertical artifact does not yet carry the
-init-stream variable slots and the engine refuses every native-free mint
-[`evidence/statics-330-unified-rebuild/RECEIPT.md`]. Use capsule mode
+**Engine refusal on a native-free mint (`--vertical-spec`)** — not
+expected at this release: the native-free mint is proven end to end
+(schema-complete, dycore rc 0 —
+[`evidence/native-free-proof-20260824/RECEIPT.md`]). If the engine
+refuses one naming missing init-stream variables, the door and engine
+are from different releases; align the checkout and the installed wheel
 (chapter 5.1).
 
 **Forecast driver reports changed reconstruction-coefficient bytes** —
@@ -125,6 +127,58 @@ provenance mismatch, not corruption: the init was built against different
 grid/static bytes than the run is pinning (chapter 5.5).
 
 ---
+
+## Forecast door
+
+**`device memory admission refused --mesh NAME: the fitted footprint for N
+cells is ... short by ... MiB`** — the card cannot hold the mesh, decided
+against memory measured at that moment (chapter 6.2). The refusal names
+the shortfall and, when a smaller registered mesh fits what was measured,
+that mesh by name. Three real remedies, in order: free device memory
+(other CUDA processes, a desktop compositor holding the card); run a
+smaller registered mesh; or, if this card's own footprint ledger has been
+run, pass its row as `--device-fixed-mib` **and**
+`--device-bytes-per-cell` — the shipped row was measured on a 170-SM part
+and smaller parts measure smaller fixed terms. Widening `--headroom-mib`
+past the shortfall is not a remedy; it removes the margin the decision
+holds back and the run then dies in CuPy instead.
+
+**`--device-fixed-mib and --device-bytes-per-cell are one measured row and
+must be given together`** — half a row mixes this card's fixed term with
+another card's slope, which is a footprint nothing ever measured.
+
+**`the forecast lane needs the gpuwm-hex SOURCE CHECKOUT and this is an
+installed wheel`** — the drivers live in `tree/tools/`, which the wheel
+does not carry. Run the door from inside a checkout or pass
+`--repo <checkout>/tree`.
+
+**`--gpuwm-checkout ... is not a directory`** — the seam pin needs a
+`gpuwm` source checkout, not the installed distribution (chapter 6.1).
+
+**`--out ... exists`** / **`--scratch ... exists`** — both must be fresh.
+A second run into an existing output tree can be read as the first one's
+continuation or silently mix frames from two trajectories; a stale kernel
+cache can be loaded from another engine pin.
+
+**`--scratch ... is inside the output tree`** — the kernel cache is not
+output. Use the sibling default or point it outside `--out`.
+
+**`--hours H is not a whole number of steps on mesh NAME, whose registered
+timestep is T s`** / **`--history-every-minutes M does not divide the ... run`**
+— the schedule is checked against the *registered row's* timestep, which is
+60 s on the generated 15 km row and 120 s on the published ones. The
+refusal prints a length that does divide.
+
+**`--mesh 'NAME' is not a registered mesh`** — see *Mesh and assets* above;
+register the row or name a registered one.
+
+**`the CUDA lane is not importable`** / **`cupy imported but reports no CUDA
+device`** — no admission decision can be made, so none is guessed. Install
+the matching CuPy extra, or check `nvidia-smi` and `CUDA_VISIBLE_DEVICES`.
+
+**`GPUWM_HEX_NO_LOCAL_GPU is set`** from the forecast door — the box has
+declared that no GPU work happens on it, and the door will not open a
+device even to measure it.
 
 ## Forecast lane
 
@@ -140,19 +194,32 @@ prints the measured minimum, the computed bound, and the remedy
 (`Declare dt_seconds <= ... or use a mesh with a larger real minimum
 dcEdge`). It is never silently reduced.
 
+**`dual-edge geometry refused before CUDA allocation`, naming an edge and
+two cells** — the mesh has a collapsed Voronoi edge and the TRiSK tangential
+terms divide by it, so it cannot integrate at any timestep (chapter 4.5).
+The refusal prints the edge, its `dvEdge` and `dcEdge`, the amplification,
+how many edges are below the floor, and the remedy. Regenerate the mesh;
+do not reduce `dt`, which is not the lever. This replaced the unattributed
+step-0 `FloatingPointError` that generated meshes used to die on
+[`evidence/genmesh-dual-edge-20260824/RECEIPT.md`].
+
 **`FloatingPointError: v8.4.1 CUDA validation flag refused the outer step
-before publish` at step 0 on a generated mesh** — the known open defect of
-chapter 4.5 [`evidence/statics-330-unified-rebuild/RECEIPT.md`]; not
-fixable from the command line. On the published meshes this refusal
-mid-run means the model declined to publish a step it does not trust
-(vertical-velocity bound 200 m/s); with `--stop-on-refusal` the run stops
-receipted with its committed frames.
+before publish`** — the model declined to publish a step it does not trust
+(vertical-velocity bound 200 m/s). With `--stop-on-refusal` the run stops
+receipted with its committed frames. The flag itself names no array: to find
+which one went non-finite, in which cell, at which launch, run
+`tools/diagnose_genmesh_nonfinite.py` with the same arguments — it wraps
+every kernel with a post-launch scan and reports the first array whose
+non-finite population grows, and with `--trace` the magnitude climb that
+preceded it.
 
 **Out-of-device-memory partway into a run** — the mesh does not fit the
-card (chapter 4.6). On a small card this dies inside a CuPy allocation
-after burning the time to get there; `tests/test_device_capacity.py` is
-the cheap version of that discovery, and `--preflight-only` verifies
-everything before CUDA.
+card (chapter 4.6). This is what the forecast door's admission gate exists
+to prevent, so reaching it means the door was bypassed (the driver run
+directly), or the fitted row and this card disagree. If the door admitted
+the run and CuPy then ran out, report both numbers: the fitted row is a
+measurement and the driver's floor is a proof constant, and only one of
+them can be wrong.
 
 ---
 
@@ -174,5 +241,5 @@ That is not a refusal — it is chapter 3.3. Check the declared divergences
 before suspecting your run: a ~15 % dry domain-mean precipitation bias,
 higher explicit rain and condensate, and an upper-level warm drift are the
 declared, measured differences from native physics, with their referees
-named. And chapter 6.3: reading the receipt's nonclaims tells you what the
+named. And chapter 6.4: reading the receipt's nonclaims tells you what the
 run never promised.

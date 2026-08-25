@@ -41,9 +41,40 @@ def test_production_manifest_is_strict_and_pins_base() -> None:
         "independent_control",
         "weak_convection_control",
     }
-    pending = [case for case in manifest.cases if case["selection_status"] == "pending"]
-    assert len(pending) == 2
-    assert all(case["cycle_time"] is None for case in pending)
+
+
+def test_production_manifest_cases_are_all_selected_and_bound() -> None:
+    """Every case is pinned, and a pinned case binds real artifacts.
+
+    Until 2026-08-24 the two control cases were deliberately `pending` with
+    null cycles, and this file asserted that, because code inventing a weather
+    case is worse than an unrun scorecard. Both are selected now, so the gate
+    moves: a case that claims a date but binds no observation or no baseline
+    arm would make the runner emit NOT_MEASURED rows that read like absent
+    weather rather than an unfinished manifest.
+    """
+
+    manifest = load_manifest(PRODUCTION_MANIFEST)
+    assert len(manifest.cases) >= manifest.bootstrap["minimum_cases"]
+    for case in manifest.cases:
+        assert case["selection_status"] == "selected", case["case_id"]
+        assert case["cycle_time"] is not None, case["case_id"]
+        assert set(case["observations"]) >= {"asos", "stage4"}, case["case_id"]
+        assert "arwen-current" in case["model_inputs"], case["case_id"]
+        assert case["model_inputs"]["arwen-current"]["optional"] is False
+
+
+def test_every_metric_names_a_source_the_cases_carry() -> None:
+    """A metric pointing at an unbound source scores nothing, silently."""
+
+    manifest = load_manifest(PRODUCTION_MANIFEST)
+    for case in manifest.cases:
+        available = set(case["observations"])
+        for metric in manifest.metrics:
+            assert metric["source"] in available, (
+                f"{case['case_id']} has no observation source "
+                f"{metric['source']!r} for metric {metric['metric_id']!r}"
+            )
 
 
 def test_manifest_refuses_automatic_default(tmp_path: Path) -> None:

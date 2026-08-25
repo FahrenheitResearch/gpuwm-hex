@@ -37,8 +37,8 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.1.0", (
-        "0.1.0 is the declared shape of this line (global variable-resolution "
+    assert declared == "0.1.1", (
+        "0.1.1 is the declared cut of the 0.1 line (global variable-resolution "
         "on one consumer GPU, deterministic, ArWen physics); moving it is a "
         "release decision, not an edit"
     )
@@ -241,17 +241,22 @@ def test_the_gpuwm_floor_is_above_the_release_that_cannot_satisfy_the_pin(
     wall is the sixteen-file manifest, which no published version satisfies
     on its own, which is why the forecast lane needs a source checkout.
 
-    The floor sits at 2.5.3 rather than 2.5.1 for a SECOND reason that the
-    seam pin does not cover: the four MPAS bridge binaries
+    The floor sits at 2.5.5 for two reasons stacked on that one.  First,
+    the seam gap recurred at every cut: at gpuwm's published 2.5.4 stamp,
+    3 of the 16 manifest files still differ from the pinned bytes
+    (``docs/mpas-seam.md``, ``gpuwm/core/mpas_column_batch.py``,
+    ``gpuwm/io/restart.py``), because the seam-convergence work this tree
+    pins landed after the 2.5.4 cut; 2.5.5 is the first published version
+    whose bytes match the manifest.  Second, the four MPAS bridge binaries
     (``rw_mpas_init``, ``rw_mpas_convert``, ``rw_mpas_mesh``,
-    ``rw_mpas_static``) enter gpuwm's bundle at 2.5.3, their rows having
+    ``rw_mpas_static``) entered gpuwm's bundle at 2.5.3, their rows having
     landed the day after the 2.5.2 upload.  Both front doors drive those
     binaries and the gpuwm source tree never publishes, so a user resolved
     onto 2.5.2 can open neither door and cannot build what is missing.  A
-    floor is the only place pip can refuse a stranded install.  gpuwm 2.5.3
-    publishes before gpuwm-hex 0.1.0 -- the one hard ordering constraint in
-    the release plan -- so this floor is unsatisfiable only in the window
-    before that act, by design.
+    floor is the only place pip can refuse a stranded install.  gpuwm 2.5.5
+    publishes before gpuwm-hex 0.1.1 -- the same hard ordering constraint
+    the 0.1.0 plan carried -- so this floor is unsatisfiable only in the
+    window before that act, by design.
     """
 
     pins = [
@@ -259,11 +264,12 @@ def test_the_gpuwm_floor_is_above_the_release_that_cannot_satisfy_the_pin(
         for entry in declaration["project"]["dependencies"]
         if entry.split(">")[0].split("=")[0].split("[")[0].strip() == "gpuwm"
     ]
-    assert pins == ["gpuwm>=2.5.3"], (
-        "the gpuwm floor must be 2.5.3: the first version that both carries "
-        "the seam bytes the Arwen manifest pins AND bundles the four MPAS "
-        "bridge binaries both front doors drive.  A lower floor lets pip "
-        f"resolve an engine that strands both doors.  Found: {pins}"
+    assert pins == ["gpuwm>=2.5.5"], (
+        "the gpuwm floor must be 2.5.5: the first version that both carries "
+        "the seam bytes the Arwen manifest pins (3 of 16 still differ at the "
+        "published 2.5.4 stamp) AND bundles the four MPAS bridge binaries "
+        "both front doors drive.  A lower floor lets pip resolve an engine "
+        f"that strands a door or refuses at launch.  Found: {pins}"
     )
 
     from mpas_port.cuda_arwen_physics_v841 import ARWEN_SOURCE_MANIFEST

@@ -285,7 +285,7 @@ def relax_init_carrier_pins(init_path: Path) -> dict[str, Any]:
             "dtype/shape",
             "finiteness",
             "topology equality with the prepared mesh",
-            "every active 3-vector component nonzero",
+            "no active 3-vector is the all-+0 static placeholder",
             "padding bitwise +0",
         ],
     }
@@ -1198,6 +1198,7 @@ def execute_forecast(
     fingerprint_every: int,
     stop_on_refusal: bool = False,
     grid_path: Path | None = None,
+    park_physics_tier: bool = False,
 ) -> dict[str, Any]:
     from mpas_port.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
@@ -1223,6 +1224,14 @@ def execute_forecast(
         stack["driver"], grid_path=str(grid_path) if grid_path else None
     )
     stack["local_timestep"] = lts_attachment
+
+    physics_park = None
+    if park_physics_tier:
+        from mpas_port.cuda_physics_tier_park_v841 import CudaPhysicsTierParkV841
+
+        physics_park = CudaPhysicsTierParkV841(
+            cp, stack["backend"]._seam, diagnose=True
+        )
 
     capture_steps = set(schedule["capture_steps"])
     labels = schedule["labels"]
@@ -1259,6 +1268,7 @@ def execute_forecast(
             prep_geometry=stack["prep_geometry"],
             kernel_cache=stack["driver"].cache,
             f000_surface_diagnostics=stack["f000_surface_diagnostics"],
+            expect_refl10cm=True,
         )
         capture_seconds += time.perf_counter() - mark
         physical_gates[str(step)] = proof.physical_snapshot_gate(
@@ -1304,6 +1314,10 @@ def execute_forecast(
                 kernel_cache=stack["driver"].cache,
                 previous_surface_updates=previous,
                 dynamics_tendencies=gf_dynamics_tendencies,
+                physics_park=physics_park,
+                # WRF/native diagflag: the step ENDING at a history frame
+                # computes refl10cm inside its own microphysics call.
+                refl_10cm_due=(step in capture_steps),
             )
         except (proof.CompositeTransactionError, FloatingPointError) as error:
             if not stop_on_refusal:
@@ -1465,6 +1479,22 @@ def execute_forecast(
         "capability": capability.as_dict(),
         "arwen_pre_kernel_cache_pin": arwen_pin,
         "memory_admission": memory,
+        "physics_tier_park": (
+            None
+            if physics_park is None
+            else {
+                **physics_park.receipt(),
+                "window": (
+                    "held on pinned host memory from after the phase-1 "
+                    "tendencies are coupled until immediately before phase 2"
+                ),
+                "nonclaim": (
+                    "not bit-identity: restored allocations sit at different "
+                    "device addresses, so the payload digest of the two arms "
+                    "is the only evidence that admits or refuses this"
+                ),
+            }
+        ),
         "source_pins": source_receipt,
         "authority": authority_receipt,
         "host_preparation": {
@@ -1627,6 +1657,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=1,
         help="rings of cells demoted to the finer rate around a class boundary",
     )
+    parser.add_argument(
+        "--park-physics-tier",
+        action="store_true",
+        help=(
+            "MEASURED NEGATIVE, kept only so the measurement reproduces: hold "
+            "the frozen-Arwen physics seam's device residency in pinned host "
+            "memory across the dynamics half of every step.  It moves 786.8 "
+            "MiB and releases 735.4 MiB of it, and on x1.40962 it still made "
+            "the allocator's reservation WORSE -- 4068.7 MiB with the park "
+            "against 4055.3 MiB without it -- because the reservation, not "
+            "the instantaneous peak, is what a card has to provide.  Alone it "
+            "changes neither number, since the peak is inside phase-1 physics "
+            "where the tier is being read.  Those absolutes were measured "
+            "2026-08-20 at Arwen seam pin 629ddb6f0, BEFORE the Grell-Freitas "
+            "local-memory frame cut; the A/B sign is what carries, and "
+            "re-running the park at pin 0d04db712 is NOT MEASURED.  Do not "
+            "reach for this as an optimisation.  Also not bit-identity: "
+            "restored allocations sit at different device addresses, so "
+            "arm-to-arm payload digests are the only evidence that admits a "
+            "parked run"
+        ),
+    )
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument(
         "--stop-on-refusal",
@@ -1739,7 +1791,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "dropped_guarantees": list(DROPPED_GUARANTEES),
         "claim": CLAIM,
         "nonclaims": list(NONCLAIMS),
-        "weather_plot_policy": "native Rust/Arwen renderer only; q2 forbidden",
+        "weather_plot_policy": "native Rust/Arwen renderer only; q2 ships in the history stream and its weather-field plots go through the same renderer",
     }
 
     if args.preflight_only:
@@ -1794,6 +1846,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         fingerprint_every=int(args.fingerprint_every),
         stop_on_refusal=bool(args.stop_on_refusal),
         grid_path=paths["grid"],
+        park_physics_tier=bool(args.park_physics_tier),
     )
     source_after = proof.require_frozen_execution_sources()
     authority_after = verify_forecast_authorities(paths)
