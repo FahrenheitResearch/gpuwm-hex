@@ -114,7 +114,7 @@ def main(argv=None) -> int:
         # before its constants are trusted.
         runner.require_frozen_execution_sources()
         runner.verify_arwen_checkout_git(checkout)
-        from mpas_port.cuda_arwen_physics_v841 import pin_arwen_physics_v841
+        from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
         pin_arwen_physics_v841(checkout)
     import gpuwm
 

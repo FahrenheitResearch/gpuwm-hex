@@ -15,6 +15,14 @@
 # what the distribution declares, against what the package actually is
 tests/test_packaging_declaration.py
 
+# the engine range and the two surfaces that must name it: the derived
+# dependency specifier, the installed-engine drift check `doctor` makes at
+# install time, and the door's refusal.  Real files and real SHA-256, no
+# card, no network -- and it belongs in the tier that runs on every push
+# because the defect it answers (pip resolving an engine the seam pin
+# refuses) is a defect of the DECLARATION, which is what a push changes
+tests/test_engine_pin.py
+
 # the checkout produces one artefact rather than one per builder: line endings
 # are pinned, so the LICENSE and NOTICE bytes inside dist-info/licenses/ do not
 # depend on the cloner's core.autocrlf
@@ -51,6 +59,12 @@ tests/test_source_manifests.py
 # and still refuse metre-scale corruption at coarse spacing.  Builds its own
 # mesh, so it belongs in the tier that needs no assets
 tests/test_mesh_validation.py
+
+# the sizing gates: a resolution spec the BUILD refuses has to be refused by
+# SIZING first.  Its arithmetic members run anywhere; the members that drive
+# rw_mpas_mesh skip by name when no generator is staged, which is the state a
+# hosted runner is in
+tests/test_mesh_spec_gates.py
 
 # the full-physics harness's non-device surface: constructor audits, contract
 # pins, surface classification.  Its four asset-touching members are marked

@@ -14,6 +14,7 @@ cover is printed as a named residue, never absorbed.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,11 +22,42 @@ M = 1024.0 * 1024.0
 BASE = Path(__file__).resolve().parent
 
 
+def _shortening_prefixes():
+    """The tree roots this table abbreviates, read from the environment.
+
+    THE BREAKAGE THIS PREVENTS: these four prefixes were absolute paths
+    under one person's home directory, hard-coded, and public since 0.1.0
+    (evidence/assembly-rehearsal-20260827/ §6).  They exposed a home
+    directory and a private working-tree layout, in a table that could not
+    abbreviate anything on any other machine.  Unset variables simply mean
+    no abbreviation -- the table still prints, with full paths, which is a
+    readable table rather than a refusal in a reporting tool.
+
+        HEX_REPO        the gpuwm-hex checkout's tree/ directory
+        ARWEN_CHECKOUT  the gpuwm source checkout at the pinned commit
+        HEX_WORK        the campaign scratch directory
+    """
+
+    roots = []
+    hex_repo = os.environ.get("HEX_REPO")
+    if hex_repo:
+        base = Path(hex_repo).as_posix().rstrip("/")
+        roots.append((f"{base}/src/hexcore/", "port:"))
+        roots.append((f"{base}/", "port:"))
+    arwen = os.environ.get("ARWEN_CHECKOUT")
+    if arwen:
+        roots.append((f"{Path(arwen).as_posix().rstrip('/')}/gpuwm/", "arwen:"))
+    work = os.environ.get("HEX_WORK")
+    if work:
+        roots.append((f"{Path(work).as_posix().rstrip('/')}/", ""))
+    return tuple(roots)
+
+
 def short(p):
-    return (str(p).replace("/home/drew/gpuwm-work/mpas-port-mg/tree/src/mpas_port/", "port:")
-            .replace("/home/drew/gpuwm-work/mpas-port-mg/tree/", "port:")
-            .replace("/home/drew/gpuwm-work/arwen-e594dc5c5/gpuwm/", "arwen:")
-            .replace("/home/drew/gpuwm-work/", ""))
+    text = str(p).replace("\\", "/")
+    for prefix, label in _shortening_prefixes():
+        text = text.replace(prefix, label)
+    return text
 
 
 def ph(d, label, key, default=None):

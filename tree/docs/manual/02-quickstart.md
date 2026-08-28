@@ -2,12 +2,14 @@
 
 This chapter goes from nothing to rendered forecast products. Every command
 in it was run, in this order, on a fresh install before it was printed here —
-the door commands against the installed 0.1.0 wheel, the forecast against the
+the door commands against the installed 0.2.0 wheel, the forecast against the
 repository checkout, the GPU steps on an RTX 5070 Ti. Where output is shown
 it is that run's output, except where a block is marked as a *form* — the
-shape of a line rather than a captured one. The refusal transcript in 2.6
-comes from a second machine, a 10 GiB RTX 3080, because that is the card
-the refusal it shows requires.
+shape of a line rather than a captured one. The card transcripts in 2.6 come
+from a second machine, a 10 GiB RTX 3080; their `ADMISSION` lines are
+re-derived on the model the door decides with today, from that card's own
+driver reading [`evidence/memory-shape-20260827/ON-CARD-366.json`], because
+the model the original run printed has since been retired (6.2).
 
 The true shape of the journey: the wheel installs in one command; the
 doors then need three estates the wheel cannot carry (a CUDA-matched CuPy,
@@ -21,21 +23,59 @@ pip install gpuwm-hex
 ```
 
 That installs the Python package, its dependencies (numpy, netCDF4, scipy)
-and the `gpuwm` engine distribution. Then add the CUDA lane. pip cannot
-detect which CUDA major your driver speaks, so you choose:
+and the `gpuwm` engine distribution at a version this port has measured.
+
+**No engine constraint of your own is needed, and that is new.** Until
+2026-08-27 this page told you to type an engine version beside the package,
+because the declared dependency was `gpuwm>=2.5.5` with no ceiling: a bare
+install took the newest published engine, and the forecast lane pins sixteen
+individual gpuwm source files by SHA-256. A bare install reached an engine the
+pin refused, and the forecast door refused at launch with a digest mismatch
+that named neither the version that works nor the fact that pip chose it.
+
+The declaration now carries a bounded range — `gpuwm>=2.5.8,<2.5.9` — so pip
+resolves the engine that works and refuses the one that does not. Three things
+follow that are worth knowing rather than discovering:
+
+- **2.5.8 is the only published engine that matches**, re-measured 2026-08-28
+  against every published 2.5.x release. So there is no fallback: the range is
+  one version wide because only one version qualifies.
+- **A newer gpuwm will not be resolved either.** The ceiling sits at the
+  first engine this port has not measured against the manifest, so a future
+  2.5.9 is excluded exactly as 2.5.7 is. That is deliberate: an unmeasured
+  engine is what produced the defect.
+- **If you already have a different gpuwm in the environment**, `gpuwm-hex
+  doctor` compares the installed engine's bytes against the pin and names
+  both the version it found and the version to install. It is a byte check,
+  not a version check, and it runs by default. On a conforming install it
+  reads `gpuwm 2.5.8: 16 of 16 pinned files are in this install and all 16
+  match`.
+
+Then add the CUDA lane:
+
+```sh
+pip install "gpuwm-hex[gpu]"     # or, spelled out, "gpuwm-hex[gpu-cu13]"
+```
+
+**There is one right answer here and it is CUDA 13.** Every GPU door in this
+port goes through `require_cuda`, which refuses a CUDA runtime below `13000`
+by name, so `cupy-cuda13x` is the only wheel the port can execute on. The
+`[gpu-cu12]` extra still resolves — it is in 0.1.0's published metadata — and
+a CuPy installed through it imports, allocates, runs cuBLAS and compiles an
+NVRTC kernel, and is then refused at forecast launch with
+`CudaRefusal: cuda.runtime_version=12090 < required 13000`. Do not use it.
+
+Check the driver, because a CUDA-13 wheel needs a driver that serves CUDA 13:
 
 ```sh
 nvidia-smi        # the CUDA version in the header is your driver's major
 ```
 
-```sh
-pip install "gpuwm-hex[gpu-cu12]"    # driver reports CUDA 12.x
-pip install "gpuwm-hex[gpu-cu13]"    # driver reports CUDA 13.x
-```
-
-Exactly one of the two. A CuPy wheel built for the wrong CUDA major
-installs cleanly, imports cleanly, and fails on the first real device call —
-which is why this is a choice you make, not one pip guesses.
+(On recent drivers that header field is spelled `CUDA UMD Version` — driver
+610.74 reads `CUDA UMD Version: 13.3`. A driver below 13 cannot open this
+port's CUDA lane at all, and no pip command changes that; `gpuwm-hex doctor`
+reads the driver itself and says so rather than offering an install that
+cannot work.)
 
 Confirm what landed:
 
@@ -46,14 +86,14 @@ gpuwm-hex version
 ```json
 {
   "distribution": "gpuwm-hex",
-  "package": ".../site-packages/mpas_port",
+  "package": ".../site-packages/hexcore",
   "source_checkout": null,
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
 ```
 
-Note `"package": .../mpas_port` — the import namespace is `mpas_port`, not
-`gpuwm_hex`. That is a declared inconsistency (README, "The import
+Note `"package": .../hexcore` — the import namespace is `hexcore`, not
+`gpuwm_hex`. It was renamed from `mpas_port` at 0.2.0 (README, "The import
 namespace"); everything you *type* is `gpuwm-hex`.
 
 ## 2.2 Doctor first
@@ -65,13 +105,13 @@ gpuwm-hex doctor
 On a fresh install with the CUDA extra, the report looks like this:
 
 ```
-INFO    distribution: gpuwm-hex 0.1.0
+INFO    distribution: gpuwm-hex 0.2.0
 INFO    interpreter: Python 3.14.4 on Linux x86_64
 OK      numpy (arrays; 48 modules import it at line one): imported, 2.5.2
 OK      netCDF4 (reads and writes every mesh, static and history file): imported, 1.7.4
 OK      scipy (the regridder's spatial index): imported, 1.18.1
 PRESENT gpuwm (the physics seam): gpuwm 2.5.2 is installed
-INFO    gpuwm source checkout (the forecast lane only): ...
+INFO    gpuwm git checkout (the forecast lane only): ...
 OK      cupy (the CUDA lane): imported, 14.2.0
 INFO    gpuwm fetch-bridges coverage: the gpuwm installed here bundles no rw_mpas_convert, rw_mpas_init, ...
 MISSING rw_mpas_init (the initial-condition builder): not found on any rung. ...
@@ -110,9 +150,9 @@ gpuwm you have: the transcript above was taken against the published gpuwm
 2.5.2 wheel, whose bundle carries `rw_wrfbatch` and **not** `rw_mpas_init`
 or `rw_mpas_convert` — which is exactly the shortfall the doctor reports
 there. The four MPAS bridge binaries enter the bundle at gpuwm 2.5.3, and
-this distribution's floor is `gpuwm>=2.5.5` (raised past 2.5.3 for the seam
-bytes the port pins): a conforming install cannot land on the engine that
-transcript was taken from. Doctor
+this distribution's declared range is `gpuwm>=2.5.8,<2.5.9` (the floor is
+far past 2.5.3, for the seam bytes the port pins): a conforming install cannot
+land on the engine that transcript was taken from. Doctor
 asks the gpuwm you actually have what its bundle declares, so it never sends
 you to a staging command that cannot deliver the file.
 
@@ -160,19 +200,27 @@ is wrong. You need four things:
    the MPAS-Atmosphere project's published mesh downloads, from the
    `MPAS-Tools` generator, or from the engine's own `gpuwm mesh` door
    (chapter 4). This quickstart uses the published 40,962-cell global mesh
-   `x1.40962` — the one that fits a 12 GiB card.
+   `x1.40962` — the one a 10 GiB card holds.
 2. **The matching static file** (`x1.40962.static.nc`), carrying terrain,
    land use, soil and vegetation for that exact mesh. The published meshes
    have published statics; a generated mesh gets its static from the same
    `gpuwm mesh` run. Grid and static must be the same mesh — the doors
    cross-check and refuse a mismatched pair by name.
 3. **For the init door: a vertical-grid declaration.** The normal path is
-   a `--vertical-spec` JSON (`gpuwm-hex.vertical-spec/v1`; examples ship in
-   the checkout under `verification/vertical-specs/`), from which the door
-   constructs the vertical grid itself — no native toolchain anywhere in
-   the loop. The compatibility mode reads the vertical out of a
+   a `--vertical-spec` JSON (`gpuwm-hex.vertical-spec/v1`), from which the
+   door constructs the vertical grid itself — no native toolchain anywhere
+   in the loop. The compatibility mode reads the vertical out of a
    native-minted init-class file (`--capsule`); chapter 5 explains both
    and when to prefer which.
+
+   **The example specs are not in the wheel.** They live at
+   `verification/vertical-specs/` in the *source distribution* and the
+   repository, and `pip install` places a wheel, so the path 2.5 prints
+   below does not exist on a fresh install — the door refuses with the
+   absolute path it could not find, which is correct and is not a hint about
+   where to get one. Take them from the sdist
+   (`pip download --no-binary :all: gpuwm-hex`, then unpack) or from the
+   gpuwm-hex repository, and put them where 2.5 expects.
 4. **Meteorological input**: a WPS intermediate file from `ungrib` (GFS,
    ERA5, whatever you drive with), valid at your start time.
 
@@ -251,7 +299,11 @@ about a minute.
 ## 2.6 Ask the card first
 
 The forecast lane is the one step whose answer depends on your hardware, so
-ask before you spend anything on it:
+ask before you spend anything on it. **Both checkouts below are required and
+neither is optional**: `--repo` is your gpuwm-hex checkout (the drivers are
+not in the wheel) and `--gpuwm-checkout` is a gpuwm checkout at **`v2.5.8`**,
+the tag whose bytes the seam pin matches (2.1). Leave `--repo` off and the
+door refuses before it reads anything else.
 
 ```sh
 gpuwm-hex forecast --preflight \
@@ -262,28 +314,57 @@ gpuwm-hex forecast --preflight \
   --init-source "GFS 2026-08-12 06Z" \
   --hours 1.0 --history-every-minutes 30 \
   --out work/fc-01 \
-  --gpuwm-checkout <gpuwm-checkout>
+  --repo <gpuwm-hex-checkout>/tree \
+  --gpuwm-checkout <gpuwm-checkout-at-v2.5.8>
 ```
+
+`--gpuwm-checkout` must be a **git clone**, not an unpacked release tarball
+and not the installed distribution: the driver asks it
+`git rev-parse --show-toplevel`, because it writes that checkout's HEAD, tree
+and dirty paths into every receipt so the seam source it executed can be named
+by commit. A tarball or a `site-packages` directory is refused by name, saying
+that. (Before 2026-08-28 the same case exited 128 and surfaced as a raw
+`CalledProcessError` the door itself labelled a driver defect.)
 
 On a card that holds the mesh, preflight binds it, admits it, runs the
-driver's own source-pin and host checks, and exits 0. On one that does not,
-it says so with numbers. This transcript is from a 10 GiB RTX 3080 with a
-desktop session on it, on a box that had the mesh pair but not yet the
-init — and preflight reports **both** blockers rather than stopping at the
-first:
+driver's own source-pin and host checks, and exits 0. This transcript is
+from a 10 GiB RTX 3080 with a desktop session on it, run 2026-08-25
+[`evidence/l6-capacity-20260825/desktop3080/`]; the `ADMISSION` line is the
+one the door prints for that card and that free reading today:
 
 ```
-INPUT MISSING --init names a missing file: .../x1.40962.init.nc.  Build one with `gpuwm-hex init` (chapter 5 of the manual).
-[mesh-binding] mesh x1.40962: nCells=40962 nEdges=122880 nominal=120000.0 m; min(dcEdge)=97076.508 m; dt=120.000 s; limit=698.951 s
+[mesh-binding] bound x1.40962: nCells=40962, nEdges=122880, dx=120000.0 m, dt=120.0 s
 BIND mesh=x1.40962 rebound=True dt=120.0 s
-ADMISSION mesh=x1.40962 cells=40,962 predicted=9,948.0 MiB headroom=512.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> REFUSED
-PREFLIGHT mesh=x1.40962 problems=2 status=preflight_refused
+ADMISSION mesh=x1.40962 cells=40,962 card=68 SM row=measured global predicted=5,682.0 MiB margin=884.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> admitted
+ARCHITECTURE sm=sm_86 -> admitted (per-architecture anchor of 2026-08-25 (evidence/sm86-tier-20260825/RECEIPT.md))
+PREFLIGHT mesh=x1.40962 problems=0 status=preflight_passed
 ```
 
-The 40,962-cell mesh needs a **12 GiB** card; that 10 GiB one is 1,363 MiB
-short of it. Preflight exits 1 and touches no CUDA beyond the memory query.
-Chapter 6.2 explains the model it decides with and how to supply your own
-card's measured row.
+The card is read at the moment of the decision — `card=68 SM`, and the row
+selected for it — so a 10 GiB desktop is priced as itself. On this free
+reading it admits `x1.40962`, `v15.150.38857` and `u96.64002`; the refusals
+earlier releases printed for those three were a 32 GiB card's arithmetic
+quoted at a 10 GiB part, and 6.2 has the whole story.
+
+On a request the card really does not hold, it says so with numbers. The
+same card and the same free reading, asked for the 163,842-cell
+`x4.163842`:
+
+```
+ADMISSION mesh=x4.163842 cells=163,842 card=68 SM row=measured global predicted=17,000.2 MiB margin=884.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> REFUSED
+PREFLIGHT REFUSED device memory admission refused --mesh x4.163842: the fitted
+footprint for 163,842 cells is 17,000.2 MiB and the decision holds back 884.0
+MiB, so it needs 17,884.2 MiB free; this device reports 9,097.0 MiB free of
+10,239.5 MiB, short by 8,787.2 MiB. ... This card fits the registered mesh(es)
+conus-x1.2971, r4.75.11020, ... u96.64002, v15.150.38857, x1.40962 at this
+moment (68,440 cells fit); re-run --mesh with one of them, or free the memory
+the shortfall names and re-run.
+```
+
+Preflight exits 1 on a refusal and touches no CUDA beyond the memory and
+device-properties queries; a missing input is *reported* alongside the card
+verdict rather than hiding it. Chapter 6.2 explains the model it decides
+with.
 
 Two more things the forecast lane needs, both stated here rather than
 discovered mid-launch:
@@ -292,11 +373,14 @@ discovered mid-launch:
   outside the wheel, and verify their own executing modules by SHA-256
   before CUDA is touched. Run the door from inside a checkout, or pass
   `--repo <gpuwm-hex-checkout>/tree`;
-- **a `gpuwm` source checkout at the pinned commit** — `--gpuwm-checkout`.
-  The seam pin includes a repository document no wheel installs, so an
-  installed gpuwm satisfies pip and not the pin. The run verifies the
-  sixteen pinned files by SHA-256 at launch and refuses a mismatch naming
-  the file and both digests.
+- **a `gpuwm` git checkout at the pinned commit** — `--gpuwm-checkout`. The
+  run verifies the sixteen pinned files by SHA-256 at launch and refuses a
+  mismatch naming the file and both digests; it also records the checkout's
+  HEAD, tree and dirty paths into every receipt, which is why it is a git
+  clone and not the installed distribution. The pin itself is satisfiable
+  from an install at 2.5.8 — all sixteen pinned paths resolve from
+  `site-packages` there, measured 2026-08-28 — so what the checkout supplies
+  now is provenance, not a missing file.
 
 ## 2.7 First forecast
 
@@ -312,7 +396,8 @@ gpuwm-hex forecast \
   --start-time 2026-08-12_06:00:00 \
   --hours 1.0 --history-every-minutes 30 \
   --out work/fc-01 \
-  --gpuwm-checkout <gpuwm-checkout> \
+  --repo <gpuwm-hex-checkout>/tree \
+  --gpuwm-checkout <gpuwm-checkout-at-v2.5.8> \
   --case-label quickstart
 ```
 
@@ -322,6 +407,10 @@ dt = 120 s, full physics, three history files, exit 0. That measurement was
 taken through `tools/run_cuda_v841_forecast_mesh.py`, the driver this door
 now drives; the door adds the admission decision in front of it and the
 receipt and render command behind it, and changes nothing in between.
+
+Re-run on 2026-08-27 on the 10 GiB RTX 3080 in a desktop, from the installed
+wheel and a published `gpuwm` 2.5.6 clone: **165.4 s of integration and 244 s
+wall**, same 30/30 steps, same three frames, `status=passed`.
 
 When it finishes, `--out` holds three history files (analysis, +30 min,
 +60 min), `cuda-v841-forecast-receipt.json` — the driver's receipt, stating
@@ -337,8 +426,11 @@ NEXT gpuwm-hex render --history <out>/cuda-history.<valid-time>.nc --mesh <grid>
 
 ## 2.8 First rendered products
 
-Paste the `NEXT` line, or spell it out. `render` needs no checkout and no
-GPU:
+Spell it out — and add `--window focus`, which the `NEXT` line does not
+carry. The door's default window is `mesh`, and the `rw_mpas_convert` in
+every published bundle answers `unknown render window 'mesh' (known: focus,
+global)`, so the pasted `NEXT` line fails on a published engine (7.1).
+`render` needs no checkout and no GPU:
 
 ```sh
 gpuwm-hex render \
@@ -346,6 +438,7 @@ gpuwm-hex render \
   --mesh    assets/x1.40962.grid.nc \
   --out     work/png \
   --simulation-start 2026-08-12_06:00:00 \
+  --window  focus \
   --products all
 ```
 
@@ -362,6 +455,13 @@ DOOR rendered=41 skipped=0 failed=0 out=work/png
 `render-manifest.json` carrying engine digests, per-frame results, and the
 exact invocations. 3.6 seconds on the proving node. That is the whole loop:
 install → doctor → assets → init → forecast → pictures.
+
+Re-run 2026-08-27 on a desktop against the published 2.5.7 bridge bundle:
+**49 rendered, 0 skipped, 0 failed, 7 s**, same `d01-22km` tree. The count
+moved because the renderer's catalog grew, not because anything here changed.
+End to end — empty machine to these pictures, including every command that
+failed on the way — **16 min 46 s**, with the mesh pair and the met file
+already on disk.
 
 ## Where to next
 

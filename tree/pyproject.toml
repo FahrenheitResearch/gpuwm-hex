@@ -14,18 +14,31 @@ build-backend = "setuptools.build_meta"
 name = "gpuwm-hex"
 # STATIC, and this is the single place the version is stated.
 #
-# `mpas_port.__version__` reads it back out of installed metadata
+# `hexcore.__version__` reads it back out of installed metadata
 # (importlib.metadata) rather than restating it, because a hand-maintained
 # constant is a promise to update two files at every cut and gpuwm already
 # broke that promise once -- its wheel shipped 0.1.1 for four releases while
 # the runtime constant said otherwise.  tests/test_packaging_declaration.py
 # fails if a second literal ever appears in the package.
 #
-# 0.1.0 is the shape of this line: 0.1 = global variable-resolution on
-# one consumer GPU, deterministic, ArWen physics.  0.2 = multi-GPU (built and
-# proven, two-node bitwise partition-invariant).  0.3 = the regional lane,
-# which the CUDA lane refuses today.
-version = "0.1.1"
+# The shape of this line, restated 2026-08-27 because the previous statement
+# had become false in both directions:
+#
+#   0.1  global variable-resolution on one consumer GPU, deterministic,
+#        ArWen physics.
+#   0.2  the LIMITED-AREA lane -- a full-physics forecast on a culled
+#        regional mesh behind lateral boundary conditions, on a 10 GiB card
+#        -- plus what decides where the fine grid goes and keeps it there:
+#        variable-resolution mesh generation, storm-following placement, and
+#        a coarse-then-corridor cycling loop.
+#
+# The previous comment reserved 0.2 for multi-GPU and put the regional lane
+# at 0.3 "which the CUDA lane refuses today".  The regional lane arrived
+# first and multi-GPU did not: two-node execution is built and proven bitwise
+# partition-invariant, but it has no door, no demo, and no re-proof at the
+# current engine pin, so it is not what a version number should be sold on.
+# Numbers are not reserved here any more.  A minor bump names what shipped.
+version = "0.2.0"
 description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.1 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -64,47 +77,82 @@ license-files = ["LICENSE", "NOTICE"]
 #
 # WHY gpuwm IS HARD: the port owns no physics.  Every physics column runs
 # through gpuwm's `run_mpas_column_batch` seam (the "column-batch seam"), and
-# the forecast lane refuses to start without it.  The floor clears 2.5.0
-# because the GF seam-parity work the port pins landed AFTER the 2.5.0 cut:
-# at gpuwm's published 2.5.0 tip, 5 of the 16 files in the port's Arwen
-# source manifest differ from the pinned bytes.  A `>=2.5.0` here would let
-# pip resolve an install whose physics seam the port then refuses at launch,
-# which is the worst of both worlds -- a green install and a dead run.
+# the forecast lane refuses to start without it.  The port pins that seam by
+# the SHA-256 of 16 individual gpuwm source files, so "a new enough gpuwm" is
+# not the question -- the question is whether a given published engine's
+# BYTES are the ones this port was proven against.  A `>=` with no ceiling
+# would let pip resolve an install whose physics seam the port then refuses
+# at launch: the worst of both worlds, a green install and a dead run.
 #
-# AND THE FLOOR IS 2.5.5, for two further reasons stacked on that one.
-# First, the seam gap recurred at every cut: at gpuwm's published 2.5.4
-# stamp, 3 of the 16 files in the Arwen source manifest still differ from
-# the pinned bytes (docs/mpas-seam.md, gpuwm/core/mpas_column_batch.py,
-# gpuwm/io/restart.py -- the seam-convergence work this tree pins landed
-# after the 2.5.4 cut).  2.5.6 is the first published version whose bytes
-# match the manifest.  Second, the four MPAS bridge binaries
-# (`rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_static`)
-# entered gpuwm's BUNDLE at 2.5.3; published 2.5.2 stages none of them
-# through `gpuwm fetch-bridges`, both of this distribution's front doors
-# drive those binaries, and the gpuwm source tree is private and never
-# pushes -- so an engine below 2.5.3 is a stranded install, not a degraded
-# one.  The 2.5.5 floor keeps both refusals where pip can make them.
+# THE SPECIFIER BELOW IS DERIVED, NOT TRANSCRIBED.  It is
+# `hexcore.engine_pin.gpuwm_requirement()`, computed from a table of
+# MEASURED verdicts -- one row per published gpuwm, saying whether it is on
+# PyPI, whether its bytes satisfy the sixteen-file manifest, and whether its
+# vendored crates are complete enough for the `--offline` build the manual
+# prints.  `tests/test_packaging_declaration.py` fails if this literal and
+# that derivation ever disagree.  The instrument is
+# `evidence/standalone-20260827/measure_engine_verdicts.py`, which re-runs
+# the whole measurement from the network, and the table is SPLICED from its
+# JSON by `evidence/repin-258-20260828/render_engine_pin_table.py` rather
+# than typed.
 #
-# The sequencing this depends on is settled, not hoped for: gpuwm 2.5.6
-# publishes BEFORE gpuwm-hex 0.1.1, the same hard ordering constraint the
-# 0.1.0 release plan carried.  Until 2.5.6 is on PyPI this floor makes
-# `pip install gpuwm-hex` unresolvable, and that is the correct behaviour
-# -- an install that cannot open a door is worse than one that refuses to
-# happen.
+# NO COUNT IS RESTATED IN THIS COMMENT, on purpose.  Every hand-written
+# statement of these figures in this tree was wrong: this comment used to say
+# 5 of 16 files differ at 2.5.0 and 3 at 2.5.4, and the test guarding it said
+# 13 at 2.5.0 and 6 at 2.5.1.  Not one of the four was right, and the "5 of
+# 16" survived here even in the edit that called it out.  Read the counts off
+# `engine_pin.PUBLISHED_ENGINES`, which is machine-written.
 #
-# AND IT IS NOT ENOUGH: satisfying this dependency is NECESSARY BUT NOT
-# SUFFICIENT for the forecast lane.  The port pins gpuwm by the
-# SHA-256 of 16 individual source files, one of which is `docs/mpas-seam.md`
-# -- a repository document that gpuwm's own packaging never places in
-# site-packages.  So the forecast lane needs a gpuwm SOURCE CHECKOUT at the
-# pinned commit in addition to the installed wheel.  The two front doors
-# (init, render) do not: they import no gpuwm at all and drive Rust binaries
-# instead.  README.md states this split where a user will read it.
+# THE FLOOR IS 2.5.8 AND IT IS THE ONLY USABLE ENGINE (re-measured
+# 2026-08-28, evidence/repin-258-20260828/).  The engine published 2.5.8 and
+# this port re-pinned its manifest to that cut's bytes; because the `moved`
+# column is measured AGAINST the manifest, re-pinning moved every row, and
+# every engine from 2.5.0 to 2.5.7 now fails it -- including the 2.5.6 that
+# was this floor the day before.  There is no fallback engine and no wider
+# range to fall back to: if 2.5.8 were yanked, `engine_pin` raises
+# EnginePinError rather than loosening the bound, because widening it means
+# measuring something that passes and nothing published does.
+#
+# Two earlier findings are kept in the table and no longer reach the floor,
+# since 2.5.5 and 2.5.6 now fail on bytes before either applies: 2.5.5 is a
+# git TAG WITH NO PyPI RELEASE (so the old `gpuwm>=2.5.5` named a version pip
+# cannot resolve), and 2.5.5's published tree is missing
+# `tools/rustwx/vendor/crates-io/cc/src/target/generated.rs`, so the manual's
+# own printed `cargo build --release --locked --offline` dies there while the
+# same command finished in 56.6 s at 2.5.6.  The derivation still requires
+# all three -- on PyPI, bytes match, buildable from -- because dropping a
+# clause is how a floor lands on a version that cannot be installed or built.
+#
+# AND THERE IS A CEILING, which is the whole point.  THE BREAKAGE IT
+# PREVENTS, measured on a real install (evidence/userwalk-20260827/): with an
+# unbounded floor pip resolved gpuwm 2.5.7, whose bytes the manifest refused,
+# and the forecast lane then stopped at launch with two SHA-256 digests and
+# no version number while `gpuwm-hex doctor` reported the estate healthy and
+# exited 0.  The ceiling is EXCLUSIVE and sits at the first engine that is
+# not measured usable, so a FUTURE engine cut cannot silently re-open this.
+# It has already been shown to work rather than merely asserted: while this
+# range read `<2.5.7` it excluded 2.5.8 exactly as it excluded 2.5.7, and
+# admitting 2.5.8 cost what it is meant to cost -- re-run the instrument,
+# move the table, let this literal follow.  It is never edited on its own.
+#
+# WHAT CHANGED FOR THE FORECAST LANE AT 2.5.8, measured: all sixteen pinned
+# paths now resolve from site-packages with NO source checkout.  Until 2.5.7
+# the manifest pinned `docs/mpas-seam.md`, a repository document gpuwm's
+# packaging did not place in site-packages, so the forecast lane needed a
+# gpuwm SOURCE CHECKOUT at the pinned commit on top of the installed wheel.
+# 2.5.8 ships that document inside the wheel at the manifest's own key:
+# against a clean PyPI install of 2.5.8, `engine_pin.inspect_seam` reports
+# checked=16, matched=16, moved=(), absent=().  The two front doors (init,
+# render) never needed a checkout -- they import no gpuwm and drive Rust
+# binaries instead.  RETIRING THE CHECKOUT REQUIREMENT IS NOT DONE HERE:
+# `engine_pin.remedy()`, the door's refusal text and README still tell a user
+# to clone, and that sweep belongs with the forecast door, not the pin.  This
+# comment records the measurement so the next reader does not repeat it.
 dependencies = [
     "numpy>=2.0",
     "netCDF4>=1.6",
     "scipy>=1.11",
-    "gpuwm>=2.5.5",
+    "gpuwm>=2.5.8,<2.5.9",
 ]
 # Search terms, which is what a keyword is: the words somebody types into
 # PyPI when they are looking for this kind of thing.  `MPAS` is here as a
@@ -161,8 +209,37 @@ Repository = "https://github.com/FahrenheitResearch/gpuwm-hex"
 # to match the one their driver reports.
 gpu-cu12 = ["cupy-cuda12x[ctk]>=14.0"]
 gpu-cu13 = ["cupy-cuda13x[ctk]>=14.0"]
-gpu = ["gpuwm-hex[gpu-cu12]"]
-dev = ["pytest>=8.0"]
+#
+# THE ALIAS FOLLOWS THE RUNTIME FLOOR, and did not before.  Ledger #379.
+# `hexcore.cuda_backend.runtime.require_cuda` refuses any CUDA runtime
+# below 13000 and EVERY GPU door in this port goes through it, so the CUDA-13
+# wheel is the only one this distribution can execute on.  While this alias
+# read `gpu-cu12`, the obvious spelling -- `pip install "gpuwm-hex[gpu]"` --
+# installed a CuPy that imports, allocates, runs cuBLAS, compiles an NVRTC
+# kernel, and is then refused by name at forecast launch with
+# `CudaRefusal: cuda.runtime_version=12090 < required 13000`.  Measured on
+# the proving RTX 5090 in evidence/xmachine-20260827 section 5.
+#
+# `gpu-cu12` is kept resolvable rather than deleted: it is in published
+# 0.1.0 metadata and in written instructions, and a name that vanishes turns
+# a wrong answer into a resolver error.  `gpuwm-hex doctor` now reads the
+# floor off require_cuda itself and reports an installed cu12 wheel as a GAP
+# naming that exact refusal, so the trap is visible before a card is opened
+# rather than after.  Retiring the extra outright is a published-metadata
+# decision and is handed up, not taken here.
+gpu = ["gpuwm-hex[gpu-cu13]"]
+# `setuptools` is here because `tests/test_packaging_declaration.py` drives
+# the REAL sdist template engine (`setuptools._distutils.filelist.FileList`)
+# over the real tree -- the only way to read a MANIFEST.in without guessing
+# what it resolves to.  THE BREAKAGE THIS DECLARATION PREVENTS, measured on
+# the proving RTX 5090 (evidence/xmachine-20260827/): since Python 3.12 `ensurepip` no
+# longer seeds setuptools, so a fresh venv does not have it, and three of
+# this distribution's own packaging gates raised ModuleNotFoundError in the
+# sdist a user unpacks -- on 3.13 but not 3.11, which is how it survived
+# every run on this desk.  The tests skip by name when it is genuinely
+# absent; this line and the CI install list are what stop that skip from
+# ever being the answer where the gate matters.
+dev = ["pytest>=8.0", "setuptools>=77"]
 
 [project.scripts]
 # ONE console script with subcommands, mirroring gpuwm's `gpuwm doctor` /
@@ -177,49 +254,85 @@ dev = ["pytest>=8.0"]
 # to plant inside a weather model.  Nominative reference in prose stays fine
 # and README/docs use it freely.
 #
-# The IMPORT namespace is still `mpas_port`, and that is a declared
-# inconsistency recorded in tests/test_packaging_declaration.py, not a
-# decision to leave it alone forever.  Renaming it is NOT cheap: eleven of the
-# seventeen modules the full-physics proof harness pins by SHA-256 carry the
-# literal string, and in five of them it is a `module_key=` NVRTC
-# compile-contract identity rather than a comment -- editing those changes the
-# kernel-cache identity as well as breaking the pin, so the rename costs a
-# re-proof on a 32 GiB card against the native authority.  That is a
-# release decision, not a tidy-up.
+# The IMPORT namespace is `hexcore` and 0.2.0 is the cut that made it so; it
+# was `mpas_port` through 0.1.1.  The old name OVERCLAIMED.  What this port
+# keeps byte-identical is MPAS-A v8.4.1's DYCORE and MESH -- a specification,
+# and it is pinned -- while it deliberately does NOT match that model's
+# physics, which is WRF physics run through MPAS's own plumbing; ArWen's
+# column-batch seam runs here instead.  So `mpas_port` put another project's
+# name in every user's import line for a relationship that held over half the
+# model.  `hexcore` names the two things that ARE pinned, the hexagonal
+# Voronoi mesh and the dycore, and it matches the distribution name.
+#
+# It was never cheap, which is why it took a ruling rather than a tidy-up:
+# this tree pins its OWN files by path and by SHA-256 -- the frozen execution
+# set in tools/run_cuda_v841_full_physics_x4.py, the regional kernel set in
+# hexcore.cuda_backend.regional_admission, and the proof-guard fixtures -- so
+# moving the directory moves every pinned path AND every pinned digest,
+# including the digest of the module holding the table.  Re-deriving those
+# tables is a measured act on a card and is tracked separately from the
+# rename; tests/test_packaging_declaration.py holds the name itself.
+#
+# There is no `mpas_port` alias shim.  A shim would keep the overclaiming name
+# resolvable in an import line, which is the one thing the rename removes.
 #
 # `forecast` IS a subcommand now, and what changed is the floor under it.
-# It was withheld while the room had none: the driver needed a card with
-# about 26.4 GiB free, its mesh/static defaults were byte-pinned authority
-# files with no fetch path, and nothing between the user and a mid-run CuPy
-# death told them their card was too small.  Since then the footprint fell to
-# a measured 6,296.5 MiB + 93,474 B/cell (the 40,962-cell global mesh peaks
-# at 9,948 MiB, inside a 12 GiB card), the registry made mesh+static explicit
-# table work, and `mpas_port.forecast_door` adds the admission decision that
-# refuses BEFORE a run starts rather than after it dies.
+# It was withheld while the room had none: the driver admitted on a retired
+# asserted floor, its mesh/static defaults were byte-pinned authority files
+# with no fetch path, and nothing between the user and a mid-run CuPy death
+# told them their card was too small.  Since then the footprint became a
+# measured row -- 5,016.5 MiB + 98,748 B/cell at the merged tip
+# (evidence/memory-row-refit-20260826/node2/; the 40,962-cell global mesh
+# peaks at 8,874 MiB, inside a 12 GiB card) -- the registry made mesh+static
+# explicit table work, and `hexcore.forecast_door` answers admission from
+# `hexcore.device_admission` (the ONE surface) and refuses BEFORE a run
+# starts rather than after it dies.  The row of record lives in that module
+# and its test, never in this comment: quote the surface, not this text.
 #
 # What has NOT changed, and is a named refusal rather than a silent failure:
 # the lane still needs the gpuwm-hex SOURCE CHECKOUT (the drivers live in
 # tools/, outside this wheel, because they verify their own executing modules
-# by SHA-256) and a gpuwm SOURCE CHECKOUT at the pinned commit (see the
-# dependency note above).  The door names both by name, and `gpuwm-hex
-# doctor` reports the same two gaps.
-gpuwm-hex = "mpas_port.cli:main"
+# by SHA-256) and a gpuwm GIT CHECKOUT at the pinned commit.  The SECOND
+# reason moved at 2.5.8 and the text moved with it: it is no longer a pinned
+# path the wheel cannot reach (all sixteen resolve from site-packages there,
+# see the dependency note above) but provenance -- the proof harness writes
+# the checkout's HEAD, tree and dirty paths into every receipt so the
+# executed bytes can be named by commit, and an install has no commit.  The
+# door names both by name, and `gpuwm-hex doctor` reports the same two gaps.
+gpuwm-hex = "hexcore.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-# Anchored patterns, never `mpas_port*`.  These are fnmatch over DIRECTORY
+# Anchored patterns, never `hexcore*`.  These are fnmatch over DIRECTORY
 # names walked from `src`, and gpuwm measured what a loose glob does: its
 # 2.5.0 wheel swallowed a sibling distribution's project directory because
 # `find` defaults to namespaces = true and a namespace finder does not need
 # the directory name to be a valid identifier.  There is no sibling under
 # src/ today; the anchor is what keeps that true when one appears.
-include = ["mpas_port", "mpas_port.*"]
+include = ["hexcore", "hexcore.*"]
+# ...and one anchored EXCLUSION, applied after the include.
+#
+# `hexcore.mod` is the sibling column-physics backend: a second adapter
+# and a second source manifest that pin a seam living on a private branch
+# with no remote, on one machine.  Nothing about it may reach a published
+# artefact -- not the adapter, not the manifest, not the digests it pins.
+# A directory is the unit setuptools can exclude (there is no way to drop a
+# single MODULE from a package), which is why that lane is a subpackage
+# rather than two files beside the rest of the port.
+#
+# THE BREAKAGE THIS PREVENTS: a wheel or an sdist carrying the pin of a
+# private branch -- its branch name, its commit, and the SHA-256 of files
+# nobody outside this machine can obtain -- published to PyPI, where it
+# cannot be recalled. `tests/mod/test_mod_seam.py` runs the real
+# discovery against this declaration and fails if the exclusion stops
+# working.
+exclude = ["hexcore.mod", "hexcore.mod.*"]
 
 [tool.setuptools.package-data]
 # Recursive globs, never an enumeration -- gpuwm's per-file enumeration had
 # drifted 52 files behind its tree before it was rewritten this way.
 #
-# There is nothing to ship today: every non-.py file under src/mpas_port is
+# There is nothing to ship today: every non-.py file under src/hexcore is
 # compiled bytecode, which .gitignore already excludes and which is a build
 # product of the sources beside it.  Every CUDA kernel this port launches is
 # generated as a Python string and handed to NVRTC at runtime, so there are
@@ -227,12 +340,12 @@ include = ["mpas_port", "mpas_port.*"]
 # table or a kernel file is a drop-in rather than a packaging discovery, and
 # tests/test_packaging_declaration.py fails if a data file ever lands under
 # the package without matching one of these.
-mpas_port = ["*.json", "data/**/*", "*.cu", "*.cuh"]
+hexcore = ["*.json", "data/**/*", "*.cu", "*.cuh"]
 
 [tool.pytest.ini_options]
 markers = [
     "gpu: needs a CUDA device and cupy; auto-applied to any test whose module imports cupy",
-    "bigcard: needs about 26.4 GiB of free device memory (the x4.163842 full-physics footprint)",
+    "bigcard: needs the x4.163842 full-physics free-memory floor computed by hexcore.device_admission (conftest registers the live figure; the measured x4 requirement, not an asserted constant)",
     "assets: needs the byte-pinned mesh/static/init/native-authority files, which ship with no fetch path",
     "slow: minutes rather than seconds",
 ]

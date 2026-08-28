@@ -90,11 +90,31 @@ python tools/device_memory_capacity/copy_elision_accounting.py \
 ```
 
 `--prior-fixed-mib` and `--prior-bytes-per-cell` are **required and have no
-defaults**, and the tool refuses by name without them. The pair above is the
-model of record: measured 2026-08-24 at Arwen seam pin `0d04db712`, after the
-Grell-Freitas local-memory frame cut
-(`evidence/gf-pin-move-measured-20260824/`). Use it for any new question about
-what fits a card.
+defaults**, and the tool refuses by name without them.
+
+**Every arm this tool accepts is HISTORICAL, and there is no affine row of
+record any more.** Since 2026-08-27 the admission surface is not
+`fixed + slope × cells`: it is a card core, plus the Grell-Freitas and YSU
+workspaces sized to `min(cells, tile(card))` — which stop growing once the
+mesh is bigger than the card — plus a per-cell term, under a margin priced
+from the card (`evidence/memory-shape-20260827/`). So this tool cannot ask the
+current question. Send a new question about what fits a card to the surface
+instead:
+
+```python
+from hexcore.device_admission import KNOWN_CARDS, model_for_card
+model_for_card(KNOWN_CARDS["10gib-68sm"]).required_bytes(40_962)
+```
+
+The pair in the command above is the **2026-08-24 arm**, measured at Arwen
+seam pin `0d04db712` after the Grell-Freitas local-memory frame cut
+(`evidence/gf-pin-move-measured-20260824/`); pass it only to reproduce an
+08-24-era projection. The tool's own refusal text lists every arm it knows —
+the retired 2026-08-26 row, the 08-25 converged row, this one, and the 08-20
+pre-cut ledger — each with its date, its pin and its evidence directory. A
+test refuses any arm labelled "of record" there and reads the retired row's
+coefficients out of `device_admission`, so the stale-model-prevention tool
+cannot itself recommend a stale model.
 
 To reproduce the #308 copy-elision accounting as it was landed, pass the arm
 it was computed against instead — `--prior-fixed-mib 9797.8
@@ -159,5 +179,21 @@ The report labels affine results `PROJECTION ONLY`. The 12 GiB gate can become
 `PASS` only from at least two byte-identical target-cell runs on a physical
 12 GiB device, or a validated whole-device limit that includes pool, non-pool,
 and CUDA local-memory backing-store allocations. The qualifying process peak
-must also leave the declared headroom (512 MiB by default).
-`CUPY_GPU_MEMORY_LIMIT` is a pool limit and is not sufficient for that gate.
+must also leave the declared headroom, which this tool still defaults to
+512 MiB. `CUPY_GPU_MEMORY_LIMIT` is a pool limit and is not sufficient for
+that gate.
+
+**That flat headroom is RETIRED as an admission margin**, and this tool's
+`--headroom-mib` default is the retired constant kept for reproducing a
+historical projection — it is a protocol knob here, never the gate. It named
+no breakage and it failed by 96 MiB on `v6.75.112676` and 28 MiB on
+`v20.80.151649`. What a live decision holds back is the model's own margin,
+priced from the card and naming what each part absorbs
+(`ShapedFootprintModel.margin_terms()`): the card's RRTMG shortwave workspace
+— the largest block that does not scale with the mesh, measured to move the
+pool high-water by 1,707.2 MiB when it stops being servable from the free list
+— at **1,745.6 MiB on a 170 SM part and 872.8 MiB on a 68 or 70 SM part, plus
+11.2 MiB of instrument convention**. The forecast door still takes
+`--headroom-mib`, but it now defaults to `None`, meaning that margin; the
+retired constant stays computable at
+`device_admission.RETIRED_FLAT_HEADROOM_BYTES`.

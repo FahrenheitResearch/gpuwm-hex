@@ -71,77 +71,233 @@ def test_exact_release_scope_and_all_execution_sources_are_frozen() -> None:
 
 
 def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
+    """The runner's twenty-three pins, spelled out a second time on purpose.
+
+    This mirror is what makes a pin move REVIEWABLE: the runner's table can be
+    edited by anybody, and without a second copy in the test suite the edit and
+    its justification travel in one diff hunk that a reviewer skims.  The two
+    copies are re-derived from the TREE by ``tools/repin_source_tables.py``,
+    each independently and never one from the other -- a mirror generated from
+    its original agrees with it by construction and gates nothing.
+    """
+
     runner = _load_runner()
     assert runner.EXECUTION_SOURCE_PINS == {
-        "src/mpas_port/cuda_physics_prep_v841.py": (
-            "29fb9bb7c6f37f90e1f66fabd576810fa89db902ad7e4495eaf21a57610cbccf"
+        "src/hexcore/cuda_physics_prep_v841.py": (
+            "0e8df0fa4c58df44d887aa5fe8aaf722da2273df6a900feb4de31f06d575fe60"
         ),
-        "src/mpas_port/cuda_gwdo_v841.py": (
-            "11e038bc2365964b6c8b8db36d3dd99ed200edc3f40e7795e208af3af08bd316"
+        "src/hexcore/cuda_gwdo_v841.py": (
+            "5b9dd5980e33d7a0b1760281bc1553c93fa5f4c4395f7b107c8d61dabe1b9f23"
         ),
-        "src/mpas_port/cuda_physics_v841.py": (
-            "ea6afd713883530e317936f93285b4d4ffe22c2fecf25d76f3f1b6af4041529f"
+        "src/hexcore/cuda_physics_v841.py": (
+            "c7ddcb52d879d4aa6ba8d9474aa73d77aaf3cfb94ee3137ba7413328fdd5e666"
         ),
-        "src/mpas_port/cuda_driver.py": (
-            "9daf917a89b3b9dd6f013be3d971c76d255bcfbbb9c1027b9de0c8823cb49e66"
+        # Re-frozen 2026-08-26 for the convection ruling: the physics cadence
+        # table reports convection: None when no scheme is selected; and again
+        # 2026-08-26 for the limited-area physics lane, which retired the
+        # second bdyMask digest convention.  Both rationales live beside the
+        # runner's pin.
+        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # now rewritten out of the shipped source in THIS tree rather than on
+        # the public copy, because the copy carries these pins with it and one
+        # of the two digest gates is an admission-time refusal, not a test.
+        # Measured inert by AST; the rationale lives beside the runner's pin.
+        "src/hexcore/cuda_driver.py": (
+            "e6f51ea11e68f87ed011b61432a7178ef507ce6a518e834a115127ca1687694c"
         ),
-        "src/mpas_port/cuda_backend/recovery.py": (
-            "40635e20e4de9f1cf49c2590dcc14f262fa03667dd4b547f0dd61fb47892dac3"
+        "src/hexcore/cuda_backend/recovery.py": (
+            "ea5dd7837f411233210f8bb47086e2264a83e2d4334e5ab41dae2bd87ebc5147"
         ),
-        "src/mpas_port/config_v841.py": (
-            "2bc878868e41ffc71491479059d3bd9165ce980a38360ed683e2717f54a8111a"
+        # Re-frozen for the regional CPU authority lane (#346 L4), again
+        # for timestep admission (#358), and again 2026-08-26 for the
+        # convection ruling; the rationale lives beside the runner's pin.
+        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # now rewritten out of the shipped source in THIS tree rather than on
+        # the public copy, because the copy carries these pins with it and one
+        # of the two digest gates is an admission-time refusal, not a test.
+        # Measured inert by AST; the rationale lives beside the runner's pin.
+        "src/hexcore/config_v841.py": (
+            "4e18842d7757db8de2a511fc78b9a650070d42b7a360838179b1d4b7df202367"
         ),
-        "src/mpas_port/cuda_arwen_physics_v841.py": (
-            "909a66f090eb08520398d884a5ef7aca9b1539f9b394f3c0c4b1b1ba9b9e90a8"
+        # New pin (convection ruling, 2026-08-26): the frozen config admits
+        # config_convection_scheme from this module and the timestep registry
+        # keys on the selection it produces; the rationale lives beside the
+        # runner's pin.
+        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # now rewritten out of the shipped source in THIS tree rather than on
+        # the public copy, because the copy carries these pins with it and one
+        # of the two digest gates is an admission-time refusal, not a test.
+        # Measured inert by AST; the rationale lives beside the runner's pin.
+        "src/hexcore/convection_admission.py": (
+            "e4b2101a63a7a6bf577744f27b53a4eb8b36e3f82f8239ae544ac5d8f9bd126f"
         ),
-        "src/mpas_port/mixing.py": (
-            "864f0686325108100afc10a8804ea4e2dd6de81e3269ee4cbc2747be82b09e2e"
+        # New pin (#358): the frozen config ADMITS config_dt from this
+        # module, so the pinned config's meaning depends on these bytes.
+        # Re-frozen 2026-08-26: ADMITTED_TIMESTEPS gained the four anchors
+        # ruled for that day (100, 75, 20, 5 s), each naming the campaign
+        # that earned it and each recording native_reference=None.  Table
+        # only; no executable behaviour outside it changed.
+        # Re-frozen again 2026-08-26: the registry is keyed by the
+        # CONFIGURATION (dt, cumulus selection), not by the timestep alone.
+        # Re-frozen a third time 2026-08-26: that key gained its third
+        # fragment, the surface/PBL cadence, so a run holding the cadence
+        # cannot occupy the welded row's slot; the rationale lives beside
+        # the runner's pin.
+        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # now rewritten out of the shipped source in THIS tree rather than on
+        # the public copy, because the copy carries these pins with it and one
+        # of the two digest gates is an admission-time refusal, not a test.
+        # Measured inert by AST; the rationale lives beside the runner's pin.
+        "src/hexcore/dt_admission.py": (
+            "0a6456699b32f1519654ba9838556f2bf9ebe8e5696b56123e594a26f6311e7f"
         ),
-        "src/mpas_port/mixing_v841.py": (
-            "f82e9f5c64547b6763db37ada8ba79a966e9ef8f310cf84fc71375f8380e3a73"
+        # New pin (surface/PBL cadence, 2026-08-26): this module decides
+        # config_bldt_seconds, a knob the frozen registry keys on; the
+        # rationale lives beside the runner's pin.
+        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # now rewritten out of the shipped source in THIS tree rather than on
+        # the public copy, because the copy carries these pins with it and one
+        # of the two digest gates is an admission-time refusal, not a test.
+        # Measured inert by AST; the rationale lives beside the runner's pin.
+        "src/hexcore/pbl_cadence.py": (
+            "1f7f5b4a41b7004ec1b9fd9ec1091a00997d8d6dbc611f6e6695ae0ca3d2a8ce"
         ),
-        "src/mpas_port/cuda_horizontal.py": (
-            "97faf0869a0a5ea9ebbc4c67b3c2d6c68cefdfa10dece73cd204d818962efde4"
+        # Re-frozen 2026-08-28 for the 2.5.8 engine repin: 77f831b rewrote
+        # this module's own ARWEN_SOURCE_MANIFEST/ARWEN_BUILD_COMMIT and did
+        # not carry its new digest into either copy of the table, which left
+        # the x4 proof refusing before CUDA.  The rationale lives beside the
+        # runner's pin.
+        "src/hexcore/cuda_arwen_physics_v841.py": (
+            "07c9ca03f12742db4ffa813ca069055f4b4c9bd65458436a7aa407ed9548ab1b"
         ),
-        "src/mpas_port/cuda_horizontal_v841.py": (
-            "3fc0b860ebd67dfed453617c348810964ea1110e782fe85db10283afb406e2fe"
+        # Re-frozen for the regional CPU authority lane (#346 L4); the
+        # rationale lives beside the runner's pin.
+        "src/hexcore/mixing.py": (
+            "7b5f9f8ac8f93f66e180d85f90ba3181eac2547c0ef7146b752eb5dd2c1a6433"
         ),
-        "src/mpas_port/cuda_transport_v841.py": (
-            "55c66759d9c81f65ed71ce77570897c102fd64661da6ad6c37b438b27771ab23"
+        # Re-frozen for the regional CPU authority lane (#346 L4); the
+        # rationale lives beside the runner's pin.
+        "src/hexcore/mixing_v841.py": (
+            "c5007fa65ddcf67759a7b89e24f2bef615c6a3201d0e8dd2affabd43138e7865"
         ),
-        "src/mpas_port/partition_assets_v841.py": (
-            "dc5f2cb3f7bdadeca28854a15644273f7a94cdb710a36df18f4f91bdba70450e"
+        "src/hexcore/cuda_horizontal.py": (
+            "fd09f38619ef3fe9b4b61e6665bd5dd440804f45af6c2ffebf9e47d05573d910"
         ),
-        "src/mpas_port/partition_local_mesh_v841.py": (
-            "609955b3db527528f1e2ffd949483099a8d19dd0bd23f724d7a711fbba08e150"
+        "src/hexcore/cuda_horizontal_v841.py": (
+            "037f094c55417bef3c3c9a9131d46195bed464122523e7de4f1e9fa286b75412"
         ),
-        "src/mpas_port/partition_state_v841.py": (
+        "src/hexcore/cuda_transport_v841.py": (
+            "6ac4eece4ed080e7f76a2239b11dc59c984501ee52db900e35e5d74762f78252"
+        ),
+        "src/hexcore/cuda_transport.py": (
+            "e2d3e173e39891e51b578805fc29787a893ed57d7475dc64f8cc49ac8ad36f92"
+        ),
+        "src/hexcore/cuda_fp32.py": (
+            "ba6b962cac42454846b96d87bba73ef3ceedbf69cdf8ae6a7f880b31f25cc28e"
+        ),
+        "src/hexcore/partition_assets_v841.py": (
+            "affae3ab52f39a1be861e82230496a82233833db933f1a7ba482c9a3e2ee9248"
+        ),
+        "src/hexcore/partition_local_mesh_v841.py": (
+            "f24e949f1d39c834d7ff1f16e93fce941422ef92e00a89fb884be1a95fea73d9"
+        ),
+        "src/hexcore/partition_state_v841.py": (
             "a504e6f5c5abc2014d40e4a8e3e89885f97d6456ff428c585fbaf57910eccbe8"
         ),
-        "src/mpas_port/partition_device_scheduler_v841.py": (
-            "fcf2f94fc368e71b6b87ddb5c1d3b1b68a4cfc2bccfcf1e50e57f0f2d3432276"
+        "src/hexcore/partition_device_scheduler_v841.py": (
+            # re-frozen 2026-08-25: admission floors rerouted through
+            # device_admission (stale-guard audit #347, finding 5)
+            "b544707943ab75ce27e1972a7a57dd9a3eeed7aa23b2fa332e92594983de97e4"
         ),
-        "src/mpas_port/partition_executor_v841.py": (
+        "src/hexcore/partition_executor_v841.py": (
             "6343fe0f89f39d81b3ef0d61343330c2ad09f59e00295ceedc090c3e4a61879c"
         ),
-        "src/mpas_port/partition_net_v841.py": (
+        "src/hexcore/partition_net_v841.py": (
             "30b0988b2d40bbda8d68be1ec236564ea87bb6690bfdcd08370eea12ca11753b"
         ),
     }
+
+
+def test_every_restated_contract_digest_equals_the_module_that_computes_it() -> None:
+    """``KNOWN_CONTRACT_PINS`` and ``config_v841`` measured, not restated.
+
+    THE BREAKAGE THIS PREVENTS, and it is not hypothetical: this test used to
+    assert three of those rows against a second copy of the same literals, so
+    it compared the table to itself and passed while every row in it was
+    wrong.  All four contract digests are computed at import over a document
+    that frames a MODULE NAME into itself, the 0.2.0 rename moved all four,
+    and nothing here noticed.  What did notice was a card: the first composite
+    step of every full-physics forecast refused with
+
+        ValueError: external GWDO provenance gwdo_contract_sha256 changed:
+        <what the module computed> != <what config_v841 restated>
+
+    raised by ``CudaPhaseOneExecutionProvenanceV841.validate`` against
+    ``config_v841.V841_GWDO_CONTRACT_SHA256``.  A pin that only a card-tier
+    gate reads is a pin that goes stale silently and fails on the node at the
+    start of a booked run, so this one now has a CPU-tier gate.
+
+    Two of the six rows the sweep moved had been stale since BEFORE the
+    rename and are recorded here so nobody re-derives them a second time
+    wondering what happened.  ``coupling_kernel_sha256`` spelled a value
+    that appears in no source and in no receipt in this tree, while all 564
+    archived receipts carrying that field report the computed one; and
+    ``adapter_contract_sha256`` spelled the value that was live until the
+    2.5.8 engine re-pin moved the adapter authority document under it.
+
+    The re-derivation lives in ``tools/repin_source_tables.py``
+    (``RESTATED_CONTRACT_DIGESTS``); this is its gate.
+    """
+
+    from hexcore import config_v841
+    from hexcore import cuda_arwen_physics_v841
+    from hexcore import cuda_gwdo_v841
+    from hexcore import cuda_physics_prep_v841
+    from hexcore import cuda_physics_v841
+
+    runner = _load_runner()
+
+    assert runner.KNOWN_CONTRACT_PINS["prep_contract_sha256"] == (
+        cuda_physics_prep_v841.CUDA_PHYSICS_PREP_V841_CONTRACT_SHA256
+    )
+    assert runner.KNOWN_CONTRACT_PINS["prep_kernel_sha256"] == (
+        cuda_physics_prep_v841.CUDA_PHYSICS_PREP_V841_KERNEL_SHA256
+    )
+    assert runner.KNOWN_CONTRACT_PINS["gwdo_contract_sha256"] == (
+        cuda_gwdo_v841.CUDA_GWDO_V841_CONTRACT_SHA256
+    )
+    assert runner.KNOWN_CONTRACT_PINS["gwdo_kernel_sha256"] == (
+        cuda_gwdo_v841.CUDA_GWDO_V841_KERNEL_SHA256
+    )
     assert runner.KNOWN_CONTRACT_PINS["coupling_contract_sha256"] == (
-        "63d9edb9ea4a12b78ccdeec64c2424de2ddbc10ff3a8c58361aa943f19c517db"
+        cuda_physics_v841.CUDA_PHYSICS_V841_CONTRACT_SHA256
     )
     assert runner.KNOWN_CONTRACT_PINS["coupling_kernel_sha256"] == (
-        "70d2006d4687b67fe087fd4a5c9e69a76e4a39c648703913f4d79903249bdcab"
+        cuda_physics_v841.CUDA_PHYSICS_V841_KERNEL_SHA256
     )
     assert runner.KNOWN_CONTRACT_PINS["adapter_contract_sha256"] == (
-        "42b376675b681e3b5998faa9da341db6b3a214185374dabbd0351c91983c8b82"
+        cuda_arwen_physics_v841.CUDA_ARWEN_PHYSICS_V841_CONTRACT_SHA256
     )
+
+    # The one the forecast lane actually reads, and the reason this test
+    # exists: ``validate`` compares the provenance the adapter built against
+    # THIS constant, so a disagreement here is a dead forecast lane.
+    assert config_v841.V841_GWDO_CONTRACT_SHA256 == (
+        cuda_gwdo_v841.CUDA_GWDO_V841_CONTRACT_SHA256
+    )
+    assert config_v841.V841_GWDO_KERNEL_SHA256 == (
+        cuda_gwdo_v841.CUDA_GWDO_V841_KERNEL_SHA256
+    )
+
+    # The module the document names is the module the document lives in.
+    # This is what made all four digests move at the rename, and it is what
+    # a future rename must keep true.
+    assert config_v841.V841_GWDO_RESULT_MODULE == cuda_gwdo_v841.__name__
 
 
 def test_landmask_cast_and_exhaustive_sealed_constructor_audit_are_exact() -> None:
     from netCDF4 import Dataset
-    from mpas_port import cuda_arwen_physics_v841 as adapter
+    from hexcore import cuda_arwen_physics_v841 as adapter
 
     runner = _load_runner()
     pin = runner.LANDMASK_CONSTRUCTOR_CAST_PIN
@@ -489,7 +645,7 @@ def test_arwen_v2_git_and_source_pin_precede_cuda_backend_and_kernel_cache() -> 
     source = inspect.getsource(runner._execute_full_proof)
     pin_import = source.index("pin_arwen_physics_v841")
     pin_call = source.index("arwen_pin = dict(pin_arwen_physics_v841")
-    backend_import = source.index("from mpas_port.cuda_backend import")
+    backend_import = source.index("from hexcore.cuda_backend import")
     cache = source.index("cache = KernelCache(")
     assert pin_import < pin_call < backend_import < cache
 

@@ -315,7 +315,7 @@ def _assert_isolated_startup() -> None:
         raise BootstrapError(
             f"Python startup customization ran before the bootstrap: {loaded_hooks}"
         )
-    leaked = sorted(name for name in sys.modules if name == "mpas_port" or name.startswith("mpas_port."))
+    leaked = sorted(name for name in sys.modules if name == "hexcore" or name.startswith("hexcore."))
     if leaked:
         raise BootstrapError(f"MPAS modules existed before capsule validation: {leaked}")
 

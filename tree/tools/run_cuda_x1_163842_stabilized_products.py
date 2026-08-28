@@ -42,12 +42,17 @@ for import_root in (SRC, TOOLS):
         sys.path.insert(0, str(import_root))
 
 RUNNER_PATH = TOOLS / "run_real_gfs_cuda_x1_163842.py"
+# Both pins are re-derived by tools/repin_source_tables.py.  EXPECTED_RUNNER_SHA256
+# was DEAD before the 0.2.0 rename: it arrived with the base import at 8a34759
+# and 0911c88 edited the runner without moving it, so this tool would have
+# refused its own high-resolution runner at _verify_runner -- before a device is
+# touched, and only ever on a machine that has one.
 EXPECTED_RUNNER_SHA256 = (
-    "4d38c89ae83dcb963c2be0e8e6c2fe8c057fd6f1b634d795e3bb74dcd58200c1"
+    "5b80b191ad974226e53f9dd9d61c03b82e165ef3eedaa206f2742205cbe5a728"
 )
 REMOTE_EVIDENCE_VALIDATOR_PATH = TOOLS / "validate_cuda_x1_163842_remote_evidence.py"
 EXPECTED_REMOTE_EVIDENCE_VALIDATOR_SHA256 = (
-    "c00d52bc4ad8d581bfb4d9fc4ecf2fae49c17e1dd44789dfb4ba60106a2eba0b"
+    "800bb6e78f8b9dd3f7266637dfe1cff91e83e6b18da0b77e624ab7a536a29c98"
 )
 
 
@@ -108,28 +113,28 @@ def _load_remote_evidence_validator() -> Any:
 
 remote_evidence_validator = _load_remote_evidence_validator()
 
-from mpas_port.cuda_backend import canonical_sha256  # noqa: E402
-from mpas_port.cuda_driver import (  # noqa: E402
+from hexcore.cuda_backend import canonical_sha256  # noqa: E402
+from hexcore.cuda_driver import (  # noqa: E402
     CUDA_IMPLEMENTED_UNLINKED_EVIDENCE,
 )
-from mpas_port.cuda_dualrun import (  # noqa: E402
+from hexcore.cuda_dualrun import (  # noqa: E402
     validate_cuda_capsule,
     write_json_atomic,
 )
-from mpas_port.driver import DryDycoreDriver, StabilityBounds  # noqa: E402
-from mpas_port.output import (  # noqa: E402
+from hexcore.driver import DryDycoreDriver, StabilityBounds  # noqa: E402
+from hexcore.output import (  # noqa: E402
     HistoryField,
     HistoryStreamOptions,
     write_history,
 )
-from mpas_port.regrid import (  # noqa: E402
+from hexcore.regrid import (  # noqa: E402
     REGRID_EVIDENCE,
     build_regrid_weights,
     load_regrid_weights,
     save_regrid_weights,
     write_regridded_netcdf,
 )
-from mpas_port.rust_renderer import (  # noqa: E402
+from hexcore.rust_renderer import (  # noqa: E402
     RustWrf2dFields,
     inspect_renderer_products,
     render_catalogued_products,
@@ -137,7 +142,7 @@ from mpas_port.rust_renderer import (  # noqa: E402
     validate_rust_wrf2d_netcdf,
     write_rust_wrf2d_netcdf,
 )
-from mpas_port.vector import initialize_reconstruction_coefficients  # noqa: E402
+from hexcore.vector import initialize_reconstruction_coefficients  # noqa: E402
 
 
 TARGET_DT_SECONDS = 120.0
@@ -310,16 +315,16 @@ _RUNTIME_SOURCE_PATHS = {
     "high_resolution_runner": RUNNER_PATH,
     "coarse_cuda_runner": TOOLS / "run_real_gfs_cuda_forecast.py",
     "cpu_gfs_runner": TOOLS / "run_real_gfs_forecast.py",
-    "cuda_dualrun": SRC / "mpas_port" / "cuda_dualrun.py",
-    "cuda_driver": SRC / "mpas_port" / "cuda_driver.py",
-    "dry_driver": SRC / "mpas_port" / "driver.py",
-    "initialization": SRC / "mpas_port" / "initialization.py",
-    "mesh": SRC / "mpas_port" / "mesh.py",
-    "vertical": SRC / "mpas_port" / "vertical.py",
-    "output": SRC / "mpas_port" / "output.py",
-    "regrid": SRC / "mpas_port" / "regrid.py",
-    "rust_renderer": SRC / "mpas_port" / "rust_renderer.py",
-    "vector": SRC / "mpas_port" / "vector.py",
+    "cuda_dualrun": SRC / "hexcore" / "cuda_dualrun.py",
+    "cuda_driver": SRC / "hexcore" / "cuda_driver.py",
+    "dry_driver": SRC / "hexcore" / "driver.py",
+    "initialization": SRC / "hexcore" / "initialization.py",
+    "mesh": SRC / "hexcore" / "mesh.py",
+    "vertical": SRC / "hexcore" / "vertical.py",
+    "output": SRC / "hexcore" / "output.py",
+    "regrid": SRC / "hexcore" / "regrid.py",
+    "rust_renderer": SRC / "hexcore" / "rust_renderer.py",
+    "vector": SRC / "hexcore" / "vector.py",
     "rust_renderer_gate": TOOLS / "run_rust_renderer_gate.py",
 }
 

@@ -147,7 +147,7 @@ class OwnedRegionCourier:
     """Collects one rank's owned regions and moves them to rank 0."""
 
     def __init__(self, layouts: Sequence[Any], rank: int, link: Any) -> None:
-        from mpas_port.partition_executor_v841 import classify_partition_axis
+        from hexcore.partition_executor_v841 import classify_partition_axis
 
         self.layouts = list(layouts)
         self.rank = int(rank)
@@ -197,7 +197,7 @@ class OwnedRegionCourier:
         return "none", None, False
 
     def collect(self, stack: Mapping[str, Any]) -> dict[str, Any]:
-        from mpas_port.partition_executor_v841 import owned_block
+        from hexcore.partition_executor_v841 import owned_block
 
         layout = self.mine
         atmosphere = stack["driver"].atmosphere
@@ -310,8 +310,8 @@ def reconstruct_boundary_record(
     """Rank 0: assemble global arrays from both owned regions and fingerprint
     them in the single-GPU runner's exact schema."""
 
-    from mpas_port.cuda_dualrun import fingerprint_atmosphere
-    from mpas_port.partition_executor_v841 import scatter_owned_axis
+    from hexcore.cuda_dualrun import fingerprint_atmosphere
+    from hexcore.partition_executor_v841 import scatter_owned_axis
 
     layouts = courier.layouts
     globals_ = {
@@ -505,17 +505,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
         paths, authority_before, start_time_text=None, horiz_mixing=args.horiz_mixing
     )
 
-    from mpas_port.partition_assets_v841 import (
+    from hexcore.partition_assets_v841 import (
         assert_exact_cover,
         load_layouts_npz,
         sha256_file,
     )
-    from mpas_port.partition_executor_v841 import (
+    from hexcore.partition_executor_v841 import (
         HaloExchangeTables,
         HaloExchanger,
         expected_round_sequence,
     )
-    from mpas_port.partition_net_v841 import connect_peer
+    from hexcore.partition_net_v841 import connect_peer
 
     layouts = load_layouts_npz(
         args.layouts,
@@ -578,15 +578,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
         raise RuntimeError(f"rank handshakes diverge on {sorted(diverged)}: {diverged}")
 
     # ---- admission: the floor reflects the partition need (design D2) ----
-    from mpas_port.cuda_arwen_physics_v841 import pin_arwen_physics_v841
+    from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
     # This must precede KernelCache's gpuwm platform-binding construction:
     # the frozen Arwen tree must own the live ``gpuwm`` package before any
     # other import binds the venv's copy (the c30cfdf pin-tool law).
     arwen_pin = dict(pin_arwen_physics_v841(arwen_checkout))
 
-    from mpas_port.cuda_backend import KernelCache, require_cuda
-    from mpas_port.partition_device_scheduler_v841 import (
+    from hexcore.cuda_backend import KernelCache, require_cuda
+    from hexcore.partition_device_scheduler_v841 import (
         apply_device_memory_cap,
         assert_identical_compile_manifests,
         partition_min_free_bytes,
@@ -605,6 +605,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
         [0], min_compute=(12, 0), min_free_bytes=floor_bytes, cupy_module=cp
     )
     # Pool caps: turn a mid-run regression into a clean OOM abort (design D5).
+    #
+    # PREMISE UNVERIFIED AT THE CONVERGED PIN (stale-guard audit #347,
+    # recorded 2026-08-25).  This tool runs as two RANKS, one CUDA device
+    # per box (no fleet box carries two devices), and the cap below --
+    # min(82% of the card, 26 GiB) -- was chosen for the whole-mesh x4
+    # two-rank runs of the partition-invariance campaign, before the L6
+    # floor re-derivation and the 08-26 merged-tip re-fit moved the measured
+    # x4 peak to 20,446 MiB.  No
+    # 2-GPU run at the merged tip (hex 2009db7 + engine 26daaab7e) has
+    # recorded pool high-water per device, so whether this cap is tight,
+    # loose, or binding there is NOT MEASURED; that run is the named
+    # replacement for this comment.  The cap stays a clean-abort ceiling,
+    # never an admission: admission is floor_bytes above, from the ONE
+    # surface.
     cap_bytes = int(min(admission[0]["total_bytes"] * 0.82, 26 * (1 << 30)))
     apply_device_memory_cap(0, cap_bytes, cupy_module=cp)
     cache = KernelCache(capability=capability, cache_dir=cache_root)
@@ -615,7 +629,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
     assert_identical_compile_manifests({rank: platform_manifest, 1 - rank: peer_platform})
 
     # ---- local mesh + device stack ---------------------------------------
-    from mpas_port.partition_local_mesh_v841 import slice_prepared_host
+    from hexcore.partition_local_mesh_v841 import slice_prepared_host
 
     # The mixing lane attaches defc_a/defc_b placeholders to the loaded mesh
     # (attach_inactive_zero_deformation) WITHOUT registering their dimensions;
@@ -738,7 +752,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
                 for path, block in shipment["blocks"].items()
                 if path.startswith("__atmosphere__/")
             }
-            from mpas_port.partition_executor_v841 import scatter_owned_axis
+            from hexcore.partition_executor_v841 import scatter_owned_axis
 
             dump: dict[str, np.ndarray] = {}
             for name, owner, kind in _ATMO_FIELDS:
@@ -897,7 +911,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
             "devices": admission,
             "min_free_bytes_floor": floor_bytes,
             "memory_pool_cap_bytes": cap_bytes,
-            "floor_law": "partition-scaled (partition_min_free_bytes), not the whole-mesh constant",
+            "floor_law": (
+                "partition-scaled (partition_min_free_bytes -> "
+                "device_admission.required_free_bytes over local cells); "
+                "per-partition application of the measured row is DERIVED, "
+                "NOT MEASURED -- see PARTITION_FLOOR_DERIVATION"
+            ),
         },
         "arwen_pin": arwen_pin,
         "handshakes": {

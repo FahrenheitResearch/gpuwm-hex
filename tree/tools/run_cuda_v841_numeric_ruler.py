@@ -80,7 +80,7 @@ def array_sha256(value: Any) -> str:
 
 
 def numeric_authority_snapshot() -> dict[str, Any]:
-    paths = sorted((ROOT / "src" / "mpas_port").rglob("*.py"))
+    paths = sorted((ROOT / "src" / "hexcore").rglob("*.py"))
     paths.extend((Path(__file__).resolve(), NUMERIC_TEST, COMPILED_REPORT))
     files = {
         str(path.relative_to(ROOT)).replace("\\", "/"): {
@@ -182,7 +182,7 @@ CUDA_STANDARD_TRIG_ACCURACY_SOURCE = (
     "https://docs.nvidia.com/cuda/cuda-programming-guide/"
     "05-appendices/mathematical-functions.html#trigonometric-functions"
 )
-_DIRECT_TRIG_PROBE_MODULE = "mpas_port.cuda_v841_numeric_trig_probe"
+_DIRECT_TRIG_PROBE_MODULE = "hexcore.cuda_v841_numeric_trig_probe"
 _DIRECT_TRIG_PROBE_SOURCE = r"""
 extern "C" __global__ void reached_angle_sincos_f32(
     const int count, const float *angle, float *sine, float *cosine)
@@ -529,7 +529,7 @@ def vector_momentum_source_activity_v841(
         _mesh_authority_array(mesh, "fEdge").astype(np.float32, copy=False),
         (nedges,),
     )
-    from mpas_port.dynamics_v841 import precomputed_mesh_inverse_v841
+    from hexcore.dynamics_v841 import precomputed_mesh_inverse_v841
 
     inv_dc = precomputed_mesh_inverse_v841(
         mesh, "dcEdge", np.dtype(np.float32)
@@ -793,7 +793,7 @@ SOURCE_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "acoustic-rhs-sign",
         "acoustic_rhs",
-        "mpas_port.cuda_acoustic_v841",
+        "hexcore.cuda_acoustic_v841",
         "r = mpas_sub(r, flux);",
         "r = mpas_add(r, flux);",
         "acoustic.",
@@ -801,7 +801,7 @@ SOURCE_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "acoustic-forward-solve-sign",
         "acoustic_solve",
-        "mpas_port.cuda_acoustic_v841",
+        "hexcore.cuda_acoustic_v841",
         "rw_p[i] = mpas_mul(mpas_sub(rw_p[i], mpas_mul(mpas_mul(",
         "rw_p[i] = mpas_mul(mpas_add(rw_p[i], mpas_mul(mpas_mul(",
         "acoustic.",
@@ -809,7 +809,7 @@ SOURCE_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "theta-edge-flux-sign",
         "theta_transport",
-        "mpas_port.cuda_driver",
+        "hexcore.cuda_driver",
         "float value = mpas_mul(ru[index], edge_theta);",
         "float value = mpas_sub(0.0f, mpas_mul(ru[index], edge_theta));",
         "theta_tendency.",
@@ -817,7 +817,7 @@ SOURCE_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "w-edge-flux-sign",
         "w_transport",
-        "mpas_port.cuda_driver",
+        "hexcore.cuda_driver",
         "value = mpas_mul(ru_interface, edge_w);",
         "value = mpas_sub(0.0f, mpas_mul(ru_interface, edge_w));",
         "w_tendency.",
@@ -825,7 +825,7 @@ SOURCE_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "scalar-rk-numerator-sign",
         "scalar_transport",
-        "mpas_port.cuda_transport_v841",
+        "hexcore.cuda_transport_v841",
         "const float numerator = mpas_add(\n                mpas_mul(old[index], rho_old[C2(k, cell, ncells)]),\n                mpas_mul(dt, mpas_sub(tendency, vertical)));",
         "const float numerator = mpas_sub(\n                mpas_mul(old[index], rho_old[C2(k, cell, ncells)]),\n                mpas_mul(dt, mpas_sub(tendency, vertical)));",
         "scalar_transport.",
@@ -833,7 +833,7 @@ SOURCE_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "split-average-times-two",
         "split_reduction",
-        "mpas_port.cuda_dynamics_v841",
+        "hexcore.cuda_dynamics_v841",
         "average[index] = mpas_mul(accumulator[index], reciprocal);",
         "average[index] = mpas_mul(accumulator[index], mpas_mul(2.0f, reciprocal));",
         "split_flux.",
@@ -841,7 +841,7 @@ SOURCE_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "rw-bottom-endpoint-one",
         "rw_endpoints",
-        "mpas_port.cuda_dynamics_v841",
+        "hexcore.cuda_dynamics_v841",
         "rw[C2(0, cell, ncells)] = 0.0f;",
         "rw[C2(0, cell, ncells)] = 1.0f;",
         "rw_endpoints.",
@@ -849,7 +849,7 @@ SOURCE_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "reference-coriolis-sign",
         "reference_wind",
-        "mpas_port.cuda_dynamics_v841",
+        "hexcore.cuda_dynamics_v841",
         "q = mpas_sub(q, mpas_mul(mpas_mul(\n                weights_on_edge[offset], reference_u), f_edge[edge]));",
         "q = mpas_add(q, mpas_mul(mpas_mul(\n                weights_on_edge[offset], reference_u), f_edge[edge]));",
         "vector_momentum.",
@@ -861,7 +861,7 @@ DIRECT_VECTOR_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "reference-cosine-to-sine",
         "reference_wind_trigonometry",
-        "mpas_port.cuda_dynamics_v841",
+        "hexcore.cuda_dynamics_v841",
         "mpas_mul(u_init[k], cosf(angle_edge[neighbor]))",
         "mpas_mul(u_init[k], sinf(angle_edge[neighbor]))",
         "direct_vector_momentum.",
@@ -869,7 +869,7 @@ DIRECT_VECTOR_MUTATIONS: tuple[SourceMutation, ...] = (
     SourceMutation(
         "reference-coriolis-double",
         "reference_wind_source",
-        "mpas_port.cuda_dynamics_v841",
+        "hexcore.cuda_dynamics_v841",
         "weights_on_edge[offset], reference_u), f_edge[edge]));",
         (
             "weights_on_edge[offset], reference_u), "
@@ -942,7 +942,7 @@ def _validate_direct_vector_mutation_provenance(
 ) -> dict[str, Any]:
     """Prove an exact one-token direct-vector delta from live production source."""
 
-    if mutation.module_key != "mpas_port.cuda_dynamics_v841":
+    if mutation.module_key != "hexcore.cuda_dynamics_v841":
         raise RuntimeError("direct vector mutation targets the wrong production module")
     token_count = production_source.count(mutation.before)
     if token_count != 1:
@@ -974,7 +974,7 @@ def _validate_direct_vector_mutation_provenance(
 
 
 def ruler_config(**updates: Any) -> "V841DryDycoreConfig":  # noqa: F821
-    from mpas_port.config_v841 import V841DryDycoreConfig
+    from hexcore.config_v841 import V841DryDycoreConfig
 
     values: dict[str, Any] = {
         "config_dt": 1.0,
@@ -1028,15 +1028,15 @@ def prepare_synthetic_case(
 ) -> SimpleNamespace:
     """Build the non-vacuous implementation deck without touching CUDA."""
 
-    from mpas_port.driver import (
+    from hexcore.driver import (
         DryDycoreDriver,
         TerrainMetrics,
         make_synthetic_x1_case,
     )
-    from mpas_port.dynamics_v841 import V841ReferenceWindProfiles
-    from mpas_port.integration import RKSchedule
-    from mpas_port.mesh import Mesh
-    from mpas_port.transport import build_advection_coefficients
+    from hexcore.dynamics_v841 import V841ReferenceWindProfiles
+    from hexcore.integration import RKSchedule
+    from hexcore.mesh import Mesh
+    from hexcore.transport import build_advection_coefficients
 
     selected = ruler_config() if config is None else config
     mesh = Mesh.from_netcdf(grid, static_path=static)
@@ -1182,7 +1182,7 @@ def prepare_synthetic_case(
 def prepare_shared_input_vector_deck(case: SimpleNamespace) -> SimpleNamespace:
     """Build one CPU-only nonzero-reference deck with a declared cancellation lane."""
 
-    from mpas_port.dynamics_v841 import vector_invariant_momentum_tendency_v841
+    from hexcore.dynamics_v841 import vector_invariant_momentum_tendency_v841
 
     mesh = case.mesh
     nlev = int(case.profiles.u_init.size)
@@ -1320,7 +1320,7 @@ def execute_shared_input_vector_cuda(
 ) -> np.ndarray:
     """Execute the production CUDA vector kernel on the deck's exact host inputs."""
 
-    from mpas_port.cuda_dynamics_v841 import vector_momentum_tendency_cuda_v841
+    from hexcore.cuda_dynamics_v841 import vector_momentum_tendency_cuda_v841
 
     context = driver.v841_context
     if context is None:
@@ -1353,7 +1353,7 @@ def _single_tu_compile_evidence(
 ) -> dict[str, Any]:
     """Validate exact NVRTC source/image evidence for one reached translation unit."""
 
-    from mpas_port.cuda_backend.compile_contract import (
+    from hexcore.cuda_backend.compile_contract import (
         validate_compile_platform_fingerprint,
     )
 
@@ -1532,7 +1532,7 @@ def verify_reached_angle_standard_trig(
 ) -> dict[str, Any]:
     """Measure the predeclared two-ULP sinf/cosf contract on reached angles."""
 
-    from mpas_port.cuda_backend import KernelCache
+    from hexcore.cuda_backend import KernelCache
 
     edges = _mesh_authority_array(case.mesh, "edgesOnEdge")
     counts = _mesh_authority_array(case.mesh, "nEdgesOnEdge")
@@ -1662,16 +1662,16 @@ def certify_shared_input_vector_momentum(
 ) -> dict[str, Any]:
     """Certify only the common-input v8.4.1 vector-momentum implementation."""
 
-    from mpas_port.cuda_backend import KernelCache
-    from mpas_port.cuda_ftz import v841_reached_translation_units
+    from hexcore.cuda_backend import KernelCache
+    from hexcore.cuda_ftz import v841_reached_translation_units
 
     deck = prepare_shared_input_vector_deck(case)
     production_source, production_kernels = v841_reached_translation_units()[
-        "mpas_port.cuda_dynamics_v841"
+        "hexcore.cuda_dynamics_v841"
     ]
     baseline_compile_evidence = _single_tu_compile_evidence(
         baseline_compile_manifest,
-        module_key="mpas_port.cuda_dynamics_v841",
+        module_key="hexcore.cuda_dynamics_v841",
         source=production_source,
         resolved_kernels=production_kernels,
         require_only_module=False,
@@ -1791,7 +1791,7 @@ def certify_shared_input_vector_momentum(
                 "diagnostic_d2h_bytes": int(candidate.nbytes),
                 "compile_evidence": _single_tu_compile_evidence(
                     manifest,
-                    module_key="mpas_port.cuda_dynamics_v841",
+                    module_key="hexcore.cuda_dynamics_v841",
                     source=mutated_source,
                     resolved_kernels=("vector_momentum_v841_f32",),
                     require_only_module=True,
@@ -1911,7 +1911,7 @@ def _copy_device_result(value: Any, cp: Any) -> Any:
 
 @contextlib.contextmanager
 def capture_cpu_operators() -> Iterator[dict[str, list[Any]]]:
-    import mpas_port.driver as module
+    import hexcore.driver as module
 
     captures: dict[str, list[Any]] = {
         name: []
@@ -1991,7 +1991,7 @@ def capture_cpu_operators() -> Iterator[dict[str, list[Any]]]:
 
 @contextlib.contextmanager
 def capture_cuda_operators(cp: Any) -> Iterator[dict[str, list[Any]]]:
-    import mpas_port.cuda_driver as module
+    import hexcore.cuda_driver as module
 
     captures: dict[str, list[Any]] = {
         name: []
@@ -2420,7 +2420,7 @@ def _compare_operator_captures(
 
 
 def _new_cuda_driver(case: SimpleNamespace, cache: Any) -> "CudaDryDycoreDriver":  # noqa: F821
-    from mpas_port.cuda_driver import CudaDryDycoreDriver
+    from hexcore.cuda_driver import CudaDryDycoreDriver
 
     return CudaDryDycoreDriver.from_host(
         case.mesh,
@@ -2443,7 +2443,7 @@ def _validate_mutant_compile_manifest(
 ) -> dict[str, Any]:
     """Validate one controlled source delta over the exact live eight-TU graph."""
 
-    from mpas_port.cuda_ftz import (
+    from hexcore.cuda_ftz import (
         V841_REACHED_TRANSLATION_UNITS,
         canonical_sha256,
         validate_v841_compile_manifest_relation,
@@ -2644,7 +2644,7 @@ def _validate_reused_compile_manifest(
     baseline_compile_manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Bind same-process cache hits to an already validated baseline image."""
-    from mpas_port.cuda_ftz import (
+    from hexcore.cuda_ftz import (
         canonical_sha256,
         validate_v841_compile_manifest_relation,
     )
@@ -2724,7 +2724,7 @@ def _require_receipt(
     mutation_cache: MutatingKernelCache | None = None,
     baseline_compile_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    from mpas_port.cuda_ftz import (
+    from hexcore.cuda_ftz import (
         canonical_sha256,
         validate_v841_compile_manifest_relation,
     )
@@ -2883,7 +2883,7 @@ def run_numeric_ruler(
     inputs_before: Mapping[str, Any] | None = None,
     engineering: bool = False,
 ) -> dict[str, Any]:
-    from mpas_port.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_backend import KernelCache, require_cuda
 
     measured_authority = numeric_authority_snapshot()
     if authority_before is None:

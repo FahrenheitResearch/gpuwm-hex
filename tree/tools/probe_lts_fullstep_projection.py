@@ -26,7 +26,7 @@ What is and is not measured
   global arm and the landed index-list (``*_lts``) derivations for the
   per-class arm, compiled through the port's own ``KernelCache``.
 * The connectivity, class populations and index lists come from a real grid
-  file, classed by ``mpas_port.lts_v841.classify_from_grid_file`` -- the same
+  file, classed by ``hexcore.lts_v841.classify_from_grid_file`` -- the same
   code the shipped option runs.
 * The field VALUES are synthetic (uniform in [0.5, 1.5]); nothing physical is
   claimed.  Launch cost at a given entity count over the real gather pattern
@@ -271,8 +271,8 @@ def measure_mesh(
     ladders: list[tuple[int, ...]],
     buffer_rings: int,
 ) -> dict[str, Any]:
-    from mpas_port import cuda_acoustic_lts, cuda_acoustic_v841
-    from mpas_port.lts_v841 import cell_min_spacing, classify_from_grid_file
+    from hexcore import cuda_acoustic_lts, cuda_acoustic_v841
+    from hexcore.lts_v841 import cell_min_spacing, classify_from_grid_file
 
     grid = load_grid(path)
     arrays = MeshArrays(cp, grid)
@@ -458,7 +458,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import cupy as cp
 
-    from mpas_port.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_backend import KernelCache, require_cuda
 
     capability = require_cuda(min_compute=(12, 0))
     cache = KernelCache(capability=capability)

@@ -23,7 +23,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mpas_port.partition_assets_v841 import (  # noqa: E402
+from hexcore.partition_assets_v841 import (  # noqa: E402
     BUILDER_VERSION,
     assert_exact_cover,
     build_partition_layouts,
@@ -32,7 +32,17 @@ from mpas_port.partition_assets_v841 import (  # noqa: E402
     sha256_file,
 )
 
-RESIDENT_GIB = 22.0  # measured resident single-GPU footprint of the x4 case
+# The per-partition memory sanity line answers from the ONE admission
+# surface (rerouted 2026-08-25, stale-guard audit #347 finding 5): the
+# retired 22 GiB whole-mesh constant scaled linearly with no fixed term,
+# the shape the L6 floor re-derivation retired.  The projection below is
+# the measured converged row applied to the largest partition's local cell
+# count -- a DECLARED DERIVATION (no 2-GPU #264 row exists at the
+# converged pin), printed with that label.
+from hexcore.device_admission import (  # noqa: E402
+    MIB,
+    required_free_bytes,
+)
 
 
 def read_zero_based(grid: Path) -> tuple[np.ndarray, np.ndarray, int, int, int]:
@@ -109,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     rows = [layout.receipt() for layout in layouts]
     max_local = max(row["n_local_cells"] for row in rows)
-    projected_gib = RESIDENT_GIB * max_local / n_cells
+    projected_gib = required_free_bytes(max_local) / (1024 * MIB)
 
     header = (
         f"{'part':>4} {'owned':>8} {'local':>8} {'ratio':>6} "
@@ -133,8 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"exact cover: {covered}")
     print(
         f"memory sanity: max_local_cells={max_local} -> "
-        f"{projected_gib:.3f} GiB projected per partition "
-        f"(resident whole-mesh {RESIDENT_GIB} GiB over {n_cells} cells)"
+        f"{projected_gib:.3f} GiB required free per partition device "
+        "(device_admission.required_free_bytes over local cells; per-"
+        "partition application of the measured row is DERIVED, NOT MEASURED)"
     )
     print(f"npz: {target}  sha256={sha256_file(target)}")
 

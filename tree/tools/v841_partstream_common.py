@@ -66,24 +66,24 @@ ARWEN_PIN_TABLE: dict[str, dict[str, str]] = {
 # `run_cuda_v841_partitioned_x4.py` for the same arm under a spelling no
 # commit ever carried, and it was recorded as a null hash rather than refused.
 PORT_SOURCE_FILES = (
-    "src/mpas_port/cuda_driver.py",
-    "src/mpas_port/cuda_v841.py",
-    "src/mpas_port/cuda_acoustic_v841.py",
-    "src/mpas_port/cuda_transport_v841.py",
-    "src/mpas_port/cuda_dynamics_v841.py",
-    "src/mpas_port/cuda_horizontal.py",
-    "src/mpas_port/cuda_horizontal_v841.py",
-    "src/mpas_port/cuda_physics_v841.py",
-    "src/mpas_port/cuda_physics_prep_v841.py",
-    "src/mpas_port/cuda_gwdo_v841.py",
-    "src/mpas_port/cuda_arwen_physics_v841.py",
-    "src/mpas_port/config_v841.py",
-    "src/mpas_port/partition_assets_v841.py",
-    "src/mpas_port/partition_local_mesh_v841.py",
-    "src/mpas_port/partition_state_v841.py",
-    "src/mpas_port/partition_executor_v841.py",
-    "src/mpas_port/partition_net_v841.py",
-    "src/mpas_port/partition_device_scheduler_v841.py",
+    "src/hexcore/cuda_driver.py",
+    "src/hexcore/cuda_v841.py",
+    "src/hexcore/cuda_acoustic_v841.py",
+    "src/hexcore/cuda_transport_v841.py",
+    "src/hexcore/cuda_dynamics_v841.py",
+    "src/hexcore/cuda_horizontal.py",
+    "src/hexcore/cuda_horizontal_v841.py",
+    "src/hexcore/cuda_physics_v841.py",
+    "src/hexcore/cuda_physics_prep_v841.py",
+    "src/hexcore/cuda_gwdo_v841.py",
+    "src/hexcore/cuda_arwen_physics_v841.py",
+    "src/hexcore/config_v841.py",
+    "src/hexcore/partition_assets_v841.py",
+    "src/hexcore/partition_local_mesh_v841.py",
+    "src/hexcore/partition_state_v841.py",
+    "src/hexcore/partition_executor_v841.py",
+    "src/hexcore/partition_net_v841.py",
+    "src/hexcore/partition_device_scheduler_v841.py",
     "tools/run_cuda_v841_full_physics_x4.py",
     "tools/v841_partstream_common.py",
     "tools/run_cuda_v841_resident_baseline_lwfix.py",
@@ -142,7 +142,7 @@ def load_layouts(
 
     import numpy as np
 
-    from mpas_port.partition_assets_v841 import build_or_load_layouts
+    from hexcore.partition_assets_v841 import build_or_load_layouts
 
     root = official_partition_dir() if partition_dir is None else Path(partition_dir)
     return build_or_load_layouts(

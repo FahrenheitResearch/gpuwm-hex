@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mpas_port.render_door import (  # noqa: E402
+from hexcore.render_door import (  # noqa: E402
     RenderDoorError,
     default_scratch,
     place_path,
@@ -118,7 +118,7 @@ class TestExecutableResolution:
 
     @pytest.fixture(autouse=True)
     def _a_machine_with_no_engines(self, monkeypatch):
-        from mpas_port import engines
+        from hexcore import engines
 
         for name in (
             "GPUWM_HEX_RW_WRFBATCH",
@@ -165,7 +165,7 @@ class TestExecutableResolution:
         refusal, because no door looked where that command writes.
         """
 
-        from mpas_port import engines
+        from hexcore import engines
 
         staged = tmp_path / engines.executable_name("rw_wrfbatch")
         staged.write_bytes(b"")
@@ -204,3 +204,148 @@ class TestProductCoverage:
         message = str(caught.value)
         assert "no_such" in message
         assert "slp" in message
+
+
+class TestComposeArguments:
+    """The compose door's refusals and the command it builds.
+
+    A composite is several model runs going into one frame.  Everything
+    here is about the ways that can be asked for incoherently, because a
+    composite built from a half-stated source list would render cleanly
+    and show the wrong weather.
+    """
+
+    @staticmethod
+    def _parser():
+        from hexcore.cli import build_parser
+
+        return build_parser()
+
+    def test_compose_makes_history_and_mesh_optional(self):
+        parsed = self._parser().parse_args(
+            ["render", "--compose", "sources.json", "--out", "png",
+             "--window", "composite"])
+        assert parsed.compose == "sources.json"
+        assert parsed.history is None and parsed.mesh is None
+
+    def test_a_single_run_render_still_requires_both(self):
+        parsed = self._parser().parse_args(
+            ["render", "--history", "h.nc", "--mesh", "m.nc", "--out", "png"])
+        assert parsed.compose is None
+        assert parsed.window == "mesh"
+
+    def test_composite_window_is_offered(self):
+        parsed = self._parser().parse_args(
+            ["render", "--compose", "s.json", "--out", "png",
+             "--window", "composite"])
+        assert parsed.window == "composite"
+
+    def test_compose_command_carries_no_second_source_list(self, tmp_path):
+        """--compose owns the meshes; --history/--mesh must not also appear.
+
+        Two source lists in one command can disagree about which run is
+        the base, and the composite would then draw the wrong run
+        everywhere the overlays do not cover.
+        """
+
+        from hexcore import render_door
+
+        seen: dict[str, list[str]] = {}
+
+        def fake_run(command, *, log_prefix):
+            seen["command"] = [str(part) for part in command]
+            report = tmp_path / "scratch" / "convert-report.json"
+            report.write_text('{"frames": []}', encoding="utf-8")
+
+            class Result:
+                returncode = 0
+                stdout = "COMPOSITE\t0\tcoarse\tpoints=4\tshare=1.0000\n"
+                stderr = ""
+
+            return Result()
+
+        original = render_door._run
+        render_door._run = fake_run
+        try:
+            report, command = render_door.convert_frames(
+                Path("rw_mpas_convert"), histories=None, mesh=None,
+                scratch=tmp_path / "scratch", window="composite",
+                field_set="full", simulation_start=None, nc_format="cdf2",
+                compose=tmp_path / "sources.json")
+        finally:
+            render_door._run = original
+
+        assert "--compose" in command
+        assert "--history" not in command
+        assert "--mesh" not in command
+        assert report == {"frames": []}
+
+    def test_base_only_rides_with_compose_and_not_alone(self, tmp_path):
+        from hexcore import render_door
+
+        def fake_run(command, *, log_prefix):
+            (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "scratch" / "convert-report.json").write_text(
+                '{"frames": []}', encoding="utf-8")
+
+            class Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Result()
+
+        original = render_door._run
+        render_door._run = fake_run
+        try:
+            _, command = render_door.convert_frames(
+                Path("rw_mpas_convert"), histories=None, mesh=None,
+                scratch=tmp_path / "scratch", window="composite",
+                field_set="full", simulation_start=None, nc_format="cdf2",
+                compose=tmp_path / "sources.json", compose_base_only=True)
+        finally:
+            render_door._run = original
+        assert "--compose-base-only" in command
+
+    def test_incoherent_commands_are_refused_before_a_binary_is_needed(
+            self, tmp_path):
+        """Named refusals, reachable without an engine installed.
+
+        Each names the concrete breakage: two source lists that can
+        disagree, a subtraction with nothing to subtract from, and a
+        window sized to regions that were never given.
+        """
+
+        import argparse
+
+        from hexcore.render_door import run_render
+
+        cases = [
+            (argparse.Namespace(
+                compose="s.json", compose_base_only=False, history=["h.nc"],
+                mesh=None, out=str(tmp_path / "png"), scratch=None,
+                window="composite"),
+             "two source lists"),
+            (argparse.Namespace(
+                compose=None, compose_base_only=True, history=["h.nc"],
+                mesh="m.nc", out=str(tmp_path / "png"), scratch=None,
+                window="mesh"),
+             "no composite without --compose"),
+            (argparse.Namespace(
+                compose=None, compose_base_only=False, history=None,
+                mesh=None, out=str(tmp_path / "png"), scratch=None,
+                window="composite"),
+             "no fine region to frame"),
+            (argparse.Namespace(
+                compose=None, compose_base_only=False, history=None,
+                mesh=None, out=str(tmp_path / "png"), scratch=None,
+                window="mesh"),
+             "required unless --compose"),
+        ]
+        for namespace, expected in cases:
+            with pytest.raises(RenderDoorError) as caught:
+                run_render(namespace)
+            assert expected in str(caught.value), (
+                f"refusal for {namespace.window}/"
+                f"compose={namespace.compose} did not name the breakage: "
+                f"{caught.value}")

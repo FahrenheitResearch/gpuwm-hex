@@ -19,7 +19,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mpas_port.partition_assets_v841 import (  # noqa: E402
+from hexcore.partition_assets_v841 import (  # noqa: E402
     load_layouts_npz,
     read_graph_info,
     read_part_file,

@@ -187,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import cupy as cp  # noqa: PLC0415  - device import belongs after sys.path
 
-    from mpas_port.cuda_backend import runtime as runtime_module  # noqa: PLC0415
+    from hexcore.cuda_backend import runtime as runtime_module  # noqa: PLC0415
 
     events: list[dict[str, Any]] = []
     install_probe(

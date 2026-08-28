@@ -17,10 +17,22 @@ Because a kernel that dereferences BEFORE its guard would fault the whole
 context, each kernel is measured in its own process by --sweep, so one bad
 kernel costs one row and not the run.
 
-Validation is built in: --sweep also measures two kernels whose reservation
-was already measured inside the real forecast (gf_gfdrv_stage 4990.0 MiB,
-ysu_column 1790.0 MiB).  If the null launch does not reproduce those, the
-technique is wrong and the RRTMG number it produces is not evidence.
+Validation is built in, and it was re-pinned 2026-08-25 (stale-guard audit
+#347, finding 6).  The original positive control pinned ``gf_gfdrv_stage``
+at 7,034.0 MiB -- the sum of the pre-cut in-run increments (rlw_rtrn_march
+254.0 + ysu_column 1790.0 + gf_gfdrv_stage 4990.0).  The #294
+Grell-Freitas frame cut retired that premise (the gf frame is now 88/72 B),
+so the instrument declared its own technique invalid against a dead number.
+The control is now the POST-CUT widest launched frame, ``wsm6_column`` at
+7,216 B (STATE.md section 5), checked against a bound DERIVED from the live
+device: 0 < reservation <= local_size_bytes x SM count x max resident
+threads per SM (1,797.0 MiB on the 170 SM card).  A derived bound is weaker
+than the retired measured-equality check; restoring equality needs one
+post-cut control run on real hardware, which is a NAMED FOLLOW-UP -- this
+re-pin ships without it because the probe cannot run without a CUDA device
+and a per-process nvidia-smi row (WDDM boxes publish none).  The negative
+control (a zero-local kernel must reserve nothing) is unchanged and stays
+exact.
 """
 
 from __future__ import annotations
@@ -48,10 +60,25 @@ BUILDERS = {
     "gpuwm.core.rrtmg_mcica": ("_mcica_gpu_module", ()),
     "gpuwm.core.gf": ("_gf_module", (55,)),
     "gpuwm.core.ysu": ("_ysu_module", ()),
+    # The registry route: gpuwm.core.kernels.load_module("wsm6") is how the
+    # engine builds the module holding the POST-CUT widest launched frame
+    # (wsm6_column, 7,216 B -- STATE.md section 5).  The per-module builder
+    # attrs above cannot reach it because wsm6 has no module-level builder.
+    "gpuwm.core.kernels": ("load_module", ("wsm6",)),
 }
 
 
-def kernel_source(mod):
+def kernel_source(mod, builder_args=()):
+    # Registry route first: gpuwm.core.kernels exposes module_source(name),
+    # the exact string load_module hands to NVRTC.
+    ms = getattr(mod, "module_source", None)
+    if callable(ms) and builder_args:
+        try:
+            src = ms(builder_args[0])
+        except Exception:
+            src = None
+        if isinstance(src, str):
+            return src
     for attr in ("_gpu_source", "_source", "_mcica_gpu_source",
                  "_module_source", "_kernel_source"):
         fn = getattr(mod, attr, None)
@@ -122,6 +149,35 @@ def build_args(cp, np, params):
     return tuple(args), keep
 
 
+# The reservation is a function of the LAUNCH CONFIGURATION, not of the
+# kernel alone (pre-cut example: gf_gfdrv_stage reserved 4990 MiB at its
+# shipped block of 64 and 7034 MiB at 128), so every row is launched at the
+# block size the shipped call site uses.
+DEFAULT_SWEEP_TARGETS = (
+    # POSITIVE CONTROL, re-pinned 2026-08-25 (stale-guard audit #347,
+    # finding 6): the post-cut widest LAUNCHED frame, wsm6_column at
+    # 7,216 B (STATE.md section 5), at its shipped call-site block of 32
+    # (gpuwm/core/wsm6.py::_COLUMN_TPB).  "bound" = the reservation must
+    # be positive and inside the device-derived backing-store bound
+    # (frame x resident threads; 1,797.0 MiB on the 170 SM card).  The
+    # retired control pinned gf_gfdrv_stage at the pre-#294-cut
+    # 7,034.0 MiB; the cut shrank that frame to 88/72 B, so the pin
+    # failed against a dead premise.  Restoring a measured-equality
+    # control needs one post-cut run on real hardware (named follow-up).
+    ("gpuwm.core.kernels", "wsm6_column", 32, "bound"),
+    # The post-cut gf frames, unpinned: measured for the ledger, no
+    # longer the control (their 88/72 B frames reserve ~nothing).
+    ("gpuwm.core.gf", "gf_gfdrv_stage", 64, None),
+    ("gpuwm.core.gf", "gf_deep_stage", 64, None),
+    ("gpuwm.core.gf", "gf_shallow_stage", 64, None),
+    # the route no in-run proxy can see; rrtmg_lw.py:3979 launches (128,)
+    ("gpuwm.core.rrtmg_lw", "rlw_rtrn_march", 128, None),
+    ("gpuwm.core.rrtmg_lw", "rlw_cldprmc", 128, None),
+    # negative control: a zero-local kernel must reserve nothing
+    ("gpuwm.core.rrtmg_mcica", None, 128, 0.0),
+)
+
+
 def one(argv):
     p = argparse.ArgumentParser()
     p.add_argument("--arwen-checkout", required=True)
@@ -151,7 +207,7 @@ def one(argv):
         pb, pa = BUILDERS[pm]
         pobj = getattr(pmod, pb)(*pa)
         pfn = pobj.get_function(pk)
-        psrc = kernel_source(pmod)
+        psrc = kernel_source(pmod, pa)
         pargs, _pk = build_args(cp, np, signature(psrc, pk))
         b0 = nvsmi_process_mib(pid)
         pfn((4096,), (int(pt),), pargs)
@@ -164,7 +220,7 @@ def one(argv):
     obj = getattr(mod, builder)(*bargs)
     fn = obj.get_function(args.kernel)
     attrs = func_attributes(cp, fn)
-    src = kernel_source(mod)
+    src = kernel_source(mod, bargs)
     params = signature(src, args.kernel)
     out = {"module": args.module, "kernel": args.kernel, "attrs": attrs,
            "params": len(params or [])}
@@ -194,6 +250,18 @@ def one(argv):
     if out["local_size_bytes"]:
         out["implied_threads"] = round(
             (out["reservation_mib"] or 0) * MIB / out["local_size_bytes"])
+    # The derived control bound: the backing store cannot exceed one frame
+    # per device-resident thread.  On the 170 SM card and wsm6_column's
+    # 7,216 B frame this is the 1,797.0 MiB upper bound STATE.md section 5
+    # records; the bound is computed from the LIVE device so the control
+    # stays valid on every card.
+    props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+    max_resident = (int(props["multiProcessorCount"])
+                    * int(props["maxThreadsPerMultiProcessor"]))
+    out["device_max_resident_threads"] = max_resident
+    if out["local_size_bytes"]:
+        out["derived_reservation_bound_mib"] = round(
+            out["local_size_bytes"] * max_resident / MIB, 1)
     print(json.dumps(out))
     return 0
 
@@ -203,28 +271,11 @@ def sweep(argv):
     p.add_argument("--arwen-checkout", required=True)
     p.add_argument("--json", default=None)
     p.add_argument("--targets", default=None,
-                   help="module:kernel[,module:kernel...]; default is the "
-                        "two already-measured controls plus the RRTMG frames")
+                   help="module:kernel[,module:kernel...]; default is "
+                        "DEFAULT_SWEEP_TARGETS (the wsm6 bound control, the "
+                        "negative control, the gf and RRTMG frames)")
     args = p.parse_args(argv)
-    # The reservation is a function of the LAUNCH CONFIGURATION, not of the
-    # kernel alone: gf_gfdrv_stage at its shipped block of 64 reserves
-    # 4990 MiB, the same kernel at 128 threads reserves 7034 MiB.  So every
-    # row is launched at the block size the shipped call site uses.
-    default = [
-        # Control.  The backing store is ONE per-context high-water pool, so
-        # this kernel alone must reserve what the whole forecast reserves:
-        # the in-run increments were rlw_rtrn_march 254.0 + ysu_column 1790.0
-        # + gf_gfdrv_stage 4990.0 = 7034.0 MiB.
-        ("gpuwm.core.gf", "gf_gfdrv_stage", 64, 7034.0),
-        # siblings in the same module, same call-site block
-        ("gpuwm.core.gf", "gf_deep_stage", 64, None),
-        ("gpuwm.core.gf", "gf_shallow_stage", 64, None),
-        # the route no in-run proxy can see; rrtmg_lw.py:3979 launches (128,)
-        ("gpuwm.core.rrtmg_lw", "rlw_rtrn_march", 128, None),
-        ("gpuwm.core.rrtmg_lw", "rlw_cldprmc", 128, None),
-        # negative control: a zero-local kernel must reserve nothing
-        ("gpuwm.core.rrtmg_mcica", None, 128, 0.0),
-    ]
+    default = list(DEFAULT_SWEEP_TARGETS)
     targets = []
     if args.targets:
         for t in args.targets.split(","):
@@ -254,7 +305,16 @@ def sweep(argv):
         # so its frame never reaches the context's backing store.  It is
         # measured here for reference and excluded from the ledger total.
         rec["launched_from_python"] = names_in_python(args.arwen_checkout, kern)
-        if expect is not None and rec.get("reservation_mib") is not None:
+        if expect == "bound":
+            # Derived-bound control: positive, and inside the device-derived
+            # backing-store bound (+2 MiB nvidia-smi granularity).
+            resv = rec.get("reservation_mib")
+            bound = rec.get("derived_reservation_bound_mib")
+            rec["matches_expected"] = (
+                resv is not None and bound is not None
+                and 0.0 < resv <= bound + 2.0
+            )
+        elif expect is not None and rec.get("reservation_mib") is not None:
             rec["matches_expected"] = abs(rec["reservation_mib"] - expect) <= 2.0
         rows.append(rec)
     out = {"rows": rows}

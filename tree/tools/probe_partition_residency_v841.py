@@ -40,8 +40,8 @@ def main() -> int:
 
     import run_cuda_v841_full_physics_x4 as R
     import v841_partstream_common as C
-    from mpas_port.cuda_backend import KernelCache
-    from mpas_port.partition_local_mesh_v841 import slice_prepared_host
+    from hexcore.cuda_backend import KernelCache
+    from hexcore.partition_local_mesh_v841 import slice_prepared_host
 
     report: dict[str, object] = {"schema": "mpas-port.partstream-residency-probe/v1"}
 

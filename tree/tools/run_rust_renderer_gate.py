@@ -27,7 +27,7 @@ import time
 from typing import Any
 import zlib
 
-from mpas_port.rust_renderer import (
+from hexcore.rust_renderer import (
     FROZEN_X1_2562_REGRID_WEIGHTS_SHA256,
     INTEGRITY_SCOPE,
     RENDERER_CONTRACT,
@@ -697,9 +697,9 @@ def main(argv: list[str] | None = None) -> int:
         "tool": {
             "runner_path": repo_relative(Path(__file__)),
             "runner_sha256": sha256_file(Path(__file__)),
-            "module_path": "src/mpas_port/rust_renderer.py",
+            "module_path": "src/hexcore/rust_renderer.py",
             "module_sha256": sha256_file(
-                ROOT / "src" / "mpas_port" / "rust_renderer.py"
+                ROOT / "src" / "hexcore" / "rust_renderer.py"
             ),
             "gpuwm_not_modified_by_this_gate": True,
             "rustwx_wrapper": rustwx_record(),

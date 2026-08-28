@@ -140,8 +140,8 @@ def build_config(
     rings: int,
     sub_steps: int = 6,
 ) -> Any:
-    from mpas_port.config_lts import V841LocalTimestepDryConfig
-    from mpas_port.config_v841 import V841DryDycoreConfig
+    from hexcore.config_lts import V841LocalTimestepDryConfig
+    from hexcore.config_v841 import V841DryDycoreConfig
 
     # The CUDA v8.4.1 lane mirrors the native split-three ruler and refuses
     # anything else (cuda_driver.py:2548-2561), while the dry dataclass default
@@ -206,9 +206,9 @@ def prepare_host(
 
     import run_cuda_v841_forecast as door
     import run_cuda_v841_full_physics_x4 as proof
-    from mpas_port.driver import load_mpas_initial_state, load_mpas_vertical_grid
-    from mpas_port.dynamics_v841 import load_v841_reference_wind_profiles
-    from mpas_port.mesh import load_precision_preserving_mesh_pair
+    from hexcore.driver import load_mpas_initial_state, load_mpas_vertical_grid
+    from hexcore.dynamics_v841 import load_v841_reference_wind_profiles
+    from hexcore.mesh import load_precision_preserving_mesh_pair
 
     # The proof module pins the digests of the ONE init file it was sealed
     # against.  The door already owns the rebinding for a different case, and
@@ -270,10 +270,10 @@ def _mesh_field(mesh: Any, name: str) -> np.ndarray:
 
 
 def run_arm(args: argparse.Namespace) -> dict[str, Any]:
-    from mpas_port.cuda_backend import require_cuda
-    from mpas_port.cuda_backend.runtime import KernelCache
-    from mpas_port.cuda_driver import CudaDryDycoreDriver
-    from mpas_port.cuda_driver_lts import attach_local_timestep
+    from hexcore.cuda_backend import require_cuda
+    from hexcore.cuda_backend.runtime import KernelCache
+    from hexcore.cuda_driver import CudaDryDycoreDriver
+    from hexcore.cuda_driver_lts import attach_local_timestep
 
     paths = {
         key: Path(getattr(args, key)).expanduser().resolve(strict=True)
@@ -433,7 +433,7 @@ def _distance(a: np.ndarray, b: np.ndarray) -> dict[str, float]:
 def _interface_cell_mask(grid: str, rates: tuple[int, ...], rings: int) -> np.ndarray:
     """Cells that touch a rate-class boundary, from the grid file's own dcEdge."""
 
-    from mpas_port.lts_v841 import classify_from_grid_file
+    from hexcore.lts_v841 import classify_from_grid_file
 
     classing = classify_from_grid_file(grid, rates=rates, buffer_rings=rings)
     from netCDF4 import Dataset

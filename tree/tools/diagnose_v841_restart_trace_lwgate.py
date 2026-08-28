@@ -26,7 +26,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 import run_cuda_v841_full_physics_x4 as runner  # noqa: E402
-import mpas_port.cuda_arwen_physics_v841 as pin_mod  # noqa: E402
+import hexcore.cuda_arwen_physics_v841 as pin_mod  # noqa: E402
 
 runner.verify_arwen_checkout_git = lambda checkout: {
     "root": str(checkout), "pins": "SKIPPED (modified work checkout)"}
@@ -37,7 +37,7 @@ import diagnose_v841_restart_step16_x4 as diag  # noqa: E402
 
 rc = diag.main()
 import gpuwm  # noqa: E402
-import mpas_port.cuda_driver as cd  # noqa: E402
+import hexcore.cuda_driver as cd  # noqa: E402
 
 print(f"[wrapper] gpuwm module: {gpuwm.__file__}", flush=True)
 print(f"[wrapper] cuda_driver module: {cd.__file__}", flush=True)

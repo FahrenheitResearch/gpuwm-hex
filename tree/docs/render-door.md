@@ -3,7 +3,7 @@
 MPAS history in, product PNGs out, entirely through the Rust path.
 
 ```
-python -m mpas_port.cli render \
+python -m hexcore.cli render \
     --history history.2025-03-15_00.00.00.nc \
     --mesh x4.163842.grid.nc \
     --out ./png \
@@ -36,10 +36,12 @@ refuses by name; it never draws a weather field in Python.
 | `rw_wrfbatch` | `--renderer-exe`, `$GPUWM_HEX_RW_WRFBATCH`, `$MPAS_PORT_RW_WRFBATCH`, `$GPUWM_RW_WRFBATCH`, `PATH` |
 
 The `GPUWM_HEX_*` pair is the preferred spelling: the distribution is
-`gpuwm-hex` and the names a user types carry its name, not the import
-package's. The `MPAS_PORT_*` pair predates that and still works — an install
-line that already works is never invalidated by a rename, and a variable that
-silently stops being read is the worst possible way to learn about one.
+`gpuwm-hex` and the names a user types carry its name. The `MPAS_PORT_*` pair
+is the import package's original name (`mpas_port` through 0.1.1, `hexcore`
+from 0.2.0) and still works — an install line that already works is never
+invalidated by a rename, and a variable that silently stops being read is the
+worst possible way to learn about one. The 0.2.0 package rename deliberately
+left this pair alone for that reason.
 
 An environment variable naming a missing file is a hard error, not a fall
 through — a ladder that silently skips a broken pin renders with the wrong

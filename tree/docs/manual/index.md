@@ -43,10 +43,29 @@ independent port and is not affiliated with or endorsed by them.)*
 
 **Every command was run before it was printed.** Each command block in this
 manual was executed against the real artifact it documents — the installed
-0.1.0 wheel for the doors, the repository tools for the forecast lane, a CUDA
+0.2.0 wheel for the doors, the repository tools for the forecast lane, a CUDA
 node for anything that needs a card — before it was written down. Where a
 command's output is shown, it is the output that run produced, with machine
 home directories shortened to `~`.
+
+**What a walk of this manual actually reaches.** On 2026-08-27 the printed
+commands were executed in printed order, from an empty environment, against
+the built 0.2.0 wheel and the *published* engine, by somebody following the
+page rather than remembering the code. Install, `doctor`, `mesh-check`, the
+init door, the forecast door and the render door all reach real output —
+16 min 46 s from an empty machine to the first rendered products. Three
+things did not, and all three were against the engine published that day,
+gpuwm 2.5.7. Two are closed by the 2.5.8 floor this distribution now declares,
+re-measured 2026-08-28 against the published bundle: the **limited-area lane**
+of chapter 6.8 and the `cull` door of chapter 9 have the engine capabilities
+they need, and the render door's **default window** is understood by the
+published converter. The third stands, with a narrower reason than it had: the forecast lane needs
+a `gpuwm` **git** checkout at **v2.5.8**, not just whatever pip installs — not
+because a pinned file is missing from the wheel (at 2.5.8 all sixteen resolve
+from `site-packages`, measured 2026-08-28) but because the run records the
+checkout's HEAD, tree and dirty paths into every receipt. Each is written
+where you meet it; the 2026-08-27 walk is in
+`evidence/userwalk-20260827/RECEIPT.md` and is a record of 2.5.7.
 
 **Citations.** Bare paths (`docs/init-door.md`, `tools/battery/README.md`) are
 repository-relative files. Paths under `evidence/` are measurement receipts
@@ -58,13 +77,13 @@ three measured, physics-shaped ways. They are stated in chapter 3, quantified
 in [`docs/declared-divergences.md`](../declared-divergences.md), and never
 hidden behind an option. Read them before trusting a number.
 
-**Version.** This manual describes gpuwm-hex 0.1.0 with the gpuwm 2.5.x
+**Version.** This manual describes gpuwm-hex 0.2.0 with the gpuwm 2.5.x
 engine line. Where a measurement was taken on specific hardware, the card is
 named beside the number.
 
 **Vocabulary.** The *distribution* (what you `pip install`) and the *command*
-(what you type) are both `gpuwm-hex`. The *import namespace* is `mpas_port` —
-a declared inconsistency, explained in the README. A *door* is a command a
-user can walk through; a *lane* is a capability that today requires the
-source checkout. The *engine* is the `gpuwm` distribution that supplies the
-physics seam and the Rust binaries.
+(what you type) are both `gpuwm-hex`. The *import namespace* is `hexcore`,
+renamed from `mpas_port` at 0.2.0 and explained in the README. A *door* is a command a
+user can walk through; a *lane* is a capability that today requires a source
+checkout. The *engine* is the `gpuwm` distribution that supplies the physics
+seam and the Rust binaries.

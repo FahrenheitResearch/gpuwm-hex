@@ -45,7 +45,7 @@ def hash_regular_tree(root: Path, *, suffix: str | None = None) -> dict[str, str
 def capture_launcher_integrity(fixture: Path) -> dict[str, Any]:
     return {
         "source_capsule_sha256": hash_regular_tree(
-            ROOT / "src" / "mpas_port", suffix=".py"
+            ROOT / "src" / "hexcore", suffix=".py"
         ),
         "test_capsule_sha256": hash_regular_tree(ROOT / "tests", suffix=".py"),
         "fixture_tree_sha256": hash_regular_tree(fixture),
@@ -141,7 +141,7 @@ def run_gate(
                 "child comparator bootstrap differs from launcher snapshot"
             )
         if child_bootstrap["preexisting_mpas_modules"]:
-            raise RuntimeError("child imported mpas_port before its source snapshot")
+            raise RuntimeError("child imported hexcore before its source snapshot")
         if not child_bootstrap["matches_gate_start"]:
             raise RuntimeError("child pre-import bootstrap did not reach gate start")
         report["ruler"]["launcher_integrity_passed"] = True

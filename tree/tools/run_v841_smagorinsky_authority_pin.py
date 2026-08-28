@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
 
     proof = runner.proof
 
-    from mpas_port.mixing_v841 import (
+    from hexcore.mixing_v841 import (
         compute_dry_mixing_tendencies_v841,
         compute_smagorinsky_coefficients_v841,
         initialize_deformation_weights_v841,
@@ -98,10 +98,10 @@ def main(argv: list[str] | None = None) -> int:
     # precede KernelCache's gpuwm platform-binding construction, or the
     # frozen-package guard refuses ("gpuwm was already imported from a
     # different tree").
-    from mpas_port.cuda_arwen_physics_v841 import pin_arwen_physics_v841
+    from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
     pin_arwen_physics_v841(args.arwen_checkout.absolute())
-    from mpas_port.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_backend import KernelCache, require_cuda
 
     capability = require_cuda(
         min_compute=(12, 0), required_compute=(12, 0), cache_dir=args.cache_root

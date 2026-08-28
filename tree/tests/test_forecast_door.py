@@ -1,10 +1,24 @@
 """The forecast door: argument grammar, refusals, admission, receipt shape.
 
 Everything here runs on a CPU-only box.  The door's device contact is
-confined to one function (:func:`mpas_port.forecast_door.measure_device_memory`)
-so that the DECISION it feeds can be tested at every interesting free-memory
-value without owning a card at that value -- which is the only way to test
-the refusal that fires on a card too small for the request.
+confined to three functions -- :func:`measure_device_memory`,
+:func:`read_device_compute` and :func:`read_card_profile` -- so that the
+DECISION they feed can be tested at every interesting free-memory value
+without owning a card at that value, which is the only way to test the
+refusal that fires on a card too small for the request.  All three are
+substituted for every test in this file by the autouse fixtures below.
+
+THE BREAKAGE THE THIRD ONE PREVENTS, measured on both CI matrix legs and
+reproduced on the Windows desktop (``evidence/xmachine-20260827/`` §4):
+``read_card_profile`` is a SECOND point of device contact that arrived after
+this file was written, and it refuses outright when ``GPUWM_HEX_NO_LOCAL_GPU``
+is set.  ``ci.yml``'s tier-1 step sets exactly that variable, so this
+distribution's own CI environment made this distribution's own door refuse,
+and ``test_the_door_leaves_destination_creation_to_the_driver`` -- a test
+about directory creation, with no interest in any card -- went red on the
+release commit.  The refusal itself is correct and stays: a box that has
+declared no GPU work cannot run a forecast.  What was wrong is a test file
+claiming its device contact was confined to one function when it was not.
 """
 
 from __future__ import annotations
@@ -15,8 +29,8 @@ from pathlib import Path
 
 import pytest
 
-from mpas_port import forecast_door as door
-from mpas_port.cli import build_parser
+from hexcore import forecast_door as door
+from hexcore.cli import build_parser
 
 
 X1_CELLS = 40_962
@@ -24,6 +38,56 @@ X4_CELLS = 163_842
 V15_CELLS = 38_857
 MIB = 1024**2
 GIB = 1024**3
+
+
+@pytest.fixture(autouse=True)
+def _proven_architecture(monkeypatch):
+    """Pin the architecture seam to the proven floor for every door test.
+
+    The architecture half of admission has its own tests below; everything
+    else in this file is about the door's other decisions and must not
+    depend on which card (if any) the test box carries.
+    """
+
+    monkeypatch.setattr(door, "read_device_compute", lambda: (12, 0))
+
+
+@pytest.fixture(autouse=True)
+def _reference_card(monkeypatch):
+    """Pin the card SHAPE seam for every door test.
+
+    The footprint row is priced from the card's multiprocessor count, and
+    ``read_card_profile`` reads that from the driver -- a device query, and
+    a refusal when the box has banned GPU work.  Every test in this file
+    decides something else, so the shape is supplied here rather than asked
+    of whatever card (or ban) the runner happens to have.  The tests that
+    are ABOUT the card's shape substitute their own row against the same
+    seam, in tests/test_device_admission.py.
+    """
+
+    from hexcore.device_admission import REFERENCE_CARD
+
+    monkeypatch.setattr(door, "read_card_profile", lambda: REFERENCE_CARD)
+
+
+@pytest.fixture(autouse=True)
+def _satisfied_seam_pin(monkeypatch):
+    """Pin the gpuwm SEAM-PIN seam for every door test.
+
+    ``--gpuwm-checkout`` in this file is an empty directory under
+    ``tmp_path``: these tests are about the argument grammar, the schedule,
+    the receipt and the driver vector, and none of them can carry a real
+    gpuwm checkout at the pinned commit.  The door's byte check over that
+    checkout is therefore supplied here, exactly as the card shape and the
+    architecture are.
+
+    The check ITSELF -- that it names the version found, the version wanted
+    and the remedy, and that it stays silent on a checkout whose bytes match
+    -- is exercised against real bytes in tests/test_engine_pin.py, where
+    this substitution is not in force.
+    """
+
+    monkeypatch.setattr(door, "seam_pin_problem", lambda checkout: None)
 
 
 def _registry() -> dict[str, door.MeshRow]:
@@ -34,6 +98,42 @@ def _registry() -> dict[str, door.MeshRow]:
         "x1.40962": door.MeshRow("x1.40962", X1_CELLS, 120.0),
         "v15.150.38857": door.MeshRow("v15.150.38857", V15_CELLS, 60.0),
     }
+
+
+def _register_timestep_anchor(monkeypatch, dt_seconds: float) -> None:
+    """Register one timestep anchor for the duration of a test.
+
+    The same gesture a ruling would make in
+    ``hexcore.dt_admission.ADMITTED_TIMESTEPS`` -- one row naming its
+    evidence -- so a test can exercise behaviour past the gate without the
+    gate being weakened for anyone else.
+    """
+
+    from hexcore import dt_admission
+
+    anchor = dt_admission.DtAnchor(
+        dt_seconds=float(dt_seconds),
+        radiation_seconds=600.0,
+        surface_pbl_seconds=float(dt_seconds),
+        cumulus_seconds=float(dt_seconds),
+        cumulus_scheme="gf",
+        meshes=(),
+        card="test-registered anchor",
+        admitted_on="2026-08-26",
+        schedule_receipt="evidence/dt-admission-20260826/",
+        integration_anchor="evidence/dt-admission-20260826/",
+        native_reference=None,
+        basis="test-registered anchor",
+        physics_health="TRACKS test-registered anchor",
+    )
+    monkeypatch.setattr(
+        dt_admission,
+        "ADMITTED_TIMESTEPS",
+        {
+            **dt_admission.ADMITTED_TIMESTEPS,
+            dt_admission.dt_key(dt_seconds): anchor,
+        },
+    )
 
 
 def _namespace(tmp_path: Path, **overrides) -> argparse.Namespace:
@@ -96,7 +196,10 @@ def test_defaults_are_the_pinned_configuration() -> None:
     # Fixed means default: the proven lane is what a bare run gets.
     assert arguments.horiz_mixing == "2d_smagorinsky"
     assert arguments.local_timestep is False
-    assert arguments.headroom_mib == door.DEFAULT_HEADROOM_BYTES / MIB
+    # None means "the model's own margin", which is the default now: the
+    # margin is priced from the card, so a flat default would be one card's
+    # number handed to every other card -- the shape of ledger #366.
+    assert arguments.headroom_mib is None
     assert arguments.device_fixed_mib is None
     assert arguments.device_bytes_per_cell is None
     assert arguments.scratch is None
@@ -172,10 +275,29 @@ def test_a_missing_mesh_file_is_refused_before_anything_expensive(
 def test_a_missing_gpuwm_checkout_names_the_pin_it_satisfies(
     tmp_path: Path,
 ) -> None:
+    """The refusal must name the breakage that is LIVE, not the one that closed.
+
+    This gate's own table was the stale side and moved 2026-08-28.  It used to
+    demand the words "source checkout" and "sixteen", which the refusal
+    supplied by saying one of the sixteen pinned paths reaches no wheel.  At
+    engine 2.5.8 that is false -- all sixteen resolve from site-packages,
+    measured against the published wheels -- so a refusal giving that reason
+    names a breakage that no longer exists, which the refusal law forbids.
+    What survives is git provenance, so that is what is demanded here.
+    """
+
     message = _refusal(_namespace(tmp_path, gpuwm_checkout=tmp_path / "nope"))
     assert "--gpuwm-checkout" in message
-    assert "source checkout" in message.lower()
+    assert "git" in message.lower(), (
+        "the requirement is a git working tree; naming only 'a checkout' "
+        "leaves a user free to unpack a tarball and meet exit status 128"
+    )
     assert "sixteen" in message, "the refusal names what the checkout satisfies"
+    assert "named by commit" in message, (
+        "the concrete breakage: an install carries the pinned bytes and no "
+        "commit, so its receipt could provenance nothing"
+    )
+    assert "no wheel" not in message, "the retired reason must not come back"
 
 
 def test_an_existing_output_directory_is_refused(tmp_path: Path) -> None:
@@ -222,10 +344,18 @@ def test_a_history_cadence_that_does_not_divide_the_run_is_refused(
 
 
 def test_the_generated_mesh_row_validates_the_schedule_at_its_own_timestep(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     # v15.150.38857 declares 60 s, not x4's 120 s; a schedule check that used a
     # single module constant would admit a half-step run on this row.
+    #
+    # 60 s holds no timestep anchor, so the door refuses this row outright
+    # (see the dt-admission test below).  The property under test here is the
+    # SCHEDULE arithmetic, so this test registers a 60 s anchor the way a
+    # ruling would -- one row -- and then checks the schedule.  That the whole
+    # difference between "refused" and "runs" is a table row is itself the
+    # point of the registry.
+    _register_timestep_anchor(monkeypatch, 60.0)
     arguments = _namespace(
         tmp_path, mesh="v15.150.38857", hours=0.05, history_every_minutes=1
     )
@@ -279,11 +409,23 @@ def test_half_a_measured_footprint_row_is_refused(tmp_path: Path) -> None:
 # admission: the measured model, decided against memory measured NOW
 # ---------------------------------------------------------------------------
 def test_the_shipped_model_is_the_measured_row() -> None:
-    assert door.FOOTPRINT_MODEL.fixed_bytes == pytest.approx(6296.5 * MIB)
-    assert door.FOOTPRINT_MODEL.bytes_per_cell == 93_474
-    # x1.40962 at this row is the 9,948 MiB measured peak, within rounding.
+    # The merged-tip row of record: the deeper pin against the raw evidence
+    # ledgers lives in test_device_admission.py.  The row is SHAPED as of
+    # 2026-08-27 -- a card core plus tiled physics workspaces plus a per-cell
+    # term -- so what must reproduce the measured peaks is predict_bytes, not
+    # any one coefficient.
+    assert not hasattr(door.FOOTPRINT_MODEL, "fixed_bytes"), (
+        "an affine fixed term must not survive as an attribute: reading one "
+        "off the shaped row is how a caller silently prices a mesh without "
+        "the workspace terms"
+    )
+    # x1.40962 at this row is the 8,874 MiB measured peak, within rounding.
     predicted = door.FOOTPRINT_MODEL.predict_bytes(X1_CELLS) / MIB
-    assert predicted == pytest.approx(9948.0, abs=1.0)
+    assert predicted == pytest.approx(8874.0, abs=1.0)
+    # x4.163842 is the row's other fitted point: the 20,446 MiB peak.
+    assert door.FOOTPRINT_MODEL.predict_bytes(X4_CELLS) / MIB == pytest.approx(
+        20446.0, abs=1.0
+    )
 
 
 def test_a_twelve_gib_card_admits_the_published_global_mesh() -> None:
@@ -315,7 +457,9 @@ def test_a_ten_gib_card_in_use_refuses_and_names_the_shortfall() -> None:
         door.require_admitted(verdict)
     message = str(caught.value)
     assert "x1.40962" in message
-    assert "9,948" in message or "9948" in message
+    # The published row (5,016.5 MiB + 98,748 B/cell) reproduces the
+    # measured 8,874 MiB x1 peak to publication rounding: 8,874.0 MiB.
+    assert "8,874" in message or "8874" in message
     assert "MiB" in message
     # The remedy is not "try again": it is a fitted alternative, by name.
     assert "fits" in message or "fitted" in message
@@ -354,21 +498,27 @@ def test_when_no_registered_mesh_fits_the_refusal_says_so_with_the_number() -> N
     assert verdict.alternatives == ()
     message = _admission_message(verdict)
     assert "no registered mesh" in message
-    assert "fixed term" in message
+    # The refusal must name THIS card's core, not "the fixed term": a card
+    # is refused by its own arithmetic now, and a sentence that quotes a
+    # shared constant is how a 32 GiB card's number ends up explaining a
+    # 10 GiB card's refusal (ledger #366).
+    assert "this card's own core" in message
 
 
 def test_a_supplied_measured_row_replaces_the_shipped_one() -> None:
-    model = door.FootprintModel(
-        fixed_bytes=3000.0 * MIB,
+    model = door.ShapedFootprintModel(
+        core_bytes=3000.0 * MIB,
         bytes_per_cell=93_474,
+        card=door.CardProfile("a 68 SM part", 68),
+        configuration="global",
         provenance="measured on this card",
     )
     verdict = door.admission_verdict(
         mesh="x1.40962",
         cells=X1_CELLS,
-        free_bytes=7374 * MIB,
+        free_bytes=9500 * MIB,
         total_bytes=10240 * MIB,
-        headroom_bytes=door.DEFAULT_HEADROOM_BYTES,
+        headroom_bytes=None,
         registry=_registry(),
         model=model,
     )
@@ -377,7 +527,7 @@ def test_a_supplied_measured_row_replaces_the_shipped_one() -> None:
 
 
 def test_the_headroom_is_part_of_the_decision() -> None:
-    exact = int(door.FOOTPRINT_MODEL.predict_bytes(X1_CELLS))
+    exact = int(round(door.FOOTPRINT_MODEL.predict_bytes(X1_CELLS)))
     tight = door.admission_verdict(
         mesh="x1.40962", cells=X1_CELLS, free_bytes=exact,
         total_bytes=12 * GIB, headroom_bytes=door.DEFAULT_HEADROOM_BYTES,
@@ -669,3 +819,76 @@ def test_a_wheel_install_honors_the_run_from_inside_gesture(
 
     monkeypatch.chdir(repo.parent)  # the repo root above tree/
     assert door.resolve_repo(None) == repo
+
+
+# ---------------------------------------------------------------------------
+# the architecture half of admission
+# ---------------------------------------------------------------------------
+
+
+def test_architecture_at_the_proven_floor_is_admitted(monkeypatch):
+    monkeypatch.setattr(door, "read_device_compute", lambda: (12, 0))
+    verdict = door.admit_architecture()
+    assert verdict["admitted"] is True
+    assert verdict["sm"] == "sm_120"
+    assert "proven contract floor" in verdict["basis"]
+
+
+def test_unanchored_below_floor_architecture_is_refused_by_name(monkeypatch):
+    from hexcore.cuda_backend import arch_admission
+
+    monkeypatch.setattr(arch_admission, "ADMITTED_BELOW_FLOOR", {})
+    monkeypatch.setattr(door, "read_device_compute", lambda: (8, 6))
+    with pytest.raises(door.ForecastDoorRefusal) as caught:
+        door.admit_architecture()
+    message = str(caught.value)
+    assert "sm_86" in message
+    assert "no per-architecture anchor" in message
+
+
+def test_anchored_architecture_is_admitted_with_its_receipt_named(monkeypatch):
+    from hexcore.cuda_backend import arch_admission
+
+    anchor = arch_admission.ArchAnchor(
+        compute=(8, 6),
+        card="RTX 3080 (test double)",
+        admitted_on="2026-08-25",
+        contract_receipt="evidence/sm86-tier-20260825/RECEIPT.md",
+        authority_anchor="evidence/sm86-tier-20260825/authority",
+        basis="test-registered anchor",
+    )
+    monkeypatch.setattr(
+        arch_admission, "ADMITTED_BELOW_FLOOR", {(8, 6): anchor}
+    )
+    monkeypatch.setattr(door, "read_device_compute", lambda: (8, 6))
+    verdict = door.admit_architecture()
+    assert verdict["admitted"] is True
+    assert verdict["sm"] == "sm_86"
+    assert "sm86-tier-20260825" in verdict["basis"]
+
+
+def test_preflight_reports_the_architecture_refusal(monkeypatch, tmp_path):
+    """Rung 4 of the small-card walk, closed: preflight and the run may no
+    longer disagree about the architecture.  An unanchored card's preflight
+    now carries the same named refusal the run would raise."""
+
+    from hexcore.cuda_backend import arch_admission
+
+    monkeypatch.setattr(arch_admission, "ADMITTED_BELOW_FLOOR", {})
+    monkeypatch.setattr(door, "read_device_compute", lambda: (7, 5))
+    monkeypatch.setattr(
+        door, "measure_device_memory", lambda: (11 * GIB, 12 * GIB)
+    )
+    arguments = _namespace(
+        tmp_path, preflight=True, receipt=tmp_path / "receipt.json"
+    )
+    registry = _registry()
+    request = door.resolve_request(arguments, registry=registry)
+    rc = door._run_preflight(request, registry, started=0.0)
+    assert rc == 1
+    receipt = json.loads((tmp_path / "receipt.json").read_text())
+    problems = receipt["preflight_problems"]
+    assert any("sm_75" in problem for problem in problems)
+    assert any(
+        "no per-architecture anchor" in problem for problem in problems
+    )

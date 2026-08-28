@@ -211,7 +211,7 @@ def run_instrumented_step16(
 ) -> None:
     """Exactly execute_composite_step for one step, with read-only dumps."""
 
-    from mpas_port.cuda_physics_v841 import (
+    from hexcore.cuda_physics_v841 import (
         clamp_wsm6_scalars_in_place_v841 as clamp,
         couple_raw_column_physics_v841 as couple,
         recover_post_rk_wsm6_state_v841 as recover,
@@ -435,10 +435,10 @@ def _build_common(cache_root: Path, arwen_checkout: Path, assets_root: Path | No
     runner.verify_arwen_checkout_git(arwen_checkout)
     authority_receipt = runner.verify_authorities(paths)
     host = runner._prepare_host_execution(paths, authority_receipt)
-    from mpas_port.cuda_arwen_physics_v841 import pin_arwen_physics_v841
+    from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
     pin_arwen_physics_v841(arwen_checkout)
-    from mpas_port.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_backend import KernelCache, require_cuda
 
     capability = require_cuda(
         min_compute=(12, 0), required_compute=(12, 0), cache_dir=cache_root

@@ -20,7 +20,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from mpas_port import vertical_spec  # noqa: E402
+from hexcore import vertical_spec  # noqa: E402
 
 netCDF4 = pytest.importorskip("netCDF4")
 

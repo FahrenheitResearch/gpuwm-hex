@@ -22,14 +22,14 @@ for entry in (ROOT / "src", ROOT / "tools"):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from mpas_port.partition_assets_v841 import build_partition_layouts  # noqa: E402
-from mpas_port.partition_executor_v841 import (  # noqa: E402
+from hexcore.partition_assets_v841 import build_partition_layouts  # noqa: E402
+from hexcore.partition_executor_v841 import (  # noqa: E402
     ExecutorError,
     HaloExchangeTables,
     HaloExchanger,
     expected_round_sequence,
 )
-from mpas_port.partition_net_v841 import NetPeerError, PeerLink, connect_peer  # noqa: E402
+from hexcore.partition_net_v841 import NetPeerError, PeerLink, connect_peer  # noqa: E402
 
 N_CELLS = 12
 NLEV = 3
@@ -310,7 +310,7 @@ def test_owned_union_reconstruction_is_bytewise_exact(cycle_layouts):
     """The invariance-gate law: scattering each rank's owned region rebuilds
     the global array byte-for-byte (exact-cover), for cells and edges."""
 
-    from mpas_port.partition_state_v841 import (
+    from hexcore.partition_state_v841 import (
         scatter_owned_cells,
         scatter_owned_edges,
     )
@@ -332,7 +332,7 @@ def test_owned_union_reconstruction_is_bytewise_exact(cycle_layouts):
 
 
 def test_axis_classification_and_axis0_reconstruction(cycle_layouts):
-    from mpas_port.partition_executor_v841 import (
+    from hexcore.partition_executor_v841 import (
         classify_partition_axis,
         owned_block,
         scatter_owned_axis,

@@ -31,7 +31,7 @@ from typing import Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_ROOT = ROOT / "src" / "mpas_port"
+SOURCE_ROOT = ROOT / "src" / "hexcore"
 VENDOR_ROOT = ROOT / "vendor" / "MPAS_source_v8.2.3_group" / "MPAS-Model-8.2.3"
 FREEZE_PATH = ROOT / "SOURCE_FREEZE.json"
 ARCHIVE_PATH = ROOT / "vendor" / "MPAS_source_v8.2.3_group" / "MPAS-Model-v8.2.3.tar.gz"

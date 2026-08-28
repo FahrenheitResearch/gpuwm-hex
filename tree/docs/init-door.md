@@ -16,7 +16,7 @@ the engine through its existing capsule ABI.
 ```sh
 export RW_MPAS_INIT=/path/to/rw_mpas_init        # or pass --engine
 
-python -m mpas_port.cli init \
+python -m hexcore.cli init \
   --met    WORK/MET:2025-03-14_12 \              # WPS intermediate file, or a dir holding exactly one
   --static assets/MESH.static.nc \
   --grid   assets/MESH.grid.nc \                 # REQUIRED in native-free mode
@@ -47,7 +47,7 @@ A native init-class file is opened only when BOTH `--capsule` and
 `--reference` are passed; mixing them with `--vertical-spec` refuses by name.
 
 ```sh
-python -m mpas_port.cli init \
+python -m hexcore.cli init \
   --met    WORK/MET:2025-03-14_12 \
   --static assets/MESH.static.nc \
   --grid   assets/MESH.grid.nc \                 # optional here; cross-checked against --static

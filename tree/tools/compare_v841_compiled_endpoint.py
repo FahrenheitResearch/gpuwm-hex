@@ -31,7 +31,7 @@ def _bootstrap_sha256(path: Path) -> str:
 
 
 def _bootstrap_source_capsule() -> dict[str, str]:
-    source_root = (ROOT / "src" / "mpas_port").resolve(strict=True)
+    source_root = (ROOT / "src" / "hexcore").resolve(strict=True)
     result: dict[str, str] = {}
     for path in sorted(source_root.rglob("*.py")):
         if path.is_symlink() or not path.is_file():
@@ -43,14 +43,14 @@ def _bootstrap_source_capsule() -> dict[str, str]:
 
 
 # This snapshot is deliberately taken before importing NumPy, NetCDF, or any
-# mpas_port production module.  The in-gate snapshots must match it exactly.
+# hexcore production module.  The in-gate snapshots must match it exactly.
 BOOTSTRAP_SOURCE_CAPSULE_SHA256 = _bootstrap_source_capsule()
 BOOTSTRAP_COMPARATOR_SHA256 = _bootstrap_sha256(Path(__file__).resolve())
 BOOTSTRAP_PREEXISTING_MPAS_MODULES = tuple(
     sorted(
         name
         for name in sys.modules
-        if name == "mpas_port" or name.startswith("mpas_port.")
+        if name == "hexcore" or name.startswith("hexcore.")
     )
 )
 
@@ -63,8 +63,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from mpas_port.config_v841 import V841DryDycoreConfig  # noqa: E402
-from mpas_port.driver import (  # noqa: E402
+from hexcore.config_v841 import V841DryDycoreConfig  # noqa: E402
+from hexcore.driver import (  # noqa: E402
     DryDycoreDriver,
     SPLIT_FLUX_REDUCTION,
     V841_IMPLEMENTATION_EVIDENCE,
@@ -72,15 +72,15 @@ from mpas_port.driver import (  # noqa: E402
     load_mpas_initial_state,
     load_mpas_vertical_grid,
 )
-from mpas_port.dynamics_v841 import (  # noqa: E402
+from hexcore.dynamics_v841 import (  # noqa: E402
     load_v841_reference_wind_profiles,
 )
-from mpas_port.errors import EvidenceError  # noqa: E402
-from mpas_port.integration import (  # noqa: E402
+from hexcore.errors import EvidenceError  # noqa: E402
+from hexcore.integration import (  # noqa: E402
     accumulate_split_flux,
     finish_split_flux,
 )
-from mpas_port.mesh import Mesh  # noqa: E402
+from hexcore.mesh import Mesh  # noqa: E402
 
 
 DEFAULT_FIXTURE = (
@@ -331,7 +331,7 @@ def hash_regular_tree(root: Path, *, suffix: str | None = None) -> dict[str, str
 
 
 def capture_integrity(fixture: Path) -> dict[str, Any]:
-    source_root = ROOT / "src" / "mpas_port"
+    source_root = ROOT / "src" / "hexcore"
     test_hashes = {
         relative: sha256_file(ROOT / relative) for relative in MUTANT_TEST_FILES
     }
@@ -360,7 +360,7 @@ def assert_integrity_unchanged(
 def assert_preimport_bootstrap(integrity: dict[str, Any]) -> None:
     if BOOTSTRAP_PREEXISTING_MPAS_MODULES:
         raise EvidenceError(
-            "compiled endpoint gate must start in a fresh process before mpas_port imports"
+            "compiled endpoint gate must start in a fresh process before hexcore imports"
         )
     if integrity["source_capsule_sha256"] != BOOTSTRAP_SOURCE_CAPSULE_SHA256:
         raise EvidenceError(

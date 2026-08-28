@@ -54,11 +54,21 @@ PYTHONPATH=src python -m pytest -q -m bigcard        # the capacity preflight
 # then the harnesses named in gpu_gates.txt
 ```
 
-The x4.163842 full-physics tier holds **about 26.4 GiB resident**, so it needs
-a device with 32 GiB. On a smaller card it does not refuse a check — it dies
-inside a CuPy allocation part-way through a run, after burning the time it
-took to get there. `tests/test_device_capacity.py` is the cheap version of
-that discovery and runs first.
+The x4.163842 full-physics tier peaks at **20,446 MiB** on a 170 SM card and
+the gate asks for **22,202.8 MiB free** — that peak plus the card's own margin
+— so in practice it still needs a 32 GiB device: a 24 GiB part running
+anything else rarely offers 21.7 GiB. The gate retypes neither figure:
+`tests/conftest.py` reads `device_admission.native_device_floor_bytes()` and
+both the `bigcard` marker text and the skip message print what it returns, so
+this requirement cannot drift from the one the run itself applies. Ask
+`device_admission.model_for_card(card).required_bytes(163_842)` for any other
+card — the number is a property of the card, not of the mesh alone. (The
+"about 26.4 GiB resident" this tier used to be described by is superseded; it
+predates the Grell-Freitas frame cut and the radiation-chunk narrowing.) On a
+smaller card it does not refuse a check — it dies inside a CuPy allocation
+part-way through a run, after burning the time it took to get there.
+`tests/test_device_capacity.py` is the cheap version of that discovery and
+runs first.
 
 **This tier is not in GitHub Actions and will not be.** GitHub-hosted runners
 have no CUDA device, and a tier that is silently skipped in CI is worse than a

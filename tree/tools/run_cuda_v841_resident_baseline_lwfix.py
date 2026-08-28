@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import run_cuda_v841_full_physics_x4 as R
     import v841_partstream_common as C
-    from mpas_port.cuda_backend import KernelCache
+    from hexcore.cuda_backend import KernelCache
 
     root = args.evidence_root
     root.mkdir(parents=True, exist_ok=True)

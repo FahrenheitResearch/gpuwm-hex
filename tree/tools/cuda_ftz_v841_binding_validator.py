@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if str(SOURCE_ROOT) not in sys.path:
         sys.path.insert(0, str(SOURCE_ROOT))
-    from mpas_port.cuda_ftz import validate_mpas_ftz_binding_v841
+    from hexcore.cuda_ftz import validate_mpas_ftz_binding_v841
 
     binding = _load_binding(binding_path)
     binding_sha = _canonical_sha256(binding)

@@ -26,7 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from mpas_port.driver import (
+from hexcore.driver import (
     DryDycoreConfig,
     DryDycoreDriver,
     DryReferenceState,
@@ -34,7 +34,7 @@ from mpas_port.driver import (
     StabilityBounds,
     TerrainMetrics,
 )
-from mpas_port.initialization import (
+from hexcore.initialization import (
     DRY_AIR_CP,
     DRY_AIR_GAS_CONSTANT,
     GRAVITY,
@@ -44,16 +44,16 @@ from mpas_port.initialization import (
     initialize_from_structured,
     load_structured_atmosphere,
 )
-from mpas_port.mesh import Mesh
-from mpas_port.output import HistoryField, HistoryStreamOptions, write_history
-from mpas_port.regrid import build_regrid_weights, write_regridded_netcdf
-from mpas_port.state import PrognosticState
-from mpas_port.terrain import build_terrain_coupling, recover_velocities
-from mpas_port.vector import (
+from hexcore.mesh import Mesh
+from hexcore.output import HistoryField, HistoryStreamOptions, write_history
+from hexcore.regrid import build_regrid_weights, write_regridded_netcdf
+from hexcore.state import PrognosticState
+from hexcore.terrain import build_terrain_coupling, recover_velocities
+from hexcore.vector import (
     initialize_reconstruction_coefficients,
     reconstruct_1d,
 )
-from mpas_port.vertical import VerticalGrid, build_vertical_grid
+from hexcore.vertical import VerticalGrid, build_vertical_grid
 
 
 ROOT = Path(__file__).resolve().parents[1]

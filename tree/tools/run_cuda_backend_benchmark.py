@@ -15,19 +15,19 @@ from typing import Any, Callable
 import cupy as cp
 import numpy as np
 
-from mpas_port.cuda_backend import (
+from hexcore.cuda_backend import (
     DeviceAtmosphere,
     KernelCache,
     RECOVERY_CUDA_SOURCE,
     recover_state,
     require_cuda,
 )
-from mpas_port.driver import DryReferenceState, DrySavedDiagnostics, TerrainMetrics
-from mpas_port.mesh import Mesh
-from mpas_port.nomix_oracle import FrozenNomixOracle
-from mpas_port.state import PrognosticState
-from mpas_port.terrain import build_terrain_coupling, recover_velocities
-from mpas_port.vertical import VerticalGrid
+from hexcore.driver import DryReferenceState, DrySavedDiagnostics, TerrainMetrics
+from hexcore.mesh import Mesh
+from hexcore.nomix_oracle import FrozenNomixOracle
+from hexcore.state import PrognosticState
+from hexcore.terrain import build_terrain_coupling, recover_velocities
+from hexcore.vertical import VerticalGrid
 
 
 ROOT = Path(__file__).resolve().parents[1]

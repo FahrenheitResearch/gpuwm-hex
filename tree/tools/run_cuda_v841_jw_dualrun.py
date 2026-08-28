@@ -25,9 +25,9 @@ SOURCE_ROOT = ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from mpas_port.config_v841 import V841DryDycoreConfig  # noqa: E402
-from mpas_port.cuda_backend import require_cuda  # noqa: E402
-from mpas_port.cuda_dualrun import (  # noqa: E402
+from hexcore.config_v841 import V841DryDycoreConfig  # noqa: E402
+from hexcore.cuda_backend import require_cuda  # noqa: E402
+from hexcore.cuda_dualrun import (  # noqa: E402
     PreparedCudaInputs,
     compare_cuda_capsule_files,
     derive_step_count,
@@ -38,14 +38,14 @@ from mpas_port.cuda_dualrun import (  # noqa: E402
     sha256_file,
     write_json_atomic,
 )
-from mpas_port.driver import (  # noqa: E402
+from hexcore.driver import (  # noqa: E402
     load_mpas_initial_state,
     load_mpas_vertical_grid,
 )
-from mpas_port.dynamics_v841 import (  # noqa: E402
+from hexcore.dynamics_v841 import (  # noqa: E402
     load_v841_reference_wind_profiles,
 )
-from mpas_port.mesh import Mesh  # noqa: E402
+from hexcore.mesh import Mesh  # noqa: E402
 
 
 DEFAULT_FIXTURE = ROOT / "oracle" / "jw-x1.2562-v8.4.1-split3-endpoint-nonclaim"

@@ -40,20 +40,63 @@ Grell-Freitas local-memory frame cut superseded it on 2026-08-24, and both
 terms moved in OPPOSITE directions: the fixed term FELL by 3501.3 MiB and the
 slope ROSE by 6844 B/cell. The two errors partly cancel, so a bare run did not
 fail loudly -- it produced a plausible fit verdict that was wrong, and exited
-0. Naming the model is what makes the answer readable.
+0. Naming the model is what makes the answer readable. (And the same drift
+then bit this very text: until 2026-08-25 the "of record" arm below still
+named the 08-24 row after the converged row superseded it -- stale-guard
+audit #347, finding 7. A test now pins the of-record arm to
+device_admission.FLOOR_DERIVATION so the two cannot disagree again.)
 
-THE TWO MODELS. Pick by the question you are asking:
+THERE IS NO AFFINE ROW OF RECORD ANY MORE, AND THIS TOOL CANNOT ASK THE
+CURRENT QUESTION. As of 2026-08-27 the admission surface is not
+`fixed + slope * cells`: it is a card core, plus physics workspaces sized to
+`min(cells, tile(card))` -- which stop growing once the mesh is bigger than
+the card -- plus a per-cell term. Every arm below is HISTORICAL. For any NEW
+question about what fits a card today, ask the surface instead:
+
+    from hexcore.device_admission import KNOWN_CARDS, model_for_card
+    model_for_card(KNOWN_CARDS["10gib-68sm"]).required_bytes(40_962)
+
+Passing an affine pair to this tool now answers a question about a retired
+row, and the answer is only meaningful against the arm it was computed
+against. evidence/memory-shape-20260827/ is why.
+
+THE HISTORICAL MODELS. Pick by the arm you are reproducing:
+
+  retired     --prior-fixed-mib 5016.5  --prior-bytes-per-cell 98748
+  2026-08-27
+              measured 2026-08-26, merged tip (hex 2009db7 + engine
+              26daaab7e), 170 SM card, both published meshes in one #264
+              session; evidence/memory-row-refit-20260826/node2/.
+              RETIRED FOR SHAPE, not for provenance: it did not cover six of
+              seventeen recorded runs and was 1,104 MiB short on a
+              limited-area cull.  Computable at
+              device_admission.retired_affine_row_floor_bytes.
+
+  superseded  --prior-fixed-mib 4339.1  --prior-bytes-per-cell 103696
+  (historical)
+              measured 2026-08-25, converged seam pin (hex 7fe514b +
+              engine 26daaab7e), 170 SM card
+              evidence/pin-move-335-20260825/node2/
+              PASS THESE only to reproduce an 08-25-era projection against
+              the arm it was actually computed against.  This one is the
+              cautionary case: it was a good measurement of a tree that had
+              already moved on, and the tip moved BOTH terms in opposite
+              directions, so the errors partly cancel between about 100k and
+              200k cells and a bare comparison looks plausible.
+
+  superseded  --prior-fixed-mib 6296.5  --prior-bytes-per-cell 93474
+  (historical)
+              measured 2026-08-24, Arwen seam pin 0d04db712, POST frame cut
+              evidence/gf-pin-move-measured-20260824/
+              PASS THESE only to reproduce an 08-24-era projection against
+              the arm it was actually computed against.
 
   prior arm   --prior-fixed-mib 9797.8  --prior-bytes-per-cell 86630
+  (historical)
               measured 2026-08-20, Arwen seam pin 629ddb6f0, PRE frame cut
               docs/device-memory-ledger.md (superseded as a current account)
               PASS THESE to reproduce the #308 copy-elision accounting as it
               was landed, against the arm it was actually computed against.
-
-  of record   --prior-fixed-mib 6296.5  --prior-bytes-per-cell 93474
-              measured 2026-08-24, Arwen seam pin 0d04db712, POST frame cut
-              evidence/gf-pin-move-measured-20260824/
-              PASS THESE for any NEW question about what fits a card today.
 
 Whichever pair you pass is written into the report's prior_gap block, so the
 artefact records the model it was projected against instead of leaving it to

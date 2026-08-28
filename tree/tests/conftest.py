@@ -5,10 +5,11 @@ a way that told the reader nothing:
 
 * **CUDA tests** compiled and ran kernels on whatever card was present, even
   on a box whose owner had asked that no GPU work happen there.
-* **The x4.163842 full-physics tier** needs about 26.4 GiB of free device
-  memory.  On a smaller card it does not print "this card is too small"; it
-  dies inside a CuPy allocation with an out-of-memory traceback several
-  frames below anything a reader recognises.
+* **The x4.163842 full-physics tier** needs the re-derived free-memory
+  floor (about 20.5 GiB: the measured x4 peak plus headroom).  On a
+  smaller card it does not print "this card is too small"; it dies inside a
+  CuPy allocation with an out-of-memory traceback several frames below
+  anything a reader recognises.
 * **The byte-pinned authority tier** (mesh, static, init, native history)
   needs about 6.9 GiB of files that ship with no fetch path and live on
   the reference node.  Without them four tests raise ``FileNotFoundError`` naming
@@ -38,8 +39,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER_PATH = ROOT / "tools" / "run_cuda_v841_full_physics_x4.py"
 
-#: Device memory the x4.163842 full-physics tier holds resident, measured.
-X4_FULL_PHYSICS_BYTES = int(26.4 * 1024**3)
+import sys
+
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from hexcore.device_admission import native_device_floor_bytes
+
+#: Free device memory the x4.163842 full-physics tier requires: the same
+#: measured floor the driver admits on (the merged-tip x4 peak plus the
+#: shared headroom), read from the one admission
+#: surface so this gate cannot drift from the gate the run itself applies.
+X4_FULL_PHYSICS_BYTES = native_device_floor_bytes()
 
 #: Honoured under both spellings.  A box configured for the engine sets
 #: GPUWM_NO_LOCAL_GPU; the port must not quietly ignore that and light up the
@@ -62,8 +73,9 @@ def pytest_configure(config: pytest.Config) -> None:
     for line in (
         "gpu: needs a CUDA device and cupy; auto-applied to any test whose "
         "module or function imports cupy",
-        "bigcard: needs about 26.4 GiB of free device memory (the x4.163842 "
-        "full-physics footprint)",
+        "bigcard: needs the x4.163842 full-physics free-memory floor "
+        f"({X4_FULL_PHYSICS_BYTES / 1024**3:.1f} GiB, the re-derived "
+        "measured requirement)",
         "assets: needs the byte-pinned mesh/static/init/native-authority "
         "files, which ship with no fetch path",
         "slow: minutes rather than seconds",
@@ -117,6 +129,83 @@ def _cupy_scope(source: str) -> tuple[bool, frozenset[str]]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _touches(node):
             functions.add(node.name)
     return whole_module, frozenset(functions)
+
+
+# ---------------------------------------------------------------------------
+# tier 4: the measurement receipts under evidence/
+#
+# A shipped number in this tree is checked against the receipt that produced
+# it -- the ledger a footprint row was fitted from, the contract run an
+# admission anchor was earned by.  Those receipts live under `evidence/`, and
+# `evidence/` is deliberately HELD OUT of every published surface: it carries
+# home-directory paths and node labels.  The assembled public tree drops it,
+# and the sdist packs exactly one member of it.
+#
+# THE BREAKAGE THIS GATE PREVENTS, measured 2026-08-27 on two independent
+# surfaces: 30 of these tests failed on an assembled public tree
+# (evidence/assembly-rehearsal-20260827/) and about 28 in a fresh-venv run of
+# the sdist a user unpacks (evidence/xmachine-20260827/).  `ci.yml` runs on
+# push, so the first public act would have gone red on the release commit --
+# every one of them raising FileNotFoundError on a path inside the checkout
+# that never existed on the reader's machine, which reads as a broken
+# distribution rather than a record that does not travel.
+#
+# THE DISCRIMINATOR IS THE DISTRIBUTION, NOT THE FILE, and that is the whole
+# design.  "This tree does not carry its receipts" is a skip.  "This tree
+# carries its receipts and the one this row names is not among them" is a
+# FAILURE, and it is exactly the defect the anchor gates were written to
+# catch: a row citing a measurement nobody can check.  A per-file existence
+# test would collapse the two into one answer and retire a real gate while
+# looking like it fixed a packaging problem.
+# ---------------------------------------------------------------------------
+RECEIPTS = ROOT / "evidence"
+
+#: The one member of `evidence/` that travels.  MANIFEST.in packs it by name
+#: because README.md and docs/source-matrix.md link it: it is what tells a
+#: reader that an `evidence/...` reference names the IDENTITY of a
+#: measurement rather than a file they are missing.  Its presence therefore
+#: says nothing about whether the receipts themselves are here, which is why
+#: it is excluded from the question below rather than answering it.
+RECEIPT_POINTER = "EVIDENCE.md"
+
+
+def receipts_carried() -> bool:
+    """Does THIS tree carry the measurement receipts at all?"""
+
+    if not RECEIPTS.is_dir():
+        return False
+    return any(entry.name != RECEIPT_POINTER for entry in RECEIPTS.iterdir())
+
+
+RECEIPTS_ABSENT_REASON = (
+    "this tree does not carry the measurement receipts under evidence/.  "
+    "They are held out of every published surface on purpose -- the receipts "
+    "carry home-directory paths and node labels -- so the assembled public "
+    "tree drops the directory and the sdist packs only "
+    f"evidence/{RECEIPT_POINTER}, the pointer that explains the convention.  "
+    "This test reads a receipt to check a shipped number against the "
+    "measurement that produced it, and with the receipt absent there is "
+    "nothing to check.  A HELD-OUT RECORD, NOT A BROKEN CHECKOUT: in a tree "
+    "that does carry its receipts this same test fails rather than skips "
+    "when the one it names is missing"
+)
+
+
+@pytest.fixture
+def receipts() -> Path:
+    """The receipt tree, or a skip that says why it is not here.
+
+    Requesting this fixture is how a test declares "I read a receipt".  It is
+    a fixture rather than a marker so that the gate travels with the test
+    function that needs it and cannot be applied to a whole module by
+    accident -- three of the six files involved have members that must keep
+    running on a published tree, including the negative controls that assert
+    the anchor gates refuse a receipt path which does not exist.
+    """
+
+    if not receipts_carried():
+        pytest.skip(RECEIPTS_ABSENT_REASON)
+    return RECEIPTS
 
 
 # ---------------------------------------------------------------------------
@@ -227,16 +316,20 @@ def _bigcard_reason() -> str | None:
     if free is None:
         return (
             "no CUDA device with a working cupy is reachable, and the "
-            "x4.163842 full-physics tier is 26.4 GiB of resident device "
-            "state -- there is nothing here to hold it"
+            "x4.163842 full-physics tier needs "
+            f"{X4_FULL_PHYSICS_BYTES / 1024**3:.1f} GiB of free device "
+            "memory (the re-derived measured floor) -- there is nothing "
+            "here to hold it"
         )
     if free < X4_FULL_PHYSICS_BYTES:
         return (
             "this card has "
             f"{free / 1024**3:.1f} GiB free and the x4.163842 full-physics "
-            "tier holds about 26.4 GiB resident.  It would not fail a check, "
-            "it would die inside a CuPy allocation part-way through a run.  "
-            "Run this tier on a >=32 GiB device"
+            "tier needs "
+            f"{X4_FULL_PHYSICS_BYTES / 1024**3:.1f} GiB (the measured "
+            "floor: the x4 peak plus shared headroom).  It "
+            "would not fail a check, it would die inside a CuPy allocation "
+            "part-way through a run.  In practice that is a 32 GiB device"
         )
     return None
 

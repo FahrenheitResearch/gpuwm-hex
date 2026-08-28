@@ -44,10 +44,10 @@ def main() -> int:
         paths, authority, start_time_text=None, horiz_mixing=args.horiz_mixing
     )
 
-    from mpas_port.cuda_arwen_physics_v841 import pin_arwen_physics_v841
+    from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
     pin_arwen_physics_v841(args.arwen_checkout)
-    from mpas_port.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_backend import KernelCache, require_cuda
 
     capability = require_cuda(
         min_compute=(12, 0), required_compute=(12, 0), cache_dir=args.cache_root

@@ -111,8 +111,8 @@ def _assert_isolated_startup() -> None:
         name
         for name in sys.modules
         if name in {"site", "sitecustomize", "usercustomize"}
-        or name == "mpas_port"
-        or name.startswith("mpas_port.")
+        or name == "hexcore"
+        or name.startswith("hexcore.")
         or name == "gpuwm"
         or name.startswith("gpuwm.")
         or name == "cupy"

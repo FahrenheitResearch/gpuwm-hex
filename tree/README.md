@@ -14,10 +14,14 @@ drift.
 is an independent port and is not affiliated with or endorsed by them. The name
 is used here only to say which model was ported.)*
 
-**Version 0.1.0.** The cut shape for this line is: global variable-resolution
-on one consumer GPU, deterministic, ArWen physics. Multi-GPU is built and
-proven but not part of 0.1. The regional (limited-area) lane does not exist —
-see *Limitations*.
+**Version 0.2.0.** 0.1 was global variable-resolution on one consumer GPU,
+deterministic, ArWen physics. 0.2 adds the **limited-area lane** — a
+full-physics forecast on a culled regional mesh behind lateral boundary
+conditions, which runs on a 10 GiB card — together with the machinery that
+decides where to put a fine grid and keeps it there as weather moves:
+variable-resolution mesh generation, storm-following placement, and a
+coarse-then-corridor cycling loop. Multi-GPU is still not shipped; see
+*Limitations*.
 
 **New here? Start with the [User Manual](docs/manual/index.md)** — a
 plain-language introduction, a quickstart in which every command was run
@@ -36,7 +40,7 @@ Measured, on an RTX 5090:
 - 2-D Smagorinsky horizontal mixing, ported from the native Registry default and
   **on by default**, with a full A/B pass.
 - Two-node multi-GPU, bitwise partition-invariant against the single-GPU
-  reference (0.2 material, not shipped in 0.1).
+  reference. Built and proven, **not shipped** — there is no door on it.
 - 702 product PNGs rendered through the Rust renderer.
 - The init door reproduces 92/92 carried fields bit-identically against a native
   golden init, and an init it produced started the port in a 5-step smoke.
@@ -50,9 +54,60 @@ Measured, on an RTX 5090:
   fingerprint byte-identical across 30 full-physics composite steps, against a
   1-ULP flip instrument the comparator flagged
   (`evidence/gf-pin-move-measured-20260824/`).
-- Device footprint, measured at two meshes and both pins in one session:
-  **6,296.5 MiB fixed + 93,474 B/cell** at the current pin on this card; the
-  published 40,962-cell global mesh peaks at **9,948 MiB**.
+- Device footprint, measured at two meshes in one session at the merged tip
+  (`evidence/memory-row-refit-20260826/node2/`): the published 40,962-cell
+  global mesh peaks at **8,874 MiB** and the native x4.163842 at
+  **20,446 MiB** on the 170 SM card. The model those points feed is **not a
+  line in cell count** — it is a per-card core, plus the Grell-Freitas and
+  YSU column workspaces charged at `min(cells, tile)`, plus a per-cell term,
+  and it reproduces both peaks exactly (`evidence/memory-shape-20260827/`).
+  Every admission gate — the forecast door, `--preflight`, and the driver's
+  own floor — answers from that one surface (`hexcore.device_admission`),
+  which reads the card's multiprocessor count at the moment of the decision.
+
+Measured on an RTX 3080, a 10 GiB Ampere card:
+
+- **A limited-area forecast runs the full physics stack** — WSM6,
+  Grell-Freitas, YSU, YSU-GWDO, revised-MO, NoahMP, cloud fraction and RRTMG —
+  behind lateral boundary conditions built from its own coarse parent. Six
+  hours, 1,080/1,080 steps, 13 history frames on an 11,020-cell culled mesh,
+  peak **6,224 MiB**, median 0.271 s/step, 343 rendered products. Against a
+  global full-physics run over the same ground at t+6 h: theta 1.117 K RMS
+  (r = 0.999973), precipitation r = 0.95, reflectivity r = 0.82, vertical
+  velocity r = 0.621 (`evidence/regional-physics-20260826/`). The cull is
+  11.0x fewer cells and 5.1x less memory than the global refined mesh that
+  covers the same storm.
+- **Four independently placed fine grids, over four different kinds of
+  weather**, each built and run full physics in sequence on one card:
+  1,080/1,080 steps every time (`evidence/four-swaths-20260827/`).
+- **The cascade follows weather across cycles.** `gpuwm-hex cycle run`
+  re-detected six hours on and continued all four slots — three reusing their
+  mesh, one regenerating — over two cycles of one real case, 1,058 s total,
+  peak 7,744 MiB. Starting a corridor from transplanted parent state instead
+  of from the beginning saved **273.8 s, 43 %**, against a real baseline arm
+  (`evidence/cycling-loop-20260827/`).
+- **The domain-size question is measured, not assumed.** Five concentric culls
+  of one parent against a no-boundary control: every field improves
+  monotonically with cut width and the knee is at **1.35x** the fine core
+  (`w` r 0.624 to 0.744, 2 m temperature r 0.578 to 0.852) for +27 % cells and
+  +25 s of wall. That is the shipped default (`evidence/nest-ratio-20260827/`).
+
+Also proven:
+
+- **Earned timestep anchors at five timesteps** — 120, 100, 75, 20 and 5 s —
+  seven rows in all, because an anchor certifies a *configuration* (the
+  timestep together with the cumulus selection) rather than a timestep alone.
+  Each was earned with two byte-identical forecasts and a same-card control.
+  20 s and 5 s are the textbook values for 3 km and 750 m, so a fine mesh has
+  a timestep it can defend (`hexcore.dt_admission`). **Only 120 s has a
+  native reference, and only it ever can** — the rest are self-consistency
+  anchors, and four of the seven rows record a divergence rather than a clean
+  agreement. The lane was pinned to 120 s before this, which capped
+  resolution at about 19 km.
+- **Variable-resolution mesh generation**, spec-driven and deterministic, with
+  a bind-time refusal for any mesh carrying a cell a Goldberg polyhedron
+  cannot have. One graded mesh regenerates **bit-identical** to its registered
+  bytes and completes a 6 h full-physics forecast.
 
 ## What is *not* claimed
 
@@ -76,7 +131,7 @@ That changes the referee; it does not clear a finding. A bias that is wrong
 against *observations* is still wrong. That comparison has now been made:
 2026-08-25, four cases, Stage-IV precipitation, MRMS reflectivity and ASOS
 surface, in receipt `evidence/obs-referee-283/` (see
-[`evidence/EVIDENCE.md`](evidence/EVIDENCE.md)). The
+receipt `evidence/EVIDENCE.md`). The
 verdict for each divergence is in
 [`docs/declared-divergences.md`](docs/declared-divergences.md).
 
@@ -87,22 +142,28 @@ verdict for each divergence is in
 | | |
 | --- | --- |
 | Python | 3.11 or newer |
-| GPU | A CUDA device. Memory is set by mesh size and by the card. Measured 2026-08-24 on an RTX 5090 at the current engine pin: `footprint = 6,296.5 MiB + 93,474 B/cell`. The published 40,962-cell global mesh (x1.40962, about 120 km) peaked at **9,948 MiB — inside a 12 GiB card's budget**; the 163,842-cell mesh (x4.163842, about 24 km) peaked at **20,902 MiB**, and its run path still admits at a 24 GiB free-memory floor, so it remains a 32 GiB-card configuration until that floor is re-derived. The fixed term is a property of the card, not the mesh; both smaller parts previously measured carried smaller fixed terms. Receipts: `evidence/gf-pin-move-measured-20260824/`. |
+| GPU | A CUDA device. Memory is set by mesh size *and* by the card, and not by a line through the two: the footprint is a per-card core, plus the Grell-Freitas and YSU column workspaces charged at `min(cells, tile)`, plus a per-cell term, all in `hexcore.device_admission`. Measured 2026-08-26 on an RTX 5090 at the merged tip: the published 40,962-cell global mesh (x1.40962, about 120 km) peaked at **8,874 MiB — inside a 12 GiB card's budget**; the 163,842-cell mesh (x4.163842, about 24 km) peaked at **20,446 MiB**, and every free-memory gate admits at the measured floor — the prediction plus that card's own margin, **about 21.7 GiB free at x4** — so x4 remains in practice a 32 GiB-card configuration. The core is a property of the card, not the mesh, and the door reads the card's multiprocessor count at the decision rather than assuming a 5090: the 16 GiB and 10 GiB parts each carry their own measured row, and a card nobody has measured gets a derived row that is labelled derived. A card with its own #264 ledger can still supply it with `--device-fixed-mib` / `--device-bytes-per-cell`. Receipts: `evidence/memory-row-refit-20260826/node2/`, `evidence/l6-capacity-20260825/` and `evidence/memory-shape-20260827/`. |
 | CUDA | CuPy matching your driver's CUDA major — there is no way for pip to detect it, so you choose (below). |
-| Engine | The `gpuwm` distribution, 2.5.5 or newer: the physics seam, and the bundle that carries the four MPAS bridge binaries both doors drive. **Plus a `gpuwm` source checkout for the forecast lane** — see *The engine pin*. |
+| Engine | The `gpuwm` distribution, `>=2.5.8,<2.5.9` — a bounded range, and pip resolves it for you: the physics seam, and the bundle that carries the MPAS bridge binaries the doors drive. **Plus a `gpuwm` source checkout at `v2.5.8` for the forecast lane** — see *The engine pin*. |
 | Assets | A mesh grid file, a matching static file, and (for the init door) a vertical-grid declaration — normally a `--vertical-spec` JSON; a native-minted init file as a capsule is the compatibility mode. **gpuwm-hex ships none of these and has no fetch path for them.** See *Assets you must supply*. |
 | Rust binaries | `rw_mpas_init` for the init door; `rw_mpas_convert` and `rw_wrfbatch` for the render door. They are built from the `gpuwm` source tree — see *Building the Rust engines*. |
 
 ### Install
 
 ```sh
-pip install gpuwm-hex                # then one of:
-pip install "gpuwm-hex[gpu-cu12]"    # driver reports CUDA 12.x
-pip install "gpuwm-hex[gpu-cu13]"    # driver reports CUDA 13.x
+pip install gpuwm-hex
+pip install "gpuwm-hex[gpu]"         # the CUDA lane; = "gpuwm-hex[gpu-cu13]"
 ```
 
-Check which you need with `nvidia-smi` — the CUDA version in its header is the
-driver's major. `pip install "gpuwm-hex[gpu]"` is an alias for `gpu-cu12`.
+**CUDA 13 is the only major this port runs on.** Every GPU door goes through
+`require_cuda`, which refuses a CUDA runtime below `13000` by name, so
+`cupy-cuda13x` is the wheel and `[gpu]` installs it. The `[gpu-cu12]` extra
+still resolves for anyone who already types it, and what it installs imports
+cleanly, runs cuBLAS, and is then refused at forecast launch with
+`CudaRefusal: cuda.runtime_version=12090 < required 13000` — `gpuwm-hex
+doctor` reports it as a gap before a card is opened. Check `nvidia-smi`: a
+driver below CUDA 13 cannot open this lane at all, and no pip command
+changes that.
 
 ```sh
 gpuwm-hex version      # what is installed, and where
@@ -120,55 +181,146 @@ required item is missing, so it works as a gate in a script.
 
 ### The import namespace
 
-The distribution is `gpuwm-hex` and every command you type is `gpuwm-hex`. The
-**import namespace is still `mpas_port`** — `import mpas_port`, not
-`import gpuwm_hex`. That is a known inconsistency, stated rather than hidden.
+The distribution is `gpuwm-hex`, every command you type is `gpuwm-hex`, and the
+**import namespace is `hexcore`** — `import hexcore`, not `import gpuwm_hex`.
 
-It is not left alone out of laziness. Eleven of the seventeen modules that the
-full-physics proof harness pins by SHA-256 carry the literal string
-`mpas_port`, and in five of them it is a `module_key=` NVRTC compile-contract
-identity rather than a comment — so editing them changes the kernel-cache
-identity as well as breaking the pin, and the rename costs a re-proof on a
-32 GiB card against the native authority. It is scheduled for a lane that can
-pay that, not sneaked into a packaging change. Scripts that import the package
-directly should expect the name to change in a later release.
+It was `mpas_port` through 0.1.1 and the rename lands in 0.2.0. The old name
+overclaimed the relationship. What this project keeps byte-identical is MPAS-A
+v8.4.1's **dycore and mesh** — a specification, and it is pinned. It
+deliberately does **not** match MPAS-A's physics, which is WRF physics run
+through MPAS's own plumbing; ArWen's column-batch seam runs here instead. So
+`mpas_port` put another project's name in every user's import line for a
+relationship that only ever held over half the model. `hexcore` names the two
+things that ARE pinned — the hexagonal Voronoi mesh and the dycore — and it
+matches the distribution name.
+
+**This is a breaking change for code that imports the package directly.** There
+is no `mpas_port` alias shim, because a shim keeps the overclaiming name alive
+in the import line, which is the thing the rename removes. Rewrite
+`import mpas_port` as `import hexcore`; every module path underneath it is
+unchanged.
 
 *(The `hex` in the name is the hexagonal Voronoi mesh the model runs on.)*
 
 ### The engine pin
 
-gpuwm-hex depends on `gpuwm>=2.5.5`. That floor is a coarse filter, not the
-wall: the port pins the engine's physics seam by the SHA-256 of **sixteen
-individual gpuwm source files**, and the gap between published stamps and the
-pinned bytes recurred at every cut — thirteen of the sixteen differ at
-gpuwm's published 2.5.0 stamp, six at 2.5.1, and three still differ at 2.5.4
-(`docs/mpas-seam.md`, `gpuwm/core/mpas_column_batch.py`,
-`gpuwm/io/restart.py`), because the seam-convergence work this tree pins
-landed after the 2.5.4 cut. A lower floor would let pip resolve an install
-that the port then refuses at launch; 2.5.5 is the first published version
-whose bytes match the manifest.
+gpuwm-hex depends on `gpuwm>=2.5.8,<2.5.9` — a **bounded range**, and the
+bound is the point. The port pins the engine's physics seam by the SHA-256 of
+**sixteen individual gpuwm source files**, and the gap between a published
+stamp and the pinned bytes has recurred at every cut. Re-measured 2026-08-28
+against the real published bytes of every 2.5.x release, plus the `v2.5.5` tag
+that has no release at all — JSON at
+`evidence/repin-258-20260828/engine-verdicts.json`, instrument beside it:
 
-The floor also keeps a **second and independent** refusal where pip can make
-it. The four MPAS bridge binaries — `rw_mpas_init`, `rw_mpas_convert`,
+| gpuwm | on PyPI | seam pin | `--offline` build road |
+| --- | --- | --- | --- |
+| 2.5.0 | yes | 10 of 16 moved | complete |
+| 2.5.1 | yes | 10 of 16 moved | complete |
+| 2.5.2 | yes | 9 of 16 moved | complete |
+| 2.5.3 | yes | 6 of 16 moved | complete |
+| 2.5.4 | yes | 6 of 16 moved | complete |
+| 2.5.5 | **no — a git tag with no release** | 4 of 16 moved | **broken** |
+| 2.5.6 | yes | 4 of 16 moved | complete |
+| 2.5.7 | yes | 3 of 16 moved | complete |
+| **2.5.8** | yes | **matches** | complete |
+
+**2.5.8 is the only published engine whose bytes match the pin**, so it is the
+floor, and with the exclusive ceiling one patch above it, it is the whole
+range.
+
+That is a narrower claim than this page carried before 2026-08-28, and the
+reason is not that an engine regressed. The `moved` column is measured against
+**this port's** seam manifest, so re-pinning that manifest moves every row at
+once, including rows for engines cut long before it: 2.5.6 read `matches`
+under the previous manifest and reads `4 of 16 moved` under this one. A row
+from the old table is not comparable with a row from this one, and neither is
+a row anyone patches by hand.
+
+The consequence is worth stating rather than discovering: **this port has no
+fallback engine.** If 2.5.8 were withdrawn, the answer would be to publish a
+new engine and re-measure, not to widen the range.
+
+Two facts about 2.5.5 that this page used to give as floor reasons are still
+true and are now beside the point, because 2.5.5 fails the re-pinned manifest
+on bytes before either one is reached: it is **a git tag with no PyPI
+release** (so the `gpuwm>=2.5.5` this distribution once declared named a
+version pip could not install), and its published `tools/rustwx/vendor/` is
+missing a file of the vendored `cc` crate, so the source-build road below
+stops there with `failed to open file .../cc/src/target/generated.rs`.
+
+> **Why the ceiling exists, and why it excludes engines that do not exist
+> yet.** Until 2026-08-27 the declaration was `gpuwm>=2.5.5` with no upper
+> bound, so `pip install gpuwm-hex` resolved the *newest* published engine —
+> which is by definition the one nobody has measured. Measured on a real
+> install at that date (`evidence/userwalk-20260827/`): pip took 2.5.7, whose
+> bytes the manifest of the day refused, and the forecast door then refused at
+> launch with two digests and no version number while `gpuwm-hex doctor`
+> reported the estate healthy and exited 0. A green install and a dead run.
+>
+> The ceiling is exclusive and sits at the first engine that is not measured
+> usable, so a future 2.5.9 is excluded exactly as 2.5.7 is today. Admitting a
+> new engine is a deliberate act: re-run
+> `evidence/standalone-20260827/measure_engine_verdicts.py`, splice its JSON
+> into the table in `hexcore.engine_pin` with
+> `evidence/repin-258-20260828/render_engine_pin_table.py`, and the
+> declaration follows it — `tests/test_packaging_declaration.py` fails if the
+> two ever disagree.
+>
+> **A bare `pip install gpuwm-hex` is the whole install.** No engine
+> constraint of your own is needed; if one is already in your environment,
+> `gpuwm-hex doctor` compares the installed engine's bytes against the pin
+> and names both the version it found and the version to install.
+
+The range also keeps a **second and independent** refusal where pip can make
+it. The MPAS bridge binaries — `rw_mpas_init`, `rw_mpas_convert`,
 `rw_mpas_mesh`, `rw_mpas_static` — entered gpuwm's *bundle* at 2.5.3; their
 rows landed the day after the 2.5.2 upload, so published 2.5.2 stages none of
-them through `gpuwm fetch-bridges`. Both front doors drive those binaries, and
-the gpuwm source tree does not publish, so a user who resolved onto a 2.5.2
-engine could open **neither door** and would have no route to build what was
-missing. That is a stranded install rather than a degraded one, and a
-dependency floor is the only place pip can refuse it. gpuwm 2.5.5 publishes
-before this distribution does, which is the one hard ordering constraint the
-release carries.
+them through `gpuwm fetch-bridges`. Both front doors drive those binaries, so
+a user who resolved onto a 2.5.2 engine could open **neither door**. That is a
+stranded install rather than a degraded one, and a dependency floor is the
+only place pip can refuse it. Measured 2026-08-28 on the pinned engine:
+`gpuwm fetch-bridges` from a published 2.5.8 install downloads
+`gpuwm-bridges-v2.5.8-win-x86_64.zip` and stages **26 of 26 artifacts, each
+verified against the packaged pin** — the four above, plus `rw_wrfbatch` and
+the `rw_mpas_lbc` the limited-area lane needs.
+
+*(The gpuwm source tree publishes too: `github.com/FahrenheitResearch/arwen`
+carries tags `v2.5.0` through `v2.5.8` with the full tree, `docs/mpas-seam.md`
+and `gpuwm/core/mpas_column_batch.py` included. The table above was taken by
+cloning all nine of those tags and hashing the pinned files, so the build road
+below is open to anyone, subject to the 2.5.5 vendor gap noted above.)*
 
 **Installing `gpuwm` is necessary but not sufficient for the forecast lane.**
-One of the sixteen pinned files is `docs/mpas-seam.md`, a repository document
-that no wheel places in `site-packages`. The forecast lane therefore needs a
-**gpuwm source checkout** at the pinned commit, passed to `gpuwm-hex forecast`
-as `--gpuwm-checkout` (`--arwen-checkout` on the driver beneath it), in
-addition to the installed distribution. This is stated plainly because the
-alternative — discovering it as a `FileNotFoundError` deep in a launch — is the
-trap; the `forecast` door refuses by name instead, and so does `gpuwm-hex
-doctor`.
+The `forecast` door refuses without `--gpuwm-checkout`: a gpuwm **git
+checkout** at the pinned commit (`--arwen-checkout` on the driver beneath it),
+in addition to the installed distribution. Clone `v2.5.8`. This is stated
+plainly because the alternative — discovering it as a `FileNotFoundError` deep
+in a launch — is the trap; the `forecast` door refuses by name instead, and so
+does `gpuwm-hex doctor`.
+
+**The reason for that requirement changed at 2.5.8, and which one is live
+matters.** The old reason was the seam pin itself: one of the sixteen pinned
+files is `docs/mpas-seam.md`, a repository document no wheel placed in
+`site-packages`, so an install could not satisfy the pin at all. That is over.
+Measured 2026-08-28 in a virtualenv holding only the published wheels,
+`docs/mpas-seam.md` resolves under `site-packages` and this port's own seam
+inspection over that install reports `checked=16, matched=16, moved=(),
+absent=()` — and `gpuwm-hex doctor` prints `16 of 16 pinned files are in this
+install and all 16 match` and exits 0. The door's own byte check accepts an
+install root.
+
+What still needs a checkout is **provenance**, not bytes. The run's proof
+harness reads the checkout's git state and writes HEAD, tree and dirty paths
+into every receipt and every history file, so the executed seam source can be
+named by commit and a reader can see whether anything was uncommitted when it
+ran. An installed distribution carries the bytes and no commit, and
+`site-packages` is not a git working tree — measured the same day, the guard
+refuses one, now by name rather than as a bare `CalledProcessError`. Retiring
+it means giving the receipt an identity that does not spell a commit; that is
+a named follow-up (`docs/release-checklist-0.2.md`) and a reader should not
+assume it has happened. Every number in these two paragraphs, both doors'
+answers and the 2.5.7 negative control are in
+`evidence/checkout-reason-20260828/`.
 
 **The init and render doors do not need any of that.** They import no `gpuwm`
 at all; they drive Rust binaries.
@@ -208,7 +360,7 @@ engine does not invent the vertical grid.
   within 3.9 mm of native `zgrid` with the per-field cost quantified, and the
   minted init runs the dycore —
   receipt `evidence/native-free-proof-20260824/` (see
-  [`evidence/EVIDENCE.md`](evidence/EVIDENCE.md)); boundary in
+  receipt `evidence/EVIDENCE.md`); boundary in
   [`docs/native-free-init-admission.md`](docs/native-free-init-admission.md).
 - **Native-capsule compatibility mode:** pass `--capsule`/`--reference` naming
   a native-minted init-class file; the door reads `zgrid, zz, fzm, fzp, dzu,
@@ -279,8 +431,8 @@ bundle carries `rw_wrfbatch` and **not** `rw_mpas_init` or `rw_mpas_convert`.
 On that engine `gpuwm fetch-bridges` gives you the renderer and nothing that
 opens either MPAS door. That measurement is why the dependency floor cleared
 2.5.3 and never fell back: 2.5.3 is where the four MPAS bridge binaries
-enter the bundle, and the current `gpuwm>=2.5.5` floor keeps that guarantee,
-so pip cannot resolve you onto an engine that strands both doors. A
+enter the bundle, and the current `gpuwm>=2.5.8,<2.5.9` range keeps that
+guarantee, so pip cannot resolve you onto an engine that strands both doors. A
 conforming install therefore never sees the 2.5.2 shortfall; it is recorded
 here because it is the reason the floor first moved.
 
@@ -360,25 +512,56 @@ There is no fallback plotter. If the Rust renderer is absent the door refuses by
 name; it never draws a weather field in Python. Full detail:
 [`docs/render-door.md`](docs/render-door.md).
 
-## Two smaller doors
+## Three smaller doors
 
 `gpuwm-hex mesh-check --grid <grid> --static <static>` validates a mesh pair
 before anything expensive touches it, and refuses a defective pair by name.
 `gpuwm-hex oracle-gate` replays the source-extracted Fortran fixtures against
-a mesh. Both are listed by `gpuwm-hex --help`.
+a mesh. `gpuwm-hex cull` cuts a limited-area grid, static and initial
+condition out of a global case, which is what makes the regional lane cheap:
+grid, static and init in about a second where a native regional init took
+775 s. All three are listed by `gpuwm-hex --help`.
 
 ## The forecast lane
 
-There is no console script for it in 0.1.0, and that is a deliberate omission
-rather than an oversight. The driver exists and works
-(`tools/run_cuda_v841_forecast.py` in the source checkout, an arbitrary-case
-runner), but it is not a door a user can walk through: it needs a `gpuwm`
-source checkout at a pinned commit, its mesh and static inputs are byte-pinned
-authority files with no fetch path, and the proven x4.163842 mesh admits at a
-24 GiB free-device-memory floor (measured peak 20,902 MiB; the registered
-x1.40962 mesh peaked at 9,948 MiB). Putting a console script on that would be
-a front door on a room with no floor. Running a forecast in 0.1.0 means
-working from the source checkout, and the packaging verdict says so.
+`gpuwm-hex forecast` is a door. It binds a registered mesh against its pinned
+bytes, asks the card whether the run fits **before** the run starts, refuses
+by name with numbers when it does not, and prints the render command when it
+passes. `--preflight` gives the same answer without integrating anything.
+
+Two things it still requires, and both are named refusals rather than silent
+failures: a **gpuwm git checkout** at the pinned commit — the proof harness
+records its HEAD, tree and dirty paths into every receipt so the executed
+bytes can be named by commit, and an install has no commit — and a **gpuwm-hex
+source checkout** for the drivers under `tools/`, which verify their own
+executing modules by SHA-256 and therefore cannot live inside the wheel.
+`gpuwm-hex doctor` reports the same two gaps. The gpuwm one is no longer about
+a pinned file the wheel cannot reach: at 2.5.8 all sixteen resolve from an
+install (*The engine pin*).
+
+Its inputs are a mesh, a static file and an init. The registry makes the first
+two table work; the init door makes the third. The card question is answered
+from `hexcore.device_admission` — on the 170 SM part the registered
+40,962-cell mesh peaks at 8,874 MiB and the 163,842-cell x4 at 20,446 MiB,
+which with that card's own margin puts x4 in practice on a 32 GiB card.
+
+### Limited area, behind lateral boundary conditions
+
+`--lbc-dir` runs the same full physics stack on a **culled** regional mesh
+driven from its parent. A cull of a placed fine grid is around eleven times
+fewer cells than the global refined mesh covering the same storm, and it runs
+on a 10 GiB card. The outermost seven rings are boundary data driven from the
+parent every step rather than the model's own answer, and products drawn over
+the whole domain include them.
+
+### Placement and cycling
+
+`gpuwm-hex swath` decides where a fine grid should go — detection on
+sea-level-reduced pressure, a declarative threat grammar, commensurable
+ranking across phenomena that carry different units, and hysteresis so a grid
+does not chase noise. `gpuwm-hex cycle` runs the loop: a coarse parent, the
+corridors placed inside it, and the next cycle's re-detection. See
+[`docs/cycle-door.md`](docs/cycle-door.md).
 
 ### Local time stepping, opt-in
 
@@ -567,7 +750,22 @@ now what that referee said — is
 [`docs/declared-divergences.md`](docs/declared-divergences.md).
 
 Measured over 24 h, two independent weather cases, two mixing regimes,
-163,842-cell mesh, cell-aligned with no interpolation:
+163,842-cell mesh, cell-aligned with no interpolation.
+
+**When, exactly — because these three magnitudes carry no date of their own.**
+They entered this repository already finished on 2026-08-20, and there is no
+receipt directory, no card and no run commit for them anywhere in the tree.
+What can be established is a ceiling: the commit that introduced them pinned
+engine `629ddb6f0`, so they were measured at or before that pin. Three engine
+pin moves have landed since — `0d04db712` (2026-08-24), `26daaab7e`
+(2026-08-25) and `659962929` (2026-08-28). The **last** of the three is
+measured to change nothing: a four-arm byte A/B on one card found the old and
+new pins identical on the atmosphere half of the per-step fingerprint at all
+31 steps and on 0 of 138 history variables
+(`evidence/seam-258-ab-20260828/`) — one mesh, one case, one hour. The two
+earlier moves have no such arm, and none of the three magnitudes has been
+re-measured over 24 h since. Whether any of them moved is **NOT MEASURED**.
+Read them as the numbers from the pre-2026-08-20 engine, not as today's.
 
 1. **Upper-level warm drift.** Above level 45 the port warms relative to native
    at **+0.019 K/h, near-linear, one-signed**, reaching **+0.46 K at 24 h** —
@@ -579,8 +777,29 @@ Measured over 24 h, two independent weather cases, two mixing regimes,
 2. **Convective-to-explicit precipitation repartition.** The port's GF produces
    about **a third less convective rain** (`rainc` -36 % / -34 % in the two
    cases); explicit microphysics makes up roughly half of it (`rainnc`
-   +29 % / +25 %); **net domain-mean precipitation runs about 15 % dry**. This
-   is the whole-model price of the declared GF generation gap above, quantified.
+   +29 % / +25 %); **net domain-mean precipitation runs about 15 % dry against
+   native MPAS-A**. This is the whole-model price of the declared GF
+   generation gap above, quantified.
+
+   **That number belongs to the retired referee, and the live one returned the
+   opposite sign.** "15 % dry" is a global domain mean against native MPAS-A,
+   and physics parity with native was retired as a goal on 2026-08-20. The
+   verification of record is skill against observations; it ran on 2026-08-25
+   against NCEP/EMC Stage-IV hourly QPE over a CONUS window and found the port
+   **wet in all four cases** — paired case-block estimate **+0.0247 mm/h**,
+   95 % interval **[+0.0041, +0.0606]**, 5,000 replicates — with the frequency
+   bias at 1 mm/h above one in three of the four (1.59 / 1.35 / 1.38 / 0.77),
+   so it rains over too much area rather than too little.
+
+   **Read the obs result with its own limits: four cases is not a skill
+   assessment.** Two of the four are the divergence cases themselves. One
+   truncated at 23 h and carries the largest bias, +56.9 %. One is +41.5 % on
+   almost no rain — 0.0156 against 0.0110 mm/h, an absolute difference of
+   +0.0046 mm/h. The two clean, complete cases are +9.8 % and +2.4 %. Neither
+   verdict cancels the other, because they are not the same domain or the same
+   statistic: one is a global mean against a model, the other a CONUS window
+   against gauge-and-radar analysis. What is settled is that being drier than
+   native does not mean being drier than the atmosphere.
 3. **Downstream condensate surplus.** With more rain made explicitly, the port
    carries **+50 % cloud water and +62 % rain water** in the domain mean by
    24 h, with much heavier point extrema (max-cell 24 h precipitation 502 vs
@@ -594,16 +813,53 @@ statistics that match (peak updraft 11.49 vs 11.26 m/s; domain means within
 port and proves nothing wrong. The three above are one-signed and
 case-independent, which chaos cannot be, and each names a lane to fix.
 
-### Regional / limited-area is not available
+### What the limited-area lane does not do yet
 
-0.1 is global variable-resolution only. Use mesh refinement to get resolution
-where you want it. The regional lane is 0.3 material and the CUDA lane refuses
-it today.
+> **The published-engine gap this section used to open with is closed, and
+> this is what replaced it.** Through gpuwm 2.5.7 the lane could not be opened
+> from published artefacts at all: no published `rw_mpas_mesh` carried
+> `--cull-parent`, and `rw_mpas_lbc` was in no bundle and no published source
+> (measured 2026-08-27, `evidence/userwalk-20260827/RECEIPT.md` — that receipt
+> is a record of 2.5.7 and is not restated here as current fact). The engine
+> then published 2.5.8, which this distribution requires.
+>
+> Measured 2026-08-28 against the real published artefacts: `gpuwm
+> fetch-bridges` on a 2.5.8 install downloads
+> `gpuwm-bridges-v2.5.8-win-x86_64.zip` and stages 26 of 26 artifacts against
+> its packaged pins, `rw_mpas_lbc` among them; and `gpuwm-hex cull` drove the
+> **staged published** `rw_mpas_mesh` through two real cuts of the
+> 40,962-cell global parent — 338 and 606 cells, grid, static and initial
+> condition each written, 0.9 s.
+>
+> **Still unmeasured from published artefacts:** a complete boundary set
+> written by the published `rw_mpas_lbc`, and a `--lbc-dir` forecast behind
+> it. That binary runs and refuses correctly by name on inputs that do not
+> satisfy it, and no parent history stream carrying the edge-normal wind over
+> a cullable region was to hand to drive it further. Every limited-area number
+> in this file was taken with a source-built engine, and none of them has been
+> reproduced from the published bundle.
+
+The lane runs, and these are its edges rather than its promises.
+
+- **One parent, windowed.** A cycle is one parent integration read at
+  successive times, not a parent regenerated per cycle. Regenerating it is the
+  operational remedy for a corridor that has moved far, and it is not built.
+- **Two of four admitted slots per cycle** are skipped as background culls by
+  a measured minimum-edge-length ratio, so a cycle can place fewer corridors
+  than it detected.
+- **Hour zero has no ice.** A corridor started from transplanted parent state
+  begins with no cloud ice, snow or graupel, because the initial-condition
+  stream carries no slot for them. Reflectivity does not correlate at hour
+  zero; one hour on, the microphysics has re-formed the ice and r = 0.863.
+  Temperature agrees to five decimals throughout.
+- **No obs-skill score on a cycled case.** The limited-area verdicts above are
+  against a global run over the same ground, not against observations.
 
 ### Other
 
-- **Multi-GPU is built and proven but not shipped in 0.1** (two-node, bitwise
-  partition-invariant, 1.23x on 25 GbE). It is 0.2 material.
+- **Multi-GPU is built and proven but not shipped** (two-node, bitwise
+  partition-invariant, 1.23x on 25 GbE). There is no door on it, and it has
+  not been re-proven at the current engine pin.
 - **A case has been seen to refuse mid-run** on a vertical-velocity divergence
   at levels 44-47. The refusal is the model declining to publish a step it does
   not trust, which is the designed behaviour, but it means a given case can stop
@@ -642,7 +898,7 @@ how to run the gated ones:
 | --- | --- | --- |
 | unit + packaging | `-m "not gpu and not bigcard and not assets"` | nothing but Python |
 | assets | `-m assets` | about 6.9 GiB of byte-pinned mesh/static/init/native-history files |
-| big card | `-m bigcard` | a CUDA device with about 26.4 GiB free (the tier's own gate constant; the measured x4 peak at the current pin is 20,902 MiB, and the gate has not been re-derived since the pin move) |
+| big card | `-m bigcard` | a CUDA device clearing the measured x4 floor — about 21.7 GiB free (the measured 20,446 MiB peak plus that card's own margin, computed by `hexcore.device_admission`; re-fitted at the merged tip 2026-08-26 and re-shaped 2026-08-27, `evidence/memory-row-refit-20260826/`) |
 
 `GPUWM_HEX_NO_LOCAL_GPU=1` (or `GPUWM_NO_LOCAL_GPU=1`, honoured so a box
 configured for the engine behaves the same) bans device contact outright.

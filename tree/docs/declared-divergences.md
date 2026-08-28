@@ -22,7 +22,7 @@ shipped Rust doors. Three ran the full 24 h; the ERA5 case refused its own step
 than smoothed over.
 The scorecard, the per-case metric records and the run receipt are in
 receipt `../evidence/obs-referee-283/` (see
-[`../evidence/EVIDENCE.md`](../evidence/EVIDENCE.md)), and that
+receipt `../evidence/EVIDENCE.md`), and that
 directory's `RECEIPT.md` carries the chain and the SHA-256 of every instrument
 in it. Two of the four cases are the divergence cases themselves; the two
 controls the manifest had left `pending` are now selected against a measured
@@ -49,6 +49,32 @@ case-dependent, and everything else in the comparison is exactly that
 (envelope statistics match; peak updraft 11.49 vs 11.26 m/s; domain means
 within 0.05 %). These three are one-signed and identical across both cases and
 both mixing regimes, which chaos cannot be.
+
+**The tense of all three magnitudes, stated because they carry none of their
+own.** They entered this repository already finished on 2026-08-20 and there
+is no receipt directory, no card and no run commit for them anywhere in the
+tree -- which is the opposite of how the obs-referee numbers below are
+recorded, and the gap is worth naming rather than papering over. What can be
+established is a ceiling: the commit that introduced them pinned engine
+`629ddb6f0`, so the run happened at or before that pin. Three engine pin moves
+have landed since -- `0d04db712` (2026-08-24), `26daaab7e` (2026-08-25) and
+`659962929` (2026-08-28, gpuwm 2.5.8).
+
+The last of those crosses the executed seam and **has now been measured**, in
+the strongest form available short of a re-run: a four-arm byte A/B on one
+RTX 5090, old pin against new pin, x4.163842, 30 composite steps, no tolerance
+anywhere. The atmosphere half of the per-step fingerprint is identical at all
+31 steps, all 198 backend seam arrays are identical at every step, and 0 of
+138 history variables differ; the only differences are the pin strings and the
+digest rolled up over them
+(receipt `../evidence/seam-258-ab-20260828/`).
+That is one mesh, one case and one hour, and it is a byte comparison rather
+than a physics claim.
+
+The two EARLIER pin moves have no such arm, and no magnitude above has been
+re-measured over 24 h since the original run. **Whether any of the three moved
+across those pins is NOT MEASURED.** Read them as pre-2026-08-20 numbers until
+somebody re-runs them.
 
 ---
 
@@ -86,7 +112,11 @@ make it.
 **Magnitude.** The port's Grell-Freitas produces about a third less
 convective rain (`rainc` **−36 % / −34 %** in the two cases); explicit
 microphysics makes up roughly half of it (`rainnc` **+29 % / +25 %**); net
-domain-mean precipitation runs about **15 % dry**.
+domain-mean precipitation runs about **15 % dry against native MPAS-A**. That
+last clause is not decoration: it names the referee retired on 2026-08-20, and
+the live referee's verdict on the same divergence is the opposite sign. It is
+under **Status** below and should be read with this paragraph, never without
+it.
 
 **Mechanism.** The declared GF generation gap, verified by source count on
 both sides: the port carries WRF v4.6.1's **Freitas-2018** GF body; native
@@ -209,6 +239,63 @@ mm/h** in the last hour before that run refused its own step 691. It is the
 runaway column that caused the refusal. It contributes about 1.5 % of that
 case's precipitation bias, so it does not explain the wet result above, but it
 should not be read as a forecast either.
+
+---
+
+## 4. Un-driven appended species are LEFT ALONE at the lateral boundary
+
+The first three entries are differences against native MPAS. This one is not:
+it is a difference against a *different* reference — an implementation of an
+additive scalar transport variant, in which extra species carried beyond the
+microphysics set are relaxed to zero in the boundary zone. It is recorded here
+because it is the same kind of statement (measured, mechanism named, referee
+named) and because a reader deciding whether to trust a number produced by
+such a configuration needs it before the run.
+
+**What this port does today, and it is a consequence rather than a choice.**
+The limited-area boundary law nudges the LEADING block of the scalar array —
+as many species as the boundary stream actually carries — and leaves every
+species after that block to the model
+(`cuda_regional_forecast_v841._driven_tracer_count`, which exists because
+launching those kernels over the *model's* species count read five planes past
+the end of the driving array and produced |w| = 179.1 m/s at ring 5). Species
+appended after the driven block therefore keep whatever value the interior
+integration and transport give them, everywhere, including in the specified
+zone where every driven field is overwritten from the stream each step.
+
+**What the reference does instead.** It relaxes those species to zero at the
+boundary, on the physical argument that inflow air carries none of the added
+material. Under the leave-alone semantics, material that reaches the specified
+zone stays there: it is not advected out by a boundary that no longer updates
+it, and across a cycled forecast — where each cycle re-places the fine grid —
+that residue is carried rather than flushed.
+
+**Both are defensible and the divergence is named rather than settled.**
+Leave-alone is the semantics that falls out of the existing driven-species law
+with no code change and no LBC change; relax-to-zero matches the reference and
+the physics of inflow. The recorded target is relax-to-zero expressed as a
+**per-species boundary-policy column on the scalar row** — data, not a code
+path, which is what the arbitrary acceptance test asks for — on a later rung.
+Nothing in this tree implements that column today.
+
+**Measured limits of the "left alone" claim, because it is not true
+everywhere.** Two paths in this tree do touch appended species:
+
+1. `regional_v841` — the CPU regional authority — has **no** driven-prefix law
+   at all. Its `bdy_adjust_scalars` and `bdy_set_scalars` index the driving
+   array with the model's species count, so a model carrying appended species
+   against a narrower stream does not leave them alone; it fails to broadcast.
+   Loud rather than silent, but a NumPy error rather than a named refusal. The
+   CUDA regional route learned this law and the CPU authority did not.
+2. `clamp_negative_scalars`, the unconditional end-of-step positivity clamp,
+   runs over the whole scalar array. It is not a boundary operator and moves
+   no boundary digest, but "appended species are untouched" is not true of it.
+
+What was measured and holds: the lateral-boundary **reader** carries a fixed
+three-species set (`lbc_qv`, `lbc_qc`, `lbc_qr`), takes no model scalar
+registry, and returns byte-identical fields whether the model integrates six
+species or seventeen. Widening the model's registry moves no boundary file, no
+reader path and no boundary digest on the CUDA route the cascade runs.
 
 ---
 

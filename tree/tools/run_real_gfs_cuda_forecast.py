@@ -38,8 +38,8 @@ for import_root in (SOURCE_ROOT, TOOLS_ROOT):
 
 import run_real_gfs_forecast as cpu_gfs  # noqa: E402
 
-from mpas_port.cuda_backend import require_cuda  # noqa: E402
-from mpas_port.cuda_dualrun import (  # noqa: E402
+from hexcore.cuda_backend import require_cuda  # noqa: E402
+from hexcore.cuda_dualrun import (  # noqa: E402
     CudaArmRun,
     PreparedCudaInputs,
     compare_cuda_capsule_files,
@@ -51,7 +51,7 @@ from mpas_port.cuda_dualrun import (  # noqa: E402
     sha256_file,
     write_json_atomic,
 )
-from mpas_port.driver import (  # noqa: E402
+from hexcore.driver import (  # noqa: E402
     DryDycoreConfig,
     DryDycoreDriver,
     DryReferenceState,
@@ -59,30 +59,30 @@ from mpas_port.driver import (  # noqa: E402
     StabilityBounds,
     TerrainMetrics,
 )
-from mpas_port.initialization import (  # noqa: E402
+from hexcore.initialization import (  # noqa: E402
     initialize_from_structured,
     load_structured_atmosphere,
 )
-from mpas_port.mesh import Mesh  # noqa: E402
-from mpas_port.output import (  # noqa: E402
+from hexcore.mesh import Mesh  # noqa: E402
+from hexcore.output import (  # noqa: E402
     HistoryField,
     HistoryStreamOptions,
     write_history,
 )
-from mpas_port.regrid import (  # noqa: E402
+from hexcore.regrid import (  # noqa: E402
     build_regrid_weights,
     write_regridded_netcdf,
 )
-from mpas_port.rust_renderer import (  # noqa: E402
+from hexcore.rust_renderer import (  # noqa: E402
     RendererProbe,
     discover_rust_renderer,
     inspect_renderer_products,
     materialize_gfs_rust_input,
     render_catalogued_products,
 )
-from mpas_port.state import PrognosticState  # noqa: E402
-from mpas_port.vector import initialize_reconstruction_coefficients  # noqa: E402
-from mpas_port.vertical import VerticalGrid, build_vertical_grid  # noqa: E402
+from hexcore.state import PrognosticState  # noqa: E402
+from hexcore.vector import initialize_reconstruction_coefficients  # noqa: E402
+from hexcore.vertical import VerticalGrid, build_vertical_grid  # noqa: E402
 
 
 GFS_STEM = "GFS-2026-03-26-00.x1.2562.cuda-port-sm120-dual-6h"

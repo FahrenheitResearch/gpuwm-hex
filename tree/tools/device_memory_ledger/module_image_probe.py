@@ -37,6 +37,14 @@ TARGETS = [
     ("gpuwm.core.rrtmg_lw", "_gpu_module", (), None),
     ("gpuwm.core.rrtmg_mcica", "_mcica_gpu_module", (), None),
     ("gpuwm.core.gf", "_gf_module", (55,), "gf_gfdrv_stage"),
+    # Added 2026-08-25 (stale-guard audit #347, finding 6): the #294 frame
+    # cut moved the widest LAUNCHED local frame from gf_gfdrv_stage
+    # (29,264 B, retired to 88/72 B) to wsm6_column (7,216 B -- STATE.md
+    # section 5).  wsm6 builds through the kernels registry rather than a
+    # module-level builder, so without this route the module holding the
+    # widest frame would escape the ledger -- the exact silent miss the
+    # rec_symbols docstring warns about.
+    ("gpuwm.core.kernels", "load_module", ("wsm6",), "wsm6_column"),
     ("gpuwm.core.noahmp_driver_gpu", "driver_module", (), None),
     ("gpuwm.core.noahmp_energy_gpu", "energy_module", (), None),
     ("gpuwm.core.noahmp_thermal_gpu", "thermal_module", (), None),
@@ -100,7 +108,11 @@ def main(argv=None):
             prev = now
             # every kernel this module exposes, with its local frame
             kernels = []
-            names = rec_symbols(mod)
+            names = rec_symbols(mod, source_hint=(
+                bargs[0]
+                if bargs and callable(getattr(mod, "module_source", None))
+                else None
+            ))
             for nm in names:
                 try:
                     k = obj.get_function(nm)
@@ -144,14 +156,23 @@ KERNEL_DECL = re.compile(
     r'extern\s+"C"\s+__global__\s+void\s+([A-Za-z_][A-Za-z0-9_]*)')
 
 
-def rec_symbols(mod):
+def rec_symbols(mod, source_hint=None):
     """Every kernel this module declares.
 
     A name list attribute is the easy case; most of these modules do not have
     one, and an empty symbol list silently reports "max local frame 0" for a
     module that was never inspected.  So the source itself is parsed: the
     builders all expose the exact translation unit they compile.
+    ``source_hint`` serves the kernels-registry route, where the module
+    builds many sources and ``module_source(name)`` returns the exact one.
     """
+    if source_hint is not None:
+        try:
+            src = mod.module_source(source_hint)
+        except Exception:
+            src = None
+        if isinstance(src, str):
+            return sorted(set(KERNEL_DECL.findall(src)))
     names = []
     for attr in ("_GPU_KERNEL_NAMES", "KERNEL_NAMES", "_KERNEL_NAMES"):
         v = getattr(mod, attr, None)

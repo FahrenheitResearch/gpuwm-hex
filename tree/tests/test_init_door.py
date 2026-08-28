@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from mpas_port.cli import main
-from mpas_port.init_door import (
+from hexcore.cli import main
+from hexcore.init_door import (
     InitDoorRefusal,
     _probe_wps_header,
     resolve_engine,
@@ -74,7 +74,7 @@ def _no_engines_anywhere(monkeypatch):
     rung, and it means a refusal test has to remove it deliberately.
     """
 
-    from mpas_port import engines
+    from hexcore import engines
 
     for name in ("GPUWM_HEX_RW_MPAS_INIT", "RW_MPAS_INIT", "GPUWM_RW_MPAS_INIT"):
         monkeypatch.delenv(name, raising=False)
@@ -107,7 +107,7 @@ def test_a_staged_engine_resolves_with_no_environment_variable(
 ):
     """``gpuwm fetch-bridges`` alone is enough to open this door."""
 
-    from mpas_port import engines
+    from hexcore import engines
 
     staged = tmp_path / engines.executable_name("rw_mpas_init")
     staged.write_bytes(b"")

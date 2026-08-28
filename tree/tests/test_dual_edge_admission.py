@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mpas_port.dual_edge_admission import (
+from hexcore.dual_edge_admission import (
     DualEdgeAdmissionError,
     DualEdgePolicy,
     admit_dual_edges,

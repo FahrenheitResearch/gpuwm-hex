@@ -48,19 +48,34 @@ jobs:
 
       - name: install the runtime dependencies that exist on PyPI today
         # NOT `pip install -e ".[dev]"`, and the reason is a real blocker
-        # rather than a workaround: gpuwm-hex declares `gpuwm>=2.5.5`, which is
-        # the first gpuwm that both carries the physics-seam bytes this port
-        # pins by SHA-256 and stages the four MPAS bridge binaries both front
-        # doors drive.  Until that version is on PyPI a resolver run fails on
+        # rather than a workaround: gpuwm-hex declares an engine floor in
+        # `tree/pyproject.toml`, at the first gpuwm that both carries the
+        # physics-seam bytes this port pins by SHA-256 and stages the four
+        # MPAS bridge binaries both front doors drive.  The number is not
+        # restated here -- it drifted once already, and the floor gate below
+        # reads it from the declaration.  Until such a version is on PyPI a
+        # resolver run fails on
         # it and takes the whole battery with it, hiding every other result
         # behind a blocker the battery is not there to test.
         #
         # So the dependencies that DO exist are installed by name and the
         # package goes in with --no-deps.  The publish-ordering blocker is
         # gated on its own, below, where its failure means what it says.
+        #
+        # `setuptools` is in this list because it is a TEST dependency, not a
+        # build one: `tests/test_packaging_declaration.py` drives the real
+        # sdist template engine (`setuptools._distutils.filelist`) over the
+        # real tree, which is the only way to read a MANIFEST.in without
+        # guessing.  THE BREAKAGE THIS LINE PREVENTS, measured on the proving RTX 5090:
+        # since Python 3.12 `ensurepip` no longer seeds setuptools, so a
+        # fresh venv on the 3.13 matrix leg does not have it and three
+        # packaging gates raised ModuleNotFoundError -- on 3.13 and not on
+        # 3.11, which is how it survived every run on a developer's box.
+        # Those tests now skip by name when it is absent; this line is what
+        # makes sure they never take that route HERE, where the gate matters.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "numpy>=2.0" "netCDF4>=1.6" "scipy>=1.11" "pytest>=8.0"
+          python -m pip install "numpy>=2.0" "netCDF4>=1.6" "scipy>=1.11" "pytest>=8.0" "setuptools>=77"
 
       - name: install gpuwm-hex from the tree, without resolving the engine
         run: python -m pip install --no-deps -e .
@@ -129,7 +144,7 @@ jobs:
         run: |
           set -x
           cd /tmp
-          /tmp/fresh/bin/python -c "import mpas_port; print(mpas_port.DISTRIBUTION_NAME, mpas_port.__version__)"
+          /tmp/fresh/bin/python -c "import hexcore; print(hexcore.DISTRIBUTION_NAME, hexcore.__version__)"
           /tmp/fresh/bin/gpuwm-hex version
           /tmp/fresh/bin/gpuwm-hex --help
           /tmp/fresh/bin/gpuwm-hex init --help
@@ -163,7 +178,7 @@ jobs:
         run: |
           cd /tmp
           declared=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('${{ github.workspace }}/tree/pyproject.toml').read_text())['project']['version'])")
-          reported=$(/tmp/fresh/bin/python -c "import mpas_port;print(mpas_port.__version__)")
+          reported=$(/tmp/fresh/bin/python -c "import hexcore;print(hexcore.__version__)")
           test "$declared" = "$reported" \
             || { echo "pyproject says $declared, the installed package says $reported"; exit 1; }
 
@@ -187,15 +202,27 @@ jobs:
         with:
           python-version: "3.11"
       - name: the declared gpuwm floor must be resolvable before a cut
-        # gpuwm-hex hard-depends on gpuwm>=2.5.5.  Until that version is
-        # published, `pip install gpuwm-hex` cannot succeed for anyone -- the
-        # same ordering constraint gpuwm has with its own companion, where the
+        # gpuwm-hex hard-depends on the engine floor `tree/pyproject.toml`
+        # declares.  Until a gpuwm at or above that floor is published,
+        # `pip install gpuwm-hex` cannot succeed for anyone -- the same
+        # ordering constraint gpuwm has with its own companion, where the
         # companion publishes FIRST or every fresh install breaks.
         #
         # This job failing is not a defect in this repository.  It is the
         # engine not having shipped yet, stated in the one place that cannot
         # be forgotten between now and a tag.
+        #
+        # THE BREAKAGE THE DERIVATION PREVENTS: this gate used to restate the
+        # floor as a literal, in four places, none of them the declaration.
+        # It drifted -- the declaration moved to 2.5.5 at the 0.1.1 cut and
+        # this file was left at 2.5.3, so the gate would have green-lit a
+        # publish against an engine the real floor refuses, which is a green
+        # install and a dead run.  The floor is now READ from the
+        # declaration, so there is exactly one place to change and no second
+        # place to forget.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --dry-run --ignore-installed "gpuwm>=2.5.5" \
-            || { echo "BLOCKER: gpuwm>=2.5.5 is not installable from PyPI. gpuwm-hex cannot be published before the engine version carrying the pinned seam bytes and the bridge binaries is published."; exit 1; }
+          FLOOR=$(python -c "import tomllib,pathlib;d=tomllib.loads(pathlib.Path('tree/pyproject.toml').read_text(encoding='utf-8'));print(next(s for s in d['project']['dependencies'] if s.split('>=')[0].strip()=='gpuwm'))")
+          echo "declared engine floor: ${FLOOR}"
+          python -m pip install --dry-run --ignore-installed "${FLOOR}" \
+            || { echo "BLOCKER: ${FLOOR} is not installable from PyPI. gpuwm-hex cannot be published before the engine version carrying the pinned seam bytes and the bridge binaries is published."; exit 1; }

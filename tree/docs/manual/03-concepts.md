@@ -26,25 +26,31 @@ The mesh and static are reusable for years; the init is per-forecast.
 
 A *door* is a command a user can walk through: it validates its inputs,
 names any refusal, does its work through proven engines, and writes a
-receipt. The 0.1.0 doors are `gpuwm-hex version`, `doctor`, `mesh-check`,
-`oracle-gate`, `init`, and `render`. The engine side contributes
-`gpuwm mesh` (mesh + static generation) and `gpuwm fetch-bridges` (engine
-staging).
+receipt. The 0.2.0 doors are `gpuwm-hex version`, `doctor`, `mesh-check`,
+`oracle-gate`, `cull`, `init`, `forecast`, `swath`, `cycle` and `render`;
+chapter 9.1 tabulates what each one needs, and `cycle` has its own
+document ([`docs/cycle-door.md`](../cycle-door.md)). The engine side
+contributes `gpuwm mesh` (mesh + static generation) and
+`gpuwm fetch-bridges` (engine staging).
 
-Two things are deliberately *not* doors in 0.1.0:
+**Forecasting is a door, and it needs two checkouts.**
+`gpuwm-hex forecast` runs the model — and `cycle run` drives it — but it
+refuses by name without a `gpuwm-hex` checkout for the drivers under
+`tools/`, which verify their own executing modules by SHA-256 before CUDA
+is touched, and a `gpuwm` **git** checkout at the pinned commit, whose
+HEAD, tree and dirty paths go into every receipt so the executed seam
+source can be named by commit. Those are named refusals at a real door,
+not the absence of a door; chapter 6 states exactly why. Every door around
+it runs from the wheel.
 
-- **The forecast lane** — the model run itself — lives in the source
-  checkout (`tools/run_cuda_v841_forecast.py` and the registered-mesh
-  runner). A console script on a path that requires a pinned source
-  checkout and multi-GiB unfetchable authority files would be a front door
-  on a room with no floor. Chapter 6 walks the lane as it actually is.
-- **Fetching.** Nothing in gpuwm-hex downloads meshes, statics, or
-  meteorological data.
+**Fetching is deliberately not a door.** Nothing in gpuwm-hex downloads
+meshes, statics, or meteorological data.
 
-The doors' data paths are Rust (`rw_mpas_init`, `rw_mpas_convert`,
-`rw_wrfbatch`); the Python layer orchestrates, validates and writes
-provenance. There is no fallback plotter and no Python weather-field
-rendering: if the renderer is absent, the render door refuses by name.
+The doors' data paths are Rust (`rw_mpas_init`, `rw_mpas_mesh`,
+`rw_mpas_convert`, `rw_wrfbatch`); the Python layer orchestrates,
+validates and writes provenance. There is no fallback plotter and no
+Python weather-field rendering: if the renderer is absent, the render
+door refuses by name.
 
 ## 3.3 Why the dycore is pinned and the physics is refereed by observations
 
@@ -71,7 +77,19 @@ is.
 **A declared divergence** is the stated-in-full form of a known difference: measured
 magnitude, named mechanism, named observational referee. There are three
 ([`docs/declared-divergences.md`](../declared-divergences.md) is the
-register; the README quantifies them):
+register; the README quantifies them).
+
+**Every magnitude below is measured against native MPAS-A, and it carries a
+tense.** The three entered the repository already finished on 2026-08-20 with
+no receipt directory, no card and no run commit; the commit that introduced
+them pinned engine `629ddb6f0`, which is the ceiling on when they were taken.
+Three engine pin moves have landed since. The last one is measured to change
+nothing on one case — a byte A/B of the two pins found the atmosphere
+fingerprint identical at all 31 steps
+(receipt `evidence/seam-258-ab-20260828/`) —
+but the two earlier moves have no such arm and no magnitude has been
+re-measured over 24 h, so whether any of them moved is **NOT MEASURED**.
+Read them as pre-2026-08-20 numbers.
 
 1. **Upper-level warm drift** — above level 45 the port warms at +0.019 K/h
    relative to native, one-signed, +0.46 K at 24 h. Fine at 24 h;
@@ -81,8 +99,15 @@ register; the README quantifies them):
    Grell-Freitas convection is WRF v4.6.1's 2018 generation, native's is
    the 2013 ensemble fork; about a third less convective rain, roughly half
    made up by explicit microphysics, net domain-mean precipitation about
-   15 % dry. Referee: hourly precipitation — declared as MRMS, run against
-   Stage-IV, because the shipped MRMS door decodes reflectivity only.
+   **15 % dry against native MPAS-A**. Referee: hourly precipitation —
+   declared as MRMS, run against Stage-IV, because the shipped MRMS door
+   decodes reflectivity only. **The referee ran and disagreed in sign.**
+   Against Stage-IV over CONUS on 2026-08-25 the port is wet in all four
+   cases (+0.0247 mm/h paired, 95 % [+0.0041, +0.0606]) and rains over too
+   much area (frequency bias at 1 mm/h 1.59 / 1.35 / 1.38 / 0.77). The
+   15 % figure belongs to the referee retired on 2026-08-20; the obs sample
+   is four cases and is not a skill assessment. Both, with their limits,
+   are in the register.
 3. **Downstream condensate surplus** — +50 % cloud water, +62 % rain water
    in the domain mean by 24 h, heavier point extrema; a consequence of (2).
    Referee: MRMS reflectivity and the precipitation extreme tail.
@@ -91,12 +116,22 @@ None of the three is softened by declaring it. Two of them have now been
 judged: the obs-referee ran for the first time on 2026-08-25, four cases
 scored against Stage-IV precipitation, MRMS reflectivity and ASOS surface
 reports ([`docs/obs-referee.md`](../obs-referee.md),
-receipt `evidence/obs-referee-283/`; see
-[`evidence/EVIDENCE.md`](../../evidence/EVIDENCE.md)). (2) is scored
-against real rainfall; (3) is scored on its precipitation-extreme half, and its
-reflectivity half cannot be scored at all against this build, because the
-history stream carries no reflectivity field to compare. (1) stays outside what
-these instruments can see. A bias that is wrong against observations is still
+receipt `evidence/obs-referee-283/`). (2) is scored
+against real rainfall. (3) is scored on **both** halves: its
+precipitation-extreme half from that run, and its reflectivity half from the
+default history stream, which publishes `refl10cm` computed inside the due
+step's own WSM6 call. On the one case re-run with the field
+(`gfs-20260812-divergence`, 2026-08-25, 720/720 steps) the object referee
+counted **86 model 35 dBZ objects against 54 observed**, 8 matched at a median
+**110.9 km** displacement — an object surplus pointing the same way as the
+declared condensate surplus, on one case. Point CSI is **0.0916** at 20 dBZ
+and **0.0097** at 40 dBZ over 643,419 pairs; both pay the documented cost of
+comparing a 22 km model box against a 0.01° pixel and should not be read
+alone. The other three cases' bundles predate the field and re-run
+mechanically
+(receipt `evidence/history-refl-q2-20260825/`).
+The cloud-water/rain-water partition itself stays outside MRMS and ASOS scope,
+and (1) stays outside what these instruments can see at all. A bias that is wrong against observations is still
 wrong — declaring MPAS no longer the referee changes the referee, it does not
 clear the finding. Every run receipt and every history file carries
 `gf_native_parity_claim: false` beside `gf_declared_divergence` so the

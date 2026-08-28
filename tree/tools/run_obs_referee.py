@@ -11,7 +11,7 @@ SRC = TREE / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from mpas_port.obs_referee.cli import main  # noqa: E402
+from hexcore.obs_referee.cli import main  # noqa: E402
 
 
 if __name__ == "__main__":

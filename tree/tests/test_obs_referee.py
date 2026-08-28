@@ -8,17 +8,17 @@ import shutil
 import numpy as np
 import pytest
 
-from mpas_port.obs_referee.bootstrap import paired_case_interval
-from mpas_port.obs_referee.bundle import (
+from hexcore.obs_referee.bootstrap import paired_case_interval
+from hexcore.obs_referee.bundle import (
     load_grid_bundle,
     write_grid_bundle,
 )
-from mpas_port.obs_referee.canonical import sha256_file, write_json
-from mpas_port.obs_referee.errors import IntegrityError, SchemaError
-from mpas_port.obs_referee.manifest import BASE_COMMIT, SCHEMA, load_manifest
-from mpas_port.obs_referee.metrics import calculate_metric
-from mpas_port.obs_referee.runner import emit_not_measured, run_suite
-from mpas_port.obs_referee.treatment import (
+from hexcore.obs_referee.canonical import sha256_file, write_json
+from hexcore.obs_referee.errors import IntegrityError, SchemaError
+from hexcore.obs_referee.manifest import BASE_COMMIT, SCHEMA, load_manifest
+from hexcore.obs_referee.metrics import calculate_metric
+from hexcore.obs_referee.runner import emit_not_measured, run_suite
+from hexcore.obs_referee.treatment import (
     TREATMENT_RECEIPT_SCHEMA,
     compare_output_trees,
     validate_treatment_receipt,

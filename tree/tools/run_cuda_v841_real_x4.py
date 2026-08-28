@@ -52,6 +52,19 @@ PREPARATION_METHOD = (
     "host/device execution fingerprints"
 )
 
+# FROZEN CLOSED-CASE PROOF CONSTANT — deliberately NOT routed through
+# hexcore.device_admission (adjudicated 2026-08-25, stale-guard audit
+# #347 unknowns).  Determination: this runner is the frozen record of the
+# closed one-step dry-dynamics x4 engineering proof, not a live admission
+# path.  Checked against the byte-pinned proof-harness manifest
+# (run_cuda_v841_full_physics_x4.py::EXECUTION_SOURCE_PINS): this tool is
+# not in it; nothing in tools/, tests/, or the battery references it; and
+# its own source_snapshot() resolves tests/test_cuda_v841_real_x4.py with
+# strict=True, a file no longer in the tree — so the runner refuses at
+# startup today and exists as the receipt-bearing record of the runs it
+# already made.  Its receipts pinned exactly these constants; rewriting
+# them would falsify the record of a proof that already happened.  The
+# LIVE x4 floor is device_admission.native_device_floor_bytes().
 MIN_FREE_DEVICE_BYTES = 16 * 1024**3
 STEP_COUNT = 1
 DT_SECONDS = 120.0
@@ -80,14 +93,14 @@ EXPECTED_DRIVER_AUTHORITY_NONCLAIMS = (
 EXPECTED_REACHED_KERNEL_COUNT = 46
 EXPECTED_COMPILED_KERNEL_COUNT = 95
 EXPECTED_TRANSLATION_UNITS = (
-    "mpas_port.cuda_acoustic",
-    "mpas_port.cuda_acoustic_v841",
-    "mpas_port.cuda_backend.recovery",
-    "mpas_port.cuda_driver",
-    "mpas_port.cuda_dynamics_v841",
-    "mpas_port.cuda_horizontal",
-    "mpas_port.cuda_horizontal_v841",
-    "mpas_port.cuda_transport_v841",
+    "hexcore.cuda_acoustic",
+    "hexcore.cuda_acoustic_v841",
+    "hexcore.cuda_backend.recovery",
+    "hexcore.cuda_driver",
+    "hexcore.cuda_dynamics_v841",
+    "hexcore.cuda_horizontal",
+    "hexcore.cuda_horizontal_v841",
+    "hexcore.cuda_transport_v841",
 )
 
 AUTHORITY_PINS: dict[str, dict[str, Any]] = {
@@ -776,7 +789,7 @@ def verify_authorities(paths: Mapping[str, Path]) -> dict[str, Any]:
 
 
 def source_snapshot() -> dict[str, Any]:
-    paths = sorted((ROOT / "src" / "mpas_port").rglob("*.py"))
+    paths = sorted((ROOT / "src" / "hexcore").rglob("*.py"))
     paths.extend((Path(__file__).resolve(), TEST_FILE.resolve(strict=True)))
     files = {
         str(path.relative_to(ROOT)).replace("\\", "/"): {
@@ -1345,7 +1358,7 @@ def materialize_post_receipt_lml_diagnostic(
 
 
 def engineering_config() -> Any:
-    from mpas_port.config_v841 import V841DryDycoreConfig
+    from hexcore.config_v841 import V841DryDycoreConfig
 
     config = V841DryDycoreConfig(
         config_dt=DT_SECONDS,
@@ -1522,7 +1535,7 @@ def require_exact_compile_relation(relation: Mapping[str, Any]) -> dict[str, Any
 
 
 def compile_exact_v841_manifest(cache: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    from mpas_port.cuda_ftz import (
+    from hexcore.cuda_ftz import (
         V841_REACHED_TRANSLATION_UNITS,
         validate_v841_compile_manifest_relation,
         v841_reached_translation_units,
@@ -1623,19 +1636,19 @@ def _run_one_step(
     if str(SRC) not in sys.path:
         sys.path.insert(0, str(SRC))
 
-    from mpas_port.cuda_backend import KernelCache, require_cuda
-    from mpas_port.cuda_driver import (
+    from hexcore.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_driver import (
         CudaDryDycoreDriver,
         cuda_configuration_payload,
     )
-    from mpas_port.cuda_dualrun import (
+    from hexcore.cuda_dualrun import (
         PreparedCudaInputs,
         fingerprint_uploaded_execution,
     )
-    from mpas_port.cuda_ftz import validate_v841_compile_manifest_relation
-    from mpas_port.driver import load_mpas_initial_state, load_mpas_vertical_grid
-    from mpas_port.dynamics_v841 import load_v841_reference_wind_profiles
-    from mpas_port.mesh import load_precision_preserving_mesh_pair
+    from hexcore.cuda_ftz import validate_v841_compile_manifest_relation
+    from hexcore.driver import load_mpas_initial_state, load_mpas_vertical_grid
+    from hexcore.dynamics_v841 import load_v841_reference_wind_profiles
+    from hexcore.mesh import load_precision_preserving_mesh_pair
 
     if source_snapshot() != sources_before:
         raise RuntimeError("source bytes changed before host preparation")

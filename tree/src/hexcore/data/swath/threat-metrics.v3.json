@@ -1,0 +1,1042 @@
+{
+  "schema": "gpuwm-hex.threat-metrics.v3",
+  "notes": [
+    "NINE ARMED ROWS, ONE MECHANISM. A tropical cyclone is an extremum in a",
+    "sea-level pressure field; a fire-weather region is a connected area where",
+    "four conditions in four different units hold at once. Nothing downstream of",
+    "the detector knows which it is holding: both produce the same feature",
+    "record, both are tracked by the same association, both become the same",
+    "flared polygon, and both are ranked by the same terms on one axis.",
+    "",
+    "HOW A COMPOUND THREAT IS EXPRESSED, because this is the point of v2. A",
+    "field row's operands come either from the file ('source_variables') or from",
+    "OTHER FIELD ROWS ('inputs'). 'threshold_margin' turns any field into a",
+    "DIMENSIONLESS distance past a threshold -- zero at the threshold, one at",
+    "one declared scale beyond it -- and 'extremum_of' with extremum 'minimum'",
+    "takes the weakest of several such margins. A cell where the minimum margin",
+    "is at or above zero is a cell where EVERY condition holds. So 'hot AND dry",
+    "AND windy AND over dry fuel' is four margin rows plus one combining row",
+    "plus one metric row, and the detector that finds it is the same",
+    "'area_threshold_exceedance' that finds a blob of reflectivity. No new",
+    "detector, no new code path, and the same construction expresses an",
+    "atmospheric river, a winter storm and an organised-severe environment.",
+    "",
+    "WHY EVERY ROW DECLARES 'rank.intensity_reference'. It is the anomaly past",
+    "this row's own detector threshold that this row calls one unit of",
+    "significance, in this row's own field units. Before v2 one policy-wide",
+    "scale divided every row's intensity, so a pressure anomaly in pascals",
+    "(about 5,000 for a deep low) was added to a reflectivity anomaly in",
+    "decibels (about 11 for a strong core) on one axis -- 470x apart from units",
+    "alone. Measured twice on real global forecasts: 41 cyclone tracks and 217",
+    "deep-convection tracks, and the 27 highest-ranked candidates of 205 were",
+    "all cyclones, so a budget of four never reached the convection row.",
+    "",
+    "EVERY THRESHOLD HERE IS A STARTING VALUE. Each row's description says what",
+    "convention it came from and, where the convention does not survive contact",
+    "with a 96 km parent forecast, says which number was moved and against what",
+    "measurement. Rows whose thresholds are anchored to a coarse parent's own",
+    "distribution say so BY NAME: they are the ones that must be re-derived for",
+    "a parent at a different resolution, and the field they are anchored on is",
+    "named in the description so that re-derivation is a measurement, not a",
+    "search.",
+    "",
+    "WHICH ROWS HAVE FIRED ON REAL DATA is recorded in",
+    "evidence/swath-metrics-20260826/RECEIPT.md against a named 24 h global",
+    "forecast, row by row, including the ones that found nothing.",
+    "",
+    "V3 ADDS ONE COLUMN TO EVERY SWATH ROW: cull_pad_scale, how far past the",
+    "swath ring the limited-area cut is taken. It has no default and every row",
+    "must declare it, because the value that used to be implicit -- cut at the",
+    "ring, 1.0 -- was measured to be the WRONG ONE and is not something a row",
+    "should inherit without choosing.",
+    "",
+    "EVERY SHIPPED ROW DECLARES 1.35 SINCE 2026-08-27, and that is a measured",
+    "correction shipping as the default rather than as a flag. Cutting at the",
+    "ring hands a 71 km parent state straight to cells the fine core's own",
+    "size -- about 7.6:1 at the interface -- and throws away the parent's own",
+    "resolution ramp. Keeping 1.35x of the ring keeps that ramp between the",
+    "boundary and the core, which is an intermediate resolution level in the",
+    "form MPAS has: a region of one mesh, not another forecast.",
+    "",
+    "WHAT THE MOVE BUYS, measured on five concentric culls of one parent, all",
+    "full physics, all on one card, compared over the smallest arm's 2,937",
+    "free cells against a run with no lateral boundary at all: vertical",
+    "velocity correlation 0.624 -> 0.744, 2 m temperature 0.578 -> 0.852,",
+    "theta RMS 1.308 K -> 0.931 K. WHAT IT COSTS: +27.5% cells, +7.9% wall",
+    "(+25 s on a 6 h run), +0.5% peak VRAM (+42 MiB), and ZERO extra",
+    "forecasts. The knee is at 1.35: the surface fields saturate there (2 m",
+    "temperature gains 0.274 on that step and 0.004 on the next, 10 m wind",
+    "0.018 then 0.001), so 1.70 buys about 3.4:1 at the interface for little",
+    "more than theta RMS. Evidence: evidence/nest-ratio-20260827/.",
+    "",
+    "MOVING THE PAD MOVES EVERY CULL'S bdyMask DIGEST, BY DESIGN, and it does",
+    "NOT move a cell centre: the mesh spec is untouched, so the fine core a",
+    "row asks for is bit-identical at every pad. A re-placed cull earns its",
+    "own contract deck and inherits its class's forecast mint, which is what",
+    "the 2026-08-27 anchor re-keying made affordable -- the flip costs decks,",
+    "not mints."
+  ],
+  "fields": [
+    {
+      "id": "surface_low",
+      "source_variables": [
+        "surface_pressure",
+        "ter",
+        "t2"
+      ],
+      "derivation": {
+        "kind": "sea_level_reduction",
+        "lapse_rate_k_per_m": 0.0065
+      },
+      "units": "Pa",
+      "description": "Surface pressure reduced to mean sea level. RAW surface pressure was this row's field until it met a real 96 km global forecast, where a minimum search over it returned the Tibetan Plateau at 52,900 Pa and nothing else: elevation outranks every weather feature on Earth by about 45 kPa, and 43 per cent of the globe sat below the 100,400 Pa threshold. The reduction is p*exp(gz/(R*Tbar)) with Tbar the mean of t2 and an assumed-lapse sea-level temperature, which is the assumption the 1004 hPa convention itself was written against."
+    },
+    {
+      "id": "surface_wind_speed",
+      "source_variables": [
+        "u10",
+        "v10"
+      ],
+      "derivation": {
+        "kind": "vector_magnitude"
+      },
+      "units": "m s^-1",
+      "description": "10 m wind speed. Confirms that a pressure minimum is a circulation rather than a thermal low, and is the wind ingredient of the fire-weather conjunction."
+    },
+    {
+      "id": "column_max_reflectivity",
+      "source_variables": [
+        "refl10cm"
+      ],
+      "derivation": {
+        "kind": "vertical_extremum",
+        "extremum": "maximum"
+      },
+      "units": "dBZ",
+      "description": "Column-maximum simulated reflectivity. Computed inside the due step's own microphysics call, which is where MPAS-A computes it: the model's field, not a renderer diagnostic."
+    },
+    {
+      "id": "column_max_vertical_velocity",
+      "source_variables": [
+        "w"
+      ],
+      "derivation": {
+        "kind": "vertical_extremum",
+        "extremum": "maximum"
+      },
+      "units": "m s^-1",
+      "description": "Column-maximum resolved vertical velocity. RESOLUTION-ANCHORED: on the 96 km parent this layer is designed against, the largest |w| anywhere on the globe at any frame of a 24 h forecast was 2.68 m s^-1, so any threshold written for a convection-permitting grid (15-25 m s^-1) never fires. The severe row's 0.5 m s^-1 is the 99th percentile of this field on that parent. Re-derive it for any other parent spacing."
+    },
+    {
+      "id": "two_metre_temperature",
+      "source_variables": [
+        "t2"
+      ],
+      "derivation": {
+        "kind": "direct"
+      },
+      "units": "K",
+      "description": "2 m air temperature."
+    },
+    {
+      "id": "two_metre_mixing_ratio",
+      "source_variables": [
+        "q2"
+      ],
+      "derivation": {
+        "kind": "direct"
+      },
+      "units": "kg kg^-1",
+      "description": "2 m water-vapour mixing ratio. The history stream's own global attribute records that this diagnostic carries negative values bitwise as the native scheme produces them; the clamp is applied where the vapour pressure is formed, which is the boundary the attribute names."
+    },
+    {
+      "id": "surface_pressure_at_ground",
+      "source_variables": [
+        "surface_pressure"
+      ],
+      "derivation": {
+        "kind": "direct"
+      },
+      "units": "Pa",
+      "description": "Surface pressure at the model's own ground, unreduced. Used as the pressure argument of the vapour-pressure derivation, where the reduction to sea level would be wrong: a 2 m mixing ratio sits at the ground, not at sea level."
+    },
+    {
+      "id": "top_soil_moisture",
+      "source_variables": [
+        "smois"
+      ],
+      "derivation": {
+        "kind": "level_slice",
+        "level_index": 0
+      },
+      "units": "m3 m^-3",
+      "description": "Volumetric soil moisture in the uppermost soil layer. Two jobs: it is the fuel-dryness ingredient of the fire-weather conjunction, and because the land surface writes 1.0 over water it is also an exact land mask -- a fire row asking for soil moisture at or below 0.15 cannot fire over an ocean. The 0.15 threshold is near the wilting point of a loam; the right value is soil-texture dependent and the history stream publishes no texture, so it is a placeholder that needs tuning against fire cases."
+    },
+    {
+      "id": "convective_rainfall_rate",
+      "source_variables": [
+        "rainc"
+      ],
+      "derivation": {
+        "kind": "time_rate"
+      },
+      "units": "mm h^-1",
+      "description": "Convective precipitation rate, differenced from the published run-total accumulator. Zero at frame zero, which has no earlier frame to difference against."
+    },
+    {
+      "id": "gridscale_rainfall_rate",
+      "source_variables": [
+        "rainnc"
+      ],
+      "derivation": {
+        "kind": "time_rate"
+      },
+      "units": "mm h^-1",
+      "description": "Grid-scale precipitation rate, differenced from the published run-total accumulator."
+    },
+    {
+      "id": "total_rainfall_rate",
+      "inputs": [
+        "convective_rainfall_rate",
+        "gridscale_rainfall_rate"
+      ],
+      "derivation": {
+        "kind": "linear_combination",
+        "coefficients": [
+          1.0,
+          1.0
+        ]
+      },
+      "units": "mm h^-1",
+      "description": "Total precipitation rate. Thresholding the published ACCUMULATOR instead would place a swath where it has already rained: the exceedance region only grows, its centroid drifts back toward the start of the event, and by the end of a long forecast the whole storm track is one connected region centred on ground the weather has left."
+    },
+    {
+      "id": "snowfall_rate",
+      "source_variables": [
+        "snownc"
+      ],
+      "derivation": {
+        "kind": "time_rate"
+      },
+      "units": "mm h^-1 liquid equivalent",
+      "description": "Snowfall rate in liquid equivalent, differenced from the published run-total accumulator."
+    },
+    {
+      "id": "two_metre_vapour_pressure",
+      "inputs": [
+        "two_metre_mixing_ratio",
+        "surface_pressure_at_ground"
+      ],
+      "derivation": {
+        "kind": "vapour_pressure"
+      },
+      "units": "hPa",
+      "description": "Water-vapour partial pressure at 2 m: e = w p / (eps + w) with eps = 0.62197. The mixing ratio is clamped at zero here because the published q2 carries native negative values, and an unclamped negative gives a negative humidity that passes every dryness test ever written -- a fire row would then fire hardest exactly where the diagnostic is broken."
+    },
+    {
+      "id": "two_metre_saturation_vapour_pressure",
+      "inputs": [
+        "two_metre_temperature"
+      ],
+      "derivation": {
+        "kind": "saturation_vapour_pressure"
+      },
+      "units": "hPa",
+      "description": "Saturation vapour pressure over liquid water, Bolton (1980) MWR 108 equation 10, quoted at better than 0.1 per cent between -35 and +35 C. This is the one nonlinearity in the humidity chain and the only reason it is a derivation kind at all: with it and the vapour pressure above, relative humidity and vapour-pressure deficit are both ordinary algebra rows."
+    },
+    {
+      "id": "two_metre_relative_humidity",
+      "inputs": [
+        "two_metre_vapour_pressure",
+        "two_metre_saturation_vapour_pressure"
+      ],
+      "derivation": {
+        "kind": "ratio",
+        "coefficient": 100.0,
+        "denominator_floor": 0.01
+      },
+      "units": "%",
+      "description": "2 m relative humidity, e/es as a percentage. It can exceed 100 per cent where the 2 m temperature and 2 m moisture diagnostics disagree -- measured on a real global forecast, the 99.9th percentile was 155 per cent. No shipped row uses the high end of this field; the fire row uses the dry tail, where the measured distribution is 8.5 per cent at the 0.1st percentile and 14.6 per cent at the 1st."
+    },
+    {
+      "id": "two_metre_vapour_pressure_deficit",
+      "inputs": [
+        "two_metre_saturation_vapour_pressure",
+        "two_metre_vapour_pressure"
+      ],
+      "derivation": {
+        "kind": "linear_combination",
+        "coefficients": [
+          1.0,
+          -1.0
+        ]
+      },
+      "units": "hPa",
+      "description": "Vapour-pressure deficit at 2 m, es - e. The atmospheric-demand term of fire behaviour and the moisture half of the Hot-Dry-Windy index."
+    },
+    {
+      "id": "hot_dry_windy_index",
+      "inputs": [
+        "two_metre_vapour_pressure_deficit",
+        "surface_wind_speed"
+      ],
+      "derivation": {
+        "kind": "product"
+      },
+      "units": "hPa m s^-1",
+      "description": "The Hot-Dry-Windy index of Srock et al. (2018), Atmosphere 9(279): the product of vapour-pressure deficit and wind speed. Published as a maximum over the lowest 500 m; this is the 2 m form, which is what the history stream supports. HDW has no universal threshold in the literature -- it is used as a percentile against a local climatology -- so the confirming value the fire row uses is derived from that row's own conjunction rather than quoted, and is stated in that row's description."
+    },
+    {
+      "id": "near_surface_zonal_wind",
+      "source_variables": [
+        "u_zonal"
+      ],
+      "derivation": {
+        "kind": "level_slice",
+        "level_index": 0
+      },
+      "units": "m s^-1",
+      "description": "Zonal wind on the lowest model level, about 983 hPa on the 55-level configuration this layer is designed against."
+    },
+    {
+      "id": "near_surface_meridional_wind",
+      "source_variables": [
+        "v_meridional"
+      ],
+      "derivation": {
+        "kind": "level_slice",
+        "level_index": 0
+      },
+      "units": "m s^-1",
+      "description": "Meridional wind on the lowest model level."
+    },
+    {
+      "id": "mid_troposphere_zonal_wind",
+      "source_variables": [
+        "u_zonal"
+      ],
+      "derivation": {
+        "kind": "level_slice",
+        "level_index": 23
+      },
+      "units": "m s^-1",
+      "description": "Zonal wind on model level 23, about 518 hPa on the 55-level configuration this layer is designed against -- measured from the run's own mean pressure profile, not assumed. MODEL LEVELS ARE TERRAIN-FOLLOWING, so this index is a fixed level of the configuration and not a fixed pressure; re-derive it for a different vertical spec."
+    },
+    {
+      "id": "mid_troposphere_meridional_wind",
+      "source_variables": [
+        "v_meridional"
+      ],
+      "derivation": {
+        "kind": "level_slice",
+        "level_index": 23
+      },
+      "units": "m s^-1",
+      "description": "Meridional wind on model level 23, about 518 hPa."
+    },
+    {
+      "id": "deep_layer_shear_zonal",
+      "inputs": [
+        "mid_troposphere_zonal_wind",
+        "near_surface_zonal_wind"
+      ],
+      "derivation": {
+        "kind": "linear_combination",
+        "coefficients": [
+          1.0,
+          -1.0
+        ]
+      },
+      "units": "m s^-1",
+      "description": "Zonal component of the surface-to-mid-troposphere wind difference."
+    },
+    {
+      "id": "deep_layer_shear_meridional",
+      "inputs": [
+        "mid_troposphere_meridional_wind",
+        "near_surface_meridional_wind"
+      ],
+      "derivation": {
+        "kind": "linear_combination",
+        "coefficients": [
+          1.0,
+          -1.0
+        ]
+      },
+      "units": "m s^-1",
+      "description": "Meridional component of the surface-to-mid-troposphere wind difference."
+    },
+    {
+      "id": "deep_layer_bulk_shear",
+      "inputs": [
+        "deep_layer_shear_zonal",
+        "deep_layer_shear_meridional"
+      ],
+      "derivation": {
+        "kind": "vector_magnitude"
+      },
+      "units": "m s^-1",
+      "description": "Bulk vector wind difference between the lowest model level and about 518 hPa: the coarse-grid stand-in for 0-6 km bulk shear, which is the classic discriminator between multicell and supercell convective modes (Weisman and Klemp 1982; Thompson et al. 2003 use 20 m s^-1 of effective bulk shear). Shear is a LARGE-SCALE quantity and is the one severe-convection ingredient that a 96 km parent represents honestly."
+    },
+    {
+      "id": "low_level_zonal_wind",
+      "source_variables": [
+        "u_zonal"
+      ],
+      "derivation": {
+        "kind": "level_slice",
+        "level_index": 10
+      },
+      "units": "m s^-1",
+      "description": "Zonal wind on model level 10, about 858 hPa on the 55-level configuration."
+    },
+    {
+      "id": "low_level_meridional_wind",
+      "source_variables": [
+        "v_meridional"
+      ],
+      "derivation": {
+        "kind": "level_slice",
+        "level_index": 10
+      },
+      "units": "m s^-1",
+      "description": "Meridional wind on model level 10, about 858 hPa."
+    },
+    {
+      "id": "low_level_wind_speed",
+      "inputs": [
+        "low_level_zonal_wind",
+        "low_level_meridional_wind"
+      ],
+      "derivation": {
+        "kind": "vector_magnitude"
+      },
+      "units": "m s^-1",
+      "description": "Wind speed at about 858 hPa, the level where the moisture transport of an atmospheric river is concentrated."
+    },
+    {
+      "id": "low_level_mixing_ratio",
+      "source_variables": [
+        "qv"
+      ],
+      "derivation": {
+        "kind": "level_slice",
+        "level_index": 10
+      },
+      "units": "kg kg^-1",
+      "description": "Water-vapour mixing ratio at about 858 hPa."
+    },
+    {
+      "id": "bulk_vapour_transport",
+      "inputs": [
+        "low_level_mixing_ratio",
+        "low_level_wind_speed"
+      ],
+      "derivation": {
+        "kind": "product",
+        "coefficient": 3058.0
+      },
+      "units": "kg m^-1 s^-1",
+      "description": "A BULK-LAYER STAND-IN FOR INTEGRATED VAPOUR TRANSPORT, and it says so. True IVT is (1/g) times the integral of q|V| dp through the column; this is the 858 hPa value multiplied by an assumed 300 hPa moist-layer depth over gravity (30000/9.80665 = 3058). That is what makes the standard 250 kg m^-1 s^-1 atmospheric-river threshold applicable at all, and it is an assumption about layer depth that a real integral would not need. The grammar cannot express the real integral because it operates on per-cell scalars and the integrand is three-dimensional; the named follow-up is in the receipt."
+    },
+    {
+      "id": "fire_hot_margin",
+      "inputs": [
+        "two_metre_temperature"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_least",
+        "threshold": 298.15,
+        "scale": 8.0
+      },
+      "units": "dimensionless",
+      "description": "How far past 25 C the 2 m temperature is, in units of 8 K. Heat is not itself a Red Flag criterion -- the US criteria are humidity, wind and fuel state -- but heat drives fine-fuel moisture down and the project names 'hot AND dry AND windy' as the thing to express. PLACEHOLDER: 25 C is a round number, not a calibrated one."
+    },
+    {
+      "id": "fire_dry_margin",
+      "inputs": [
+        "two_metre_relative_humidity"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_most",
+        "threshold": 20.0,
+        "scale": 10.0
+      },
+      "units": "dimensionless",
+      "description": "How far below 20 per cent the 2 m relative humidity is, in units of 10 percentage points. US Red Flag Warning humidity criteria run from 15 per cent in the interior west to 25 per cent in the east; 20 per cent is mid-range. A 96 km cell mean is smoother than the local minimum a warning is written against, so this is if anything conservative. On a real global forecast 20 per cent selects roughly the driest 1.5 per cent of cells."
+    },
+    {
+      "id": "fire_windy_margin",
+      "inputs": [
+        "surface_wind_speed"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_least",
+        "threshold": 8.0,
+        "scale": 4.0
+      },
+      "units": "dimensionless",
+      "description": "How far past 8 m s^-1 the 10 m wind is, in units of 4 m s^-1. The Red Flag sustained-wind criterion is about 11.2 m s^-1 (25 mph). RESOLUTION-ANCHORED AND RELAXED ON PURPOSE: a 96 km cell mean under-represents both gusts and terrain channelling, and 8 m s^-1 is the 96 km analogue. On a convection-permitting parent this should go back up toward the criterion."
+    },
+    {
+      "id": "fire_fuel_margin",
+      "inputs": [
+        "top_soil_moisture"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_most",
+        "threshold": 0.15,
+        "scale": 0.05
+      },
+      "units": "dimensionless",
+      "description": "How far below 0.15 m3 m^-3 the uppermost soil layer is, in units of 0.05. The drought or fuel-state condition, and simultaneously an exact land mask, because the land surface writes 1.0 over water. PLACEHOLDER: the physically right value is the wilting point, which is soil-texture dependent, and the history stream publishes no texture."
+    },
+    {
+      "id": "fire_weather_margin",
+      "inputs": [
+        "fire_hot_margin",
+        "fire_dry_margin",
+        "fire_windy_margin",
+        "fire_fuel_margin"
+      ],
+      "derivation": {
+        "kind": "extremum_of",
+        "extremum": "minimum"
+      },
+      "units": "dimensionless",
+      "description": "THE COMPOUND FIELD. The weakest of four margins measured in kelvin, per cent, metres per second and cubic metres per cubic metre. At or above zero exactly where all four conditions hold at once, which is what 'hot AND dry AND windy over dry fuel' means. Its magnitude is a real intensity: 1.0 is one full scale past every one of the four thresholds simultaneously."
+    },
+    {
+      "id": "severe_reflectivity_margin",
+      "inputs": [
+        "column_max_reflectivity"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_least",
+        "threshold": 40.0,
+        "scale": 10.0
+      },
+      "units": "dimensionless",
+      "description": "How far past 40 dBZ the column-maximum reflectivity is, in units of 10 dB. RESOLUTION-ANCHORED: the severe-criteria convention is 50 dBZ or more, but on the 96 km parent this layer is designed against the largest column-max reflectivity anywhere on the globe was 48 dBZ and the 99.9th percentile was 42, so 50 never fires. 40 dBZ is the coarse-parent analogue and must be raised toward 50 on a convection-permitting parent."
+    },
+    {
+      "id": "severe_shear_margin",
+      "inputs": [
+        "deep_layer_bulk_shear"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_least",
+        "threshold": 15.0,
+        "scale": 10.0
+      },
+      "units": "dimensionless",
+      "description": "How far past 15 m s^-1 the deep-layer bulk shear is, in units of 10 m s^-1. Fifteen to twenty metres per second of deep-layer shear is the conventional boundary between disorganised and organised convection. This ingredient is NOT resolution-anchored: shear is a large-scale gradient and a coarse parent gets it about right. On a real global forecast 15 m s^-1 selects roughly the top quarter of cells."
+    },
+    {
+      "id": "severe_ascent_margin",
+      "inputs": [
+        "column_max_vertical_velocity"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_least",
+        "threshold": 0.5,
+        "scale": 0.5
+      },
+      "units": "dimensionless",
+      "description": "How far past 0.5 m s^-1 the column-maximum resolved ascent is, in units of 0.5 m s^-1. RESOLUTION-ANCHORED, and the most fragile threshold in this document: 0.5 m s^-1 is the 99th percentile of resolved column-max w on the 96 km parent, where the global maximum over a whole 24 h forecast was 2.68 m s^-1. A convection-permitting parent resolves updraughts an order of magnitude larger and this number is meaningless there."
+    },
+    {
+      "id": "severe_convection_margin",
+      "inputs": [
+        "severe_reflectivity_margin",
+        "severe_shear_margin",
+        "severe_ascent_margin"
+      ],
+      "derivation": {
+        "kind": "extremum_of",
+        "extremum": "minimum"
+      },
+      "units": "dimensionless",
+      "description": "Storm, shear and ascent together: the ingredients-based form that operational severe-convection parameters (SCP, STP) are built on, expressed as the weakest of three normalised margins rather than as their product so that a single missing ingredient cannot be bought back by an excess of another."
+    },
+    {
+      "id": "river_transport_margin",
+      "inputs": [
+        "bulk_vapour_transport"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_least",
+        "threshold": 400.0,
+        "scale": 200.0
+      },
+      "units": "dimensionless",
+      "description": "How far past 400 kg m^-1 s^-1 the bulk vapour transport is, in units of 200. THE LITERATURE THRESHOLD IS 250 AND THIS IS NOT IT. 250 applies to true integrated vapour transport; the field below it is a bulk-layer stand-in that runs systematically high, because it applies the 858 hPa mixing ratio to an assumed 300 hPa layer in which the real mixing ratio falls off sharply. Measured on the parent this layer is designed against, the proxy's global median is 154 and 250 selects 26 per cent of the planet -- which is not what an atmospheric-river threshold is supposed to select. 400 is the parent's own 90th percentile. This is the least defensible threshold in this document and the first one that a published true IVT would retire."
+    },
+    {
+      "id": "river_wind_margin",
+      "inputs": [
+        "low_level_wind_speed"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_least",
+        "threshold": 12.5,
+        "scale": 7.5
+      },
+      "units": "dimensionless",
+      "description": "How far past 12.5 m s^-1 the 858 hPa wind is, in units of 7.5. An atmospheric river is a TRANSPORT corridor, so a strong low-level jet is part of the phenomenon and not an extra condition. It also does the work the crude transport proxy cannot: a warm quiescent tropical air mass has high moisture and no wind, and the product alone cannot tell it from a corridor."
+    },
+    {
+      "id": "atmospheric_river_margin",
+      "inputs": [
+        "river_transport_margin",
+        "river_wind_margin"
+      ],
+      "derivation": {
+        "kind": "extremum_of",
+        "extremum": "minimum"
+      },
+      "units": "dimensionless",
+      "description": "Concentrated moisture AND a low-level jet to move it: the weaker of the two margins."
+    },
+    {
+      "id": "winter_snow_rate_margin",
+      "inputs": [
+        "snowfall_rate"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_least",
+        "threshold": 0.5,
+        "scale": 1.0
+      },
+      "units": "dimensionless",
+      "description": "How far past 0.5 mm h^-1 liquid-equivalent the snowfall rate is, in units of 1.0, so one unit of ranked intensity is 1.5 mm h^-1 -- about 1.5 cm h^-1 of snow at a 10:1 ratio, which is heavy-snow criteria as a 96 km CELL MEAN rather than at a point. RESOLUTION-ANCHORED: the 0.5 mm h^-1 threshold sits between the 99th and 99.9th percentiles of this field on the parent measured, and both numbers must be re-derived for a parent at another spacing."
+    },
+    {
+      "id": "winter_cold_margin",
+      "inputs": [
+        "two_metre_temperature"
+      ],
+      "derivation": {
+        "kind": "threshold_margin",
+        "comparison": "at_most",
+        "threshold": 273.15,
+        "scale": 5.0
+      },
+      "units": "dimensionless",
+      "description": "How far below freezing the 2 m temperature is, in units of 5 K. Snow falling into an above-freezing surface layer is a rain event with a snow diagnostic, and the swath belongs where it reaches the ground as snow."
+    },
+    {
+      "id": "winter_storm_margin",
+      "inputs": [
+        "winter_snow_rate_margin",
+        "winter_cold_margin"
+      ],
+      "derivation": {
+        "kind": "extremum_of",
+        "extremum": "minimum"
+      },
+      "units": "dimensionless",
+      "description": "Heavy snow AND a surface cold enough to keep it: the weaker of the two margins."
+    }
+  ],
+  "metrics": [
+    {
+      "id": "tropical_cyclone_centre",
+      "threat_class": "tropical_cyclone",
+      "field": "surface_low",
+      "enabled": true,
+      "description": "A closed surface low with a wind circulation around it, in a warm environment. The 100,400 Pa threshold is the closed-low convention and the 17 m s^-1 confirmation is the WMO tropical-storm wind criterion (34 kt). The warm-environment confirmation is what separates this row from the extratropical one: the two rows read the same field and are told apart by the temperature of the air the low sits in. IT IS A PROXY. Tropical cyclogenesis is conventionally tied to a sea surface temperature of 26.5 C, the history stream publishes no SST, and a 2 m temperature of 297 K is also reached over summer continents -- so this row can select a warm-season continental low. Tuning it against real tropical cases has not been done.",
+      "detector": {
+        "kind": "extremum_ball",
+        "extremum": "minimum",
+        "threshold": 100400.0,
+        "search_radius_km": 300.0,
+        "minimum_separation_km": 600.0
+      },
+      "confirm_with": [
+        {
+          "field": "surface_wind_speed",
+          "aggregation": {
+            "kind": "ball_maximum",
+            "radius_km": 300.0
+          },
+          "comparison": "at_least",
+          "value": 17.0
+        },
+        {
+          "field": "two_metre_temperature",
+          "aggregation": {
+            "kind": "ball_mean",
+            "radius_km": 300.0
+          },
+          "comparison": "at_least",
+          "value": 297.0
+        }
+      ],
+      "track": {
+        "maximum_speed_km_per_hour": 60.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 150.0,
+        "flare_km_per_hour": 12.5,
+        "maximum_half_width_km": 300.0,
+        "spacing_km": 4.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 12.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 3.0
+      },
+      "rank": {
+        "intensity_reference": 2500.0
+      }
+    },
+    {
+      "id": "extratropical_cyclone_centre",
+      "threat_class": "extratropical_cyclone",
+      "field": "surface_low",
+      "enabled": true,
+      "description": "A deep mid-latitude low in cool air: the baroclinic cyclone, which is a different object from the tropical one and wants a different grid. The 100,000 Pa threshold is deeper than the tropical row's because mid-latitude lows are routinely below 1004 hPa and a 1004 hPa threshold in the winter storm track selects half an ocean. The complementary temperature confirmation (at most 297 K, against the tropical row's at least) means one storm cannot satisfy both rows. The swath is wider and coarser than the tropical one because these systems are larger: the frontal structure that is worth resolving is a 1,000 km comma, not a 50 km eyewall. On a 96 km parent this is the row that finds the deep Southern Ocean and North Atlantic lows.",
+      "detector": {
+        "kind": "extremum_ball",
+        "extremum": "minimum",
+        "threshold": 100000.0,
+        "search_radius_km": 400.0,
+        "minimum_separation_km": 800.0
+      },
+      "confirm_with": [
+        {
+          "field": "surface_wind_speed",
+          "aggregation": {
+            "kind": "ball_maximum",
+            "radius_km": 400.0
+          },
+          "comparison": "at_least",
+          "value": 17.0
+        },
+        {
+          "field": "two_metre_temperature",
+          "aggregation": {
+            "kind": "ball_mean",
+            "radius_km": 400.0
+          },
+          "comparison": "at_most",
+          "value": 297.0
+        }
+      ],
+      "track": {
+        "maximum_speed_km_per_hour": 90.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 250.0,
+        "flare_km_per_hour": 15.0,
+        "maximum_half_width_km": 450.0,
+        "spacing_km": 6.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 12.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 3.0
+      },
+      "rank": {
+        "intensity_reference": 3000.0
+      }
+    },
+    {
+      "id": "deep_convection_area",
+      "threat_class": "deep_convection",
+      "field": "column_max_reflectivity",
+      "enabled": true,
+      "description": "A contiguous area of deep convection, ignited when the coarse forecast says it will first appear. 35 dBZ over 20,000 km2 -- about two cells of a 96 km mesh -- is the conventional signature of convection deep enough to matter, without any requirement that it be organised or severe. This is the broadest convective row: it fires in the tropics, over warm oceans and in the mid-latitude warm season alike. The severe row below is the narrower, ingredients-based one. intensity_reference is 15 dBZ, which puts a 50 dBZ core at one unit of significance.",
+      "detector": {
+        "kind": "area_threshold_exceedance",
+        "comparison": "at_least",
+        "threshold": 35.0,
+        "minimum_area_km2": 20000.0,
+        "maximum_area_km2": 1600000.0
+      },
+      "confirm_with": [],
+      "track": {
+        "maximum_speed_km_per_hour": 90.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 200.0,
+        "flare_km_per_hour": 10.0,
+        "maximum_half_width_km": 350.0,
+        "spacing_km": 4.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 6.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 2.0
+      },
+      "rank": {
+        "intensity_reference": 15.0
+      }
+    },
+    {
+      "id": "severe_convection_area",
+      "threat_class": "severe_convection",
+      "field": "severe_convection_margin",
+      "enabled": true,
+      "description": "Organised severe convection, by ingredients rather than by reflectivity alone: a storm, deep-layer shear to organise it, and resolved ascent, all three at once. THE REGION IS PART OF THE DEFINITION. 'Severe' is an operational North American construct with stated criteria (one-inch hail, 50 kt wind, a tornado); the ingredient thresholds carrying those criteria fire continuously over warm tropical oceans, where the same reflectivity and the same shear mean something else and nobody is issuing a warning. The box is the contiguous United States, which is the declared domain; retargeting it is four numbers. TWO OF THE THREE INGREDIENT THRESHOLDS ARE ANCHORED TO A 96 KM PARENT and are named as such in their own field rows.",
+      "region": {
+        "kind": "bounding_box",
+        "south_deg": 24.0,
+        "north_deg": 50.0,
+        "west_deg": -125.0,
+        "east_deg": -66.0
+      },
+      "detector": {
+        "kind": "area_threshold_exceedance",
+        "comparison": "at_least",
+        "threshold": 0.0,
+        "minimum_area_km2": 10000.0,
+        "maximum_area_km2": 900000.0
+      },
+      "confirm_with": [],
+      "track": {
+        "maximum_speed_km_per_hour": 90.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 150.0,
+        "flare_km_per_hour": 10.0,
+        "maximum_half_width_km": 250.0,
+        "spacing_km": 3.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 6.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 2.0
+      },
+      "rank": {
+        "intensity_reference": 1.0
+      }
+    },
+    {
+      "id": "fire_weather_area",
+      "threat_class": "fire_weather",
+      "field": "fire_weather_margin",
+      "enabled": true,
+      "description": "Hot, dry, windy, and over dry fuel, all four at once: the compound threat this grammar was extended to express. The four conditions live in four different units and are made commensurable by the margin rows they are built from. The confirming Hot-Dry-Windy value of 150 hPa m s^-1 is NOT quoted from the literature -- HDW has no universal threshold and is used against a local climatology. It is derived from this row's own conjunction: at exactly 25 C and 20 per cent relative humidity the deficit is about 25 hPa, so at the 8 m s^-1 wind threshold the index is about 200. A floor of 150 therefore rejects a cell that scrapes all four margins by an epsilon in cool humid air while accepting everything the conjunction was written for. It is a consistency check, not an independent criterion, and it is stated that way rather than dressed up as one.",
+      "detector": {
+        "kind": "area_threshold_exceedance",
+        "comparison": "at_least",
+        "threshold": 0.0,
+        "minimum_area_km2": 20000.0,
+        "maximum_area_km2": 1600000.0
+      },
+      "confirm_with": [
+        {
+          "field": "hot_dry_windy_index",
+          "aggregation": {
+            "kind": "ball_maximum",
+            "radius_km": 200.0
+          },
+          "comparison": "at_least",
+          "value": 150.0
+        }
+      ],
+      "track": {
+        "maximum_speed_km_per_hour": 60.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 120.0,
+        "flare_km_per_hour": 5.0,
+        "maximum_half_width_km": 200.0,
+        "spacing_km": 4.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 12.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 3.0
+      },
+      "rank": {
+        "intensity_reference": 1.0
+      }
+    },
+    {
+      "id": "heavy_rainfall_area",
+      "threat_class": "heavy_rainfall",
+      "field": "total_rainfall_rate",
+      "enabled": true,
+      "description": "A contiguous area of heavy precipitation, by RATE rather than by accumulation. Five millimetres per hour as a 96 km cell mean is a large-scale heavy-rain signal: flash-flood guidance is written against point rates several times larger, but a whole 96 km cell averaging 5 mm h^-1 is a substantially wetter event than a gauge reading the same number. On the parent measured, 5 mm h^-1 sits between the 99th and 99.9th percentiles of the rate field. This row cannot detect at frame zero, which has no earlier frame to difference against; its delayed-start policy covers that.",
+      "detector": {
+        "kind": "area_threshold_exceedance",
+        "comparison": "at_least",
+        "threshold": 5.0,
+        "minimum_area_km2": 20000.0,
+        "maximum_area_km2": 1600000.0
+      },
+      "confirm_with": [],
+      "track": {
+        "maximum_speed_km_per_hour": 90.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 175.0,
+        "flare_km_per_hour": 10.0,
+        "maximum_half_width_km": 300.0,
+        "spacing_km": 4.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 6.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 2.0
+      },
+      "rank": {
+        "intensity_reference": 10.0
+      }
+    },
+    {
+      "id": "winter_storm_area",
+      "threat_class": "winter_storm",
+      "field": "winter_storm_margin",
+      "enabled": true,
+      "description": "Heavy snow reaching a surface cold enough to keep it: a two-ingredient compound. A snowfall-rate threshold on its own selects elevated snow falling into air above freezing, which is a rain event on the ground and not a winter storm. Both thresholds are placeholders and neither has been tuned against a real winter-storm case; the snow-rate one is anchored to a 96 km parent's own distribution and named as such in its field row.",
+      "detector": {
+        "kind": "area_threshold_exceedance",
+        "comparison": "at_least",
+        "threshold": 0.0,
+        "minimum_area_km2": 20000.0,
+        "maximum_area_km2": 1600000.0
+      },
+      "confirm_with": [],
+      "track": {
+        "maximum_speed_km_per_hour": 90.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 200.0,
+        "flare_km_per_hour": 10.0,
+        "maximum_half_width_km": 350.0,
+        "spacing_km": 4.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 12.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 3.0
+      },
+      "rank": {
+        "intensity_reference": 1.0
+      }
+    },
+    {
+      "id": "damaging_wind_area",
+      "threat_class": "damaging_wind",
+      "field": "surface_wind_speed",
+      "enabled": true,
+      "description": "A contiguous area of destructive surface wind, whatever produced it -- a cyclone, a squall line, a mountain-gap jet. The 25 m s^-1 threshold is the US severe convective wind criterion (50 kt) applied to a sustained 10 m wind rather than to a gust, which makes it a considerably higher bar: on the parent measured, 25 m s^-1 sits above the 99.9th percentile. THIS ROW OVERLAPS THE CYCLONE ROWS ON PURPOSE and just as often loses to them: a deep low that clears this threshold is usually already admitted as a cyclone, and this candidate is then declined for separation. What it exists to catch is destructive wind with no closed low under it.",
+      "detector": {
+        "kind": "area_threshold_exceedance",
+        "comparison": "at_least",
+        "threshold": 25.0,
+        "minimum_area_km2": 10000.0,
+        "maximum_area_km2": 1600000.0
+      },
+      "confirm_with": [],
+      "track": {
+        "maximum_speed_km_per_hour": 90.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 150.0,
+        "flare_km_per_hour": 12.0,
+        "maximum_half_width_km": 300.0,
+        "spacing_km": 4.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 9.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 3.0
+      },
+      "rank": {
+        "intensity_reference": 8.0
+      }
+    },
+    {
+      "id": "atmospheric_river_corridor",
+      "threat_class": "atmospheric_river",
+      "field": "atmospheric_river_margin",
+      "enabled": true,
+      "description": "A corridor of concentrated low-level moisture transport with a jet inside it. The 50,000 km2 area floor is in the spirit of the standard atmospheric-river definition (Ralph et al. 2019 BAMS, and the AMS Glossary entry that followed it), which also carries a geometric criterion -- longer than 2,000 km, narrower than 1,000 km -- that this grammar cannot express because it has no shape descriptors for a detected region. THE TRANSPORT INGREDIENT IS A BULK-LAYER STAND-IN, NOT AN INTEGRAL, and its threshold is fitted to the parent's own distribution rather than quoted: see the two ingredient rows. THIS IS THE WEAKEST ROW IN THE LIBRARY and it is shipped labelled as such, because the alternative was to leave a requested phenomenon out of the answer without saying why.",
+      "detector": {
+        "kind": "area_threshold_exceedance",
+        "comparison": "at_least",
+        "threshold": 0.0,
+        "minimum_area_km2": 50000.0,
+        "maximum_area_km2": 2000000.0
+      },
+      "confirm_with": [],
+      "track": {
+        "maximum_speed_km_per_hour": 90.0,
+        "minimum_frames": 2
+      },
+      "swath": {
+        "half_width_km": 175.0,
+        "flare_km_per_hour": 6.0,
+        "maximum_half_width_km": 275.0,
+        "spacing_km": 6.0,
+        "cull_pad_scale": 1.35,
+        "transition_cells": 81.0,
+        "lead_hours": 12.0,
+        "path_step_km": 100.0,
+        "cap_points": 16
+      },
+      "start_policy": {
+        "kind": "time_of_first_exceedance",
+        "lead_margin_hours": 3.0
+      },
+      "rank": {
+        "intensity_reference": 1.0
+      }
+    }
+  ]
+}

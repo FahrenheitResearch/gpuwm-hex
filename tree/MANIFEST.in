@@ -33,6 +33,42 @@ graft verification
 # file the reader does not have" defect the grafts above exist to prevent.
 include evidence/EVIDENCE.md
 
+# ...and one directory of tests that must NOT travel, for the same reason
+# `[tool.setuptools.packages.find] exclude` drops `hexcore.mod` from the
+# wheel.  `graft tests` above is a wildcard, and a wildcard is exactly how the
+# thing nobody listed gets shipped: these tests carry the branch name, the
+# commit and the SHA-256 digests of a private seam that has no remote and
+# exists on one machine.  The package exclusion alone would not stop them --
+# they live under tests/, not under the package.
+prune tests/mod
+
+# ...and one DOCUMENT that must not travel, caught by the same wildcard logic
+# one directory over.  `graft docs` is a wildcard and
+# `docs/LANE-BRIEFING.md` is not a user document at all: it is this
+# repository's internal working brief, written for whoever picks the tree up
+# next.
+#
+# THE BREAKAGE THIS PREVENTS: an sdist published to PyPI carrying a private
+# LAN address, a home-directory path on the maintainer's own machine, the
+# maintainer's name against the machines he owns, the reservation protocol
+# for those machines, and the existence and card priority of a second,
+# unrelated private effort.  None of that is recallable once uploaded, none
+# of it helps a reader install or run this software, and the file postdates
+# the 0.1.1 sdist -- so this is a leak the previous cut did not have.
+# `tests/test_packaging_declaration.py` builds the real sdist and fails if
+# the briefing reappears in it.
+exclude docs/LANE-BRIEFING.md
+
+# ...and the release checklist, for the same reason and one more.  It is an
+# operating procedure for cutting a release of this distribution, not a
+# document about using it: it names the private assembly tree, the public
+# repository, the maintainer, the scrub policy applied on the way out, and the
+# ordered commands for acts that need the maintainer's explicit approval.
+# Shipping it inside the artefact it describes would publish the recipe for its
+# own publication, and would put governance text into a public tree, which is
+# exactly what the 0.1.0 scrub removed by hand.
+exclude docs/release-checklist-*.md
+
 # Compiled bytecode is a build product of the sources beside it, never an
 # input; the same rule the working tree follows.
 global-exclude *.pyc

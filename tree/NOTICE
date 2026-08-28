@@ -43,7 +43,7 @@ and a downstream condensate surplus.
 Two of the MPAS-derived operators carry a further upstream lineage, which
 MPAS-Model distributes inside its own tree under the terms reproduced
 below. The orographic gravity-wave-drag operator in
-src/mpas_port/cuda_gwdo_v841.py is a reimplementation of MPAS-Model's
+src/hexcore/cuda_gwdo_v841.py is a reimplementation of MPAS-Model's
 physics_wrf/module_bl_gwdo.F, which is WRF-derived, and of
 physics_mmm/bl_gwdo.F90, the Kim/YSU orographic gravity-wave-drag and
 flow-blocking scheme from NCAR/MMM. Those files are cited by path and line

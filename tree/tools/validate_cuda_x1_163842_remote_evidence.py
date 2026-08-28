@@ -24,8 +24,8 @@ SOURCE_ROOT = ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-import mpas_port.cuda_ftz as cuda_ftz  # noqa: E402
-from mpas_port.cuda_dualrun import (  # noqa: E402
+import hexcore.cuda_ftz as cuda_ftz  # noqa: E402
+from hexcore.cuda_dualrun import (  # noqa: E402
     compare_cuda_capsule_files,
     validate_cuda_capsule,
 )
@@ -295,7 +295,7 @@ def _validate_live_capsule_sources(capsule: Mapping[str, Any]) -> None:
     for name, record in sources.items():
         if not isinstance(record, Mapping):
             raise EvidenceValidationError(f"capsule source pin is invalid: {name}")
-        path = _safe_file(SOURCE_ROOT / "mpas_port", str(record.get("path")))
+        path = _safe_file(SOURCE_ROOT / "hexcore", str(record.get("path")))
         if _sha256_file(path) != record.get("sha256"):
             raise EvidenceValidationError(
                 f"capsule implementation source differs from clean checkout: {name}"

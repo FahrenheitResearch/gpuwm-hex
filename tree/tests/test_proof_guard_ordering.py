@@ -2,7 +2,7 @@
 
 ``verify_arwen_checkout_git`` gates on ``ARWEN_SOURCE_MANIFEST``, which
 ``arwen_source_manifest()`` imports lazily from
-``mpas_port.cuda_arwen_physics_v841`` -- a module that is itself pinned in
+``hexcore.cuda_arwen_physics_v841`` -- a module that is itself pinned in
 ``EXECUTION_SOURCE_PINS``.  Calling the guard first therefore trusts that
 module's constants before its bytes have been proven: an edited adapter
 module can hand the guard a manifest that admits the edited seam, and the

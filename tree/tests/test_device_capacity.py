@@ -1,12 +1,13 @@
 """The preflight for the big-card tier.
 
-The x4.163842 full-physics proof is a forty-minute run that holds about
-26.4 GiB resident.  On a smaller card it does not refuse: it dies part-way
-through, inside a CuPy allocation, several frames below anything the reader
-recognises, after burning whatever time it took to get there.  This test is
-the cheap version of that discovery -- it asks the question first, and on a
-card that cannot answer it skips with the number rather than pretending the
-tier passed.
+The x4.163842 full-physics proof is a forty-minute run whose measured peak
+at the converged pin is 20,542 MiB; its admission floor is that requirement
+plus headroom, read from the one admission surface.  On a smaller card it
+does not refuse: it dies part-way through, inside a CuPy allocation, several
+frames below anything the reader recognises, after burning whatever time it
+took to get there.  This test is the cheap version of that discovery -- it
+asks the question first, and on a card that cannot answer it skips with the
+number rather than pretending the tier passed.
 """
 
 from __future__ import annotations

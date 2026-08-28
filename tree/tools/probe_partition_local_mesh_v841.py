@@ -21,8 +21,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mpas_port.partition_assets_v841 import build_partition_layouts  # noqa: E402
-from mpas_port.partition_local_mesh_v841 import (  # noqa: E402
+from hexcore.partition_assets_v841 import build_partition_layouts  # noqa: E402
+from hexcore.partition_local_mesh_v841 import (  # noqa: E402
     build_local_mesh,
     prepared_slice_report,
     slice_prepared_host,
@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         f"localV={layout.n_local_vertices} ({time.time() - started:.1f}s)"
     )
 
-    from mpas_port.mesh import load_precision_preserving_mesh_pair
+    from hexcore.mesh import load_precision_preserving_mesh_pair
 
     loaded = time.time()
     mesh, output_mesh, _ = load_precision_preserving_mesh_pair(grid, static)
@@ -121,14 +121,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # Slice the global advection coefficients so advCellsForEdge takes part in
     # the edge verdict, then fold its clamp mask into the verification.
-    from mpas_port.partition_local_mesh_v841 import _remap_values
+    from hexcore.partition_local_mesh_v841 import _remap_values
 
     adv_report: dict[str, object] = {"available": False}
     clamp: dict[str, np.ndarray] = {}
     for name, value in dict(local.arrays).items():
         pass
     # rebuild the clamp report by re-running the remap on the global arrays
-    from mpas_port.partition_local_mesh_v841 import (
+    from hexcore.partition_local_mesh_v841 import (
         CELL_VALUED,
         EDGE_VALUED,
         NOT_REMAPPED,
@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         clamp[name] = clamped
 
     try:
-        from mpas_port.transport import build_advection_coefficients
+        from hexcore.transport import build_advection_coefficients
 
         coefficients = build_advection_coefficients(mesh)
         adv_cells = np.asarray(coefficients.adv_cells_for_edge)

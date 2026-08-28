@@ -12,17 +12,40 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src" / "mpas_port"
+SRC = ROOT / "src" / "hexcore"
 
 EXPECTED_SOURCE_SHA256 = {
+    # Moved by the NVRTC reciprocal-rewrite lane (#355): the flux3/flux4
+    # denominator in the three vertical-flux kernels is a translation-unit
+    # constant rather than a source literal, so NVRTC cannot rewrite the
+    # division as a reciprocal multiply on a compute_100-or-above target.
+    # Moved again 2026-08-26 by the convection ruling: the per-component
+    # physics cadence table reports convection: None when no cumulus scheme
+    # is selected.  The reciprocal-rewrite migration this table guards is
+    # untouched -- the flux3/flux4 denominator is still the translation-unit
+    # constant, checked by name in the tests below.
+    # Moved again 2026-08-26 by the limited-area physics lane: the bdyMask
+    # digest has one definition again and cuda_driver delegates to it, and
+    # the full-physics commit's recovered-state gate is routed through the
+    # regional runtime like every other recovered-state gate already was.
+    # Moved again 2026-08-27 by the provenance scrub (#377): three comment
+    # and docstring lines naming a person and a machine were rewritten so the
+    # public assembly no longer has to move bytes that sit under a pin.  The
+    # elisions this table guards are untouched, which is checked by name in
+    # the tests below rather than asserted.
+    # Moved again 2026-08-28 by the 0.2.0 package rename: all three files are
+    # byte-identical to their pre-rename selves once the token mpas_port is
+    # substituted with hexcore, so no elision this table guards moved at all --
+    # which the tests below check by name rather than assert.  Re-derived by
+    # tools/repin_source_tables.py, never by hand.
     SRC / "cuda_driver.py": (
-        "9daf917a89b3b9dd6f013be3d971c76d255bcfbbb9c1027b9de0c8823cb49e66"
+        "e6f51ea11e68f87ed011b61432a7178ef507ce6a518e834a115127ca1687694c"
     ),
     SRC / "cuda_horizontal.py": (
-        "97faf0869a0a5ea9ebbc4c67b3c2d6c68cefdfa10dece73cd204d818962efde4"
+        "fd09f38619ef3fe9b4b61e6665bd5dd440804f45af6c2ffebf9e47d05573d910"
     ),
     SRC / "cuda_horizontal_v841.py": (
-        "3fc0b860ebd67dfed453617c348810964ea1110e782fe85db10283afb406e2fe"
+        "037f094c55417bef3c3c9a9131d46195bed464122523e7de4f1e9fa286b75412"
     ),
 }
 

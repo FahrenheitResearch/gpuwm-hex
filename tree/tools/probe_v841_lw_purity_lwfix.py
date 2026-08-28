@@ -125,13 +125,13 @@ def main(argv=None) -> int:
     runner.verify_arwen_checkout_git(arwen_checkout)
     authority_receipt = runner.verify_authorities(paths)
     host = runner._prepare_host_execution(paths, authority_receipt)
-    from mpas_port.cuda_arwen_physics_v841 import pin_arwen_physics_v841
+    from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
     pin_arwen_physics_v841(arwen_checkout)
     import gpuwm
 
     print(f"[probe:{args.perturb}] gpuwm module: {gpuwm.__file__}", flush=True)
-    from mpas_port.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_backend import KernelCache, require_cuda
 
     capability = require_cuda(
         min_compute=(12, 0), required_compute=(12, 0), cache_dir=cache_root

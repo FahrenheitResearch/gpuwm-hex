@@ -47,9 +47,9 @@ import sys
 import numpy as np
 from netCDF4 import Dataset
 
-from mpas_port.obs_referee.bundle import write_grid_bundle
-from mpas_port.obs_referee.canonical import write_json
-from mpas_port.render_door import resolve_convert_exe
+from hexcore.obs_referee.bundle import write_grid_bundle
+from hexcore.obs_referee.canonical import write_json
+from hexcore.render_door import resolve_convert_exe
 
 #: Every WRF name this producer reads. A converted frame missing any of them is
 #: refused by name rather than packed with a hole: a frame without Q2 has no

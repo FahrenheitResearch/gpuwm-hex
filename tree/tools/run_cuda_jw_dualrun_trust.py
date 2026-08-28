@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Trust-promote one frozen 24-step v8.2.3 CUDA JW dual run.
 
-This launcher intentionally imports no ``mpas_port`` or GPUWM module before
+This launcher intentionally imports no ``hexcore`` or GPUWM module before
 it has validated static authority pins and copied the exact admitted bytes to
 a fresh capsule.  The measured child enters through an isolated bootstrap.
 Only after the child exits does this launcher import the frozen MPAS validator
@@ -552,7 +552,7 @@ def _gpuwm_inventory(root: Path) -> dict[str, Any]:
 def _authority_snapshot(
     args: argparse.Namespace, *, pins: Mapping[str, Any]
 ) -> dict[str, Any]:
-    source_files = _tree_inventory(ROOT / "src" / "mpas_port", ignored_parts=_IGNORED_PARTS)
+    source_files = _tree_inventory(ROOT / "src" / "hexcore", ignored_parts=_IGNORED_PARTS)
     receipt_root = args.gpuwm_probe.expanduser().resolve()
     receipt_files = _tree_inventory(receipt_root)
     expected = pins.get("expected")
@@ -568,7 +568,7 @@ def _authority_snapshot(
     return {
         "outer_launcher_authority": deepcopy_json(OUTER_LAUNCHER_AUTHORITY),
         "mpas_source": {
-            "root": str((ROOT / "src" / "mpas_port").resolve()),
+            "root": str((ROOT / "src" / "hexcore").resolve()),
             "files": source_files,
             **_inventory_summary(source_files),
         },
@@ -947,7 +947,7 @@ def _freeze_capsule(
     for relative, record in snapshot["mpas_source"]["files"].items():
         _copy_file_exclusive(
             source_root / relative,
-            capsule / "src" / "mpas_port" / relative,
+            capsule / "src" / "hexcore" / relative,
             record,
         )
     _copy_file_exclusive(
@@ -1253,7 +1253,7 @@ def _reject_nondeterministic_fields(value: Any, path: str = "") -> None:
 
 
 def _expected_source_bindings(capsule: Path) -> dict[str, dict[str, str]]:
-    source = capsule / "src" / "mpas_port"
+    source = capsule / "src" / "hexcore"
     return {
         label: {"path": relative, "sha256": _file_record(source / relative)["sha256"]}
         for label, relative in EXPECTED_SOURCE_PATHS.items()
@@ -1262,7 +1262,7 @@ def _expected_source_bindings(capsule: Path) -> dict[str, dict[str, str]]:
 
 def _validate_with_frozen_source(capsule: Path, arms: Sequence[Mapping[str, Any]]) -> None:
     leaked = sorted(
-        name for name in sys.modules if name == "mpas_port" or name.startswith("mpas_port.")
+        name for name in sys.modules if name == "hexcore" or name.startswith("hexcore.")
     )
     if leaked:
         raise TrustError(f"MPAS modules were imported before frozen validation: {leaked}")
@@ -1270,12 +1270,12 @@ def _validate_with_frozen_source(capsule: Path, arms: Sequence[Mapping[str, Any]
     sys.path.insert(0, str(source_root))
     imported: list[str] = []
     try:
-        module = importlib.import_module("mpas_port.cuda_dualrun")
+        module = importlib.import_module("hexcore.cuda_dualrun")
         imported = [
-            name for name in sys.modules if name == "mpas_port" or name.startswith("mpas_port.")
+            name for name in sys.modules if name == "hexcore" or name.startswith("hexcore.")
         ]
         module_path = Path(module.__file__).resolve()
-        expected_path = (source_root / "mpas_port" / "cuda_dualrun.py").resolve()
+        expected_path = (source_root / "hexcore" / "cuda_dualrun.py").resolve()
         if module_path != expected_path:
             raise TrustError("capsule validator was not imported from frozen source")
         for arm in arms:
@@ -1635,7 +1635,7 @@ def _validate_runtime_receipt(
         "gpuwm.certify.compile_platform",
         "netCDF4",
         "numpy",
-        "mpas_port.cuda_dualrun",
+        "hexcore.cuda_dualrun",
         "scipy",
     }
     missing_modules = sorted(required_modules - set(post_modules))

@@ -36,7 +36,7 @@ Per-leg receipts are named `evidence/source-matrix/<source>/` (init
 provenance, vertical receipt, mesh-bind receipt, forecast receipt), with one
 met_intermediate receipt or verbatim refusal per source beside them. Those
 receipt files are not carried in this repository — see
-[`../evidence/EVIDENCE.md`](../evidence/EVIDENCE.md) for why, and for how to
+receipt `../evidence/EVIDENCE.md` for why, and for how to
 ask for a specific one. Every verdict quoted in the tables below is reproduced
 verbatim here, so the table is readable without them.
 

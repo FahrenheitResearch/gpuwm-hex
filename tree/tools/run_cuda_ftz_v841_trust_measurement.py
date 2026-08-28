@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Trust-anchored launcher for the promoted v8.4.1 sm_120 FTZ measurement.
 
-This launcher deliberately does not import ``mpas_port`` or the measured
+This launcher deliberately does not import ``hexcore`` or the measured
 runner.  It pins their bytes first, starts the frozen runner in a child
 process with absent output/cache roots, independently validates the completed
 measurement, then publishes a separate O_EXCL receipt, manifest, and final
@@ -33,15 +33,26 @@ AUTHORITY_PINS = ROOT / "tools" / "cuda_ftz_v841_authority_pins.json"
 ISOLATED_BOOTSTRAP = ROOT / "tools" / "cuda_ftz_v841_isolated_bootstrap.py"
 FROZEN_VALIDATOR = ROOT / "tools" / "cuda_ftz_v841_binding_validator.py"
 
-FROZEN_TOOL_SHA256 = "9be59ef180ae3e562d363081ffa9bd6c9872799c3998631d149045d2d5f66abe"
+# These four pin instruments of this repository, not measurements, and they are
+# re-derived by tools/repin_source_tables.py.  TWO OF THEM WERE DEAD BEFORE THE
+# 0.2.0 RENAME AND NOBODY KNEW: AUTHORITY_PINS_SHA256 arrived with the base
+# import at 8a34759 and was killed by 36802f8, which edited the json it
+# digests, and it stayed wrong for weeks because nothing that runs without a
+# CUDA card ever reads it -- the whole CPU battery is green with this constant
+# naming bytes that exist nowhere.  A card-tier gate whose table only a card
+# checks is a gate that fails on the node, at the start of a booked run.
+# AUTHORITY_PINS_SHA256 is also a fixed point: the json it digests carries
+# run_cuda_ftz_contract.py's own digest, so the two settle in that order and
+# the generator iterates until a whole pass changes nothing.
+FROZEN_TOOL_SHA256 = "c146ae3160f077b8e45478d6f9b242c443c767638785e9fe57ee01764f8ee1d9"
 AUTHORITY_PINS_SHA256 = (
-    "8fb3d656ab20375e02d3f5940c1cb4ff581b0823aa935c270a8595b814c30f72"
+    "a9a08873213b0c36058d6cfae9b78b27d7b9d26607538ec9da3dc800025d3804"
 )
 ISOLATED_BOOTSTRAP_SHA256 = (
     "05c936eeb999a35b45a1ca446fbb1e346238d0576e898e7debc96f71c2e16738"
 )
 FROZEN_VALIDATOR_SHA256 = (
-    "d3a264ffa326dd5c69ff96c668c488fb1a87a84d8ba73b7e777960fad6536915"
+    "e122e8da5c24c743bf8684e8b54b95a4c95b187eaf8aedd2bbb82f234d3055ef"
 )
 
 PIN_SCHEMA = "mpas-port.cuda-ftz-v841-authority-pins/v1"
@@ -60,15 +71,28 @@ KERNEL_AUDIT_MEASUREMENT = (
 AUDIT_PASS_SCHEMA = "mpas-port.cuda-ftz-v841-device-pass/v2"
 AUDIT_TRANSCRIPT_SCHEMA = "mpas-port.cuda-ftz-v841-transcript/v2"
 
+# THE 0.2.0 RENAME LEFT A CARD-TIER PIN OWED HERE, AND IT IS NOT RE-DERIVABLE
+# FROM THIS TREE.  These keys are NVRTC module_key values, they moved from
+# mpas_port.* to hexcore.* with the package, and CompileManifest.snapshot()
+# keys its "modules" map by exactly them.  So a compile manifest measured on a
+# card today canonicalises to a different digest than the sm_120 measurement
+# that minted expected_measurement.compile_manifest_canonical_sha256 /
+# _file_sha256 in cuda_ftz_v841_authority_pins.json, and _verify_compile_manifest
+# will refuse with "measured compile manifest canonical SHA-256 changed".
+# Those two values are a MEASUREMENT of a card, not a statement about this
+# tree, so tools/repin_source_tables.py deliberately does not touch them:
+# re-deriving a card measurement from source would be a fabrication.  They are
+# RE-MEASURED by re-running the ftz contract on an sm_120 card, and until that
+# happens this gate is red by construction.  NOT MEASURED by the re-pin lane.
 EXPECTED_TRANSLATION_UNITS = {
-    "mpas_port.cuda_acoustic": 1,
-    "mpas_port.cuda_acoustic_v841": 6,
-    "mpas_port.cuda_backend.recovery": 3,
-    "mpas_port.cuda_driver": 12,
-    "mpas_port.cuda_dynamics_v841": 9,
-    "mpas_port.cuda_horizontal": 4,
-    "mpas_port.cuda_horizontal_v841": 6,
-    "mpas_port.cuda_transport_v841": 5,
+    "hexcore.cuda_acoustic": 1,
+    "hexcore.cuda_acoustic_v841": 6,
+    "hexcore.cuda_backend.recovery": 3,
+    "hexcore.cuda_driver": 12,
+    "hexcore.cuda_dynamics_v841": 9,
+    "hexcore.cuda_horizontal": 4,
+    "hexcore.cuda_horizontal_v841": 6,
+    "hexcore.cuda_transport_v841": 5,
 }
 EXPECTED_TRANSLATION_UNIT_COUNT = 8
 EXPECTED_RESOLVED_KERNEL_COUNT = 46
@@ -1453,7 +1477,7 @@ def _validate_measured_output(
         compile_manifest_sha256=compile_sha,
     )
     runner_record = pre_snapshot["mpas_authority"]["files"].get(
-        "src/mpas_port/cuda_ftz_v841.py"
+        "src/hexcore/cuda_ftz_v841.py"
     )
     if not isinstance(runner_record, Mapping):
         raise TrustError("authority snapshot lacks the live FTZ runner source")

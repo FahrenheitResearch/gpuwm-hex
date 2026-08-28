@@ -9,20 +9,20 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mpas_port.config_lts import (
+from hexcore.config_lts import (
     DEFAULT_LOCAL_TIMESTEP_RATES,
     V841LocalTimestepDryConfig,
     V841LocalTimestepGwdoConfig,
     V841LocalTimestepSmagorinskyGwdoConfig,
     local_timestep_enabled,
 )
-from mpas_port.config_v841 import (
+from hexcore.config_v841 import (
     V841DryDycoreConfig,
     V841MpasColumnPhysicsGwdoConfig,
     V841MpasColumnPhysicsSmagorinskyGwdoConfig,
 )
-from mpas_port.errors import ConfigurationRefusal
-from mpas_port.lts_v841 import (
+from hexcore.errors import ConfigurationRefusal
+from hexcore.lts_v841 import (
     admissible_rates,
     cell_min_spacing,
     classify_local_timestep,
@@ -276,8 +276,8 @@ _GATHERED = (
 
 
 def test_every_derived_acoustic_kernel_is_its_ancestor_plus_the_gather():
-    from mpas_port import cuda_acoustic_lts as lts
-    from mpas_port import cuda_acoustic_v841
+    from hexcore import cuda_acoustic_lts as lts
+    from hexcore import cuda_acoustic_v841
 
     source = cuda_acoustic_v841._CUDA_SOURCE
     for name, index, bound in _GATHERED:
@@ -305,8 +305,8 @@ def test_every_derived_acoustic_kernel_is_its_ancestor_plus_the_gather():
 
 
 def test_the_damping_kernel_is_its_ancestor_plus_the_gather():
-    from mpas_port import cuda_acoustic_lts as lts
-    from mpas_port import cuda_horizontal
+    from hexcore import cuda_acoustic_lts as lts
+    from hexcore import cuda_horizontal
 
     original = lts._extract_kernel(cuda_horizontal._CUDA_SOURCE, "divergence_damping_f32")
     derived = lts._gather(
@@ -331,7 +331,7 @@ def test_the_damping_kernel_is_its_ancestor_plus_the_gather():
 
 
 def test_a_moved_anchor_refuses_instead_of_silently_deriving_a_whole_domain_launch():
-    from mpas_port import cuda_acoustic_lts as lts
+    from hexcore import cuda_acoustic_lts as lts
 
     drifted = (
         'extern "C" __global__ void made_up(const int ncells)\n'
@@ -356,7 +356,7 @@ def test_a_flux_corrected_limiter_is_refused_alongside_the_option():
     # an interface that was never proved with a limiter crossing it.
     import types
 
-    from mpas_port import cuda_driver_lts
+    from hexcore import cuda_driver_lts
 
     for knob in ("config_monotonic", "config_positive_definite"):
         config = types.SimpleNamespace(
@@ -385,7 +385,7 @@ def test_the_reflux_settle_carries_no_atomics():
     # identical runs then differ: measured over 120 steps that seed reached
     # 59-99% of the domain.  The port's corruption screen on cards with no ECC
     # is the dual-run byte comparison, which a nondeterministic path defeats.
-    from mpas_port import cuda_acoustic_lts as lts
+    from hexcore import cuda_acoustic_lts as lts
 
     import re
 
@@ -413,7 +413,7 @@ def test_the_reflux_settle_carries_no_atomics():
 def test_the_settle_grouping_keeps_every_interface_edge_exactly_once():
     import numpy as _np
 
-    from mpas_port.lts_v841 import classify_local_timestep
+    from hexcore.lts_v841 import classify_local_timestep
 
     dc, eoc, counts, coe = _chain([10.0] * 3 + [50.0] * 6)
     classing = classify_local_timestep(
@@ -439,7 +439,7 @@ def test_the_settle_grouping_keeps_every_interface_edge_exactly_once():
 
 
 def test_the_derived_translation_unit_declares_every_kernel_once():
-    from mpas_port import cuda_acoustic_lts as lts
+    from hexcore import cuda_acoustic_lts as lts
 
     source = lts.local_timestep_cuda_source()
     for name in (

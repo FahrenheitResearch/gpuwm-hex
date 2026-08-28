@@ -6,7 +6,7 @@ the render law reserves the Rust renderer for weather-field products and
 allows matplotlib for analysis that is not one.
 
 Every number plotted is either the measured footprint row the door ships
-(``mpas_port.forecast_door.FOOTPRINT_MODEL``, read from there rather than
+(``hexcore.forecast_door.FOOTPRINT_MODEL``, read from there rather than
 restated) or a value measured on the certifying card and recorded below.
 Nothing here is illustrative.
 
@@ -26,13 +26,14 @@ from matplotlib.ticker import FuncFormatter  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mpas_port.forecast_door import (  # noqa: E402
-    DEFAULT_HEADROOM_BYTES,
+from hexcore.forecast_door import (  # noqa: E402
     FOOTPRINT_MODEL,
     MIB,
 )
 
-HEADROOM_MIB = DEFAULT_HEADROOM_BYTES / MIB
+# The margin is the model's own now -- two named, measured terms priced from
+# the card -- not a flat constant every card shares.
+HEADROOM_MIB = FOOTPRINT_MODEL.margin_bytes() / MIB
 
 # Registered rows, from tools/mpas_mesh_binding.py.  Named here rather than
 # imported because importing the registry pulls netCDF4 and numpy for a
@@ -70,9 +71,7 @@ def predicted_mib(cells: int) -> float:
 
 
 def fitted_cells(budget_gib: float) -> int:
-    return FOOTPRINT_MODEL.max_cells(
-        int(budget_gib * 1024 * MIB), DEFAULT_HEADROOM_BYTES
-    )
+    return FOOTPRINT_MODEL.max_cells(int(budget_gib * 1024 * MIB))
 
 
 def _style(axes) -> None:
@@ -163,8 +162,10 @@ def decision_chart(path: Path) -> None:
     )
     axes.text(
         0.0, 1.045,
-        f"predicted from the measured row {FOOTPRINT_MODEL.fixed_bytes / MIB:,.1f} "
-        f"MiB + {FOOTPRINT_MODEL.bytes_per_cell:,.0f} B per cell; all three\n"
+        f"predicted from the measured row: a "
+        f"{FOOTPRINT_MODEL.core_bytes / MIB:,.1f} MiB core, the tiled physics "
+        f"workspaces at this\ncard's own tile, and "
+        f"{FOOTPRINT_MODEL.bytes_per_cell:,.0f} B per cell; all three\n"
         f"sat above what this 10 GiB card had free, so the door refused all three",
         transform=axes.transAxes, color=MUTED, fontsize=9.5, va="bottom",
     )

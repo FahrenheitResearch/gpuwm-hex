@@ -20,7 +20,7 @@ These three files are that producer. None of them parses an archive format.
 ## The boundary they keep
 
 Every GRIB2 and METAR byte is decoded by a Rust front door resolved through
-gpuwm's own ladder (`gpuwm.obs.frontdoor`, `mpas_port.render_door`), and the
+gpuwm's own ladder (`gpuwm.obs.frontdoor`, `hexcore.render_door`), and the
 unstructured-to-structured gather is `rw_mpas_convert`. What these files do is
 read the packs those doors wrote — with gpuwm's own pack reader, which re-proves
 the payload digest — and write the referee's containers.
@@ -75,4 +75,4 @@ python tools/run_obs_referee.py run \
 
 The first real run of that command is recorded in
 receipt `../../evidence/obs-referee-283/RECEIPT.md` (see
-[`../../evidence/EVIDENCE.md`](../../evidence/EVIDENCE.md)).
+receipt `../../evidence/EVIDENCE.md`).

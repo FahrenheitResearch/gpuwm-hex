@@ -51,8 +51,8 @@ import numpy as np
 from gpuwm.obs.frontdoor import ASOS, MRMS, STAGE4
 from gpuwm.obs.obspack import read_grid_pack, read_pack
 
-from mpas_port.obs_referee.bundle import write_grid_bundle, write_station_bundle
-from mpas_port.obs_referee.canonical import write_json
+from hexcore.obs_referee.bundle import write_grid_bundle, write_station_bundle
+from hexcore.obs_referee.canonical import write_json
 
 PRODUCER = "gpuwm-hex"
 

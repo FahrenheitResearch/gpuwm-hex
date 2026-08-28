@@ -34,7 +34,7 @@ import numpy as np
 import pytest
 from scipy.spatial import ConvexHull
 
-from mpas_port.mesh import Mesh, MeshValidationError, spherical_arc_tolerance
+from hexcore.mesh import Mesh, MeshValidationError, spherical_arc_tolerance
 
 
 #: The radius the published meshes carry.
@@ -526,3 +526,120 @@ def test_arc_tolerance_relative_half_is_never_looser_than_binary32_storage() -> 
     # Metre-scale corruption at coarse spacing must not fit inside the relative
     # half: at 200 km that bound is under a quarter of a metre.
     assert coarse * 200_000.0 < 0.25
+
+
+# ---------------------------------------------------------------------------
+# a global mesh that carries the boundary-mask triple
+#
+# MEASURED (2026-08-26, all three fleet cards, x1.40962 at the anchored 120 s
+# timestep): every forecast on the published global mesh was refused with
+# "regional mesh is not a bounded disk: nCells-nEdges+nVertices = 2, not 1"
+# and three "bdyMask rings [1..7] are empty" findings.  Both are the proof the
+# mesh is GLOBAL -- 2 is a closed sphere's Euler characteristic, and empty
+# rings are what an all-zero mask means -- and they were being read as proof
+# of a corrupt cull.
+#
+# The cause is that native MPAS-A writes bdyMaskCell/Edge/Vertex into a GLOBAL
+# mesh's static file as well, all zero.  Read from the real published bytes:
+# x1.40962.static.nc (NCAR, init_atmosphere v8.2.0) carries all three, with
+# 0 of 40,962 / 0 of 122,880 / 0 of 81,920 entries nonzero.  Classifying on
+# the triple's PRESENCE therefore refuses the published family outright, while
+# the mesh registry's own row for the same mesh says global (its
+# boundary_zone_width and bdy_mask_sha256 are both unset).
+# ---------------------------------------------------------------------------
+def _with_zero_boundary_masks(mesh: Mesh) -> Mesh:
+    """The fixture as native MPAS-A would write it: the triple, all zero."""
+
+    arrays = dict(mesh.arrays)
+    for name, count in (
+        ("bdyMaskCell", mesh.dimensions["nCells"]),
+        ("bdyMaskEdge", mesh.dimensions["nEdges"]),
+        ("bdyMaskVertex", mesh.dimensions["nVertices"]),
+    ):
+        arrays[name] = np.zeros(int(count), dtype=np.int32)
+    return Mesh(
+        arrays=arrays, dimensions=dict(mesh.dimensions), attrs=dict(mesh.attrs)
+    )
+
+
+def test_a_global_mesh_carrying_an_all_zero_mask_triple_is_still_global(
+    fine_mesh: Mesh,
+) -> None:
+    """The regression: presence of the triple is necessary, not sufficient."""
+
+    mesh = _with_zero_boundary_masks(fine_mesh)
+    # every mask is present, so the schema alone says "regional"
+    assert all(
+        name in mesh.arrays
+        for name in ("bdyMaskCell", "bdyMaskEdge", "bdyMaskVertex")
+    )
+    # and the mesh is a closed sphere, so it is not one
+    assert (
+        mesh.dimensions["nCells"]
+        - mesh.dimensions["nEdges"]
+        + mesh.dimensions["nVertices"]
+        == 2
+    )
+    assert mesh.validate() is mesh
+
+
+def test_a_cull_with_a_real_zone_is_still_classified_regional(
+    fine_mesh: Mesh,
+) -> None:
+    """The other direction: the fix must not stop seeing genuine culls.
+
+    A nonempty zone is what makes a mesh regional, so a sphere carrying one is
+    a contradiction and must be refused -- by the disk check, exactly as
+    before.  This is the arm that would go quiet if the new rule were simply
+    "never regional".
+    """
+
+    arrays = dict(fine_mesh.arrays)
+    n_cells = int(fine_mesh.dimensions["nCells"])
+    n_edges = int(fine_mesh.dimensions["nEdges"])
+    n_vertices = int(fine_mesh.dimensions["nVertices"])
+    mask_cell = np.zeros(n_cells, dtype=np.int32)
+    mask_cell[:64] = 7
+    arrays["bdyMaskCell"] = mask_cell
+    arrays["bdyMaskEdge"] = np.zeros(n_edges, dtype=np.int32)
+    arrays["bdyMaskVertex"] = np.zeros(n_vertices, dtype=np.int32)
+    mesh = Mesh(
+        arrays=arrays,
+        dimensions=dict(fine_mesh.dimensions),
+        attrs=dict(fine_mesh.attrs),
+    )
+    with pytest.raises(MeshValidationError) as caught:
+        mesh.validate()
+    assert "bounded disk" in str(caught.value)
+
+
+def test_an_all_zero_triple_on_a_mesh_that_is_no_sphere_is_refused_by_name(
+    fine_mesh: Mesh,
+) -> None:
+    """The gap the new rule opens is closed where it opens.
+
+    An all-zero triple now means "global", and global means "closed sphere".
+    A file that claims neither is described by no convention this validator
+    holds, and says so rather than being waved through as global.
+    """
+
+    mesh = _with_zero_boundary_masks(fine_mesh)
+    n_vertices = int(mesh.dimensions["nVertices"])
+    # drop one vertex consistently -- dimension AND every array indexed by it
+    # -- so the file is shape-coherent and its Euler characteristic is 1
+    arrays = {
+        name: (
+            value[: n_vertices - 1]
+            if getattr(value, "shape", (None,))[0] == n_vertices
+            else value
+        )
+        for name, value in mesh.arrays.items()
+    }
+    dimensions = dict(mesh.dimensions)
+    dimensions["nVertices"] = n_vertices - 1
+    broken = Mesh(arrays=arrays, dimensions=dimensions, attrs=dict(mesh.attrs))
+    with pytest.raises(MeshValidationError) as caught:
+        broken.validate()
+    text = str(caught.value)
+    assert "entirely zero" in text
+    assert "closed sphere's 2" in text

@@ -205,6 +205,58 @@ def test_copy_elision_accounting_matches_x4_geometry() -> None:
     assert sum(event.bytes for event in events.values()) == 1_515_206_856
 
 
+def test_copy_elision_of_record_arm_is_the_admission_surface_row() -> None:
+    """Stale-guard audit #347, finding 7: the stale-model-prevention tool's
+    own "of record" instruction went stale -- it directed new questions at
+    the superseded 6,296.5 + 93,474 row after the converged row landed.
+    The refusal text and ``device_admission.FLOOR_DERIVATION`` must quote
+    the SAME of-record coefficients, so the tool built to prevent stale
+    models can never again recommend one."""
+
+    import re
+
+    from hexcore import device_admission as surface
+
+    module = _load("copy_elision_accounting")
+    text = module.MODEL_REFUSAL
+
+    # 2026-08-27: the admission surface stopped being affine, so this tool --
+    # which can only project an affine pair -- can no longer answer the
+    # current question at all.  A stale-model-prevention tool presenting an
+    # affine row as "of record" would be the exact drift it was built to
+    # prevent, one generation on.
+    assert not re.search(r"of record\s+--prior-fixed-mib", text), (
+        "no affine arm may be labelled 'of record': the surface is shaped, "
+        "and an affine pair now answers a question about a retired row"
+    )
+    assert "model_for_card" in text, (
+        "the refusal must send a NEW question to the surface that can answer "
+        "it, by the name a reader can call"
+    )
+
+    # The row this lane retired stays quotable, and its numbers must still be
+    # the retired arm's own -- hand-typing them is how a superseded row
+    # outlives the constant it came from.
+    retired = surface.RETIRED_AFFINE_ROW_20260826
+    match = re.search(
+        r"retired\s+--prior-fixed-mib\s+([0-9.]+)\s+"
+        r"--prior-bytes-per-cell\s+(\d+)",
+        text,
+    )
+    assert match is not None, "the retired 2026-08-26 arm must stay quotable"
+    assert float(match.group(1)) == pytest.approx(retired.fixed_bytes / (1024**2))
+    assert float(match.group(2)) == retired.bytes_per_cell
+    assert "retired_affine_row_floor_bytes" in text, (
+        "the retired arm must name the ONE place it is computable, so a "
+        "before/after table never hand-types it"
+    )
+
+    # The older rows stay quotable too, but only as labeled history.
+    assert "6296.5" in text and "93474" in text
+    assert "superseded" in text.lower()
+    assert "pin-move-335-20260825" in text
+
+
 def test_lifetime_contract_refuses_concurrent_writable_alias() -> None:
     module = _load("runtime_ledger")
     read_left = module.LifetimeContract("left", 0, 1, "read", 1000, 100)

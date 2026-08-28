@@ -20,7 +20,9 @@ The unusual part is where it runs: **one consumer graphics card**. The entire
 model state lives in GPU memory and every step of the integration is CUDA.
 There is no cluster, no MPI job, no supercomputer allocation. A 12 GiB gaming
 card integrates the published 40,962-cell global mesh; a 32 GiB card
-integrates the 163,842-cell mesh whose fine band is about 25 km.
+integrates the 163,842-cell mesh whose fine band is about 25 km; a 10 GiB
+card runs a six-hour full-physics limited-area forecast cut out of a
+global case.
 
 ## What it is, precisely
 
@@ -33,18 +35,29 @@ integrates the 163,842-cell mesh whose fine band is about 25 km.
   `gpuwm` distribution share one physics implementation rather than two that
   drift.
 - **The tooling** is a set of doors: `doctor` reports what your install can
-  reach, `mesh-check` validates a mesh, `init` builds initial conditions,
-  `render` turns model output into product images. Each door refuses bad
-  input by name rather than producing a plausible wrong answer.
+  reach, `mesh-check` validates a mesh, `cull` cuts a limited-area case out
+  of a global one, `init` builds initial conditions, `forecast` runs the
+  model, `swath` decides where a fine grid goes, `cycle` follows weather
+  across cycles, `render` turns model output into product images. Each door
+  refuses bad input by name rather than producing a plausible wrong answer.
 
 ## What it can do
 
 Measured, not promised (receipts in the README and under `evidence/`):
 
 - 24-hour global forecasts on one card, deterministic across dual runs.
+- Full-physics limited-area forecasts cut out of a global case with the
+  `cull` door and driven at their boundary: six hours, 1,080 of 1,080
+  steps on an 11,020-cell cut, a 6,224 MiB footprint on a 10 GiB card
+  [`evidence/regional-physics-20260826/`].
+- Weather followed across forecast cycles: `swath` places fine grids from
+  a coarse run's own fields, `cycle` cuts, forces and integrates them —
+  two real cycles ran back to back, both fine forecasts completing
+  1,080 of 1,080 steps [`evidence/cycling-loop-20260827/`].
 - Initial conditions built from a WPS intermediate file (GFS, ERA5, or
-  whatever you drive with) without running any native Fortran tool, given a
-  one-time native-built "capsule" for the mesh (chapter 5).
+  whatever you drive with) without running any native Fortran tool; a
+  native-built "capsule" is an explicit compatibility mode, not a
+  requirement (chapter 5).
 - Product PNGs rendered from history files entirely through the Rust
   renderer, filed by domain, product, and valid day (chapter 7).
 - New meshes at resolutions you choose, with their static fields, generated
@@ -59,13 +72,14 @@ Measured, not promised (receipts in the README and under `evidence/`):
   chaos-shaped divergence there are **three measured, one-signed
   differences** — the declared divergences of chapter 3. Read them before
   trusting a number.
-- **No regional (limited-area) mode.** 0.1 is global-only; use mesh
-  refinement to put resolution where you want it.
-- **No multi-GPU in 0.1.** Two-node execution is built and proven bitwise
+- **No multi-GPU.** Two-node execution is built and proven bitwise
   partition-invariant, but it is not part of this release.
-- **No forecast front door yet.** Running the model itself requires the
-  source checkout (chapter 6 states exactly why); the packaged doors cover
-  doctor, mesh validation, initial conditions, and rendering.
+- **Forecasting needs two checkouts.** `gpuwm-hex forecast` is a shipped
+  door — and `cycle run` drives it — but it refuses by name without a
+  `gpuwm-hex` checkout for the drivers and a `gpuwm` **git** checkout at
+  the pinned commit, the second for receipt provenance rather than for the
+  seam bytes (chapter 6 states exactly why). The doors around it run from
+  the wheel.
 - **No data fetching.** gpuwm-hex ships no meshes, no static files, no
   meteorological data, and has no download command for them. Chapter 2 states
   plainly where each asset comes from.
@@ -81,7 +95,7 @@ Measured, not promised (receipts in the README and under `evidence/`):
 
 | | |
 | --- | --- |
-| GPU | Any CUDA device for the doors. For forecasts, memory is set by mesh size — measured at the current engine pin on an RTX 5090: **6,296.5 MiB fixed + 93,474 bytes per cell** [`evidence/gf-pin-move-measured-20260824/`]. The 40,962-cell global mesh peaked at **9,948 MiB** (fits a 12 GiB card); the 163,842-cell mesh peaked at **20,902 MiB** and its run path admits at a 24 GiB free-memory floor, so it remains a 32 GiB-card configuration. The fixed term is a property of the card: smaller cards previously measured carried smaller fixed terms. |
+| GPU | Any CUDA device for the doors. For forecasts, memory is set by mesh size *and* by the card, and the two do not combine into a line: the footprint is a per-card core, plus two physics column workspaces charged at `min(cells, tile)`, plus a per-cell term (chapter 4). Measured at the merged tip on an RTX 5090, 2026-08-26 [`evidence/memory-row-refit-20260826/node2/`]: the 40,962-cell global mesh peaked at **8,874 MiB** (fits a 12 GiB card); the 163,842-cell mesh peaked at **20,446 MiB** and admits at the measured floor — the prediction plus that card's own margin, about 21.7 GiB free at x4, computed by `hexcore.device_admission` — so it remains in practice a 32 GiB-card configuration. The core is a property of the card, and the door reads the card at the moment of the decision. |
 | CPU/RAM | Modest. The doors are I/O-bound; the model state lives on the device. |
 | Disk | Meshes, initial conditions, and history files are hundreds of MB to a few GB each. The optional byte-pinned test assets are about 6.9 GiB. |
 | OS | Linux or Windows. Python 3.11 or newer. |

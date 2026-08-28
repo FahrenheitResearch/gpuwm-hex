@@ -15,8 +15,8 @@ SOURCE_ROOT = ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from mpas_port.cuda_backend import require_cuda  # noqa: E402
-from mpas_port.cuda_dualrun import (  # noqa: E402
+from hexcore.cuda_backend import require_cuda  # noqa: E402
+from hexcore.cuda_dualrun import (  # noqa: E402
     compare_cuda_capsule_files,
     derive_step_count,
     jw_day_config,

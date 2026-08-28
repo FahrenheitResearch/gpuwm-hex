@@ -42,9 +42,9 @@ for import_root in (SOURCE_ROOT, TOOLS_ROOT):
 
 import run_real_gfs_cuda_forecast as coarse  # noqa: E402
 
-from mpas_port.cuda_backend import require_cuda  # noqa: E402
-from mpas_port.cuda_driver import CudaDryDycoreDriver  # noqa: E402
-from mpas_port.cuda_dualrun import (  # noqa: E402
+from hexcore.cuda_backend import require_cuda  # noqa: E402
+from hexcore.cuda_driver import CudaDryDycoreDriver  # noqa: E402
+from hexcore.cuda_dualrun import (  # noqa: E402
     compare_cuda_capsule_files,
     fingerprint_array,
     fingerprint_atmosphere,
@@ -56,29 +56,29 @@ from mpas_port.cuda_dualrun import (  # noqa: E402
     run_cuda_arm_generic,
     write_json_atomic,
 )
-from mpas_port.driver import (  # noqa: E402
+from hexcore.driver import (  # noqa: E402
     DryDycoreDriver,
     StabilityBounds,
 )
-from mpas_port.initialization import (  # noqa: E402
+from hexcore.initialization import (  # noqa: E402
     initialize_from_structured,
     load_structured_atmosphere,
 )
-from mpas_port.mesh import (  # noqa: E402
+from hexcore.mesh import (  # noqa: E402
     LONGITUDE_TRIG_EQUIVALENCE_ATOL as _CORE_LONGITUDE_TRIG_EQUIVALENCE_ATOL,
     Mesh,
     load_precision_preserving_mesh_pair,
 )
-from mpas_port.output import (  # noqa: E402
+from hexcore.output import (  # noqa: E402
     HistoryField,
     HistoryStreamOptions,
     write_history,
 )
-from mpas_port.regrid import (  # noqa: E402
+from hexcore.regrid import (  # noqa: E402
     build_regrid_weights,
     write_regridded_netcdf,
 )
-from mpas_port.rust_renderer import (  # noqa: E402
+from hexcore.rust_renderer import (  # noqa: E402
     discover_rust_renderer,
     inspect_renderer_products,
     materialize_gfs_rust_input,
@@ -86,8 +86,8 @@ from mpas_port.rust_renderer import (  # noqa: E402
     sha256_file,
     write_renderer_materialization_authority,
 )
-from mpas_port.vector import initialize_reconstruction_coefficients  # noqa: E402
-from mpas_port.vertical import build_vertical_grid  # noqa: E402
+from hexcore.vector import initialize_reconstruction_coefficients  # noqa: E402
+from hexcore.vertical import build_vertical_grid  # noqa: E402
 
 InputPin = coarse.InputPin
 VerifiedCudaRun = coarse.VerifiedCudaRun
@@ -103,6 +103,24 @@ TARGET_LATLON_DEGREES = 0.5
 TARGET_CELLS = 163_842
 TARGET_EDGES = 491_520
 TARGET_VERTICES = 327_680
+# FROZEN CLOSED-CASE PROOF CONSTANTS — the dt derivation below is a
+# RETIRED METHOD, kept as the record of the runs it made (adjudicated
+# 2026-08-25, stale-guard audit #347 unknowns).  This lane derives dt from
+# ``nominalMinDc`` (6 s per nominal km -> 360 s), and #300 later measured
+# nominalMinDc 10.5% / 23.6% / 39.7% HIGH as a length on three meshes --
+# the unsafe direction.  The live rule (tools/mpas_mesh_binding.py, the
+# versioned Courant policy: 125 m/s, 0.90) admits dt against the file's
+# real ``dcEdge`` and never nominalMinDc.  Whether this lane's 360 s
+# would survive that policy is NOT MEASURED: at the uniform-mesh bias
+# (10.5%) the policy cap is ~391 s and 360 s passes; at the worst
+# recorded bias (39.7%) the cap is ~309 s and 360 s fails.  Settling it
+# needs one CPU read of min(dcEdge) from the pinned x1.163842 grid, and
+# that file is absent from every reachable fleet box (either proving card,
+# node-4 full-disk searched 2026-08-25; node-3 unreachable), so the tool
+# cannot pass its own input pins today either.  If the mesh is ever
+# re-fetched, the read is the named follow-up; until then these constants
+# are the receipt-bearing record of the closed 2026-03-26 evidence
+# campaign, and this dt rule must not be copied into live code.
 TARGET_NOMINAL_MIN_DC_M = 60_000.0
 DT_SECONDS_PER_NOMINAL_KM = 6.0
 LONGITUDE_TRIG_EQUIVALENCE_ATOL = _CORE_LONGITUDE_TRIG_EQUIVALENCE_ATOL

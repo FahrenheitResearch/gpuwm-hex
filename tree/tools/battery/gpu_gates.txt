@@ -48,9 +48,23 @@ tests/test_device_capacity.py
 #   manifest and the authorities WITHOUT touching a device, which makes it a
 #   useful tier-2 gate on a box with the assets and no big card.
 #
-# THE CHECKOUT REQUIREMENT, stated once so it is not rediscovered: the port
-# pins gpuwm by the SHA-256 of sixteen individual source files, one of which
-# is docs/mpas-seam.md -- a repository document that gpuwm's packaging never
-# places in site-packages.  An installed gpuwm wheel therefore CANNOT satisfy
-# the pin no matter its version.  These harnesses need a source checkout at
-# the pinned commit, which is why neither is a console script in 0.1.0.
+# THE CHECKOUT REQUIREMENT, stated once so it is not rediscovered -- AND
+# RESTATED 2026-08-28, because its old reason died and this file was written
+# in the voice of a settled fact so nobody would re-check it.
+#
+# What this file used to say: one of the sixteen pinned paths is
+# docs/mpas-seam.md, a repository document gpuwm's packaging never places in
+# site-packages, so an installed wheel CANNOT satisfy the pin no matter its
+# version.  That was true through engine 2.5.7 and is false at 2.5.8, which
+# ships the document inside the wheel at the manifest's own key.  Measured
+# 2026-08-28 in a virtualenv holding only the published wheels:
+# engine_pin.inspect_seam over the INSTALL root returns checked=16,
+# matched=16, moved=(), absent=().
+#
+# The requirement stands anyway, for a reason that is not the bytes:
+# verify_arwen_checkout_git records the checkout's HEAD, tree and dirty paths
+# into every receipt and every history file, so the executed seam source can
+# be named by commit.  An install carries the bytes and no commit, and
+# site-packages is not a git working tree -- measured the same day, the guard
+# refuses one by name.  These harnesses therefore need a gpuwm GIT CHECKOUT
+# at the pinned commit, which is why neither is a console script.

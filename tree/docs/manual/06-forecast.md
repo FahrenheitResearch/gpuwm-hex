@@ -28,14 +28,28 @@ because they verify their own executing modules by SHA-256 before CUDA is
 touched. Run the door from inside a checkout, or pass
 `--repo <gpuwm-hex-checkout>/tree`.
 
-**It needs a `gpuwm` source checkout too**, passed as `--gpuwm-checkout`.
-The port pins the engine's physics seam by the SHA-256 of sixteen
-individual gpuwm source files, one of which is a repository document that
-no wheel places in site-packages — so an installed gpuwm satisfies pip and
-does not satisfy the pin. The run verifies the checkout's git state and
-the sixteen digests at launch and refuses any mismatch by name. No
-published gpuwm version satisfies the manifest on its own (README, *The
-engine pin*).
+**It needs a `gpuwm` git checkout too**, passed as `--gpuwm-checkout`. The
+port pins the engine's physics seam by the SHA-256 of sixteen individual
+gpuwm source files; the run verifies all sixteen at launch and refuses any
+mismatch by name. It also reads the checkout's **git state** and writes
+HEAD, tree and dirty paths into every receipt and every history file, so
+the seam source it executed can be named by commit and a reader can see
+whether anything was uncommitted. That second half is why it is a clone and
+not the installed distribution: an install carries the bytes and no commit,
+and `site-packages` is not a git working tree, which the driver refuses by
+name.
+
+**Which reason is live, because it changed.** Through engine 2.5.7 the pin
+named `docs/mpas-seam.md`, a repository document no wheel placed in
+`site-packages`, so an installed gpuwm satisfied pip and could not satisfy
+the pin at all. gpuwm 2.5.8 ships that document inside the wheel at the
+manifest's own key. Measured 2026-08-28 against a virtualenv holding only
+the published wheels, all sixteen pinned paths resolve from `site-packages`
+and `gpuwm-hex doctor` reports `16 of 16 pinned files are in this install
+and all 16 match`. Only the provenance half survives (README, *The engine
+pin*), and retiring it is a named follow-up rather than something that has
+already happened. Both doors were run against that install to establish it:
+receipt `evidence/checkout-reason-20260828/`.
 
 Beyond those two: a **registered mesh pair** (chapter 4), an **init** for
 it (chapter 5), and **device memory for the mesh** — which the door now
@@ -79,36 +93,64 @@ Run for this manual: 5/5 PASS.
 **Before anything else, ask the card.** The door does, on every run:
 
 ```
-ADMISSION mesh=x1.40962 cells=40,962 predicted=9,948.0 MiB headroom=512.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> REFUSED
+ADMISSION mesh=x1.40962 cells=40,962 card=68 SM row=measured global predicted=5,682.0 MiB margin=884.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> admitted
 ```
 
-That is a real line from an RTX 3080 while this chapter was written. The
-number it decides against is measured **at that moment**, from the driver,
-because the memory your desktop is already holding is part of the answer —
-never a budget carried from a previous run or a previous card. The
-footprint it is compared to is the fitted row of chapter 4.6:
-`6,296.5 MiB + 93,474 bytes per cell`.
+That is an RTX 3080 answering **on its own row, with no flags** — the card,
+its 68 multiprocessors and its 9,097.0 MiB free all read from the driver
+[`evidence/memory-shape-20260827/ON-CARD-366.json`]. The door reads the
+card's multiprocessor count from the driver at the moment of the decision
+and selects or derives that card's row; free memory is measured at the same
+moment, because the memory your desktop is already holding is part of the
+answer and is never a budget carried from a previous run or a previous
+card.
 
-**Why the door refuses rather than letting the driver try.** The driver
-carries its own free-memory floor, scaled per mesh from the native row —
-about 6.0 GiB on `x1.40962`. That is a floor, not a footprint. A card
-between 6.0 GiB and 9,948 MiB passes it, loads the mesh, compiles the
-kernels, and *then* dies inside a CuPy allocation part-way through the
-integration, after burning the time it took to get there. That is the
-concrete breakage this gate prevents.
+**You no longer type your card's row on the command line.** Until
+2026-08-27 you did: the door priced every card with the 170 SM part's fixed
+term unless you passed `--device-fixed-mib` and `--device-bytes-per-cell`
+yourself, so a 10 GiB desktop refused `x1.40962` and `v15.150.38857` — two
+meshes it had been measured running with 2,244 MiB to spare. That was
+ledger #366 and it is fixed; the flags survive for a card whose own ledger
+you have run and want to override with.
 
-The refusal names the shortfall and the fitted alternative:
+**What the footprint model is.** Not a line in cell count. Chapter 4.6 has
+the shape; the short version is a card core, plus the physics workspaces
+that are sized to the threads the *card* can hold in flight (so they stop
+growing once your mesh is bigger than the card), plus a per-cell term. The
+margin held back is not a flat number either: it is this card's RRTMG
+shortwave workspace — the largest block in the footprint that does not scale
+with the mesh — plus 11.2 MiB of instrument convention. Both are measured
+and both name what they prevent.
+
+**One admission surface.** The door and the driver's own free-memory floor
+answer from the same sum, through `hexcore.device_admission`, and the door
+forwards the identical requirement to the driver
+(`--required-free-bytes`), so the two gates cannot disagree. It was not
+always so: the driver once floored at an asserted 24 GiB scaled linearly
+per cell — about 6.0 GiB on `x1.40962` against a then-measured 9,948 MiB
+peak. A card between those numbers passed the floor, loaded the mesh,
+compiled the kernels, and *then* died inside a CuPy allocation part-way
+through the integration, after burning the time it took to get there. That
+is the concrete breakage this gate prevents, and the floor is the measured
+row — re-derived 2026-08-25 and re-fitted at the merged tip 2026-08-26 — so
+the two gates are one.
+
+The refusal names the shortfall, the margin's own two components, the row it
+priced with, and the fitted alternative — this one is the same RTX 3080 and
+the same free reading, asked for the 163,842-cell `x4.163842`:
 
 ```
-device memory admission refused --mesh x1.40962: the fitted footprint for 40,962
-cells is 9,948.0 MiB and the decision holds back 512.0 MiB, so it needs
-10,460.0 MiB free; this device reports 9,097.0 MiB free of 10,239.5 MiB, short by
-1,363.0 MiB. ... no registered mesh fits this card at this moment: the fixed term
-alone is 6,296.5 MiB before a single cell is allocated ...
+device memory admission refused --mesh x4.163842: the fitted footprint for
+163,842 cells is 17,000.2 MiB and the decision holds back 884.0 MiB, so it
+needs 17,884.2 MiB free; this device reports 9,097.0 MiB free of 10,239.5 MiB,
+short by 8,787.2 MiB. ... This card fits the registered mesh(es)
+conus-x1.2971, r4.75.11020, ... u96.64002, v15.150.38857, x1.40962 at this
+moment (68,440 cells fit) ...
 ```
 
 When a smaller registered mesh *does* fit the memory measured, the refusal
-names it instead.
+names it instead — and on this card that list now includes the two meshes
+the retired row refused.
 
 **On Windows, the number the door reads is not the number `nvidia-smi`
 prints.** Measured in one process on the RTX 3080 above, at one moment: the
@@ -122,32 +164,30 @@ through — but it means an admission on Windows is optimistic relative to
 cannot deliver. If a run the door admitted dies in CuPy on Windows, this is
 the first thing to check.
 
-**The fixed term is a property of the card, and the row shipped was
-measured on a 170-SM part.** Smaller parts previously measured carried
-smaller fixed terms, so on a smaller card this prediction is an
-over-estimate and the refusal it produces is conservative. The remedy for
-that is to measure, not to widen the gate: run
-`tools/device_memory_ledger/hex_ledger_probe.py` on the card and pass what
-it reports as `--device-fixed-mib` and `--device-bytes-per-cell`. They are
-one row and must be given together — half a row mixes this card's fixed
-term with another card's slope, which is a footprint nothing ever
-measured. `--headroom-mib` sets the margin the decision holds back
-(default 512).
+**The row flags are an override now, not a procedure.**
+`--device-fixed-mib` and `--device-bytes-per-cell` still exist and still
+have to be given together — half a row mixes this card's core with another
+card's slope, which is a footprint nothing ever measured — but you reach
+for them only when you have run this card's own ledger
+(`tools/device_memory_ledger/hex_ledger_probe.py`) and want to override
+what the door selected. `--headroom-mib` overrides the margin the same
+way; its default is no longer a flat 512 MiB but the model's own two named
+terms, priced from your card.
 
-**The remedy is reachable only on an architecture the execution pin
-admits.** The instrument runs the real driver, and the driver's first act
-on the device is `require_cuda(min_compute=(12,0),
-required_compute=(12,0))` — compute capability 12.0 exactly, because the
-port's byte-pinned proofs are anchored to sm_120 compilation. On any other
-architecture both the measurement and the run refuse by name, before a
-single allocation. Measured on a 10 GiB RTX 3080 (sm_86, 2026-08-24,
-`evidence/small-card-3080-20260824/`): with a measured row that admits,
-the run stops at `cuda.compute_capability=8.6 is below required 12.0` —
-so on a non-sm_120 card the binding constraint is the architecture pin,
-not memory, and no `--device-fixed-mib` row changes that. One sharp edge
-from the same session: `--preflight` is deliberately CUDA-free, so it
-cannot see this gate and answers `preflight_passed` on a card the run then
-refuses.
+**Architecture is admission too, and it is a registry rather than one
+number.** The port's numerical contract was proven on sm_120, so an
+architecture below that floor runs only if it holds its own anchor — a
+measured contract receipt and a frozen-authority anchor taken on real
+hardware of that architecture
+(`src/hexcore/cuda_backend/arch_admission.py`). **sm_86 holds one**
+(2026-08-25, a 10 GiB RTX 3080; `evidence/sm86-tier-20260825/`), which is
+why the quickstart's preflight prints `ARCHITECTURE sm=sm_86 -> admitted`
+and why a full-physics limited-area forecast runs on that card (6.8). An
+architecture holding no anchor is refused by name before a single
+allocation, with the roster of the ones that do. `--preflight` answers this
+half from a device-properties read rather than from the driver's CUDA
+import, so it can no longer say `preflight_passed` about a card the run
+then refuses by architecture.
 
 **`--preflight` answers the whole question.** It runs every check —
 inputs, the mesh bind, the admission decision, and the driver's own
@@ -158,14 +198,39 @@ unadmitted card is *reported* rather than raised, because a user asking
 question is the one no file fixes:
 
 ```
-INPUT MISSING --init names a missing file: .../x1.40962.init.nc.  Build one with `gpuwm-hex init` ...
+INPUT MISSING --init names a missing file: .../x1.40962.init.nc.  Build one with `gpuwm-hex init` (chapter 5 of the manual).
 BIND mesh=x1.40962 rebound=True dt=120.0 s
-ADMISSION mesh=x1.40962 cells=40,962 predicted=9,948.0 MiB headroom=512.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> REFUSED
-PREFLIGHT mesh=x1.40962 problems=2 status=preflight_refused
+ADMISSION mesh=x1.40962 cells=40,962 card=68 SM row=measured global predicted=5,682.0 MiB margin=884.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> admitted
+ARCHITECTURE sm=sm_86 -> admitted (per-architecture anchor of 2026-08-25 (evidence/sm86-tier-20260825/RECEIPT.md))
+PREFLIGHT mesh=x1.40962 problems=1 status=preflight_refused
 ```
 
+The registered row's TIMESTEP is collected the same way (2026-08-26).  A
+row declaring a timestep that holds no anchor used to end the preflight on
+the spot, so the answer to "will this mesh fit my card?" was never printed
+for exactly the meshes people ask it about.  Both answers now come back in
+one pass — here for `v15.150.38857`, which declares 60 s:
+
+```
+INPUT MISSING --mesh v15.150.38857 declares dt=60 s and selects GF (resolution) with surface/PBL every step (welded).  config_dt=60 s with GF holds no timestep anchor: ... a schedule receipt and an integration anchor at 5 s (GF), 5 s (convection off), 20 s (GF), 20 s (convection off), 75 s (GF), 100 s (GF), 120 s (GF) and at nothing else ...
+ADMISSION mesh=v15.150.38857 cells=38,857 card=68 SM row=measured global predicted=5,488.1 MiB margin=884.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> admitted
+PREFLIGHT mesh=v15.150.38857 problems=4 status=preflight_refused
+```
+
+**The timestep is not pinned to 120 s.** Five configurations hold an earned
+anchor — 120, 100, 75, 20 and 5 s — and the registry is keyed to the
+cumulus selection as well as the timestep, because how often a scheme is
+CALLED is part of what an anchor's forecasts measured
+(`hexcore.dt_admission`). Only 120 s carries a native MPAS-A reference
+and only it ever can. For a new mesh the rule of thumb is `dt ≈ 6 × dx` in
+km. Read the anchor you are about to use before trusting its weather: each
+one records what its band did against a 120 s control on the same card,
+mesh and init, and the 20 s and 5 s rows record a divergence rather than a
+match. An anchor certifies that a timestep integrates finitely and
+deterministically at the cadences it names, and nothing more.
+
 Preflight writes the same receipt a run does, with a `preflight_problems`
-list. It touches no CUDA beyond the memory query.
+list. It touches no CUDA beyond the memory and device-properties queries.
 
 ## 6.3 What the door writes
 
@@ -219,7 +284,7 @@ pair, whose omission was found and closed by exactly this gate;
 [`evidence/restart-step16-327/`], CHANGELOG). A pre-v3 checkpoint is
 refused by name instead of resuming wrong.
 
-**What does not exist in 0.1.0:** a user-facing resume flag on the
+**What does not exist in 0.2.0:** a user-facing resume flag on the
 forecast driver. Engineering forecasts run uninterrupted and write no
 checkpoint — that is a stated dropped guarantee in every receipt. If a
 forecast stops (power, refusal, operator), you re-run it from its init;
@@ -283,7 +348,86 @@ Mid-run validation failures are refusals, not crashes (chapter 3.4). The
 one seen in practice: a vertical-velocity divergence at levels 44–47 tripped
 the 200 m/s validation bound and the case stopped rather than publish a bad
 step. `--stop-on-refusal` converts that into a receipted stop with the
-committed frames preserved. The generated-mesh step-0 refusal is a known
-open defect (chapter 4.5). If a run refuses on *sources* — a pinned module
+committed frames preserved. If a run refuses on *sources* — a pinned module
 or seam file whose digest moved — nothing was integrated at all; restore
 the pinned bytes rather than editing the pin.
+
+## 6.8 Limited-area forecasting — `--lbc-dir`
+
+> **This section used to open by telling you the lane could not be opened
+> with a published engine. That was true of 2.5.7, and it is no longer the
+> current answer.** Walked 2026-08-27 from an installed 0.2.0 wheel against
+> gpuwm 2.5.7: the `rw_mpas_mesh` that `gpuwm fetch-bridges` staged had no
+> `--cull-parent` (it dropped the flag silently and then asked for `--spec`),
+> and `rw_mpas_lbc` was in no published bundle and no published source.
+> Receipt: `evidence/userwalk-20260827/RECEIPT.md`, a record of 2.5.7.
+>
+> The engine published 2.5.8, which this distribution now requires. Measured
+> 2026-08-28 against the published artefacts: `gpuwm fetch-bridges` on a 2.5.8
+> install stages 26 of 26 artifacts against its packaged pins, `rw_mpas_lbc`
+> among them, and `gpuwm-hex cull` drove the **staged published**
+> `rw_mpas_mesh` through two real cuts of the 40,962-cell global parent — 338
+> and 606 cells, grid, static and initial condition each written, 0.9 s.
+>
+> **What is still unmeasured:** a complete boundary set written by the
+> published `rw_mpas_lbc`, and a `--lbc-dir` forecast behind it. That binary
+> runs and refuses correctly by name on inputs that do not satisfy it, and
+> nothing here has yet driven it to a written boundary file. Every
+> limited-area number in this chapter was taken with a source-built engine and
+> none has been reproduced from the published bundle.
+
+The same door runs a **limited-area** case: a mesh cut out of a global
+parent and integrated behind lateral boundary conditions instead of around
+a sphere. `gpuwm-hex cull` cuts the grid, static and initial condition out
+of a global case in one command; `rw_mpas_lbc` builds the boundary files
+from the parent's own history frames; `--lbc-dir <directory>` hands them to
+the forecast. Everything else on the command line is unchanged.
+
+**The physics is the whole stack, not a dycore with one tracer** — WSM6 +
+Grell-Freitas + YSU + YSU-GWDO + revised-MO + NoahMP + cloud fraction +
+legacy RRTMG, the same set the global lane runs. Measured on a 10 GiB
+RTX 3080 [`evidence/regional-physics-20260826/RECEIPT.md`]: six hours on an
+11,020-cell cull, **1,080 of 1,080 steps**, 13 history frames, median
+0.271 s/step, peak **6,224 MiB**, and 343 rendered products across seven
+frames.
+
+Against a full-physics global run over the same ground, same init and same
+six hours, at t+6 h over the free interior: theta **1.117 K** RMS
+(r = 0.999973), precipitation r = 0.95, reflectivity r = 0.82, vertical
+velocity r = 0.621. The disagreement does not grow inward from the
+boundary — theta RMS by ring is nearly flat and largest at the driven
+rings, where a coarse parent's interpolated state is imposed on fine cells.
+`w` is the smallest and fastest field here, and a limited-area `w` product
+is that run's own answer rather than the parent's.
+
+The limited-area device stack is its own row of the admission table (6.2):
+it carries a padded atmosphere, two levels of lateral-boundary state and 22
+more kernels, so the door prices it as `row=... limited-area` rather than
+scaling the global row. That row's core is an ENVELOPE over five measured
+culls rather than a fit, so it over-predicts the smaller ones on purpose.
+
+## 6.9 Cycling — following weather from one cycle to the next
+
+One forecast is a snapshot. `gpuwm-hex cycle run` is the loop: detect in a
+coarse forecast, place the fine swaths, decide per slot whether to move or
+stay, cut the culls, build the boundaries, run the per-geometry contract
+deck, run the full-physics limited-area forecast behind it, render, and
+carry the decision into the next cycle. `gpuwm-hex cycle plan` answers what
+it would do with no device opened and nothing cut. `docs/cycle-door.md` is
+the page for it; this section is what a forecast reader needs.
+
+Measured over two cycles on one real case
+[`evidence/cycling-loop-20260827/RECEIPT.md`]: corridors at dt 20 s under
+an anchored configuration class, both **1,080 of 1,080 steps**, and a
+**delayed start** — a cycle beginning mid-window takes the parent's state
+at the hour the swath wanted instead of integrating the fine grid from
+hour 0. The state transplant took **0.83 s** and saved **273.8 s of card,
+43 %**, against a real baseline arm on the same card and the same cull
+geometry.
+
+**Its cost is named, and it is the first hour.** The initial-condition
+stream has no slot for cloud ice, snow or graupel, so a corridor started
+inside an ice cloud starts without it: hour-0 reflectivity does not
+correlate with the baseline at all. One hour later WSM6 has re-formed the
+ice and r = 0.863; theta agrees to five decimals throughout. If your first
+frame matters, that is the frame to distrust.

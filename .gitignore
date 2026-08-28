@@ -19,3 +19,7 @@ __pycache__/
 # untracked at the root of this repo while only `.worktrees/` was covered.
 .worktrees/
 wt-*/
+
+# Source-matrix lane scratch: pulled history frames and rendered PNGs.
+frames/
+.claude/

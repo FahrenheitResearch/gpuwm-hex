@@ -21,12 +21,27 @@ the refusal text itself is the index below.
 ## Install and environment
 
 **`MISSING cupy (the CUDA lane)`** — you installed the base package without
-a CUDA extra, or with the wrong one. Match the driver's CUDA major
-(`nvidia-smi`, header): `pip install "gpuwm-hex[gpu-cu12]"` or
-`"gpuwm-hex[gpu-cu13]"`, exactly one. A CuPy built for the wrong major
-imports cleanly, probes cleanly, and fails on the first real device call —
-if device calls die inside CuPy on a box that "looks fine," check this
-first.
+a CUDA extra, or with the wrong one. `pip install "gpuwm-hex[gpu]"`, which
+is `gpu-cu13`: every GPU door here refuses a CUDA runtime below `13000`, so
+that is the only wheel this port runs on.
+
+**`MISSING cupy (the CUDA lane): cupy imports but carries CUDA runtime
+12090`** — a CuPy built for CUDA 12 is installed. It imports cleanly, probes
+cleanly, runs cuBLAS, and is then refused by name at forecast launch with
+`CudaRefusal: cuda.runtime_version=12090 < required 13000`. Doctor prints
+the removal first because pip leaves both wheels installed and import order,
+not intent, picks the winner:
+
+```
+  pip uninstall -y cupy-cuda12x
+  pip install "gpuwm-hex[gpu-cu13]"
+```
+
+**`MISSING cupy (the CUDA lane): this box's driver serves CUDA 12`** — not a
+pip problem. `cupy-cuda13x` needs a driver serving CUDA 13, and the CUDA-12
+wheel is refused by the runtime floor, so no install command opens the CUDA
+lane on this machine. Update the NVIDIA driver, or run the CUDA lane on a
+machine that has one. Doctor deliberately offers no `pip install` line here.
 
 **`MISSING rw_mpas_init ... not found on any rung`** (likewise
 `rw_mpas_convert`, `rw_wrfbatch`) — the Rust engines are not staged. The
@@ -74,10 +89,22 @@ the two files are from different meshes. Get the matching static for the
 grid (or vice versa); chapter 4.2's `mesh-check` digests identify which
 registered bytes you hold.
 
-**`unknown mesh 'NAME'; registered meshes are ['u96.64002',
-'v15.150.38857', 'x1.40962', 'x4.163842']`** — the forecast runner only binds registered
-meshes. Register the pair (table work in `tools/mpas_mesh_binding.py`) or
-name a registered one.
+**`--mesh 'NAME' is not a registered mesh.  Registered meshes are
+conus-x1.2971, r4.75.11020, … x4.163842.`** — the forecast door only binds
+registered meshes. The refusal prints the whole registry — 21 rows at this
+release — so a deliberately wrong name is also how you list it (chapter
+4.1). Register the pair (table work in `tools/mpas_mesh_binding.py`) or name
+a registered one. The binding layer states the same thing as `unknown mesh
+'NAME'; registered meshes are [...]` when it is called directly.
+
+**`cell coordination refused before CUDA allocation. Cell N has 4 edges,
+below the admitted floor 5`** — the mesh carries a cell a Goldberg
+polyhedron cannot have, put there by a generator defect fixed on
+2026-08-26. Do not reduce `dt`: the refusal shows the same failure at the
+same model time across three timesteps. Regenerate with a current engine, or
+run the replacement row the refusal names (chapter 4.5). Receipt-checked,
+not reproduced here — it needs the refused mesh's own multi-GiB pair
+[`evidence/meshgen-coordination-20260826/RECEIPT.md`, the control leg].
 
 **`mesh 'NAME': grid byte count N != declared M`** — the file you passed is
 not the registered bytes for that name (wrong file, wrong mesh name, or
@@ -132,16 +159,20 @@ grid/static bytes than the run is pinning (chapter 5.5).
 
 **`device memory admission refused --mesh NAME: the fitted footprint for N
 cells is ... short by ... MiB`** — the card cannot hold the mesh, decided
-against memory measured at that moment (chapter 6.2). The refusal names
-the shortfall and, when a smaller registered mesh fits what was measured,
-that mesh by name. Three real remedies, in order: free device memory
-(other CUDA processes, a desktop compositor holding the card); run a
-smaller registered mesh; or, if this card's own footprint ledger has been
-run, pass its row as `--device-fixed-mib` **and**
-`--device-bytes-per-cell` — the shipped row was measured on a 170-SM part
-and smaller parts measure smaller fixed terms. Widening `--headroom-mib`
-past the shortfall is not a remedy; it removes the margin the decision
-holds back and the run then dies in CuPy instead.
+against memory measured at that moment (chapter 6.2). The door reads THIS
+card's multiprocessor count and prices its row from that, so the number is
+not a 5090's and "measure your own card" is no longer the first move. Two
+real remedies, in order: free device memory (other CUDA processes, a
+desktop compositor holding the card); or run a smaller registered mesh —
+the refusal names the ones that fit what was measured, and how many cells
+fit. Widening `--headroom-mib` past the shortfall is not a remedy: the
+margin it removes is named and measured, this card's RRTMG shortwave
+workspace (which moved a pool high-water by 1,707.2 MiB when it stopped
+being servable from the free list) plus 11.2 MiB of instrument convention,
+and the run then dies in CuPy at the first radiation call instead. If this
+card's own footprint ledger HAS been run, `--device-fixed-mib` **and**
+`--device-bytes-per-cell` replace the shipped core and per-cell term with
+its own — an escape hatch, not the remedy of first resort.
 
 **`--device-fixed-mib and --device-bytes-per-cell are one measured row and
 must be given together`** — half a row mixes this card's fixed term with
@@ -152,8 +183,33 @@ installed wheel`** — the drivers live in `tree/tools/`, which the wheel
 does not carry. Run the door from inside a checkout or pass
 `--repo <checkout>/tree`.
 
-**`--gpuwm-checkout ... is not a directory`** — the seam pin needs a
-`gpuwm` source checkout, not the installed distribution (chapter 6.1).
+**`--gpuwm-checkout ... is not a directory`** — the forecast lane needs a
+`gpuwm` git checkout, not the installed distribution (chapter 6.1).
+
+**`... is not a git working tree, and the Arwen checkout has to be one`** —
+you pointed `--gpuwm-checkout` at an unpacked tarball or at `site-packages`.
+The bytes there may well be right: at 2.5.8 all sixteen pinned paths resolve
+from an install. What is missing is the commit — the run writes the
+checkout's HEAD, tree and dirty paths into every receipt so the executed seam
+source can be named — so clone the tag instead of copying the files.
+
+**`--gpuwm-checkout ... is gpuwm 2.5.7, and this port's physics seam is
+pinned to gpuwm 2.5.8`** — the checkout is a real gpuwm tree at the wrong
+version. The refusal names both versions, lists which of the sixteen pinned
+files moved, and prints the two commands that close it: the bounded `pip
+install` and the `git clone --depth 1 --branch v<version>` for the checkout
+the forecast lane needs on top of the wheel. Nothing to work out; clone the
+tag it names.
+
+The same comparison runs at install time. `gpuwm-hex doctor` hashes the
+pinned files that live inside `site-packages` — at 2.5.8 that is all sixteen,
+and a conforming install reads `16 of 16 pinned files are in this install and
+all 16 match` — and reports **`MISSING gpuwm seam bytes`** on a wrong engine,
+with the same two versions and the same
+remedy — so a wrong engine is a report you get before a run, not a digest
+mismatch you meet after one. Before 2026-08-27 there was no such check: the
+report said *Every check passed* and exited 0 while the forecast lane was
+dead (`evidence/userwalk-20260827/`).
 
 **`--out ... exists`** / **`--scratch ... exists`** — both must be fresh.
 A second run into an existing output tree can be read as the first one's
@@ -165,9 +221,10 @@ output. Use the sibling default or point it outside `--out`.
 
 **`--hours H is not a whole number of steps on mesh NAME, whose registered
 timestep is T s`** / **`--history-every-minutes M does not divide the ... run`**
-— the schedule is checked against the *registered row's* timestep, which is
-60 s on the generated 15 km row and 120 s on the published ones. The
-refusal prints a length that does divide.
+— the schedule is checked against the *registered row's* timestep, and the
+rows declare five different ones (120, 100, 75, 60 and 20 s), so do not
+assume 120. The refusal prints the row's timestep and a length that does
+divide.
 
 **`--mesh 'NAME' is not a registered mesh`** — see *Mesh and assets* above;
 register the row or name a registered one.
@@ -216,10 +273,12 @@ preceded it.
 **Out-of-device-memory partway into a run** — the mesh does not fit the
 card (chapter 4.6). This is what the forecast door's admission gate exists
 to prevent, so reaching it means the door was bypassed (the driver run
-directly), or the fitted row and this card disagree. If the door admitted
-the run and CuPy then ran out, report both numbers: the fitted row is a
-measurement and the driver's floor is a proof constant, and only one of
-them can be wrong.
+directly). The door and the driver cannot disagree: both answer from
+`hexcore.device_admission`, and the door forwards its own resolved
+requirement into the driver's argv as `--required-free-bytes`. If the door
+admitted the run and CuPy ran out anyway, that is a card the model does not
+yet cover — report the card, its multiprocessor count, the cell count, the
+predicted peak and where in the run it died.
 
 ---
 
@@ -238,8 +297,35 @@ delivered tree; use the default sibling or point it elsewhere.
 ## When output exists but looks wrong
 
 That is not a refusal — it is chapter 3.3. Check the declared divergences
-before suspecting your run: a ~15 % dry domain-mean precipitation bias,
-higher explicit rain and condensate, and an upper-level warm drift are the
-declared, measured differences from native physics, with their referees
-named. And chapter 6.4: reading the receipt's nonclaims tells you what the
-run never promised.
+before suspecting your run: higher explicit rain, a condensate surplus and an
+upper-level warm drift are the declared, measured differences from native
+physics, with their referees named. And chapter 6.4: reading the receipt's
+nonclaims tells you what the run never promised.
+
+**Precipitation needs its own paragraph, because the two referees disagree in
+sign and the older one is the retired one.** Against native MPAS-A this port's
+domain-mean precipitation runs about **15 % dry** — a global mean against
+another model, and model parity was retired as a goal on 2026-08-20. Against
+observations, which is the verification of record, it is the other way round:
+scored on 2026-08-25 against NCEP/EMC Stage-IV hourly QPE over CONUS, the port
+is **wet in all four cases** (+0.0247 mm/h paired, 95 % [+0.0041, +0.0606]),
+and its frequency bias at 1 mm/h is above one in three of the four
+(1.59 / 1.35 / 1.38 / 0.77) — it rains over **too much area**.
+
+What that means for a run that looks wrong:
+
+- **Too wet, or rain spread over too much area.** That is the direction the
+  live referee measured on this build. It is a declared property, not a sign
+  your run failed. Judge it against observations rather than against a native
+  run before you change anything.
+- **Drier than a native MPAS-A run you are comparing with.** That is
+  divergence 2 and it is expected — the port's convective rain is about a
+  third below native's, with explicit microphysics making up roughly half.
+  It is not evidence that the run under-produced rain in absolute terms, and
+  the obs comparison says it did not.
+- **Either way, do not treat four cases as a skill assessment.** Two of the
+  four are the divergence cases themselves, one truncated at 23 h and carries
+  the largest bias (+56.9 %), and one is +41.5 % on almost no rain
+  (0.0156 against 0.0110 mm/h). The two clean, complete cases are +9.8 % and
+  +2.4 %. The numbers and their limits are in
+  [`docs/declared-divergences.md`](../declared-divergences.md).

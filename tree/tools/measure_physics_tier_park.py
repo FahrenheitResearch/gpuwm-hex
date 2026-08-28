@@ -72,10 +72,10 @@ class LiveBytesHook:
 def install_labels(hook: LiveBytesHook) -> None:
     """Label the four parts of a composite step, changing nothing else."""
 
-    from mpas_port.cuda_arwen_physics_v841 import (
+    from hexcore.cuda_arwen_physics_v841 import (
         PersistentTwoPhaseCudaPhysicsBackendV841 as Backend,
     )
-    from mpas_port.cuda_driver import CudaDryDycoreDriver
+    from hexcore.cuda_driver import CudaDryDycoreDriver
 
     def wrap(owner: Any, name: str, entered: str, left: str) -> None:
         original = getattr(owner, name)

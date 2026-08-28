@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNNER_PATH = ROOT / "tools" / "run_cuda_v841_full_physics_x4.py"
 
 #: Names the gpuwm object store this box holds.  Set it and the store MUST
-#: hold ``ARWEN_COMMIT``; there is no falling back to a skip.
+#: hold ``ARWEN_BUILD_COMMIT``; there is no falling back to a skip.
 #:
 #: There is no built-in default and there must not be one.  A default is a
 #: guess about somebody's filesystem: it is right on exactly the machine it
@@ -40,6 +40,37 @@ RUNNER_PATH = ROOT / "tools" / "run_cuda_v841_full_physics_x4.py"
 #: commit.  Unset means "this box has no store", which is a skip that names
 #: what went unverified.
 GPUWM_OBJECT_STORE_ENV = "GPUWM_OBJECT_STORE"
+
+
+def manifest_commit() -> str:
+    """The gpuwm commit ``ARWEN_SOURCE_MANIFEST`` was taken from.
+
+    Read from the module that OWNS the manifest,
+    ``hexcore.cuda_arwen_physics_v841``, so the seed commit and the pins it
+    is validated against can never come from two different places.  It is
+    deliberately NOT the runner's ``ARWEN_COMMIT``: that constant is receipt
+    provenance and a restart-consistency key, it is stamped into every
+    snapshot netCDF, and it moves on its own schedule.
+
+    THE BREAKAGE THIS PREVENTS, measured 2026-08-28 with $GPUWM_OBJECT_STORE
+    pointed at a gpuwm checkout.  The two constants were equal for the whole
+    life of this file and the fixture leaned on that coincidence.  The 2.5.8
+    engine re-pin (hex 77f831b) moved ``ARWEN_BUILD_COMMIT`` and four of the
+    sixteen digests onto gpuwm ``659962929`` and left ``ARWEN_COMMIT`` at
+    ``26daaab7e``, so the fixture seeded PRE-re-pin blobs and validated them
+    against POST-re-pin pins.  All six proof-guard tests then ERRORed at
+    setup with "gpuwm object store blob for gpuwm/core/physics.py does not
+    hash to the manifest pin; the fixture instrument is invalid"
+    (``f8095178...`` found against ``51b8c606...`` pinned), while the same
+    file is 15 passed at the pre-re-pin tip ``b3ba292``.  On a box that
+    declares no store the six SKIP, so the battery read green with this
+    guard disarmed -- which is why the coupling is fixed rather than the
+    number patched.
+    """
+
+    from hexcore.cuda_arwen_physics_v841 import ARWEN_BUILD_COMMIT
+
+    return ARWEN_BUILD_COMMIT
 
 
 def _load_runner() -> object:
@@ -86,7 +117,7 @@ def _holds_commit(store: Path, commit: str) -> bool:
 
 
 def _resolve_object_source(commit: str) -> Path:
-    """The store holding ``ARWEN_COMMIT``, or a refusal / a named skip.
+    """The store holding ``ARWEN_BUILD_COMMIT``, or a refusal / a named skip.
 
     THE DISTINCTION IS THE POINT.  A gpuwm checkout that EXISTS but no longer
     holds the proven commit is the failure this guard was written for: the
@@ -140,14 +171,15 @@ def _resolve_object_source(commit: str) -> Path:
 def proven_checkout(tmp_path: Path) -> tuple[object, Path]:
     """A real git checkout carrying exactly the proven manifest bytes.
 
-    Seeded from the real gpuwm object store at ``ARWEN_COMMIT`` (blob bytes,
-    no filters), committed in a throwaway repository -- never on a real
-    branch.  Every seeded file is validated against the manifest pin before
-    the tests rely on it.
+    Seeded from the real gpuwm object store at ``manifest_commit()`` (blob
+    bytes, no filters), committed in a throwaway repository -- never on a
+    real branch.  Every seeded file is validated against the manifest pin
+    before the tests rely on it.
     """
 
     runner = _load_runner()
-    source = _resolve_object_source(runner.ARWEN_COMMIT)
+    commit = manifest_commit()
+    source = _resolve_object_source(commit)
     manifest = dict(runner.arwen_source_manifest())
     assert len(manifest) == 16
     repo = tmp_path / "arwen-checkout"
@@ -159,7 +191,7 @@ def proven_checkout(tmp_path: Path) -> tuple[object, Path]:
     _git(repo, "config", "commit.gpgsign", "false")
     for relative, expected in manifest.items():
         blob = _git(
-            source, "cat-file", "blob", f"{runner.ARWEN_COMMIT}:{relative}", binary=True
+            source, "cat-file", "blob", f"{commit}:{relative}", binary=True
         )
         assert hashlib.sha256(blob).hexdigest() == expected, (
             f"gpuwm object store blob for {relative} does not hash to the "
@@ -183,7 +215,7 @@ def test_manifest_identical_checkout_at_a_different_commit_passes(
     _git(repo, "add", "docs/scratch-note.md")
     _git(repo, "commit", "-q", "-m", "docs: a commit that moves no executed source")
     head = _git(repo, "rev-parse", "HEAD")
-    assert head != runner.ARWEN_COMMIT
+    assert head != manifest_commit()
 
     record = runner.verify_arwen_checkout_git(repo)
 
@@ -278,6 +310,41 @@ def test_dirty_unrelated_file_is_recorded_loudly_and_execution_proceeds(
     assert record["manifest"]["files"] == dict(runner.arwen_source_manifest())
     loud = capsys.readouterr().out
     assert "scratch.log" in loud
+
+
+def test_a_path_that_is_not_a_git_tree_refuses_by_name(tmp_path: Path) -> None:
+    """The wall that survived the engine's packaging fix gets a sign on it.
+
+    MEASURED 2026-08-28, in a virtualenv holding only the published 2.5.8
+    wheels.  Engine 2.5.8 ships ``docs/mpas-seam.md`` inside the wheel at the
+    manifest's own key, so ``engine_pin.inspect_seam`` over the INSTALL root
+    returns checked=16, matched=16, moved=(), absent=() and the forecast
+    door's own byte check ACCEPTS ``--gpuwm-checkout <site-packages>``.  The
+    run then arrived here and died on ``git rev-parse --show-toplevel`` with
+    a bare ``CalledProcessError`` and exit status 128: no breakage named, no
+    remedy, and a user who had done exactly what the door asked.
+
+    The guard is right to refuse -- HEAD, tree and dirty paths go into every
+    receipt so the executed source can be named by commit, and an install has
+    no commit -- so it stays, and it now says that.
+    """
+
+    runner = _load_runner()
+    plain = tmp_path / "not-a-repository"
+    plain.mkdir()
+
+    with pytest.raises(RuntimeError) as error:
+        runner.verify_arwen_checkout_git(plain)
+
+    text = str(error.value)
+    assert "not a git working tree" in text
+    assert "named by commit" in text, "the breakage the guard prevents"
+    assert "--gpuwm-checkout" in text, "the remedy"
+    assert "no wheel" not in text, (
+        "the retired reason: through engine 2.5.7 the pin named a path no "
+        "wheel carried.  At 2.5.8 all sixteen resolve from an install, so a "
+        "refusal that gives that reason names a breakage that is closed"
+    )
 
 
 def test_head_and_tree_are_provenance_not_gates() -> None:

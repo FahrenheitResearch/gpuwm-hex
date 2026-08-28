@@ -147,6 +147,14 @@ if str(_TOOLS) not in sys.path:
 
 import run_cuda_v841_full_physics_x4 as proof  # noqa: E402
 
+from hexcore import dt_admission  # noqa: E402
+from hexcore.errors import ConfigurationRefusal  # noqa: E402
+from hexcore.mesh import (  # noqa: E402
+    REGIONAL_BOUNDARY_MASK_NAMES,
+    REGIONAL_BOUNDARY_ZONE_WIDTH,
+    regional_boundary_mask_digest,
+)
+
 ROOT = proof.ROOT
 
 SCHEMA = "mpas-port.cuda-v841-engineering-forecast/v1"
@@ -165,6 +173,22 @@ COLD_ZERO_SCALAR_NAMES = proof.COLD_ZERO_SCALAR_NAMES
 SOURCE_SCALAR_NAMES = proof.SOURCE_SCALAR_NAMES
 NOMINAL_DX_M = proof.NOMINAL_DX_M
 ARWEN_XICE_THRESHOLD = proof.ARWEN_XICE_THRESHOLD
+
+#: The run's cumulus selection, and why it was made.  ``bind_mesh`` rebinds
+#: this from the BOUND mesh's own finest spacing, exactly as it rebinds
+#: DT_SECONDS -- one decision, one source.  The value standing here before a
+#: bind is the native x4 configuration this module's constants describe, so a
+#: direct invocation with no bind behaves as it always did.
+CONVECTION_DECISION: dict[str, Any] = {}
+
+#: The run's surface/PBL cadence, and why it was chosen.  Travels the same
+#: road as DT_SECONDS and CONVECTION_DECISION: ``bind_mesh`` takes the
+#: decision once from the bound row's own timestep and rebinds it here, and
+#: the driver refuses if its own request disagrees.  Empty before a bind
+#: means the weld -- ``config_bldt_seconds = config_dt``, the proven
+#: configuration -- so a direct invocation with no bind behaves as it always
+#: did.  See :mod:`hexcore.pbl_cadence`.
+PBL_CADENCE_DECISION: dict[str, Any] = {}
 
 # Mesh authority roles kept under exact-byte pins.  ``init`` is deliberately
 # absent: see removal 1.
@@ -374,8 +398,17 @@ def relax_surface_classification(
         "water": int(core["open_water_columns"]),
         "sea_ice": int(core["sea_ice_columns"]),
         "glacier": int(core["glacier_columns"]),
-        "glacier_path": glacier_path,
     }
+    # The glacier kernel's provenance is reported by the seam only when the
+    # seam ran it, which it does only when the domain HAS glacier columns.
+    # MEASURED (2026-08-26, r4.75.11020): a placed swath over the Southern
+    # Ocean has none, and demanding the provenance anyway refused its first
+    # step with "NoahMP census/provenance changed" -- an all-ocean domain
+    # failing for not naming the source file of a scheme it correctly never
+    # called.  The count is still checked in both directions, so a domain
+    # that HAS glaciers still has to say which kernel ran on them.
+    if int(core["glacier_columns"]) > 0:
+        census["glacier_path"] = glacier_path
     proof.EXPECTED_NOAHMP_CENSUS = MappingProxyType(dict(census))
     return {"surface_classification": dict(core), "noahmp_census": dict(census)}
 
@@ -456,6 +489,121 @@ def install_capture_labels(labels: Mapping[int, str]) -> None:
 # constructor values (transcribed from proof.build_arwen_constructor_values,
 # case literals replaced by measurement)
 # --------------------------------------------------------------------------
+def build_forecast_config(
+    *,
+    dt_seconds: float,
+    convection_scheme: str = "cu_grell_freitas",
+    surface_pbl_seconds: float | None = None,
+    horiz_mixing: str = "2d_smagorinsky",
+    local_timestep: bool = False,
+    local_timestep_declared_off: bool = False,
+    local_timestep_rates: tuple[int, ...] = (1, 3),
+    local_timestep_buffer_rings: int = 1,
+    apply_lbcs: bool = False,
+) -> Any:
+    """Build the run's configuration AT THE BOUND MESH'S TIMESTEP.
+
+    THE BREAKAGE THIS PREVENTS, MEASURED (2026-08-26, the proving RTX 5090):
+    this function did not exist and the configuration was constructed from
+    its dataclass defaults, so ``config_dt`` was 120.0 no matter what mesh
+    was bound.  ``bind_mesh`` rebinds ``DT_SECONDS`` in this module and in
+    the proof module, and the sealed Arwen constructor read that rebound
+    value -- but the DYCORE takes its outer step from ``config.config_dt``,
+    which nothing rebound.  A mesh row declaring 100 s therefore bound
+    clean, allocated 18,820 MiB, spent 285 s and died inside composite
+    step 0 with ``post-RK candidate time must equal the exact step
+    endpoint: 120.0 != 100.0``.
+
+    There is now ONE timestep in this path: the bound mesh's.  It reaches
+    the config here, and ``build_forecast_constructor_values`` derives the
+    seam's clocks from the config rather than from the module constant, so
+    the two cannot disagree by construction.  An unanchored timestep is
+    refused by ``config.validate()`` below, on the host, before a mesh file
+    is opened -- which is where a 285-second refusal belongs.
+
+    The two cadences welded to the timestep travel with it.  ``cudt`` has
+    no choice: WRF pins ``cudt = 0`` for Grell-Freitas, so the sealed
+    constructor requires ``cumulus_seconds == dt``.  ``bldt`` follows dt by
+    DEFAULT because that is the proven configuration's own semantics -- the
+    native x4 reference ran ``bldt = dt``, i.e. surface/PBL every step --
+    and ``surface_pbl_seconds`` is how an A/B arm holds it there while dt
+    moves.  ``None`` is the weld and changes no run; an explicit value is an
+    instrument and records itself as one.  See :mod:`hexcore.pbl_cadence`
+    for the measurement that needed it and the breakage its registry key
+    prevents.
+    """
+
+    from hexcore.config_v841 import (
+        V841MpasColumnPhysicsGwdoConfig,
+        V841MpasColumnPhysicsSmagorinskyGwdoConfig,
+    )
+    from hexcore.config_lts import (
+        V841LocalTimestepGwdoConfig,
+        V841LocalTimestepSmagorinskyGwdoConfig,
+    )
+
+    from hexcore import convection_admission, pbl_cadence
+
+    dt = float(dt_seconds)
+    scheme = str(convection_scheme)
+    if scheme not in convection_admission.ADMITTED_CONVECTION_SCHEMES:
+        raise ValueError(
+            f"convection_scheme must be one of "
+            f"{list(convection_admission.ADMITTED_CONVECTION_SCHEMES)}, "
+            f"got {convection_scheme!r}"
+        )
+    bldt = (
+        dt
+        if surface_pbl_seconds is None
+        else pbl_cadence.resolve_seconds(
+            dt_seconds=dt, requested=surface_pbl_seconds
+        )
+    )
+    clocks: dict[str, Any] = {
+        "config_dt": dt,
+        "config_bldt_seconds": bldt,
+        # WRF pins cudt=0 for Grell-Freitas, so with a scheme selected the
+        # cumulus cadence IS dt.  With no scheme selected there is no cadence
+        # at all -- see hexcore.convection_admission.
+        "config_cudt_seconds": (
+            None if scheme == convection_admission.SCHEME_OFF else dt
+        ),
+        "config_convection_scheme": scheme,
+        # The lateral-boundary switch is NOT a user knob here: it is the
+        # grid's own property, read off the bdyMask triple by the caller.
+        # mpas_atm_bdy_checks refuses either mismatch by name -- boundary
+        # cells with the switch off, or the switch on with none.
+        "config_apply_lbcs": bool(apply_lbcs),
+    }
+    lts_block: dict[str, Any] = {
+        "config_local_timestep": bool(local_timestep),
+        "config_local_timestep_rates": tuple(local_timestep_rates),
+        "config_local_timestep_buffer_rings": int(local_timestep_buffer_rings),
+    }
+
+    if horiz_mixing == "2d_smagorinsky":
+        # Default: native's Registry configuration (deformation-based 2-D
+        # Smagorinsky + del4), the regime the natA/natB 24-h references
+        # integrate.  Numbers under this lane are a NEW SUB-SERIES: they are
+        # not bit-comparable to any mixing-off arm.
+        if local_timestep or local_timestep_declared_off:
+            # Same released lane, plus the opt-in local-timestep block.  With
+            # the switch off this subtype validates and executes identically
+            # to its parent, which is what the default-off gate measures.
+            return V841LocalTimestepSmagorinskyGwdoConfig(**clocks, **lts_block)
+        return V841MpasColumnPhysicsSmagorinskyGwdoConfig(**clocks)
+    if horiz_mixing == "off":
+        # Explicit control arm: the pre-mixing configuration (the regime
+        # native itself dies in on convective cases -- the 2026-08-17
+        # reference-node control died at step 466 on case B).
+        if local_timestep or local_timestep_declared_off:
+            return V841LocalTimestepGwdoConfig(**clocks, **lts_block)
+        return V841MpasColumnPhysicsGwdoConfig(**clocks)
+    raise ValueError(
+        f"horiz_mixing must be '2d_smagorinsky' or 'off', got {horiz_mixing!r}"
+    )
+
+
 def build_forecast_constructor_values(
     *,
     init_path: Path,
@@ -464,6 +612,7 @@ def build_forecast_constructor_values(
     reference: Any,
     saved_diagnostics: Any,
     start_time_text: str | None,
+    config: Any,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, np.ndarray], dict[str, Any]]:
     from netCDF4 import Dataset
 
@@ -574,11 +723,26 @@ def build_forecast_constructor_values(
     xland_unique, xland_counts = np.unique(xland, return_counts=True)
     # MEASURED, not pinned: the proof asserted (1.0, 2.0) with the case counts.
     # The value SET is still a hard requirement -- MPAS xland is 1 (land/ice)
-    # or 2 (water) and nothing else.
-    if tuple(float(value) for value in xland_unique) != (1.0, 2.0):
+    # or 2 (water) and nothing else -- but requiring BOTH values requires the
+    # domain to contain a coastline, and a limited-area domain need not.
+    #
+    # THE BREAKAGE THIS PREVENTS: xland selects which surface scheme a column
+    # runs.  A third value would send columns to neither the land-surface
+    # model nor the open-water branch and the surface fluxes would be whatever
+    # the uninitialised path left behind.
+    #
+    # THE BREAKAGE IT MUST NOT INVENT, MEASURED (2026-08-26, r4.75.11020): a
+    # placed swath over the Southern Ocean is all water, so its xland set is
+    # (2.0,).  Demanding a land column refuses an all-ocean domain for having
+    # no coastline in it, which is a property of the case, not a defect.
+    if not set(float(value) for value in xland_unique) <= {1.0, 2.0}:
         raise RuntimeError(
-            f"init xland value set is not exactly (1.0, 2.0): {xland_unique}"
+            f"init xland carries values outside (1.0, 2.0): {xland_unique}; "
+            "MPAS xland is 1 for land or ice and 2 for water, and a column "
+            "carrying anything else reaches neither surface branch"
         )
+    if xland_unique.size == 0:
+        raise RuntimeError("init xland is empty")
     xice = surface["xice"]
     if float(np.min(xice)) < 0.0 or float(np.max(xice)) > 1.0:
         raise RuntimeError("init xice lies outside [0,1]")
@@ -699,7 +863,7 @@ def build_forecast_constructor_values(
     # GF's per-cell length scale, native's own construction and the same one
     # this port already feeds GWDO: len_disp/meshDensity**0.25, with a
     # non-positive config_len_disp resolved to the mesh nominalMinDc.
-    from mpas_port.cuda_gwdo_v841 import native_cell_dx_m
+    from hexcore.cuda_gwdo_v841 import native_cell_dx_m
 
     dx_column_m = native_cell_dx_m(
         proof._mesh_value(mesh, "meshDensity"), float(NOMINAL_DX_M)
@@ -722,14 +886,36 @@ def build_forecast_constructor_values(
         area_cell=np.ascontiguousarray(proof._mesh_value(mesh, "areaCell")),
     )
 
+    # The seam's four clocks come from the CONFIG, never from the module
+    # constant.  That is the whole of the 2026-08-26 rebinding fix: one
+    # timestep travels from the bound mesh row through config_dt to here, so
+    # the dycore's outer step and the frozen seam's step are the same number
+    # by construction rather than by two rebinds agreeing.
+    from hexcore import convection_admission
+
+    cumulus_scheme = convection_admission.constructor_scheme(
+        config.config_convection_scheme
+    )
+    gf_ishallow = convection_admission.gf_ishallow(config.config_convection_scheme)
+
     values: dict[str, Any] = {
         "n_levels": N_LEVELS,
         "n_columns": N_CELLS,
-        "dt": DT_SECONDS,
-        "radiation_seconds": 600.0,
-        "surface_pbl_seconds": DT_SECONDS,
-        "cumulus_seconds": DT_SECONDS,
-        "cumulus_scheme": "gf",
+        "dt": float(config.config_dt),
+        "radiation_seconds": float(config.config_radt_seconds),
+        "surface_pbl_seconds": float(config.config_bldt_seconds),
+        # The cumulus selection comes from the CONFIG, never from a literal
+        # here.  it was ruled on 2026-08-26 that convection is off below 3 km,
+        # so "gf" written in this mapping would have silently reinstated the
+        # closure the ruling switches off -- the config would say off and the
+        # sealed constructor would be handed on.  See
+        # hexcore.convection_admission.
+        "cumulus_seconds": (
+            None
+            if config.config_cudt_seconds is None
+            else float(config.config_cudt_seconds)
+        ),
+        "cumulus_scheme": cumulus_scheme,
         "start_time": start_datetime,
         "latitude_deg": latitude_deg,
         "longitude_deg": longitude_deg,
@@ -739,8 +925,11 @@ def build_forecast_constructor_values(
         "dx_m": float(NOMINAL_DX_M),
         "dx_column_m": dx_column_m,
         # Native MPAS v8.4.1 hardwires GF's shallow scheme on
-        # (mpas_atmphys_vars.F:340).
-        "gf_ishallow": 1,
+        # (mpas_atmphys_vars.F:340).  Derived from the selection rather than
+        # written as 1: the sealed constructor refuses gf_ishallow=1 with no
+        # GF selected, so a literal here would refuse every convection-off
+        # run at host preparation.
+        "gf_ishallow": gf_ishallow,
         "landmask": landmask,
         "xland": xland,
         "xice_threshold": float(ARWEN_XICE_THRESHOLD),
@@ -780,7 +969,9 @@ def build_forecast_constructor_values(
         "dx_column_policy": "native len_disp/meshDensity**0.25 per cell",
         "dx_column_min_m": float(dx_column_m.min()),
         "dx_column_max_m": float(dx_column_m.max()),
-        "gf_ishallow": 1,
+        "gf_ishallow": gf_ishallow,
+        "cumulus_scheme": cumulus_scheme,
+        "config_convection_scheme": config.config_convection_scheme,
         "defaults_used": False,
         "arrays": {
             name: {
@@ -813,65 +1004,126 @@ def prepare_forecast_host(
     *,
     start_time_text: str | None,
     horiz_mixing: str = "2d_smagorinsky",
+    convection: str = "auto",
+    pbl_cadence: str = "auto",
     local_timestep: bool = False,
     local_timestep_declared_off: bool = False,
     local_timestep_rates: tuple[int, ...] = (1, 3),
     local_timestep_buffer_rings: int = 1,
+    lbc_paths: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    from mpas_port.config_v841 import (
-        V841MpasColumnPhysicsGwdoConfig,
-        V841MpasColumnPhysicsSmagorinskyGwdoConfig,
-    )
-    from mpas_port.config_lts import (
-        V841LocalTimestepGwdoConfig,
-        V841LocalTimestepSmagorinskyGwdoConfig,
-    )
-    from mpas_port.cuda_arwen_physics_v841 import SealedArwenConstructorV841
-    from mpas_port.cuda_dualrun import PreparedCudaInputs
-    from mpas_port.driver import load_mpas_initial_state, load_mpas_vertical_grid
-    from mpas_port.dynamics_v841 import load_v841_reference_wind_profiles
-    from mpas_port.mesh import load_precision_preserving_mesh_pair
+    from hexcore.cuda_arwen_physics_v841 import SealedArwenConstructorV841
+    from hexcore.cuda_dualrun import PreparedCudaInputs
+    from hexcore.driver import load_mpas_initial_state, load_mpas_vertical_grid
+    from hexcore.dynamics_v841 import load_v841_reference_wind_profiles
+    from hexcore.mesh import load_precision_preserving_mesh_pair
 
     relaxation: dict[str, Any] = {"init_carriers": relax_init_carrier_pins(paths["init"])}
 
-    if horiz_mixing == "2d_smagorinsky":
-        # Default: native's Registry configuration (deformation-based 2-D
-        # Smagorinsky + del4), the regime the natA/natB 24-h references
-        # integrate.  Numbers under this lane are a NEW SUB-SERIES: they are
-        # not bit-comparable to any mixing-off arm.
-        if local_timestep or local_timestep_declared_off:
-            # Same released lane, plus the opt-in local-timestep block.  With
-            # the switch off this subtype validates and executes identically
-            # to its parent, which is what the default-off gate measures.
-            config = V841LocalTimestepSmagorinskyGwdoConfig(
-                config_local_timestep=bool(local_timestep),
-                config_local_timestep_rates=tuple(local_timestep_rates),
-                config_local_timestep_buffer_rings=int(local_timestep_buffer_rings),
-            )
-        else:
-            config = V841MpasColumnPhysicsSmagorinskyGwdoConfig()
-    elif horiz_mixing == "off":
-        # Explicit control arm: the pre-mixing configuration (the regime
-        # native itself dies in on convective cases -- the 2026-08-17
-        # reference-node control died at step 466 on case B).
-        if local_timestep or local_timestep_declared_off:
-            config = V841LocalTimestepGwdoConfig(
-                config_local_timestep=bool(local_timestep),
-                config_local_timestep_rates=tuple(local_timestep_rates),
-                config_local_timestep_buffer_rings=int(local_timestep_buffer_rings),
-            )
-        else:
-            config = V841MpasColumnPhysicsGwdoConfig()
-    else:
+    # DT_SECONDS is the module constant bind_mesh rebinds to the bound row's
+    # declared timestep.  Reading it HERE is what closes the 2026-08-26
+    # rebinding defect: before this, the config took its dataclass default
+    # and the two clocks diverged silently until composite step 0.
+    # The cumulus selection travels the same road as the timestep: decided
+    # once at the bind from the mesh's own finest spacing, read here.  If a
+    # bind happened and its request disagrees with this one, that is TWO
+    # sources of the same decision -- the exact shape of the 2026-08-26 clock
+    # defect -- and it is refused on the host rather than discovered in the
+    # receipt of a finished run.
+    from hexcore import convection_admission as _convection
+
+    decision = dict(CONVECTION_DECISION) if CONVECTION_DECISION else None
+    if decision is not None and decision.get("requested") != convection:
         raise ValueError(
-            "horiz_mixing must be '2d_smagorinsky' or 'off', got "
-            f"{horiz_mixing!r}"
+            f"the bound mesh decided its convection selection under "
+            f"--convection {decision.get('requested')!r} and this run was "
+            f"invoked with --convection {convection!r}.  One decision, one "
+            f"source: the bind's request and the driver's must be the same "
+            f"string, or the receipt would name a selection the run did not "
+            f"make"
         )
+    if decision is None:
+        decision = _convection.convection_decision(
+            nominal_dx_m=float(NOMINAL_DX_M), requested=convection
+        )
+    convection_scheme = decision["scheme"]
+    print(
+        f"[convection] {decision['scheme']} ({decision['source']}): "
+        f"{decision['note']}",
+        flush=True,
+    )
+
+    # The surface/PBL cadence travels the same road, for the same reason and
+    # with the same refusal: one decision, one source.  ``auto`` is the weld
+    # (config_bldt_seconds = config_dt), which is the proven configuration
+    # and the default; an explicit cadence is an A/B arm.
+    from hexcore import pbl_cadence as _pbl
+
+    pbl_decision = dict(PBL_CADENCE_DECISION) if PBL_CADENCE_DECISION else None
+    if pbl_decision is not None and pbl_decision.get("requested") != pbl_cadence:
+        raise ValueError(
+            f"the bound mesh decided its surface/PBL cadence under "
+            f"--pbl-cadence {pbl_decision.get('requested')!r} and this run "
+            f"was invoked with --pbl-cadence {pbl_cadence!r}.  One decision, "
+            f"one source: the bind's request and the driver's must be the "
+            f"same string, or the receipt would name a cadence the run did "
+            f"not use"
+        )
+    if pbl_decision is None:
+        pbl_decision = _pbl.pbl_cadence_decision(
+            dt_seconds=float(DT_SECONDS), requested=pbl_cadence
+        )
+    print(
+        f"[pbl-cadence] {pbl_decision['label']} ({pbl_decision['source']}): "
+        f"{pbl_decision['note']}",
+        flush=True,
+    )
+
+    config = build_forecast_config(
+        dt_seconds=float(DT_SECONDS),
+        convection_scheme=convection_scheme,
+        surface_pbl_seconds=pbl_decision["surface_pbl_seconds"],
+        horiz_mixing=horiz_mixing,
+        local_timestep=local_timestep,
+        local_timestep_declared_off=local_timestep_declared_off,
+        local_timestep_rates=local_timestep_rates,
+        local_timestep_buffer_rings=local_timestep_buffer_rings,
+        apply_lbcs=bool(lbc_paths),
+    )
     config.validate()
     mesh, output_mesh, mesh_evidence = load_precision_preserving_mesh_pair(
         paths["grid"], paths["static"]
     )
     del output_mesh
+    # A limited-area grid declares itself: the cull writes the
+    # bdyMaskCell/Edge/Vertex triple and nothing else does.  Everything below
+    # is the SAME preparation the global lane runs -- the sentinel flag says
+    # "this mesh's outermost ring has one-cell edges by construction", it does
+    # not select a different code path.
+    is_regional = bool(getattr(mesh, "is_regional", False))
+    if is_regional and not lbc_paths:
+        raise ConfigurationRefusal(
+            "config_apply_lbcs",
+            True,
+            "this grid carries a bdyMask triple, so its outermost ring is a "
+            "lateral boundary that something has to drive; integrating it with "
+            "no boundary series lets the interior run against whatever the "
+            "initial state left on the ring, and the domain empties from the "
+            "edge inward within a few hours",
+            "a --lbc-dir of files rw_mpas_lbc built from the parent forecast "
+            "this mesh was cut out of",
+        )
+    if not is_regional and lbc_paths:
+        raise ConfigurationRefusal(
+            "config_apply_lbcs",
+            True,
+            "this grid carries no bdyMask triple, so it has no boundary zone "
+            "for a lateral-boundary series to drive; the files would be read "
+            "and never applied, and the receipt would name a forcing the run "
+            "did not use",
+            "a limited-area grid cut with rw_mpas_mesh --cull-parent, or no "
+            "--lbc-dir",
+        )
     reconstruction_overlay = proof.overlay_exact_init_reconstruction_coefficients(
         mesh, paths["init"]
     )
@@ -883,7 +1135,10 @@ def prepare_forecast_host(
     )
     defc = proof.attach_inactive_zero_deformation(mesh)
     native = load_mpas_vertical_grid(
-        paths["init"], mesh, config_coef_3rd_order=config.config_coef_3rd_order
+        paths["init"],
+        mesh,
+        config_coef_3rd_order=config.config_coef_3rd_order,
+        allow_regional_sentinels=is_regional,
     )
     state, reference, saved = load_mpas_initial_state(
         paths["init"],
@@ -892,6 +1147,7 @@ def prepare_forecast_host(
         scalar_names=SOURCE_SCALAR_NAMES,
         terrain_metrics=native.terrain_metrics,
         return_saved_diagnostics=True,
+        allow_regional_sentinels=is_regional,
     )
     relaxation["negative_qv"] = relax_negative_qv_pin(state)
     scalar_receipt = proof.augment_exact_wsm6_scalars(state)
@@ -915,6 +1171,7 @@ def prepare_forecast_host(
         terrain_metrics=native.terrain_metrics,
         input_bytes=dict(authority_receipt["files"]),
         reference_wind_profiles=profiles,
+        allow_regional_sentinels=is_regional,
     )
     f000_surface_diagnostics = proof.load_f000_initialized_surface_diagnostics(
         paths["init"]
@@ -931,7 +1188,33 @@ def prepare_forecast_host(
         reference=reference,
         saved_diagnostics=saved,
         start_time_text=start_time_text,
+        config=config,
     )
+    if is_regional:
+        # The ArWen statics move onto the PADDED extent here, BEFORE the
+        # surface census is rebound, because the census counts columns and
+        # the run seals nCells+1 of them.  Doing it after left the seam
+        # reporting 11,021 classified columns against an expectation of
+        # 11,020 and the first step receipt refused by exactly one column.
+        from hexcore.cuda_regional_forecast_v841 import pad_regional_physics_host
+        from hexcore.regional_v841 import derive_regional_masks, regional_bdy_checks
+
+        regional_masks = derive_regional_masks(mesh, np.dtype(np.float32))
+        # mpas_atm_bdy_checks, on the host, before a byte moves: a mesh with
+        # boundary cells and no LBCs, or LBCs and no boundary cells, is
+        # refused by name here rather than discovered in a finished receipt.
+        regional_bdy_checks(
+            regional_masks, config_apply_lbcs=True, lbc_input_interval_valid=True
+        )
+        constructor_values, gwdo_host, pad_receipt = pad_regional_physics_host(
+            constructor_values, gwdo_host, n_cells_solve=int(N_CELLS)
+        )
+        constructor_receipt["regional_physics_pad"] = pad_receipt
+        classification = dict(
+            SealedArwenConstructorV841.from_mapping(
+                constructor_values
+            ).expected_surface_classification()
+        )
     relaxation["surface"] = relax_surface_classification(
         classification, proof.ARWEN_GLACIER_CUDA_PROVENANCE
     )
@@ -939,6 +1222,39 @@ def prepare_forecast_host(
     sealed_constructor_audit = SealedArwenConstructorV841.from_mapping(
         constructor_values
     )
+    # Belt and braces on the wiring above: the seam's clocks are DERIVED from
+    # the config, so this can only fail if somebody reintroduces a second
+    # source of the timestep.  It costs nothing and it is the difference
+    # between a host refusal and 18,820 MiB plus 285 s on a card.
+    coherence = dt_admission.require_step_clock_coherence(
+        config_dt=config.config_dt,
+        constructor_dt=sealed_constructor_audit.dt,
+        config_radt_seconds=config.config_radt_seconds,
+        constructor_radiation_seconds=constructor_values["radiation_seconds"],
+        config_bldt_seconds=config.config_bldt_seconds,
+        constructor_surface_pbl_seconds=constructor_values["surface_pbl_seconds"],
+        config_cudt_seconds=config.config_cudt_seconds,
+        constructor_cumulus_seconds=constructor_values["cumulus_seconds"],
+    )
+    constructor_receipt["step_clock_coherence"] = coherence
+    from hexcore import convection_admission as _convection
+
+    constructor_receipt["dt_admission"] = dt_admission.require_dt_anchor(
+        config.config_dt,
+        radiation_seconds=config.config_radt_seconds,
+        surface_pbl_seconds=config.config_bldt_seconds,
+        cumulus_seconds=config.config_cudt_seconds,
+        # The anchor certifies a CONFIGURATION at a timestep.  Omitting this
+        # would have admitted a convection-off run against a Grell-Freitas
+        # row -- an anchor whose forecasts measured a forcing this run does
+        # not apply.
+        cumulus_scheme=_convection.constructor_scheme(
+            config.config_convection_scheme
+        ),
+    ).as_dict()
+    # config_bldt_seconds reaches require_dt_anchor above as the LOOKUP key
+    # as well as the comparison, so a run holding the surface/PBL cadence
+    # reads the row that measured that cadence and never the welded one.
     constructor_receipt["sealed_host_contract_audit"] = {
         "authority": "SealedArwenConstructorV841.from_mapping",
         "accepted": True,
@@ -946,8 +1262,51 @@ def prepare_forecast_host(
         "array_fields": sorted(constructor_receipt["arrays"]),
         **dict(sealed_constructor_audit.receipt()),
     }
+    constructor_receipt["convection_admission"] = decision
+    constructor_receipt["pbl_cadence"] = pbl_decision
+    regional: dict[str, Any] | None = None
+    if is_regional:
+        # The species the boundary files actually carry, intersected with
+        # the model's own scalar order.  LBC_REQUIRED_VARIABLES makes
+        # lbc_qv/lbc_qc/lbc_qr mandatory in every file rw_mpas_lbc writes,
+        # so this is the model's leading three for a WSM6 run -- but it is
+        # DERIVED from the stream rather than assumed, so a stream that
+        # gains a species drives it without a code change.
+        from hexcore.lbc import LBC_REQUIRED_VARIABLES
+
+        driven = tuple(
+            f"lbc_{name}"
+            for name in SCALAR_NAMES
+            if f"lbc_{name}" in LBC_REQUIRED_VARIABLES
+        )
+        regional = {
+            "driven_scalars": driven,
+            "lbc_paths": [str(path) for path in lbc_paths or ()],
+            "start_time": datetime.strptime(
+                constructor_receipt["config_start_time"], "%Y-%m-%d_%H:%M:%S"
+            ),
+            "n_cells_solve": int(N_CELLS),
+            "boundary_zone_width": int(REGIONAL_BOUNDARY_ZONE_WIDTH),
+            "free_interior_cells": int(
+                np.count_nonzero(regional_masks.bdy_mask_cell == 0)
+            ),
+            "specified_zone_cells": int(regional_masks.spec_cells.size),
+            "relaxation_zone_cells": int(regional_masks.relax_cells.size),
+            "specified_zone_edges": int(regional_masks.spec_edges.size),
+            "relaxation_zone_edges": int(regional_masks.relax_edges.size),
+            "bdy_mask_sha256": regional_boundary_mask_digest(
+                {
+                    name: mesh.arrays[name]
+                    for name in REGIONAL_BOUNDARY_MASK_NAMES
+                    if name in mesh.arrays
+                }
+            ),
+        }
     return {
         "config": config,
+        "regional": regional,
+        "convection": decision,
+        "pbl_cadence": pbl_decision,
         "prepared": prepared,
         "constructor_values": constructor_values,
         "constructor_receipt": constructor_receipt,
@@ -978,7 +1337,9 @@ _SAVED_HEALTH_FIELDS = (
 )
 
 
-def step_health_gate(stack: Mapping[str, Any], step: int, cp: Any) -> dict[str, Any]:
+def step_health_gate(
+    stack: Mapping[str, Any], step: int, cp: Any, *, trace_hot_cell: bool = False
+) -> dict[str, Any]:
     """Refuse the moment the integration stops being finite and physical.
 
     Deliberately allocation-light.  The frozen Arwen phase-one seam is
@@ -994,12 +1355,35 @@ def step_health_gate(stack: Mapping[str, Any], step: int, cp: Any) -> dict[str, 
     saved = atmosphere.saved
     groups = [(name, getattr(state, name)) for name in _STATE_HEALTH_FIELDS]
     groups += [(name, getattr(saved, name)) for name in _SAVED_HEALTH_FIELDS]
+    # On a limited-area run every array is one element wider than the domain
+    # it solves: native allocates nCells+1 (and nEdges+1) and holds pool
+    # values in that element -- rho_theta, theta_m and exner are the pool
+    # ZERO there by native's own rule.  This gate refuses a non-positive
+    # theta_m, so reducing over the allocation instead of the domain refuses
+    # every limited-area step at step 1 for a column that is not a column.
+    # The bound is the model's, not a tolerance: the health of an element
+    # native never solves is not a statement about the forecast.
+    solve_cells = stack.get("solve_cells")
+    solve_edges = stack.get("solve_edges")
+    padded_extents = {
+        int(value) + 1: int(value)
+        for value in (solve_cells, solve_edges)
+        if value is not None
+    }
+
+    def _domain(array: Any) -> Any:
+        if not padded_extents:
+            return array
+        trimmed = padded_extents.get(int(array.shape[-1]))
+        return array if trimmed is None else array[..., :trimmed]
+
     envelope: dict[str, list[float]] = {}
     nonfinite: list[str] = []
     for name, value in groups:
         array = cp.asarray(value)
         if array.dtype.kind != "f":
             continue
+        array = _domain(array)
         low = float(cp.min(array))
         high = float(cp.max(array))
         envelope[name] = [low, high]
@@ -1020,12 +1404,36 @@ def step_health_gate(stack: Mapping[str, Any], step: int, cp: Any) -> dict[str, 
         )
     w_low, w_high = envelope["vertical_velocity"]
     w_abs_max = max(abs(w_low), abs(w_high))
+    # WHERE, not only how big.  On a limited-area run the single most useful
+    # fact about a growing vertical velocity is which boundary ring it sits
+    # in: ring 0 is the free interior and the forecast owns it, rings 1-7 are
+    # driven and a maximum there is the boundary treatment talking.  The two
+    # readings cost one argmax on a state already resident.
+    hot: dict[str, Any] | None = None
+    if trace_hot_cell:
+        w_field = _domain(cp.asarray(saved.vertical_velocity))
+        flat = int(cp.argmax(cp.abs(w_field)))
+        cell = flat % int(w_field.shape[-1])
+        hot = {
+            "vertical_velocity_max_abs": w_abs_max,
+            "cell": int(cell),
+            "level": int(flat // int(w_field.shape[-1])),
+        }
+        rings = stack.get("bdy_mask_cell")
+        if rings is not None and cell < len(rings):
+            hot["boundary_ring"] = int(rings[cell])
+            hot["zone"] = (
+                "free interior"
+                if int(rings[cell]) == 0
+                else f"driven boundary ring {int(rings[cell])} of 7"
+            )
     if w_abs_max > VERTICAL_VELOCITY_REFUSAL_M_S:
         raise FloatingPointError(
             f"step {step} vertical velocity {w_abs_max} m/s exceeds the "
             f"{VERTICAL_VELOCITY_REFUSAL_M_S} m/s divergence refusal"
+            + ("" if hot is None else f"; worst column {json.dumps(hot)}")
         )
-    scalars = cp.asarray(state.scalars)
+    scalars = _domain(cp.asarray(state.scalars))
     qv_min = float(cp.min(scalars[0]))
     qv_max = float(cp.max(scalars[0]))
     hydrometeor_min = float(cp.min(scalars[1:]))
@@ -1047,6 +1455,7 @@ def step_health_gate(stack: Mapping[str, Any], step: int, cp: Any) -> dict[str, 
         "qv_min": qv_min,
         "qv_max": qv_max,
         "hydrometeor_min": hydrometeor_min,
+        "hot_cell": hot,
         "finite": True,
     }
 
@@ -1199,26 +1608,36 @@ def execute_forecast(
     stop_on_refusal: bool = False,
     grid_path: Path | None = None,
     park_physics_tier: bool = False,
+    required_free_bytes: int | None = None,
 ) -> dict[str, Any]:
-    from mpas_port.cuda_arwen_physics_v841 import pin_arwen_physics_v841
+    from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
     arwen_pin = dict(pin_arwen_physics_v841(arwen_checkout))
     # This must precede KernelCache's gpuwm platform-binding construction.
-    from mpas_port.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_backend import KernelCache, require_cuda
 
     capability = require_cuda(
         min_compute=(12, 0), required_compute=(12, 0), cache_dir=cache_root
     )
     import cupy as cp
 
-    memory = proof.gpu_memory_admission(cp)
+    # ``required_free_bytes`` is the forecast door's own admission sum,
+    # forwarded so this floor and the door's verdict are one number enforced
+    # twice: without it, a card admitted at the door on its OWN measured row
+    # would be refused here on the default model's larger fixed term, after
+    # the mesh bind and the kernel compile were already paid for.  Absent,
+    # the mesh-bound floor from the same admission surface applies.
+    if required_free_bytes is None:
+        memory = proof.gpu_memory_admission(cp)
+    else:
+        memory = proof.gpu_memory_admission(cp, minimum=int(required_free_bytes))
     cache = KernelCache(capability=capability, cache_dir=cache_root)
     stack = proof._construct_device_stack(
         host=host, cache=cache, arwen_checkout=arwen_checkout
     )
     # Opt-in local time stepping.  Returns None -- and rebinds nothing -- when
     # config_local_timestep is off, which is the default.
-    from mpas_port.cuda_driver_lts import attach_local_timestep
+    from hexcore.cuda_driver_lts import attach_local_timestep
 
     lts_attachment = attach_local_timestep(
         stack["driver"], grid_path=str(grid_path) if grid_path else None
@@ -1227,7 +1646,7 @@ def execute_forecast(
 
     physics_park = None
     if park_physics_tier:
-        from mpas_port.cuda_physics_tier_park_v841 import CudaPhysicsTierParkV841
+        from hexcore.cuda_physics_tier_park_v841 import CudaPhysicsTierParkV841
 
         physics_park = CudaPhysicsTierParkV841(
             cp, stack["backend"]._seam, diagnose=True
@@ -1269,6 +1688,7 @@ def execute_forecast(
             kernel_cache=stack["driver"].cache,
             f000_surface_diagnostics=stack["f000_surface_diagnostics"],
             expect_refl10cm=True,
+            solve_cells=stack.get("solve_cells"),
         )
         capture_seconds += time.perf_counter() - mark
         physical_gates[str(step)] = proof.physical_snapshot_gate(
@@ -1366,7 +1786,14 @@ def execute_forecast(
         )
         mark = time.perf_counter()
         try:
-            health.append(step_health_gate(stack, step, cp))
+            health.append(
+                step_health_gate(
+                    stack,
+                    step,
+                    cp,
+                    trace_hot_cell=stack.get("solve_cells") is not None,
+                )
+            )
         except FloatingPointError as error:
             if not stop_on_refusal:
                 raise
@@ -1497,6 +1924,28 @@ def execute_forecast(
         ),
         "source_pins": source_receipt,
         "authority": authority_receipt,
+        "regional": (
+            None
+            if host.get("regional") is None
+            else {
+                **host["regional"],
+                "start_time": host["regional"]["start_time"].strftime(
+                    "%Y-%m-%d_%H:%M:%S"
+                ),
+                "config_apply_lbcs": True,
+                "lbc_intervals": len(host["regional"]["lbc_paths"]),
+                "anchor": (
+                    None
+                    if getattr(stack["driver"], "regional_v841", None) is None
+                    else getattr(stack["driver"].regional_v841, "anchor", None)
+                ),
+                "runtime": (
+                    None
+                    if getattr(stack["driver"], "regional_v841", None) is None
+                    else stack["driver"].regional_v841.receipt()
+                ),
+            }
+        ),
         "host_preparation": {
             "constructor": host["constructor_receipt"],
             "scalars": host["scalar_receipt"],
@@ -1613,10 +2062,40 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="2d_smagorinsky",
         help=(
             "horizontal mixing lane; the default is native's Registry "
-            "2d_smagorinsky (deformation-based, mpas_port.mixing_v841). "
+            "2d_smagorinsky (deformation-based, hexcore.mixing_v841). "
             "'off' selects the pre-mixing control lane and is reported as "
             "the configuration native itself cannot integrate on "
             "convective cases"
+        ),
+    )
+    parser.add_argument(
+        "--convection",
+        choices=("auto", "off", "gf"),
+        default="auto",
+        help=(
+            "cumulus selection.  The default APPLIES DREW'S 2026-08-26 "
+            "RULING: convection is switched off below 3 km, decided from the "
+            "bound mesh's own finest spacing with no flag passed.  'off' and "
+            "'gf' are explicit A/B arms -- they record themselves as "
+            "explicit in the receipt, and an arm that overrides the ruling "
+            "says so.  See hexcore.convection_admission"
+        ),
+    )
+    parser.add_argument(
+        "--pbl-cadence",
+        default="auto",
+        metavar="{auto,SECONDS}",
+        help=(
+            "surface/PBL cadence (config_bldt_seconds).  The default 'auto' "
+            "is the PROVEN CONFIGURATION: the cadence is welded to config_dt, "
+            "so the surface layer, the land-surface model and the PBL run on "
+            "every model step, exactly as the native x4 v8.4.1 reference "
+            "ran.  An explicit number of seconds HOLDS the cadence there "
+            "while config_dt moves -- an A/B instrument for measuring "
+            "whether a forcing scales with call count rather than with "
+            "elapsed time.  It records itself as explicit in the receipt and "
+            "earns its own timestep anchor; it is never a remedy.  See "
+            "hexcore.pbl_cadence"
         ),
     )
     parser.add_argument(
@@ -1679,6 +2158,31 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "parked run"
         ),
     )
+    parser.add_argument(
+        "--required-free-bytes",
+        type=int,
+        default=None,
+        help=(
+            "free-device-byte requirement computed by the forecast door's "
+            "admission (hexcore.device_admission.required_free_bytes over "
+            "the card's resolved footprint row), forwarded so the door's "
+            "verdict and this driver's floor are the same number.  Default: "
+            "the mesh-bound floor from the same admission surface"
+        ),
+    )
+    parser.add_argument(
+        "--lbc-dir",
+        type=Path,
+        default=None,
+        help=(
+            "directory of lateral-boundary files (lbc.*.nc, as rw_mpas_lbc "
+            "writes them) for a limited-area grid.  REQUIRED when --grid "
+            "carries a bdyMask triple and refused when it does not: a "
+            "limited-area domain integrated with no boundary series empties "
+            "from its outer ring inward, and a global domain has no boundary "
+            "zone for one to drive"
+        ),
+    )
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument(
         "--stop-on-refusal",
@@ -1695,6 +2199,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("execution requires --cache-root and --output")
     if args.fingerprint_every < 0:
         parser.error("--fingerprint-every must be >= 0")
+    if args.required_free_bytes is not None and args.required_free_bytes <= 0:
+        parser.error(
+            "--required-free-bytes must be positive: a non-positive "
+            "requirement is not a measured admission, it is the memory gate "
+            "switched off, and the run it admits dies inside a CuPy "
+            "allocation mid-integration"
+        )
     try:
         rates = tuple(
             int(piece) for piece in str(args.local_timestep_rates).split(",") if piece
@@ -1734,11 +2245,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     source_before = proof.require_frozen_execution_sources()
     arwen_git_before = proof.verify_arwen_checkout_git(arwen_checkout)
     authority_before = verify_forecast_authorities(paths)
+    lbc_paths: list[str] | None = None
+    if args.lbc_dir is not None:
+        lbc_dir = Path(args.lbc_dir).expanduser().absolute()
+        lbc_paths = sorted(str(path) for path in lbc_dir.glob("lbc.*.nc"))
+        if not lbc_paths:
+            raise ConfigurationRefusal(
+                "config_apply_lbcs",
+                str(lbc_dir),
+                "--lbc-dir names a directory with no lbc.*.nc in it, so the "
+                "run would integrate a limited-area domain against no "
+                "boundary series at all",
+                "the --out-dir rw_mpas_lbc wrote its boundary files into",
+            )
     host = prepare_forecast_host(
         paths,
         authority_before,
+        lbc_paths=lbc_paths,
         start_time_text=args.start_time,
         horiz_mixing=args.horiz_mixing,
+        convection=args.convection,
+        pbl_cadence=args.pbl_cadence,
         local_timestep=args.local_timestep,
         local_timestep_declared_off=args.local_timestep_declared_off,
         local_timestep_rates=args.local_timestep_rates,
@@ -1775,6 +2302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "profile": proof.PROFILE,
         "source_release": proof.SOURCE_RELEASE,
         "horiz_mixing": args.horiz_mixing,
+        "convection": host["convection"],
         "local_timestep": {
             "enabled": bool(args.local_timestep),
             "declared_off_arm": bool(args.local_timestep_declared_off),
@@ -1847,6 +2375,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         stop_on_refusal=bool(args.stop_on_refusal),
         grid_path=paths["grid"],
         park_physics_tier=bool(args.park_physics_tier),
+        required_free_bytes=args.required_free_bytes,
     )
     source_after = proof.require_frozen_execution_sources()
     authority_after = verify_forecast_authorities(paths)

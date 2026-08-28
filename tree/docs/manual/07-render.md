@@ -7,12 +7,23 @@ reference.
 
 ## 7.1 The proven invocation
 
+> **The default window works on the pinned engine.** Through 2.5.7 it did
+> not: the `rw_mpas_convert` that `gpuwm fetch-bridges` staged knew only
+> `focus` and `global` and answered `unknown render window 'mesh' (known:
+> focus, global)`, so this box told you to pass `--window focus` (measured
+> 2026-08-27 on the published 2.5.7 bundle). The `rw_mpas_convert` in the
+> published **2.5.8** bundle declares all four — `focus`, `global`, `mesh`,
+> `composite` — checked 2026-08-28 from the staged published binary's own
+> usage. The **49 products in 7 s** below were rendered with `--window focus`
+> on 2.5.7 and have not been re-timed on 2.5.8.
+
 ```sh
 gpuwm-hex render \
   --history work/out/cuda-history.2026-08-12_07.00.00.nc \
   --mesh    assets/x1.40962.grid.nc \
   --out     work/png \
   --simulation-start 2026-08-12_06:00:00 \
+  --window  focus \
   --products all
 ```
 
@@ -83,8 +94,10 @@ diagnosis.
   requested one.
 - `--heavy` gates the heavy product family (off by default).
 - `--frames all|N` selects frames within each store; `--window
-  focus|global` and `--field-set full|surface` select the conversion;
-  `--size WIDTHxHEIGHT` (default 1200x900).
+  mesh|focus|global|composite` and `--field-set full|surface` select the
+  conversion; `--size WIDTHxHEIGHT` (default 1200x900). The default is
+  `mesh`, and **only `focus` and `global` work against a published
+  converter** (7.1).
 
 ## 7.6 Exit codes
 

@@ -26,16 +26,16 @@ through ArWen's column-batch seam, so gpuwm-hex and `gpuwm` share one physics
 implementation instead of two that drift.
 
 The dependency is strictly one-directional, and that is measured, not assumed:
-`mpas_port` imports `gpuwm` at 5 sites under `tree/src/` and 14 under
-`tree/tools/`; `gpuwm` imports `mpas_port` at **zero** sites. There is no cycle,
+`hexcore` imports `gpuwm` at 5 sites under `tree/src/` and 14 under
+`tree/tools/`; `gpuwm` imports `hexcore` at **zero** sites. There is no cycle,
 which is why the two can be separate repositories at all.
 
 Two seams cross the boundary, and neither is a source dependency:
 
 | seam | what crosses | how it refuses |
 | --- | --- | --- |
-| **Python** | the `gpuwm` distribution, `>=2.5.3`, plus a `gpuwm` source checkout at the pinned commit for the forecast lane | 16 source files pinned by SHA-256; a moved byte refuses by name before a device is touched |
-| **Rust binaries** | `rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_static`, built in `gpuwm`'s `tools/rustwx` workspace | each carries an ABI marker and a `GPUWM_BRIDGE_SOURCE_REV` stamp, so a stale binary is detectable rather than silently wrong |
+| **Python** | the `gpuwm` distribution, `>=2.5.8,<2.5.9`, plus a `gpuwm` source checkout at the pinned commit for the forecast lane | 16 source files pinned by SHA-256; a moved byte refuses by name before a device is touched |
+| **Rust binaries** | `rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_static`, `rw_mpas_lbc`, built in `gpuwm`'s `tools/rustwx` workspace and published in its bridge bundle from v2.5.8 | each carries an ABI marker and a `GPUWM_BRIDGE_SOURCE_REV` stamp, so a stale binary is detectable rather than silently wrong |
 
 Mesh generation and the `gpuwm mesh` door stay in `gpuwm`. The `rw-mpas` crate
 depends by path on `rw-store`, `static-fields` and `rustwx-core` — 776
@@ -95,7 +95,7 @@ that would settle it is still open work, tracked in [`STATE.md`](STATE.md).
 
 ## The pin
 
-`tree/src/mpas_port/cuda_arwen_physics_v841.py` pins sixteen `gpuwm` source
+`tree/src/hexcore/cuda_arwen_physics_v841.py` pins sixteen `gpuwm` source
 files by SHA-256, and `tree/tools/run_cuda_v841_full_physics_x4.py` names the
 `gpuwm` commit they were taken from:
 
@@ -176,7 +176,7 @@ STATE.md         open items, carried forward with their measurements
 .github/         ci.yml, the battery; publish.yml, release-triggered only
 vtables/         authored RW-WPS Vtables (see tree/docs/source-matrix.md)
 tree/            the gpuwm-hex distribution
-  src/mpas_port/   the port itself (import namespace is still mpas_port)
+  src/hexcore/     the port itself (`import hexcore`; `mpas_port` through 0.1.1)
   tools/           harnesses, proof guards, comparators
   tests/           the three-tier battery
   verification/    schemas, manifests and vertical specs the docs invoke

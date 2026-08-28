@@ -27,8 +27,8 @@ SOURCE_ROOT = ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from mpas_port.cuda_backend import KernelCache, require_cuda  # noqa: E402
-from mpas_port.cuda_ftz import (  # noqa: E402
+from hexcore.cuda_backend import KernelCache, require_cuda  # noqa: E402
+from hexcore.cuda_ftz import (  # noqa: E402
     build_mpas_ftz_binding,
     build_mpas_ftz_binding_v841,
     production_translation_units,

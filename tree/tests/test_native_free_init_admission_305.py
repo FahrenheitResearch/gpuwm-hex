@@ -11,21 +11,21 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from mpas_port.init_door import InitDoorRefusal, select_vertical_mode
-from mpas_port.timestep_admission import (
+from hexcore.init_door import InitDoorRefusal, select_vertical_mode
+from hexcore.timestep_admission import (
     CourantPolicy,
     TimestepAdmissionError,
     admit_timestep,
     edge_length_authority,
 )
-from mpas_port.vertical import (
+from hexcore.vertical import (
     build_edge_vertical_metrics,
     build_vertical_grid,
     runtime_vertical_vectors,
     smooth_terrain,
     validate_vertical_grid,
 )
-from mpas_port.vertical_spec import VerticalSpec, VerticalSpecError
+from hexcore.vertical_spec import VerticalSpec, VerticalSpecError
 
 
 class ClosedFourCellMesh:

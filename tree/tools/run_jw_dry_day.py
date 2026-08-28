@@ -22,7 +22,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from mpas_port.driver import (
+from hexcore.driver import (
     DryDycoreConfig,
     DryDycoreDriver,
     DrySavedDiagnostics,
@@ -30,8 +30,8 @@ from mpas_port.driver import (
     load_mpas_initial_state,
     load_mpas_vertical_grid,
 )
-from mpas_port.mesh import Mesh
-from mpas_port.state import PrognosticState
+from hexcore.mesh import Mesh
+from hexcore.state import PrognosticState
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -362,7 +362,7 @@ def execute(args: argparse.Namespace) -> int:
     native_record = verify_frozen_input(
         args.native_t0, EXPECTED_NATIVE_T0_SHA256, "native internal t0"
     )
-    driver_path = ROOT / "src" / "mpas_port" / "driver.py"
+    driver_path = ROOT / "src" / "hexcore" / "driver.py"
 
     receipt: dict[str, Any] = {
         "schema": "mpas-port.jw-dry-day-receipt.v1",

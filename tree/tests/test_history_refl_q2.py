@@ -127,7 +127,7 @@ def test_refl_due_reaches_the_phase_two_seam_by_signature() -> None:
     assert parameters["refl_10cm_due"].default is False
 
     sys.path.insert(0, str(ROOT / "src"))
-    from mpas_port.cuda_arwen_physics_v841 import (
+    from hexcore.cuda_arwen_physics_v841 import (
         PersistentTwoPhaseCudaPhysicsBackendV841,
     )
 

@@ -17,11 +17,11 @@ SRC = TREE / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from mpas_port.obs_referee.bundle import write_grid_bundle, write_station_bundle  # noqa: E402
-from mpas_port.obs_referee.canonical import write_json  # noqa: E402
-from mpas_port.obs_referee.manifest import BASE_COMMIT, SCHEMA  # noqa: E402
-from mpas_port.obs_referee.runner import run_suite  # noqa: E402
-from mpas_port.obs_referee.treatment import TREATMENT_RECEIPT_SCHEMA  # noqa: E402
+from hexcore.obs_referee.bundle import write_grid_bundle, write_station_bundle  # noqa: E402
+from hexcore.obs_referee.canonical import write_json  # noqa: E402
+from hexcore.obs_referee.manifest import BASE_COMMIT, SCHEMA  # noqa: E402
+from hexcore.obs_referee.runner import run_suite  # noqa: E402
+from hexcore.obs_referee.treatment import TREATMENT_RECEIPT_SCHEMA  # noqa: E402
 
 
 CASE_SPECS = (

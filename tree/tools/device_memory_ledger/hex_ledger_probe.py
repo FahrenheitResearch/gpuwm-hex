@@ -659,6 +659,11 @@ def run(args) -> int:
         "--output", str(args.output),
         "--case-label", args.case_label,
     ]
+    if args.required_free_bytes is not None:
+        # Forwarded verbatim to the driver's admission, exactly as the
+        # forecast door forwards its own verdict: a card's measured row may
+        # admit a mesh the default model's fixed term refuses.
+        rest += ["--required-free-bytes", str(int(args.required_free_bytes))]
 
     # The real mesh bind, fail-closed, exactly as tools/run_cuda_v841_forecast_mesh.py does.
     bind_receipt = binding.bind_mesh(
@@ -1050,6 +1055,14 @@ def main(argv=None) -> int:
     p.add_argument("--output", type=Path)
     p.add_argument("--case-label", default="hex-ledger")
     p.add_argument("--ledger-json", type=Path)
+    p.add_argument(
+        "--required-free-bytes",
+        type=int,
+        default=None,
+        help="forwarded to the forecast driver's admission floor (a card's "
+             "own measured row, computed by the caller); default: the "
+             "mesh-bound floor from the shared admission surface",
+    )
     p.add_argument("--arm", choices=("clean", "hook", "full"), default="full")
     p.add_argument("--depth", type=int, default=32)
     p.add_argument("--census-steps", type=int, default=2)

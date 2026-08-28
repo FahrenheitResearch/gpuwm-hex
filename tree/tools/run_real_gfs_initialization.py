@@ -20,9 +20,9 @@ from typing import Any
 
 import numpy as np
 
-from mpas_port.initialization import initialize_from_structured, load_structured_atmosphere
-from mpas_port.mesh import Mesh
-from mpas_port.vertical import build_vertical_grid
+from hexcore.initialization import initialize_from_structured, load_structured_atmosphere
+from hexcore.mesh import Mesh
+from hexcore.vertical import build_vertical_grid
 
 
 ROOT = Path(__file__).resolve().parents[1]

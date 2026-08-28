@@ -16,7 +16,7 @@ import types
 import numpy as np
 import pytest
 
-from mpas_port.cuda_physics_tier_park_v841 import (
+from hexcore.cuda_physics_tier_park_v841 import (
     CudaPhysicsTierParkV841,
     PhysicsTierParkRefusal,
     walk_device_allocations,
