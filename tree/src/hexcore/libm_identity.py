@@ -43,6 +43,7 @@ import numpy as np
 __all__ = [
     "SCALAR_POW_PROBE_SIZE",
     "KNOWN_SCALAR_POW_LIBMS",
+    "ARRAY_POW_LEAVES_SCALAR_PATH",
     "scalar_pow_probe_inputs",
     "scalar_pow_fingerprint",
     "correctly_rounded_square_fingerprint",
@@ -134,7 +135,65 @@ KNOWN_SCALAR_POW_LIBMS: dict[str, dict[str, str]] = {
             "still differ from np.square here"
         ),
     },
+    "ded6cf5be374b61d": {
+        "libm": (
+            "numpy's own CPU-dispatched SIMD pow kernel (engaged on AVX-512 "
+            "silicon, over an unchanged glibc scalar powf)"
+        ),
+        "measured_on": (
+            "the GitHub ubuntu-24.04 runner (first CI run to execute this "
+            "gate, 33405889844) and WSL Ubuntu 24.04 glibc 2.39-0ubuntu8.7 "
+            "on an AMD Ryzen 9 9950X3D"
+        ),
+        "numpy": "2.3.5 / 2.4.3 / 2.4.6 / 2.5.2 -- digest identical on all four",
+        "measured_date": "2026-08-31",
+        "note": (
+            "NOT a third C library.  On the same box, the same probe through "
+            "the element-wise SCALAR expression still digests e8f06d91c151bfd8 "
+            "-- the registered glibc row -- so the platform's scalar powf is "
+            "byte-identical from glibc 2.39 through 2.43 and what moved is "
+            "numpy's ARRAY dispatch: np.power(array, array) takes numpy's "
+            "vendored SIMD kernel on CPUs with the AVX-512 feature set and "
+            "answers differently on 220,001 of the 1,048,576 probe values "
+            "(float32; the float64 kernel diverges too, 8,926 of 200,000 on "
+            "the equivalence test's own values).  Cross-checked on a "
+            "no-AVX-512 Linux box the same day (the proving RTX 5090, Intel Core "
+            "Ultra 7 270K, glibc 2.43, numpy 2.5.2): array == scalar there, "
+            "both e8f06d91.  The correctly-rounded square control is "
+            "d026ac1b6fd1ea85 on every box named here, which is what pins the "
+            "split to the pow path.  A receipt carrying this fingerprint "
+            "names bytes minted by numpy's kernel, and "
+            "refuse_unless_recorded_libm_matches keeps them apart from glibc "
+            "and MSVC artifacts exactly as it keeps those apart from each "
+            "other.  See ARRAY_POW_LEAVES_SCALAR_PATH below for the one "
+            "consequence the equivalence tests must honour."
+        ),
+    },
 }
+
+
+#: Fingerprints whose ARRAY ``np.power`` is MEASURED to leave the scalar
+#: libm path on the box that produces them.
+#:
+#: On every platform measured before 2026-08-31, ``np.power(a, b)`` with two
+#: arrays and the element-wise scalar expression answered identical bytes,
+#: and the vectorized-equivalence tests assert exactly that.  On AVX-512
+#: silicon numpy dispatches the array form to its own SIMD pow kernel, so on
+#: those boxes the assertion is a statement about numpy's dispatch table,
+#: not about this repository's loops -- the vectorized form CANNOT reproduce
+#: the scalar transcription there, in either precision (measured: 36,855 of
+#: 200,000 float32 and 8,926 of 200,000 float64 on the equivalence test's
+#: own values).  ``tests/test_vertical_vectorized_equivalence.py`` skips its
+#: pow-path bitwise legs BY NAME on these fingerprints -- a skip that names
+#: the measured figures, never a widened tolerance -- and every other leg
+#: still runs.  What governs ARTIFACTS on such a box is unchanged: the
+#: receipt names this fingerprint and
+#: :func:`refuse_unless_recorded_libm_matches` refuses cross-libm reads by
+#: name.  Membership is additive and measured, like the table above; a row
+#: enters here only with the same-box scalar digest recorded in its table
+#: note, because that is what separates "numpy dispatched away from the
+#: libm" from "the libm itself moved".
+ARRAY_POW_LEAVES_SCALAR_PATH: frozenset[str] = frozenset({"ded6cf5be374b61d"})
 
 
 def describe_float_environment() -> dict[str, Any]:
