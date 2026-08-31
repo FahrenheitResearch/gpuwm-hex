@@ -438,13 +438,29 @@ def test_the_door_answers_the_convection_question_from_the_row_alone():
     assert admitted["physics_health"].startswith("REFERENCE")
 
 
-def test_a_registered_row_keeps_the_configuration_it_has_always_run():
-    """Nothing already registered moves under the ruling.
+def test_every_registered_row_gets_the_scheme_its_own_spacing_selects():
+    """The ruling decides each row from its own spacing, and nothing else.
 
-    MEASURED: the finest registered mesh is 15,000 m, so every row selects
-    Grell-Freitas under the 3,000 m threshold and the frozen lane's proven
-    configuration is byte-unchanged for all of them.  The ruling fires the
-    moment a swath row is registered, and not before.
+    THIS TEST WAS RE-READ ON 2026-08-29, NOT RELAXED, and its own former
+    message is why.  It used to assert that the FINEST registered mesh is at
+    or above the 3,000 m threshold -- true when it was written (finest
+    15,000 m) and still true at 4,000 m -- and it printed the instruction for
+    the day that stopped holding: "a row finer than the threshold is now
+    registered; the ruling fires on it, and this test should be re-read
+    rather than relaxed".
+
+    That day is here: ``v0.9.120.110533`` declares 937.5 m.  So the claim the
+    test protects is restated as what it always meant -- every row gets the
+    scheme ITS OWN spacing selects -- and it now checks BOTH sides, which is
+    strictly more than the single-sided version could:
+
+    * every row at or above the threshold still selects Grell-Freitas, so
+      nothing that was registered before this ruling moved; and
+    * every row below it selects no cumulus scheme at all, so the ruling
+      actually fires rather than being a threshold nobody crosses.
+
+    Keyed on the threshold rather than on a list of names, so the next
+    sub-kilometre row is absorbed without editing this test again.
     """
 
     import importlib.util
@@ -462,15 +478,23 @@ def test_a_registered_row_keeps_the_configuration_it_has_always_run():
     sys.modules["_test_mesh_binding_convection"] = module
     spec.loader.exec_module(module)
 
-    finest = min(
-        float(row.nominal_dx_m) for row in module.MESH_BINDINGS.values()
-    )
-    assert finest >= CONVECTION_OFF_BELOW_M, (
-        "a row finer than the threshold is now registered; the ruling fires "
-        "on it, and this test should be re-read rather than relaxed"
-    )
+    coarse, fine = [], []
     for name, row in module.MESH_BINDINGS.items():
-        decision = convection_admission.convection_decision(
-            nominal_dx_m=float(row.nominal_dx_m)
-        )
-        assert decision["scheme"] == SCHEME_GRELL_FREITAS, name
+        dx = float(row.nominal_dx_m)
+        decision = convection_admission.convection_decision(nominal_dx_m=dx)
+        if dx >= CONVECTION_OFF_BELOW_M:
+            assert decision["scheme"] == SCHEME_GRELL_FREITAS, name
+            coarse.append(name)
+        else:
+            assert decision["scheme"] == SCHEME_OFF, name
+            fine.append(name)
+        # Either way the decision is the RULING's and not a flag's.
+        assert decision["source"] == "resolution", name
+    # Both arms have to be exercised, or this test is single-sided again
+    # without saying so.
+    assert coarse, "no registered row is at or above the threshold"
+    assert fine, (
+        "no registered row is below the threshold, so the convection-off "
+        "half of the ruling is untested here; if that is genuinely the "
+        "state of the registry, say so rather than deleting the assertion"
+    )

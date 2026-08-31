@@ -1042,6 +1042,67 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
                 "attach."
             ),
         ),
+        "v0.9.120.110533": MeshBinding(
+            name="v0.9.120.110533",
+            n_cells=110_533,
+            n_edges=331_593,
+            n_levels=55,
+            n_interfaces=56,
+            n_soil_levels=4,
+            nominal_dx_m=937.5,
+            dt_seconds=5.0,
+            grid_bytes=151_227_968,
+            grid_sha256="40e9e9f7449835af34f45a5510e169a49fd2145af826cad318ada0be1747d1af",
+            static_bytes=224_613_208,
+            static_sha256="6e941739c3412f4df713346677216e26846e3179a28a8c5160345100d8b47528",
+            drop_carried_deformation=True,
+            notes=(
+                "THE FIRST SUB-KILOMETRE ROW THIS PROGRAM HAS REGISTERED. A "
+                "937.5 m refined core of 100 km radius over central Oklahoma "
+                "(35.0 N 97.0 W) on a 120 km global background, reached in "
+                "seven nested cap rows of ONE spec -- each halving the "
+                "spacing, each ramp eighteen times its own target -- so the "
+                "gradient the surgery-locality gate reads is 10.05 % per "
+                "cell against its 12.25 % ceiling. Delivered 110,533 cells "
+                "against a predicted 110,437.7, 0.086 %. Attained finest "
+                "946.99 m, coarsest 124,804.8 m, spacing ratio 131.79, the "
+                "widest any registered row carries. Coordination 5->1,835, "
+                "6->106,876, 7->1,821, 8->1, nothing below five edges. "
+                "GLOBAL: sum(areaCell)/4pi = 1.0 exactly, Euler 2, "
+                "orthogonality 1.265e-11 against a 1e-10 emission limit, "
+                "TRiSK antisymmetry 3.886e-16, area decomposition 2.69 eps "
+                "of 32. min(dvEdge/dcEdge) 0.040048, 2.00x the admission "
+                "floor; SHORTEST DUAL EDGE 58.879 m, which the binary32 "
+                "200 m floor refuses and which this grid's own "
+                "binary64_earth_centred storage admits at 3.725e-7 m -- the "
+                "2026-08-29 dual-edge unlock is what makes the row "
+                "expressible at all. "
+                "Declared dt 5 s against a measured Courant limit of "
+                "6.259 s (min dcEdge 869.25 m) -- 1.252x of margin, the "
+                "tightest any registered row sits at, and the FIRST row "
+                "where 5 s is the mesh's natural step rather than 140x "
+                "below its limit. Convection is off here by the 2026-08-26 "
+                "sub-3-km ruling with no flag passed, so the row binds the "
+                "anchored (5 s, convection off) configuration, whose own "
+                "anchor named this measurement as the one that would "
+                "settle its confound. "
+                "ITS STATIC IS THE FIRST BUILT AT A DERIVED CATEGORICAL "
+                "SAMPLING RATE. The stock builder sampled every geography "
+                "dataset once per source pixel and refused this mesh -- "
+                "'modis_landuse_20class_30s_with_lakes mapped no valid "
+                "category pixels to cell 49103' at 34.79 N 96.84 W -- "
+                "because a 30 arc-second pixel is 926 m and this mesh's "
+                "cells are 947. The refusal is unchanged; the rate is now "
+                "derived per categorical dataset from the mesh's own "
+                "min(dcEdge) -- ceil(1310.43 / min(dcEdge)), the pixel "
+                "diagonal over the smallest cell's inradius -- and reads 2 "
+                "here and 1 for every mesh with min(dcEdge) at or above "
+                "1,310.43 m. The finest REGISTERED mesh before this row has "
+                "min(dcEdge) 4,302.90 m, so x1.40962's and x4.163842's statics rebuild "
+                "BYTE-IDENTICALLY and no registered static moved. "
+                "Evidence: gpuwm evidence/fine-mesh-20260829/."
+            ),
+        ),
     }
 )
 

@@ -37,11 +37,12 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.2.0", (
-        "0.2.0 is the declared cut of the 0.2 line (the limited-area lane, "
-        "variable-resolution mesh generation, storm-following placement and "
-        "the cycling loop, on top of the 0.1 global core); moving it is a "
-        "release decision, not an edit"
+    assert declared == "0.2.1", (
+        "0.2.1 is the declared cut of the 0.2 line: the release forced by "
+        "gpuwm 2.6.0 (its pin window excludes every earlier engine), "
+        "carrying the repaired transition-band gate and the seam's "
+        "fail-closed scalar ladder; moving it is a release decision, not "
+        "an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")

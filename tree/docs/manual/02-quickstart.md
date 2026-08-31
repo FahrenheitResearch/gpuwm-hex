@@ -33,23 +33,23 @@ individual gpuwm source files by SHA-256. A bare install reached an engine the
 pin refused, and the forecast door refused at launch with a digest mismatch
 that named neither the version that works nor the fact that pip chose it.
 
-The declaration now carries a bounded range — `gpuwm>=2.5.8,<2.5.9` — so pip
+The declaration now carries a bounded range — `gpuwm>=2.6.0,<2.6.1` — so pip
 resolves the engine that works and refuses the one that does not. Three things
 follow that are worth knowing rather than discovering:
 
-- **2.5.8 is the only published engine that matches**, re-measured 2026-08-28
-  against every published 2.5.x release. So there is no fallback: the range is
-  one version wide because only one version qualifies.
+- **2.6.0 is the only published engine that matches**, re-measured 2026-08-31
+  against every published 2.5.x and 2.6.x release. So there is no fallback:
+  the range is one version wide because only one version qualifies.
 - **A newer gpuwm will not be resolved either.** The ceiling sits at the
   first engine this port has not measured against the manifest, so a future
-  2.5.9 is excluded exactly as 2.5.7 is. That is deliberate: an unmeasured
+  2.6.1 is excluded exactly as 2.5.8 is. That is deliberate: an unmeasured
   engine is what produced the defect.
 - **If you already have a different gpuwm in the environment**, `gpuwm-hex
   doctor` compares the installed engine's bytes against the pin and names
   both the version it found and the version to install. It is a byte check,
   not a version check, and it runs by default. On a conforming install it
-  reads `gpuwm 2.5.8: 16 of 16 pinned files are in this install and all 16
-  match`.
+  reads `gpuwm 2.6.0: 16 of 16 pinned files are in this install and all 16
+  match` (measured 2026-08-31 against the published 2.6.0 wheel).
 
 Then add the CUDA lane:
 
@@ -150,7 +150,7 @@ gpuwm you have: the transcript above was taken against the published gpuwm
 2.5.2 wheel, whose bundle carries `rw_wrfbatch` and **not** `rw_mpas_init`
 or `rw_mpas_convert` — which is exactly the shortfall the doctor reports
 there. The four MPAS bridge binaries enter the bundle at gpuwm 2.5.3, and
-this distribution's declared range is `gpuwm>=2.5.8,<2.5.9` (the floor is
+this distribution's declared range is `gpuwm>=2.6.0,<2.6.1` (the floor is
 far past 2.5.3, for the seam bytes the port pins): a conforming install cannot
 land on the engine that transcript was taken from. Doctor
 asks the gpuwm you actually have what its bundle declares, so it never sends
@@ -301,7 +301,7 @@ about a minute.
 The forecast lane is the one step whose answer depends on your hardware, so
 ask before you spend anything on it. **Both checkouts below are required and
 neither is optional**: `--repo` is your gpuwm-hex checkout (the drivers are
-not in the wheel) and `--gpuwm-checkout` is a gpuwm checkout at **`v2.5.8`**,
+not in the wheel) and `--gpuwm-checkout` is a gpuwm checkout at **`v2.6.0`**,
 the tag whose bytes the seam pin matches (2.1). Leave `--repo` off and the
 door refuses before it reads anything else.
 
@@ -315,7 +315,7 @@ gpuwm-hex forecast --preflight \
   --hours 1.0 --history-every-minutes 30 \
   --out work/fc-01 \
   --repo <gpuwm-hex-checkout>/tree \
-  --gpuwm-checkout <gpuwm-checkout-at-v2.5.8>
+  --gpuwm-checkout <gpuwm-checkout-at-v2.6.0>
 ```
 
 `--gpuwm-checkout` must be a **git clone**, not an unpacked release tarball
@@ -397,7 +397,7 @@ gpuwm-hex forecast \
   --hours 1.0 --history-every-minutes 30 \
   --out work/fc-01 \
   --repo <gpuwm-hex-checkout>/tree \
-  --gpuwm-checkout <gpuwm-checkout-at-v2.5.8> \
+  --gpuwm-checkout <gpuwm-checkout-at-v2.6.0> \
   --case-label quickstart
 ```
 

@@ -43,14 +43,14 @@ independent port and is not affiliated with or endorsed by them.)*
 
 **Every command was run before it was printed.** Each command block in this
 manual was executed against the real artifact it documents — the installed
-0.2.0 wheel for the doors, the repository tools for the forecast lane, a CUDA
+0.2.1 wheel for the doors, the repository tools for the forecast lane, a CUDA
 node for anything that needs a card — before it was written down. Where a
 command's output is shown, it is the output that run produced, with machine
 home directories shortened to `~`.
 
 **What a walk of this manual actually reaches.** On 2026-08-27 the printed
 commands were executed in printed order, from an empty environment, against
-the built 0.2.0 wheel and the *published* engine, by somebody following the
+the built 0.2.1 wheel and the *published* engine, by somebody following the
 page rather than remembering the code. Install, `doctor`, `mesh-check`, the
 init door, the forecast door and the render door all reach real output —
 16 min 46 s from an empty machine to the first rendered products. Three
@@ -60,7 +60,7 @@ re-measured 2026-08-28 against the published bundle: the **limited-area lane**
 of chapter 6.8 and the `cull` door of chapter 9 have the engine capabilities
 they need, and the render door's **default window** is understood by the
 published converter. The third stands, with a narrower reason than it had: the forecast lane needs
-a `gpuwm` **git** checkout at **v2.5.8**, not just whatever pip installs — not
+a `gpuwm` **git** checkout at **v2.6.0**, not just whatever pip installs — not
 because a pinned file is missing from the wheel (at 2.5.8 all sixteen resolve
 from `site-packages`, measured 2026-08-28) but because the run records the
 checkout's HEAD, tree and dirty paths into every receipt. Each is written
@@ -77,7 +77,7 @@ three measured, physics-shaped ways. They are stated in chapter 3, quantified
 in [`docs/declared-divergences.md`](../declared-divergences.md), and never
 hidden behind an option. Read them before trusting a number.
 
-**Version.** This manual describes gpuwm-hex 0.2.0 with the gpuwm 2.5.x
+**Version.** This manual describes gpuwm-hex 0.2.1 with the gpuwm 2.6.x
 engine line. Where a measurement was taken on specific hardware, the card is
 named beside the number.
 

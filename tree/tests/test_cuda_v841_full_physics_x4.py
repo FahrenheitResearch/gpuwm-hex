@@ -168,7 +168,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # the x4 proof refusing before CUDA.  The rationale lives beside the
         # runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "07c9ca03f12742db4ffa813ca069055f4b4c9bd65458436a7aa407ed9548ab1b"
+            "e7c65f4809bbb4df9beb05d4d6e3c2e78fea8b14f3a2b590a1eb1a60d02bbd0b"
         ),
         # Re-frozen for the regional CPU authority lane (#346 L4); the
         # rationale lives beside the runner's pin.

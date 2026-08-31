@@ -23,3 +23,13 @@ wt-*/
 # Source-matrix lane scratch: pulled history frames and rendered PNGs.
 frames/
 .claude/
+
+# The sibling column-physics subpackage never ships: the assembler does not
+# copy `tree/src/hexcore/mod/` or `tree/tests/mod/` into this repository at
+# all, and `pyproject.toml` / `MANIFEST.in` hold them out of the wheel and
+# the sdist.  These entries are the second line of defence should a copy
+# ever land in a working tree here -- and the staging gesture is always
+# `git add -A`, never `-Af`, because `-f` overrides every rule in this file.
+/tree/src/hexcore/mod/
+/tree/tests/mod/
+/tree/.pytest_cache/

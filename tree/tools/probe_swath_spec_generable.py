@@ -35,6 +35,40 @@ def _gradient(text: str) -> float | None:
     return float(found.group(1)) if found else None
 
 
+#: The repaired meter's two coverage refusals carry NO gradient fragment
+#: (there is no number to print: nobody measured one), so "no fragment"
+#: stopped meaning "refused by some other gate".  These are the fragments
+#: rw-mpas mesh/hierarchy.rs prints for them; tests/test_mesh_spec_gates.py
+#: pins them against the Rust source beside a checkout-built engine.
+_UNMEASURED_FRAGMENTS = (
+    "could not be MEASURED",
+    "was never visited",
+)
+
+
+def _classify(returncode: int, blob: str) -> dict[str, Any]:
+    """The gradient-gate verdict, fail-closed over the refusal classes.
+
+    THE BREAKAGE THE OLD SPELLING HAD: ``cleared_gradient_gate`` was
+    ``returncode == 0 or gradient is None``, written when the only
+    gradient refusal carried a printed number.  The repaired meter also
+    refuses when coverage is partial or the refinement was never visited,
+    with no number in the text -- and the old spelling reported exactly
+    those specs as having CLEARED the gate.
+    """
+    gradient = _gradient(blob)
+    unmeasured = returncode != 0 and gradient is None and any(
+        fragment in blob for fragment in _UNMEASURED_FRAGMENTS)
+    return {
+        "returncode": returncode,
+        "gradient_percent_per_cell": gradient,
+        "refused_on_gradient": returncode != 0 and gradient is not None,
+        "refused_unmeasured": unmeasured,
+        "cleared_gradient_gate": returncode == 0 or (
+            gradient is None and not unmeasured),
+    }
+
+
 def _attempt(engine: Path, spec: dict[str, Any], label: str, sweeps: int) -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as scratch:
         spec_path = Path(scratch) / "spec.json"
@@ -52,13 +86,8 @@ def _attempt(engine: Path, spec: dict[str, Any], label: str, sweeps: int) -> dic
             "spacing_km": spec["regions"][0]["spacing_km"],
             "transition_cells": spec["regions"][0]["transition_cells"],
             "sweeps": sweeps,
-            "returncode": done.returncode,
             "seconds": round(time.perf_counter() - started, 3),
-            "gradient_percent_per_cell": _gradient(blob),
-            "refused_on_gradient": _gradient(blob) is not None,
-            "cleared_gradient_gate": (
-                done.returncode == 0 or _gradient(blob) is None
-            ),
+            **_classify(done.returncode, blob),
             "message": blob.strip().splitlines()[0][:400] if blob.strip() else "",
         }
 

@@ -1152,6 +1152,47 @@ class PhysicsBackend(Protocol):
     ) -> ColumnTendencies: ...
 
 
+# The DOMAIN of ``_required_scalar_names``: the gpuwm microphysics selectors an
+# MPAS scheme NAME can actually route to.  Derived from ``_ROUTES`` rather than
+# restated, so a new route cannot drift away from the ladder that has to carry
+# it, and so the ladder stays exhaustive over its own domain by construction
+# rather than by anyone remembering.
+_ROUTED_MP_PHYSICS: frozenset[int] = frozenset(
+    _ROUTES["config_microp_scheme"].values()
+)
+
+
+# gpuwm microphysics selectors DELIBERATELY given no row in the ladder below,
+# each with its reason, in the shape ``_UNROUTED_REASONS`` uses for MPAS scheme
+# names.  An omission recorded here is a decision; an omission recorded nowhere
+# reads as an oversight, and the next reader has to guess which it was.
+_UNROUTED_MP_PHYSICS_REASONS: Mapping[int, str] = MappingProxyType(
+    {
+        50: (
+            "P3 one-category two-moment ice (gpuwm mp_physics=50) has no MPAS "
+            "name to arrive by: the frozen v8.2.3 config_microp_scheme "
+            "inventory above and MPAS-A v8.4.1 alike stop at mp_kessler, "
+            "mp_thompson, mp_thompson_aerosols and mp_wsm6.  Its carrier set "
+            "cannot be written in this vocabulary either.  WRF's mp=50 call "
+            "shape (module_microphysics_driver.F:1569-1602 into "
+            "mp_p3_wrapper_wrf, module_mp_p3.F:690-932) transports EIGHT "
+            "scalars -- qv, qc, qr, nr, qi, ni and the rime pair qir (rime "
+            "mass) and qib (rime volume) -- while MPAS-A allocates no rime "
+            "scalar at all, so _SCALAR_ALIASES can name six of the eight.  A "
+            "six-of-eight row would let _validate_requirements accept a batch "
+            "carrying no rime state, which is the state substitution this "
+            "function exists to refuse, so the answer is this refusal and not "
+            "a partial row.  One ice category is also why the (6, 8, 28) row "
+            "must never simply grow a 50: P3 writes neither qs nor qg, and "
+            "requiring them would demand two species the scheme does not "
+            "have.  Adding a P3 row to _ROUTES therefore means giving this "
+            "seam qir and qib first, and this refusal is what stops the route "
+            "landing without them"
+        ),
+    }
+)
+
+
 def _required_scalar_names(selection: GPUWMSchemeSelection) -> frozenset[str]:
     """Exact MPAS/gpuwm scalar state needed by the selected schemes.
 
@@ -1161,7 +1202,39 @@ def _required_scalar_names(selection: GPUWMSchemeSelection) -> frozenset[str]:
     mpas_atmphys_driver_microphysics.F lines 394-426). gpuwm's DomainState carries
     the same mp=8/mp=28 number fields. Omitting them is a state substitution,
     not an optional diagnostic.
+
+    THE BREAKAGE THE REFUSAL BELOW PREVENTS, measured 2026-08-29.  This ladder
+    answers "which scalars must be present", and its silence is not neutral: a
+    selector with no row falls through every arm and declares ``{"qv"}`` alone,
+    so ``_validate_requirements`` accepts a batch with no cloud, no rain and no
+    ice state and the backend then runs on state that was substituted rather
+    than supplied -- with no error anywhere.  The rows cover exactly
+    ``_ROUTED_MP_PHYSICS`` today, which is why no forecast has met that; nothing
+    but this refusal keeps it true.  gpuwm publishes microphysics selectors this
+    seam does not route (10, 18 and 50 among them, and ``GPUWM_SELECTOR_INVENTORY``
+    above is a second copy that can drift from ``_ROUTES``), so the arrival is a
+    new route away, not a hypothetical.
     """
+
+    if selection.mp_physics not in _ROUTED_MP_PHYSICS:
+        # Report the MPAS knob the user actually set when a name got this far
+        # (the real arrival: somebody added a route).  A selection built
+        # directly from selectors has no name to quote, so that case names the
+        # gpuwm selector instead of putting an integer under a name knob.
+        mpas_name = selection.mpas_names.get("config_microp_scheme")
+        _refuse(
+            "config_microp_scheme" if mpas_name is not None else "mp_physics",
+            mpas_name if mpas_name is not None else selection.mp_physics,
+            _UNROUTED_MP_PHYSICS_REASONS.get(
+                selection.mp_physics,
+                f"gpuwm mp_physics={selection.mp_physics} has no scalar "
+                "requirement row in this seam, and only "
+                f"{sorted(_ROUTED_MP_PHYSICS)} are reachable from an MPAS "
+                "scheme name; without a row the selection would be accepted "
+                "declaring qv alone, which is a state substitution",
+            ),
+            "config_microp_scheme='off'",
+        )
 
     required: set[str] = set()
     if selection.mp_physics or selection.cu_physics or selection.bl_pbl_physics:

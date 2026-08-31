@@ -56,11 +56,12 @@ is no receipt directory, no card and no run commit for them anywhere in the
 tree -- which is the opposite of how the obs-referee numbers below are
 recorded, and the gap is worth naming rather than papering over. What can be
 established is a ceiling: the commit that introduced them pinned engine
-`629ddb6f0`, so the run happened at or before that pin. Three engine pin moves
-have landed since -- `0d04db712` (2026-08-24), `26daaab7e` (2026-08-25) and
-`659962929` (2026-08-28, gpuwm 2.5.8).
+`629ddb6f0`, so the run happened at or before that pin. Four engine pin moves
+have landed since -- `0d04db712` (2026-08-24), `26daaab7e` (2026-08-25),
+`659962929` (2026-08-28, gpuwm 2.5.8) and `7e34a48` (2026-08-31, gpuwm
+2.6.0).
 
-The last of those crosses the executed seam and **has now been measured**, in
+The 2.5.8 move crosses the executed seam and **has been measured**, in
 the strongest form available short of a re-run: a four-arm byte A/B on one
 RTX 5090, old pin against new pin, x4.163842, 30 composite steps, no tolerance
 anywhere. The atmosphere half of the per-step fingerprint is identical at all
@@ -71,10 +72,17 @@ digest rolled up over them
 That is one mesh, one case and one hour, and it is a byte comparison rather
 than a physics claim.
 
-The two EARLIER pin moves have no such arm, and no magnitude above has been
-re-measured over 24 h since the original run. **Whether any of the three moved
-across those pins is NOT MEASURED.** Read them as pre-2026-08-20 numbers until
-somebody re-runs them.
+The 2026-08-31 move crosses the executed seam too
+(`gpuwm/core/rrtmg_legacy.py` is one of its three moved files, and legacy
+RRTMG is the prime suspect for the drift below), and it carries its own
+one-hour byte arm: the x4 frozen-source proof re-run at that pin wrote an
+F001 history byte-identical to the 2.5.8 proof's -- one SHA-256, two
+engines (receipt `evidence/repin-260-20260831/x4-proof/`).  One mesh, one
+case, one hour, same caveat as above.  The two EARLIER pin moves have no
+arm at all, and no magnitude above has been re-measured over 24 h since
+the original run. **Whether any of the three moved across those pins is
+NOT MEASURED.** Read them as pre-2026-08-20 numbers until somebody re-runs
+them.
 
 ---
 

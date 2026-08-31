@@ -384,6 +384,134 @@ def regional_ring_shell_errors(
     return errors
 
 
+#: Coordinate representations this build knows how to read, and whether each
+#: stores its components as binary64.  A file declaring anything else is
+#: refused rather than guessed at: see :func:`_coordinate_frame_errors`.
+COORDINATE_REPRESENTATIONS: dict[str, bool] = {
+    "binary32_earth_centred": False,
+    "binary64_earth_centred": True,
+}
+
+#: Global attribute naming the representation.  Absent means
+#: ``binary32_earth_centred`` -- what every published mesh carries.
+COORDINATE_REPRESENTATION_ATTR = "rw_coordinate_representation"
+
+#: Global attribute carrying the origin the stored components are measured
+#: FROM, in metres.  Absent means the Earth's centre.  A reader reconstructs an
+#: absolute position as ``stored + origin``.
+COORDINATE_ORIGIN_ATTR = "rw_coordinate_origin_xyz"
+
+
+def _coordinate_frame_errors(attrs: dict[str, Any], arrays: dict[str, Any]) -> list[str]:
+    """Refuse a file whose declared coordinate frame is not the one it holds.
+
+    WHAT THIS DOES NOT DO.  It does not decide the storage tolerance;
+    :func:`spherical_arc_tolerance` reads that off the coordinate dtype and is
+    already right with no attribute at all.  An UNDECLARED file is therefore
+    read exactly as before, and it has to be: the published
+    ``x1.40962.grid.nc`` and ``x4.163842.grid.nc`` store binary64 coordinates
+    and carry no attribute, so reading silence as binary32 would refuse the two
+    meshes the port is anchored to.
+
+    WHAT IT DOES.  Every check downstream loosens with the dtype it finds, so a
+    fine mesh rewritten from binary64 to binary32 -- a rescale, a conversion
+    through a tool that only writes floats -- loses 5.4e8 of its coordinate
+    precision and passes all of them, because they all move with it.  On a
+    115 m dual edge that is 8.4e-3 of orthogonality defect in the point set the
+    dycore's operators are built from where the generator was gated at 1.4e-11.
+    A declaration of what the PRODUCER stored is the only thing that notices.
+
+    Three refusals, each naming what it prevents:
+
+    * an UNKNOWN representation -- it carries no statement this build can
+      check, so a rewritten file would pass unremarked;
+    * a declaration that DISAGREES with the stored dtype -- the file was
+      rewritten after its producer wrote it, in the direction the message
+      names;
+    * an ORIGIN that is not the Earth's centre -- this build reads the stored
+      components as absolute positions, so it would place the whole mesh
+      somewhere else on the Earth, and terrain, lateral boundaries and every
+      rendered product would land at the wrong point with no arithmetic
+      anywhere disagreeing.
+    """
+
+    errors: list[str] = []
+    names = [axis + family for family in ("Cell", "Edge", "Vertex") for axis in "xyz"]
+    present = [arrays[n] for n in names if n in arrays]
+    if not present:
+        return errors
+    stored_is_binary64 = all(np.asarray(a).dtype.itemsize >= 8 for a in present)
+    mixed = stored_is_binary64 != any(np.asarray(a).dtype.itemsize >= 8 for a in present)
+    if mixed:
+        errors.append(
+            "Cartesian coordinate arrays are stored at MIXED widths; the storage "
+            "tolerance is derived from one quantum and cannot serve two"
+        )
+        return errors
+
+    declared = attrs.get(COORDINATE_REPRESENTATION_ATTR)
+    if declared is None:
+        # Read by dtype, as every consumer already reads it.  Absence is not a
+        # claim, and must never be treated as one.
+        return errors
+    representation = str(declared).strip()
+    if representation not in COORDINATE_REPRESENTATIONS:
+        errors.append(
+            f"{COORDINATE_REPRESENTATION_ATTR}={representation!r} is not a "
+            f"representation this build knows "
+            f"({sorted(COORDINATE_REPRESENTATIONS)}). The attribute records what "
+            "the file's producer stored, so that a file rewritten at a different "
+            "width is caught rather than read at the width it now happens to "
+            "have; a tag this build cannot interpret carries no such statement "
+            "and would be ignored in silence"
+        )
+        return errors
+    if COORDINATE_REPRESENTATIONS[representation] != stored_is_binary64:
+        says = "binary64" if COORDINATE_REPRESENTATIONS[representation] else "binary32"
+        holds = "binary64" if stored_is_binary64 else "binary32"
+        consequence = (
+            "A demotion loses 5.37e+08 of the coordinate precision the mesh was "
+            "generated and gated at, and the point set the dycore builds its edge "
+            "normals, tangent planes and reconstruction coefficients from stops "
+            "being orthogonal to that accuracy."
+            if says == "binary64"
+            else "A promotion changes no value but proves the arrays are not the "
+            "bytes the producer wrote, so nothing else in the file is the bytes "
+            "it wrote either."
+        )
+        errors.append(
+            f"{COORDINATE_REPRESENTATION_ATTR}={representation!r} but "
+            f"xCell/yCell/zCell are stored as {holds}, so this file was rewritten "
+            f"after its producer wrote it. {consequence} Every storage check here "
+            "derives its tolerance from the dtype it FINDS -- 2*sqrt(3) coordinate "
+            "ULP, 1.73 m at binary32 and 3.2e-9 m at binary64 -- so all of them "
+            "move with the rewrite and none of them would say a word. Rebuild the "
+            "static from its grid rather than editing either the attribute or the "
+            "arrays"
+        )
+        return errors
+
+    origin = attrs.get(COORDINATE_ORIGIN_ATTR)
+    if origin is not None:
+        vector = np.asarray(origin, dtype=np.float64).ravel()
+        if vector.size != 3 or not np.all(np.isfinite(vector)):
+            errors.append(
+                f"{COORDINATE_ORIGIN_ATTR} must be three finite metres; a frame "
+                "that cannot be read is a frame that would be guessed"
+            )
+        elif np.any(vector != 0.0):
+            offset = float(np.linalg.norm(vector)) / 1000.0
+            errors.append(
+                f"{COORDINATE_ORIGIN_ATTR}={vector.tolist()} m is not the Earth's "
+                f"centre. This build reads the stored components as absolute "
+                f"positions, so it would place the whole mesh {offset:.1f} km from "
+                "where the file puts it, and terrain lookup, lateral-boundary "
+                "interpolation and every rendered product would land at the wrong "
+                "point with no arithmetic anywhere disagreeing"
+            )
+    return errors
+
+
 def spherical_arc_tolerance(
     radius: float, coordinate_dtype: Any, metric_rtol: float = _SPHERICAL_ARC_MAX_RTOL
 ) -> tuple[float, float]:
@@ -1403,6 +1531,26 @@ class Mesh:
             ):
                 errors.append("kites belonging to each cell do not sum to areaCell")
 
+        # ---- a DECLARED coordinate frame must be the one the file holds ---
+        #
+        # The storage tolerance below is derived from the dtype the file
+        # carries, not from this attribute, and is already right without it.
+        # What a declaration adds is a record of what the PRODUCER stored: a
+        # mesh rewritten from binary64 to binary32 loses 5.4e8 of coordinate
+        # precision and passes every check here, because every check derives
+        # its tolerance from the dtype it finds and so moves with the rewrite.
+        #
+        # AN UNDECLARED FILE IS READ BY ITS DTYPE, which is already correct
+        # and is what every published mesh relies on -- x1.40962.grid.nc and
+        # x4.163842.grid.nc store binary64 coordinates and carry no attribute.
+        # The declaration, written by rw-mpas `staticfile::coordframe` on files
+        # with no native MPAS-A counterpart, records what the PRODUCER stored,
+        # so a file rewritten at a different width is caught instead of being
+        # read at the width it now happens to have -- with every tolerance
+        # having quietly moved with it.
+        frame_errors = _coordinate_frame_errors(self.attrs, self.arrays)
+        errors.extend(frame_errors)
+
         on_sphere = str(self.attrs.get("on_a_sphere", "NO")).strip().upper() == "YES"
         if on_sphere:
             try:
@@ -1956,5 +2104,8 @@ __all__ = [
     "reconcile_grid_rotate_longitudes",
     "regional_boundary_mask_digest",
     "spherical_arc_tolerance",
+    "COORDINATE_REPRESENTATIONS",
+    "COORDINATE_REPRESENTATION_ATTR",
+    "COORDINATE_ORIGIN_ATTR",
     "validate_longitude_normalization",
 ]

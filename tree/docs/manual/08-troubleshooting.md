@@ -193,8 +193,8 @@ from an install. What is missing is the commit — the run writes the
 checkout's HEAD, tree and dirty paths into every receipt so the executed seam
 source can be named — so clone the tag instead of copying the files.
 
-**`--gpuwm-checkout ... is gpuwm 2.5.7, and this port's physics seam is
-pinned to gpuwm 2.5.8`** — the checkout is a real gpuwm tree at the wrong
+**`--gpuwm-checkout ... is gpuwm 2.5.8, and this port's physics seam is
+pinned to gpuwm 2.6.0`** — the checkout is a real gpuwm tree at the wrong
 version. The refusal names both versions, lists which of the sixteen pinned
 files moved, and prints the two commands that close it: the bounded `pip
 install` and the `git clone --depth 1 --branch v<version>` for the checkout

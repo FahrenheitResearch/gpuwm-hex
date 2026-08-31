@@ -460,6 +460,143 @@ def test_binary32_storage_noise_alone_breaks_a_purely_relative_bound(
 
 
 # ---------------------------------------------------------------------------
+# the declared coordinate frame: what a mesh with no native counterpart says
+# about how precisely it stores its points, and what a disagreement means
+# ---------------------------------------------------------------------------
+def _binary64_coordinates_binary32_metrics() -> Mesh:
+    """The shape rw-mpas writes for a mesh with no native MPAS-A counterpart.
+
+    Cartesian coordinates and the lat/lon pair beside them at binary64, every
+    METRIC still binary32.  The metrics stay binary32 because a stored metric
+    is a relative quantity binary32 carries to 6e-8 at any length; what a fine
+    mesh runs into is the coordinate quantum, which is absolute.
+    """
+
+    mesh = graded_sphere_mesh(dtype=np.float64)
+    for name in (
+        "dcEdge",
+        "dvEdge",
+        "areaCell",
+        "areaTriangle",
+        "kiteAreasOnVertex",
+        "weightsOnEdge",
+        "angleEdge",
+        "meshDensity",
+    ):
+        if name in mesh.arrays:
+            mesh.arrays[name] = np.asarray(mesh.arrays[name], dtype=np.float32)
+    mesh.attrs["rw_coordinate_representation"] = "binary64_earth_centred"
+    mesh.attrs["rw_coordinate_origin_xyz"] = np.zeros(3, dtype=np.float64)
+    return mesh
+
+
+def test_binary64_coordinates_over_binary32_metrics_are_admitted() -> None:
+    """The representation a sub-kilometre generated mesh actually ships in.
+
+    This is not a hypothetical: `rw_mpas_static` writes exactly this pair for
+    a grid whose provenance says it was generated here, and the same file was
+    loaded through this validator at 48,782 cells before this test existed.
+    """
+
+    mesh = _binary64_coordinates_binary32_metrics()
+    assert mesh.arrays["xCell"].dtype == np.float64
+    assert mesh.arrays["dvEdge"].dtype == np.float32
+    assert mesh.validate() is mesh
+
+
+def test_an_undeclared_binary64_mesh_is_read_by_its_dtype() -> None:
+    """ABSENCE IS NOT A CLAIM OF BINARY32, and reading it as one would refuse
+    the two meshes this port is anchored to: the published ``x1.40962`` and
+    ``x4.163842`` grid files store binary64 coordinates and carry no
+    ``rw_coordinate_representation`` attribute at all."""
+
+    mesh = _binary64_coordinates_binary32_metrics()
+    del mesh.attrs["rw_coordinate_representation"]
+    del mesh.attrs["rw_coordinate_origin_xyz"]
+    assert mesh.validate() is mesh
+
+
+def test_a_declaration_that_disagrees_with_the_arrays_is_refused_by_name() -> None:
+    """A file rewritten at a different width than its producer wrote it.
+
+    The DEMOTION direction is the one that costs: every storage check here
+    derives its tolerance from the dtype it finds, so a mesh rewritten from
+    binary64 to binary32 loses 5.4e8 of coordinate precision and passes all of
+    them.  The declaration is the only thing that notices.
+    """
+
+    demoted = graded_sphere_mesh(dtype=np.float32).copy()
+    demoted.attrs["rw_coordinate_representation"] = "binary64_earth_centred"
+    with pytest.raises(MeshValidationError) as refusal:
+        demoted.validate()
+    message = str(refusal.value)
+    assert "rewritten after its producer wrote it" in message
+    assert "A demotion loses" in message
+    assert "5.37e+08" in message
+
+    promoted = _binary64_coordinates_binary32_metrics()
+    promoted.attrs["rw_coordinate_representation"] = "binary32_earth_centred"
+    with pytest.raises(MeshValidationError) as refusal:
+        promoted.validate()
+    assert "A promotion changes no value" in str(refusal.value)
+
+
+def test_an_unknown_representation_is_refused_rather_than_ignored() -> None:
+    mesh = _binary64_coordinates_binary32_metrics()
+    mesh.attrs["rw_coordinate_representation"] = "binary32_local_origin"
+    with pytest.raises(MeshValidationError) as refusal:
+        mesh.validate()
+    message = str(refusal.value)
+    assert "is not a representation this build knows" in message
+    assert "would be ignored in silence" in message
+
+
+def test_an_origin_away_from_the_earths_centre_is_refused_by_name() -> None:
+    """This build reads the stored components as ABSOLUTE positions.  A file
+    that measures them from somewhere else would put the whole mesh at the
+    wrong point on the Earth with no arithmetic anywhere disagreeing, so the
+    origin is checked rather than assumed."""
+
+    mesh = _binary64_coordinates_binary32_metrics()
+    mesh.attrs["rw_coordinate_origin_xyz"] = np.array([1.0e5, 0.0, 0.0])
+    with pytest.raises(MeshValidationError) as refusal:
+        mesh.validate()
+    message = str(refusal.value)
+    assert "is not the Earth's centre" in message
+    assert "100.0 km" in message
+
+
+def test_binary64_coordinates_shrink_the_storage_disagreement_they_carry() -> None:
+    """The reason the representation exists, measured on this fixture.
+
+    The stored ``dvEdge`` is binary32 in both meshes, so what changes is the
+    coordinates the arc is recomputed FROM.  At binary32 the disagreement is
+    the ~1 m absolute floor `spherical_arc_tolerance` exists to carry; at
+    binary64 all that is left is the binary32 rounding of ``dvEdge`` itself.
+    """
+
+    def worst_disagreement(mesh: Mesh) -> float:
+        unit = np.stack(
+            [np.asarray(mesh.arrays[f"{axis}Vertex"], dtype=np.float64) for axis in "xyz"],
+            axis=1,
+        )
+        unit /= np.linalg.norm(unit, axis=1)[:, None]
+        ends = np.asarray(mesh.verticesOnEdge, dtype=np.int64)
+        recomputed = _arc_length(unit[ends[:, 0]], unit[ends[:, 1]], EARTH_RADIUS)
+        stored = np.asarray(mesh.dvEdge, dtype=np.float64)
+        return float(np.max(np.abs(stored - recomputed) / recomputed))
+
+    binary32 = worst_disagreement(graded_sphere_mesh(dtype=np.float32))
+    binary64 = worst_disagreement(_binary64_coordinates_binary32_metrics())
+    # binary32 storage leaves a relative disagreement past the port's own
+    # relative bound, which is why that bound has an absolute floor beside it.
+    assert binary32 > 1.0e-5
+    # binary64 coordinates leave only the f32 dvEdge rounding: half an ulp.
+    assert binary64 < 1.0e-7
+    assert binary32 / binary64 > 100.0
+
+
+# ---------------------------------------------------------------------------
 # the other direction: a real corruption is still named and still refused
 # ---------------------------------------------------------------------------
 def _coarsest_edge(mesh: Mesh) -> int:

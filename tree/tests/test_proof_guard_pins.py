@@ -56,8 +56,8 @@ def manifest_commit() -> str:
     pointed at a gpuwm checkout.  The two constants were equal for the whole
     life of this file and the fixture leaned on that coincidence.  The 2.5.8
     engine re-pin (hex 77f831b) moved ``ARWEN_BUILD_COMMIT`` and four of the
-    sixteen digests onto gpuwm ``659962929`` and left ``ARWEN_COMMIT`` at
-    ``26daaab7e``, so the fixture seeded PRE-re-pin blobs and validated them
+    sixteen digests onto the 2.5.8 cut and left ``ARWEN_COMMIT`` at the
+    0.1.x merge, so the fixture seeded PRE-re-pin blobs and validated them
     against POST-re-pin pins.  All six proof-guard tests then ERRORed at
     setup with "gpuwm object store blob for gpuwm/core/physics.py does not
     hash to the manifest pin; the fixture instrument is invalid"

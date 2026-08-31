@@ -77,6 +77,18 @@ class SizingResult:
     steepest_gradient_percent_per_cell: float | None
     attained_spacing_km: float | None
     attained_basis: str
+    #: What the SPEC ASKED FOR at this region, in km, before anything moved it.
+    requested_spacing_km: float | None
+    #: What the generator will actually BUILD there, in km.  The graded ladder
+    #: refines by midpoint insertion, which halves a spacing exactly, so a
+    #: refined core can only land on ``background / 2^k``; `rw-mpas`
+    #: ``mesh::ladder_snap`` moves a request onto the nearest such rung, always
+    #: FINER, and records the move.  Quoting only the request would hide it,
+    #: and quoting only the attainment would leave a reader unable to tell a
+    #: ramp that under-delivers from a snap that over-delivers.
+    delivered_spacing_km: float | None
+    #: The generator's own record of the move, verbatim from its receipt.
+    ladder_snap: Mapping[str, Any] | None
     receipt: Mapping[str, Any]
     probe_receipt: Mapping[str, Any] | None
 
@@ -94,6 +106,11 @@ class SizingResult:
                 else round(self.attained_spacing_km, 4)
             ),
             "attained_basis": self.attained_basis,
+            # NOT rounded, unlike the measured figures above: these two are
+            # exact spec values, and 75/32 is 2.34375 km rather than 2.3438.
+            "requested_spacing_km": self.requested_spacing_km,
+            "delivered_spacing_km": self.delivered_spacing_km,
+            "ladder_snap": self.ladder_snap,
             "polygon_attainment": POLYGON_ATTAINMENT_UNAVAILABLE,
         }
 
@@ -227,6 +244,20 @@ def size_swath_spec(
         else None
     )
     requested = float(spec["regions"][region_index]["spacing_km"])
+    # The generator SNAPS every region onto the power-of-two ladder it can
+    # actually build, before it seeds anything, and the dry-run record carries
+    # the move.  `attained` is measured against the SNAPPED request, so the
+    # bare request is no longer the number to compare it with -- reading it as
+    # one is how a receipt comes to say a swath under-delivers when the
+    # generator moved it FINER.
+    snap = probe.get("ladder_snap") or receipt.get("ladder_snap")
+    delivered = requested
+    if isinstance(snap, Mapping):
+        rows = snap.get("regions") or []
+        if region_index < len(rows):
+            row = rows[region_index]
+            if row.get("delivered_spacing_km") is not None:
+                delivered = float(row["delivered_spacing_km"])
     # The cull leaves the cells INSIDE the ring.  Their spacing is the
     # attained figure at the deepest point and coarser everywhere nearer the
     # boundary, so the integral at the attained spacing is an UPPER bound on
@@ -234,7 +265,7 @@ def size_swath_spec(
     # the requested spacing, which is all a plan that never measured
     # attainment could use.
     swath_cells = predicted_cells_in(
-        list(ring), spacing_km=attained if attained else requested
+        list(ring), spacing_km=attained if attained else delivered
     )
     return SizingResult(
         parent_cells=float(receipt.get("predicted_cells", 0.0)),
@@ -250,6 +281,9 @@ def size_swath_spec(
         ),
         attained_spacing_km=attained,
         attained_basis="inscribed_cap_probe",
+        requested_spacing_km=requested,
+        delivered_spacing_km=delivered,
+        ladder_snap=receipt.get("ladder_snap"),
         receipt=receipt,
         probe_receipt=probe,
     )

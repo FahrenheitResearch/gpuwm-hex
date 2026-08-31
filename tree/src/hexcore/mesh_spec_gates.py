@@ -13,13 +13,28 @@ just called fine:
   ``steepest_requested_gradient_percent_per_cell``, and it refuses in about
   90 ms -- *after* a user has authored, sized and accepted the spec.
 * the **short dual edge floor** (``rw-mpas`` ``mesh/validate.rs``,
-  ``Limits::min_dv_edge_m`` = 200 m) reads the finished tessellation, so it
-  cannot fire until the whole ladder has been relaxed.  Measured here on a
+  ``Limits::min_dv_edge_m``) reads the finished tessellation, so it cannot
+  fire until the whole ladder has been relaxed.  Measured here on a
   0.75/3/15/75 km design that cleared the transition-band gate: **1,251 s**
   to derive 217,621 cells and then refuse edge 562175 -- ``dvEdge`` 36.8 m
   against ``dcEdge`` 886 m -- with no grid written.  The report that opened
   this lane measured the same shape at 711 s, 220,468 cells and edge 655199
   (39.2 m over 937 m) on another box.
+
+  **THAT FLOOR MOVED WITH THE STORAGE ON 2026-08-29, and this module moved
+  with it.**  The floor is not a length any more, it is 400 COORDINATE QUANTA
+  (``mesh/validate.rs::DV_EDGE_FLOOR_QUANTA``): the breakage it prevents is
+  the orthogonality defect storage rounding puts into the point set,
+  ``1.935 * q / dvEdge`` at the worst edge, measured on both published
+  statics' own bytes.  At the published binary32 representation the quantum
+  is 0.5 m and 400 quanta is 200.0 m to the bit, so nothing moved for a mesh
+  with a native MPAS-A counterpart.  A mesh ``rw_mpas_mesh`` GENERATES has no
+  native counterpart and its static stores coordinates at binary64, where the
+  quantum is 9.313e-10 m and the same budget reads **3.725e-7 m**.  Every
+  refusal quoted above was a binary32 refusal of a generated mesh, and none of
+  them would happen today.  Leaving 200 m transcribed here would have told a
+  user their 1 km spec was heading for a refusal it can no longer reach --
+  which is this lane's own fault, pointed the other way.
 
 This module is the answer to the first: the cheap gate is applied where the
 sizing happens, so a spec generation will refuse is refused by sizing first.
@@ -28,11 +43,15 @@ floor is NOT decidable from a spec, and saying so with the numbers that
 decide it beats saying nothing.  See :func:`short_dual_edge_exposure`.
 
 WHAT THIS DOES NOT DO, AND WHY.  It does not move, soften or reinterpret
-either floor.  The 200 m floor has already survived a wrong-value episode
+either floor.  The dual-edge floor has already survived a wrong-value episode
 (the retired 7,500 m anchor refused the published ``x4.163842`` itself), and
 the fix for "the user learns too late" is to change WHEN they learn, never
 WHAT is allowed.  Every constant here is transcribed from the Rust that
-enforces it, with the file named beside it, so a drift is a grep.
+enforces it, with the file named beside it, so a drift is a grep -- and the
+2026-08-29 storage change is exactly the drift that discipline exists to
+catch: the constant is now DERIVED here the same way it is derived there,
+from the quanta and the representation, so the next storage change moves it
+without an edit.
 """
 
 from __future__ import annotations
@@ -60,9 +79,41 @@ MIN_TRANSITION_BAND_CELLS = 2.0 * SURGERY_LOCALITY_CELLS
 #: ``2 ** (1 / 6) - 1`` -- 12.2462 % per cell.  Derived, never chosen.
 MAX_GRADIENT_PER_CELL = 2.0 ** (1.0 / MIN_TRANSITION_BAND_CELLS) - 1.0
 
-#: ``rw-mpas`` ``mesh/validate.rs`` ``Limits::default().min_dv_edge_m``.  The
-#: shortest dual edge the generator will emit, in metres at earth radius.
-MIN_DV_EDGE_M = 200.0
+#: ``rw-mpas`` ``mesh/validate.rs::DV_EDGE_FLOOR_QUANTA``.  The dual-edge
+#: floor in COORDINATE QUANTA of the representation the mesh will be stored
+#: in, not in metres: the breakage it prevents is the orthogonality defect
+#: storage rounding puts into the point set, ``1.935 * q / dvEdge`` at the
+#: worst edge, so a floor stated in metres is stated in the wrong units and
+#: has to be re-anchored by hand every time the storage changes.
+DV_EDGE_FLOOR_QUANTA = 400.0
+
+#: The coordinate quantum in metres at ``sphere_radius = 6 371 229``: the
+#: spacing between representable values at that magnitude.  ``ulp`` is exact,
+#: so these are exact.  ``rw-mpas``
+#: ``staticfile::coordframe::CoordinateRepresentation::quantum_m``.
+COORDINATE_QUANTUM_M = {
+    "binary32_earth_centred": 0.5,
+    "binary64_earth_centred": 9.313225746154785e-10,
+}
+
+#: What a mesh ``rw_mpas_mesh`` GENERATES is stored at.  It has no native
+#: MPAS-A counterpart -- native MPAS-A cannot produce it -- so no dycore
+#: byte-identity anchor binds its storage precision.  ``rw-mpas``
+#: ``staticfile::coordframe::CoordinateRepresentation::for_generated_mesh``.
+GENERATED_MESH_REPRESENTATION = "binary64_earth_centred"
+
+#: The floor a mesh with a NATIVE COUNTERPART is judged by: 400 quanta of
+#: 0.5 m, which is 200.0 m to the bit -- the 2026-08-25 ruling, unchanged.
+PUBLISHED_MIN_DV_EDGE_M = (
+    DV_EDGE_FLOOR_QUANTA * COORDINATE_QUANTUM_M["binary32_earth_centred"]
+)
+
+#: The floor a GENERATED mesh is judged by, in metres at earth radius, which
+#: is what this module advises about: the same 400 quanta at the generated
+#: representation's own quantum.  3.725e-7 m.
+MIN_DV_EDGE_M = (
+    DV_EDGE_FLOOR_QUANTA * COORDINATE_QUANTUM_M[GENERATED_MESH_REPRESENTATION]
+)
 
 #: ``Limits::default().min_dv_over_dc``, and equal to this package's own
 #: :class:`hexcore.dual_edge_admission.DualEdgePolicy` floor.
@@ -166,7 +217,25 @@ def transition_band_cells(gradient_per_cell: float) -> float:
     a fraction; a receipt prints that fraction times 100 and this reads it
     back divided by 100, which is a round trip that need not be exact.  The
     disagreement is at the last bit, so a spec within about 1e-15 of the
-    limit can be judged differently by the two.  Nothing else can.
+    limit can be judged differently by the two ARITHMETICS.
+
+    AND WHY THAT SENTENCE USED TO BE WORTH NOTHING.  Agreement between the two
+    gates was never evidence that either was right, because both read ONE
+    number and neither measured it: this function is handed the gradient off
+    the receipt, and until 2026-08-29 the generator sampled that gradient on a
+    Fibonacci lattice uniform over the whole sphere.  At the 50,000 points it
+    used, those sit 101 km apart, so any refinement transition narrower than
+    that was stepped over and the receipt reported the flat background the
+    lattice happened to land on.  MEASURED on the eight-rung 51.2 -> 0.2 km
+    ladder: 12.1155 % per cell printed and agreed on to the last bit by both
+    gates, for a field the corrected instrument reads at 37.0355 -- band 6.06
+    against a floor of 6.0, so ADMITTED with one percent of margin, when the
+    truth is a band of 2.2.  Two instruments sharing one blind spot read as
+    corroboration, which is exactly what made it survive to two published
+    releases.  The generator now probes where the spec says its regions are
+    and stamps a coverage word beside the number; :func:`gates_from_receipt`
+    refuses a receipt that does not carry one, because a stale engine would
+    otherwise keep the old trust silently.
     """
 
     if not math.isfinite(gradient_per_cell) or gradient_per_cell <= 0.0:
@@ -231,13 +300,36 @@ def widening_that_clears(
     -- in production the generator's own ``--dry-run``, so the remedy is
     quoted from the instrument that will judge it, not from a model of it.
 
-    WHY IT IS A SEARCH AND NOT A DIVISION.  The gradient is a MAXIMUM over a
-    50,000-point Fibonacci lattice, so it is not monotone in the ramp width:
-    measured on one 0.75/6/75 km spec, ``transition_cells`` 40/44/46/48 read
-    21.45 / 23.93 / 21.51 / 24.82 % per cell.  The analytic factor
-    ``g / g_max`` is the opening bid; each attempt widens it by half again,
-    and the first that MEASURES clear is the one quoted.  ``None`` means no
-    attempt cleared, which is reported as such rather than guessed past.
+    WHY IT IS A SEARCH AND NOT A DIVISION.  This used to say the gradient is
+    not monotone in the ramp width, and cited ``transition_cells``
+    40/44/46/48 reading 21.45 / 23.93 / 21.51 / 24.82 % per cell on one
+    0.75/6/75 km spec.  That non-monotonicity was SAMPLING NOISE, not a
+    property of the field: the reading was a maximum over a Fibonacci lattice
+    uniform over the whole sphere, and widening a ramp moved the field under a
+    fixed point set rather than refining it.  RE-MEASURED 2026-08-29 on the
+    corrected instrument, the same spec at ``transition_cells``
+    40/42/44/46/48/50/60/80/108/160/240 reads 24.96 / 24.19 / 23.38 / 23.11 /
+    21.94 / 21.67 / 19.56 / 16.15 / 13.52 / 10.20 / 7.60 -- monotone at every
+    step, where the old instrument read 14.65 / 21.85 / 19.86 / 18.89 / 19.52
+    / 17.35 / 10.64 / 14.17 / 9.55 / 7.48 / 7.31 and rose on five of them.
+
+    IT IS STILL A SEARCH, and now for a reason that is about the FIELD.  One
+    isolated ramp's peak gradient is exactly ``(h_bg - h_i) / (2 W)``, so
+    widening it once would settle the remedy by division -- but a nested
+    ladder is not one ramp.  Each rung's real neighbour is the next rung, and
+    widening every ramp together changes which branch is steepest, so the
+    composite falls SLOWER than ``1 / W``: over the sweep above, the value
+    ``1/W`` would predict climbs from 24.96 to 45.59 % per cell.  A division
+    would under-widen and quote a remedy that does not clear.  So ``g / g_max``
+    stays the opening bid, each attempt widens it by half again, and the first
+    that MEASURES clear is the one quoted.  ``None`` means no attempt cleared,
+    which is reported as such rather than guessed past.
+
+    WHAT THE OLD INSTRUMENT DID TO THIS FUNCTION, so the retirement is not
+    mistaken for tidying: measured on the same spec, the search used to quote
+    a widening whose own true gradient was still over the ceiling, and the
+    build then ADMITTED it because the build under-read it identically. The
+    remedy the door printed closed the loop on itself.
     """
 
     if gradient_per_cell <= 0.0:
@@ -332,7 +424,18 @@ def check_transition_band(
 # the short dual edge floor: what sizing CANNOT decide, said with numbers
 # ---------------------------------------------------------------------------
 def short_dual_edge_exposure(spec: Mapping[str, Any]) -> dict[str, Any]:
-    """What the 200 m dual-edge floor demands of this spec, and what decides it.
+    """What the dual-edge floor demands of this spec, and what decides it.
+
+    THE FLOOR THIS ANSWERS ABOUT IS THE GENERATED-MESH ONE, 3.725e-7 m --
+    400 coordinate quanta of the binary64 representation ``rw_mpas_mesh``
+    stores a generated mesh at (:data:`MIN_DV_EDGE_M`), not the 200.0 m a
+    mesh with a native MPAS-A counterpart is judged by
+    (:data:`PUBLISHED_MIN_DV_EDGE_M`).  Both are the same budget; they differ
+    only by the quantum of the file the mesh lands in.  Every verdict below is
+    therefore ``cannot_bind`` for any spec a person would write, and that is
+    the answer, not a broken instrument: the arithmetic is kept because it is
+    what SHOWS the floor cannot bind, and because it moves back on its own if
+    a representation ever moves back.
 
     NOT A GATE, AND THAT IS THE POINT.  ``min_dv_edge_m`` reads the shortest
     dual edge of the FINISHED tessellation.  A spec fixes the spacing field;
@@ -410,6 +513,10 @@ def short_dual_edge_exposure(spec: Mapping[str, Any]) -> dict[str, Any]:
         )
     return {
         "limit_m": MIN_DV_EDGE_M,
+        "limit_quanta": DV_EDGE_FLOOR_QUANTA,
+        "coordinate_representation": GENERATED_MESH_REPRESENTATION,
+        "coordinate_quantum_m": COORDINATE_QUANTUM_M[GENERATED_MESH_REPRESENTATION],
+        "limit_m_for_a_mesh_with_a_native_counterpart": PUBLISHED_MIN_DV_EDGE_M,
         "gate": "rw-mpas mesh/validate.rs, Limits::min_dv_edge_m",
         "decidable_before_the_build": False,
         "why_not": (
@@ -505,6 +612,25 @@ def gates_from_receipt(
             "accepted and then refused by the build, which is the defect this "
             "check exists for. Stage an rw_mpas_mesh that prints it"
         )
+    coverage = receipt.get("gradient_probe_coverage")
+    if coverage != "complete":
+        raise MeshSpecRefusal(
+            "the dry-run receipt reports its steepest-gradient probe coverage "
+            f"as {coverage!r}, so the number beside it is not a measurement of "
+            "this spec's field and this gate will not judge a spec on it. THE "
+            "BREAKAGE THIS PREVENTS: an engine that samples the gradient on a "
+            "lattice uniform over the whole sphere cannot see a refinement "
+            "transition narrower than its own point spacing -- at the 50,000 "
+            "points it used, 101 km -- and reports the flat background it "
+            "landed on instead. Measured on an eight-rung 51.2 -> 0.2 km "
+            "ladder, such an engine printed 12.1155 % per cell for a field "
+            "that reads 37.0355, and this gate admitted it with one percent of "
+            "margin. A missing coverage word means an engine from before "
+            "2026-08-29; 'partial' means the probe budget could not cover the "
+            "spec's own transition shells, and an unmeasured ramp is not a "
+            "gentle one. Stage an rw_mpas_mesh that measures the gradient "
+            "where the regions are"
+        )
     gradient = float(gradient_percent) / 100.0
     check_transition_band(spec, gradient, measure=measure)
     return {
@@ -516,6 +642,13 @@ def gates_from_receipt(
             "band_cells": transition_band_cells(gradient),
             "band_cells_floor": MIN_TRANSITION_BAND_CELLS,
             "gradient_percent_per_cell_ceiling": MAX_GRADIENT_PER_CELL * 100.0,
+            # WHERE the number was measured, carried so a reader can tell a
+            # measurement from a lattice that missed the ramp.  The two other
+            # numbers on the same receipt -- predicted_cells and
+            # region_attainment -- are still integrals over a global lattice
+            # and do NOT follow the regions.
+            "gradient_probe_coverage": coverage,
+            "gradient_probe_points": receipt.get("gradient_probe_points"),
         },
         "short_dual_edge_floor": short_dual_edge_exposure(spec),
         "gates_this_sizing_cannot_apply": ["short_dual_edge_floor"],

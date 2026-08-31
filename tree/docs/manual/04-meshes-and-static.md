@@ -113,7 +113,7 @@ icosahedral Goldberg grid at the resolution you ask for and builds the
 matching static in the same run, with no native toolchain anywhere in the
 loop. (This door was not present on the published gpuwm 2.5.2 wheel; it
 arrives with the 2.5.3 bundle, well below the floor this distribution's
-declared `gpuwm>=2.5.8,<2.5.9` range requires. The commands below were proven from a `gpuwm` checkout.)
+declared `gpuwm>=2.6.0,<2.6.1` range requires. The commands below were proven from a `gpuwm` checkout.)
 
 **See what a card can hold:**
 
@@ -198,6 +198,41 @@ fifth of a second:
 ```sh
 gpuwm-hex mesh-plan --spec my-case.json --card rtx-5070-ti
 ```
+
+#### Where that gradient is measured (changed 2026-08-29)
+
+The transition-band gate is arithmetic on one number, and until 2026-08-29
+the generator sampled that number on a lattice spread evenly over the whole
+globe. At the 50,000 points it used, those sit about 101 km apart, so a
+refinement transition narrower than that was stepped over entirely and the
+receipt reported the flat background the lattice happened to land on. On an
+eight-rung 51.2 km to 200 m ladder it printed 12.12 %/cell for a field that
+reads 37.04, and the build admitted a design its own gate exists to refuse.
+Nothing in the reading said so, because a maximum over points that missed the
+ramp looks exactly like a gentle ramp.
+
+The generator now probes where a spec says its regions are — a shell a few
+transition widths wide around each region boundary, resolved across the ramp
+rather than along it — and prints two more fields beside the number:
+`gradient_probe_points`, what the reading cost, and
+`gradient_probe_coverage`, which reads `complete` when every locus where the
+field varies was covered. `gpuwm-hex` refuses to judge a spec on a receipt
+that does not say `complete`, including a receipt from an older engine that
+does not say anything, because a number that is not a measurement is not
+something to gate on.
+
+Two consequences worth stating plainly. Specs with ramps hundreds of
+kilometres wide — every swath the threat metrics emit, and the two examples
+above — do not move: the old lattice already resolved them, and their
+readings shift in the fourth decimal. Specs with sub-kilometre cores and
+short ramps do move, sharply, and some designs that used to build now refuse
+before anything is seeded. That is the gate working, not a new restriction:
+the band was always that narrow.
+
+And what still is not measured this way: `predicted_cells` and
+`region_attainment` on the same receipt are still integrals over the global
+lattice, with the resolution limit that implies. Only the gradient follows
+the regions.
 
 It prices the spec through the generator's own sizing integral, applies the
 transition-band gate here (so a spec the build would refuse is refused

@@ -484,3 +484,58 @@ def test_a_history_frame_publishes_the_domain_not_the_allocation():
     assert capture.index("if solve_cells is not None:") < capture.index(
         "f000_overlay = None"
     )
+
+
+# ---------------------------------------------------------------------------
+# The scalar-requirement ladder fails closed over its own domain.
+# ---------------------------------------------------------------------------
+
+def _selection(mp_physics: int):
+    from hexcore.physics_seam import GPUWMSchemeSelection
+
+    return GPUWMSchemeSelection(
+        mp_physics=mp_physics, cu_physics=0, sf_surface_physics=0,
+        bl_pbl_physics=0, sf_sfclay_physics=0, ra_lw_physics=0,
+        ra_sw_physics=0, ra_rrtmg_variant="rte-rrtmgp",
+        wrf_rrtmg_compatibility="none", cloud_fraction_scheme="off",
+        mpas_names={})
+
+
+def test_an_unrouted_selector_refuses_instead_of_declaring_qv_alone():
+    """A selector with no scalar-requirement row must refuse, not fall through.
+
+    THE BREAKAGE (measured 2026-08-29): the ladder's silence was not
+    neutral -- a selector with no row fell through every arm and declared
+    ``{"qv"}`` alone, so ``_validate_requirements`` accepted a batch with
+    no cloud, no rain and no ice state, and the backend ran on state that
+    was substituted rather than supplied, with no error anywhere.
+    """
+    from hexcore.errors import ConfigurationRefusal
+    from hexcore import physics_seam as ps
+
+    # mp=50 carries its own reason row: the rime pair qir/qib is state this
+    # seam cannot yet transport, and the refusal must say so by name.
+    with pytest.raises(ConfigurationRefusal) as caught:
+        ps._required_scalar_names(_selection(50))
+    message = str(caught.value)
+    assert "qir" in message and "qib" in message
+    assert "rime" in message
+
+    # A selector with no reason row gets the generic fall-through text.
+    with pytest.raises(ConfigurationRefusal) as caught:
+        ps._required_scalar_names(_selection(10))
+    assert "no scalar" in str(caught.value)
+    assert "state substitution" in str(caught.value)
+
+
+def test_every_routed_selector_still_declares_its_rows():
+    """The refusal covers exactly the complement of the routed domain."""
+    from hexcore import physics_seam as ps
+
+    assert ps._ROUTED_MP_PHYSICS == frozenset(
+        ps._ROUTES["config_microp_scheme"].values())
+    for mp in sorted(ps._ROUTED_MP_PHYSICS):
+        names = ps._required_scalar_names(_selection(mp))
+        if mp:
+            assert "qv" in names
+    assert 50 not in ps._ROUTED_MP_PHYSICS

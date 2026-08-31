@@ -6,6 +6,32 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
+## 0.2.1 (2026-08-31)
+
+New:
+- The physics seam's scalar-requirement ladder fails closed over its own
+  domain: a gpuwm microphysics selector with no requirement row is refused
+  by name instead of being accepted while declaring water vapour alone.
+  mp=50 (P3) carries its own refusal reason: its rime pair (qir/qib) is
+  state no six-species scheme can source, and this seam does not yet
+  transport it.
+
+Fixed:
+- The transition-band gate refuses a gradient nobody measured. The engine's
+  steepest-gradient meter used to sample a sphere-uniform lattice (~101 km
+  point spacing) and stepped over any refinement transition narrower than
+  that, so a spec truly at 65.2 %/cell read 8.3 and was admitted at 7.3x
+  the ceiling; the repaired engine probes where the regions are and stamps
+  its probe coverage, this gate refuses a receipt whose coverage word is
+  missing or not complete, and the widening helper's non-monotonicity note
+  died with the sampling defect that caused it.
+- The swath probe stops reporting a coverage-refused spec as having cleared
+  the gradient gate; its verdict now fails closed over the refusal classes
+  and its coverage fragments are pinned against the Rust that prints them.
+- Requires gpuwm 2.6.0: the engine release carrying the repaired
+  steepest-gradient meter, P3 microphysics (mp_physics = 50) and the ten
+  P3 reachability fixes.
+
 ## 0.2.0
 
 New:

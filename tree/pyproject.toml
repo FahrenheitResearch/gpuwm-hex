@@ -38,7 +38,7 @@ name = "gpuwm-hex"
 # partition-invariant, but it has no door, no demo, and no re-proof at the
 # current engine pin, so it is not what a version number should be sold on.
 # Numbers are not reserved here any more.  A minor bump names what shipped.
-version = "0.2.0"
+version = "0.2.1"
 description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.1 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -103,15 +103,17 @@ license-files = ["LICENSE", "NOTICE"]
 # 16" survived here even in the edit that called it out.  Read the counts off
 # `engine_pin.PUBLISHED_ENGINES`, which is machine-written.
 #
-# THE FLOOR IS 2.5.8 AND IT IS THE ONLY USABLE ENGINE (re-measured
-# 2026-08-28, evidence/repin-258-20260828/).  The engine published 2.5.8 and
+# THE FLOOR IS 2.6.0 AND IT IS THE ONLY USABLE ENGINE (re-measured
+# 2026-08-31, evidence/repin-260-20260831/).  The engine published 2.6.0 and
 # this port re-pinned its manifest to that cut's bytes; because the `moved`
 # column is measured AGAINST the manifest, re-pinning moved every row, and
-# every engine from 2.5.0 to 2.5.7 now fails it -- including the 2.5.6 that
-# was this floor the day before.  There is no fallback engine and no wider
-# range to fall back to: if 2.5.8 were yanked, `engine_pin` raises
-# EnginePinError rather than loosening the bound, because widening it means
-# measuring something that passes and nothing published does.
+# every engine from 2.5.0 to 2.5.8 now fails it -- including the 2.5.8 that
+# was this floor the day before (three files moved at the 2.6.0 cut:
+# gpuwm/config.py, gpuwm/core/rrtmg_legacy.py, gpuwm/io/restart.py).  There
+# is no fallback engine and no wider range to fall back to: if 2.6.0 were
+# yanked, `engine_pin` raises EnginePinError rather than loosening the
+# bound, because widening it means measuring something that passes and
+# nothing published does.
 #
 # Two earlier findings are kept in the table and no longer reach the floor,
 # since 2.5.5 and 2.5.6 now fail on bytes before either applies: 2.5.5 is a
@@ -152,7 +154,7 @@ dependencies = [
     "numpy>=2.0",
     "netCDF4>=1.6",
     "scipy>=1.11",
-    "gpuwm>=2.5.8,<2.5.9",
+    "gpuwm>=2.6.0,<2.6.1",
 ]
 # Search terms, which is what a keyword is: the words somebody types into
 # PyPI when they are looking for this kind of thing.  `MPAS` is here as a

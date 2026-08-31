@@ -90,3 +90,124 @@ tests/test_obs_referee.py
 # the default stream makes divergence 3's declared referee unrunnable, which
 # is exactly what the first real run reported.
 tests/test_history_refl_q2.py
+
+# ---------------------------------------------------------------------------
+# THE 2026-08-29 TIER CENSUS.  Everything below this line was on NO tier list.
+#
+# Measured in this tree at dd6183d, with GPUWM_HEX_NO_LOCAL_GPU=1 and the
+# tier-1 selector -m "not gpu and not bigcard and not assets":
+#
+#     56 test files on disk, 16 named by a tier list, 40 named by none
+#     867 tests collect under the tier-1 selector
+#       238 of them are in this list
+#       629 of them (73%) were in no tier and ran in NO CI at all
+#     the 40 unlisted files, run together: 618 passed, 11 skipped,
+#     5 deselected, in 73.91 s
+#
+# Every one of the forty collects and passes on a machine with no card, no
+# assets and no network -- so none of them was device-only, none of them was
+# deliberately deferred, and none of them was hard to run.  They were simply
+# never added, one file at a time, and the file that says so already exists
+# in this list: tests/test_obs_referee.py carries the note "it was in no tier
+# list at all until the referee's first real run, which meant the machinery
+# that decides whether the physics is right was not gated on any push."  That
+# happened at least forty more times.
+#
+# The header of this file states the intent -- "a new file that nobody added
+# here is not silently absorbed" -- and nothing enforced it.
+# tests/test_tier_membership.py now does: every tests/test_*.py on disk must
+# be named by exactly one tier list, so the forty-first cannot arrive quietly.
+#
+# Grouped by subsystem rather than one comment per file, because the argument
+# for the coverage is the same within each group and forty separate one-line
+# reasons would say less than these seven.
+# ---------------------------------------------------------------------------
+
+# The admission decisions: what the port REFUSES and why.  Every one of these
+# is a refusal that has to name its breakage (the project's refusal law), and
+# a refusal that stops firing is invisible from the outside -- the run simply
+# proceeds and produces a number.  Pure argument checking, no device.
+tests/test_admission_strings.py
+tests/test_arch_admission.py
+tests/test_cell_coordination_admission.py
+tests/test_convection_admission.py
+tests/test_device_admission.py
+tests/test_domain_size_agreement.py
+tests/test_dt_admission.py
+tests/test_dual_edge_admission.py
+tests/test_native_free_init_admission_305.py
+tests/test_partition_device_admission.py
+tests/test_regional_mesh_admission.py
+
+# The device-memory ledger and the tools that read it.  The capacity numbers
+# decide whether a mesh is admitted to a card at all; the ledger has already
+# been superseded twice, and an arithmetic change here silently moves the size
+# of the largest forecast this port will accept.  The arithmetic runs on CPU.
+tests/test_capacity_copy_elisions.py
+tests/test_device_memory_capacity_tools.py
+tests/test_device_memory_ledger_probes.py
+
+# The CUDA surfaces that are decidable without a CUDA device: kernel source
+# structure, the NVRTC reciprocal rewrite, the libm identity, the vectorised
+# vertical arithmetic against its scalar sibling, and the projection probe.
+# These are the parts of the device path a hosted runner CAN check, and not
+# checking them meant no push examined the kernel sources at all.
+tests/test_cuda_physics_tier_park_v841.py
+tests/test_cuda_regional_kernels.py
+tests/test_fullstep_projection_probe.py
+tests/test_libm_identity.py
+tests/test_nvrtc_reciprocal_rewrite.py
+tests/test_vertical_artifact_met_state.py
+tests/test_vertical_vectorized_equivalence.py
+
+# The regional/nesting seam: anchoring, mesh binding, the physics seam, the
+# lateral boundary reader, the refined-region field and the ring/shell ratio.
+# This is the newest subsystem in the port and the one under most edit, which
+# is precisely the wrong thing to leave off every push.  The members that need
+# the native-culled reference set skip by name (measured: 11 skips across the
+# whole forty, each printing its own reason under -rs).
+tests/test_lbc.py
+tests/test_nest_ratio_ring_shell.py
+tests/test_refined_region_field.py
+tests/test_regional_forecast_anchor.py
+tests/test_regional_mesh_binding.py
+tests/test_regional_physics_seam.py
+tests/test_regional_runtime.py
+
+# Time stepping and physics cadence: the local timestep and the PBL call
+# interval.  A cadence that drifts changes every forecast this port produces
+# and changes no interface, so nothing but a test can see it.
+tests/test_local_timestep.py
+tests/test_pbl_cadence.py
+
+# The cycling cascade: the loop that carries one forecast into the next.
+tests/test_cycle_cascade.py
+
+# The swath subsystem end to end -- registry, plan, geometry, detection,
+# composite spec, the door and the real-forecast surface.  Seven files and
+# 139 tests for the product's newest user-facing feature, none of which any
+# push ran.
+tests/test_swath_composite_spec.py
+tests/test_swath_detect.py
+tests/test_swath_door.py
+tests/test_swath_geometry.py
+tests/test_swath_plan.py
+tests/test_swath_real_forecast.py
+tests/test_swath_registry.py
+
+# Distribution and tree hygiene: the wheel a user actually reaches, and the
+# conflict-marker scan.  Both are about what leaves this machine, which makes
+# a push exactly the event they should run on.
+tests/test_no_conflict_markers.py
+tests/test_wheel_reach.py
+
+# The tier census itself: every test file on disk is named by exactly one tier
+# list.  It is what stops this block having to be written again.
+tests/test_tier_membership.py
+
+# The four writers that land on a tracked file. No card, no assets, no
+# network: it reads three modules with ast and round-trips three JSON
+# files through tmp_path. `* text=auto eol=lf` normalizes the blob, so a
+# CRLF worktree is invisible to every blob-reading check and only a
+# leg that RUNS this can see it.
+tests/test_tracked_file_writers_keep_lf.py

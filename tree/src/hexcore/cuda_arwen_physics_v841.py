@@ -12,11 +12,11 @@ Arwen constructor default is admitted.  The imported Arwen tree is accepted
 only when all production source bytes match
 :data:`ARWEN_BUILD_COMMIT` below, which is the ONE place that commit is
 spelled -- this sentence deliberately names no digest of its own.  A prose
-copy of the pin is how this module came to contradict itself: it carried
-``26daaab7e`` (the 0.1.x seam-converge merge) as present-tense fact for the
-whole of the 2.5.8 re-pin, while the constant twelve lines below already read
-``659962929``, so the refusal a user hit and the documentation they read
-named different engines.  Every step is transactional:
+copy of the pin is how this module came to contradict itself: it carried the
+0.1.x seam-converge merge commit as present-tense fact for the whole of the
+2.5.8 re-pin, while the constant below already named the 2.5.8 cut, so the
+refusal a user hit and the documentation they read named different engines.
+Every step is transactional:
 the Arwen boundary state is exported before phase one, and an abort or any
 adapter failure rebuilds a fresh seam and restores that boundary snapshot.
 """
@@ -64,7 +64,7 @@ from .cuda_physics_v841 import (
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "659962929a06ef7d4cecc32486723d8bef85952c"
+ARWEN_BUILD_COMMIT = "7e34a4877a8278970fcb16db3a117ef6cc5b9bbe"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
@@ -96,7 +96,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "27019d7fdd4ad31aec2e2e4b21ec339dd512a449aea5e35ab2386ca5217aae5e"
         ),
         "gpuwm/core/rrtmg_legacy.py": (
-            "cb4774dbdf06d5959577e78765221e2c8f56a0db7944a0cd78c77b756d39a11c"
+            "39af610f0df41f9a3eaef601cd55b8ba27928c7e477a1d4739048094a510214d"
         ),
         "gpuwm/core/noahmp_runtime.py": (
             "990780ab87764481c463b1fa2f8c988cd9538e0833dc390203d2a0396fee66bc"
@@ -120,10 +120,10 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"
         ),
         "gpuwm/config.py": (
-            "0ce9deaf810b14a7ff033b81bf809ee8def8c38a78f19adaf2a91676e83ec907"
+            "73b91bb4f4b3de1e8521d6e932f5f7fa106e4f7efcfd400affa94effde861aa7"
         ),
         "gpuwm/io/restart.py": (
-            "c196ae402829f7940a5fabea79c667c12865ca5ad173e36175356314a126b9d8"
+            "8482a222c0ad096400a9154e5a6a706c21704b7cc17ebbbab9d15bbe4879f91f"
         ),
         "docs/mpas-seam.md": (
             "7fe13aaa37fa944b160838c1fe5083ab79fe0d2e271da048c4dc92de8d9fc7fd"

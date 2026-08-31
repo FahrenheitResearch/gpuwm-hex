@@ -113,7 +113,7 @@ def test_the_shipped_table_says_what_the_measurement_said():
     Not a re-derivation -- the network instrument is
     ``evidence/standalone-20260827/measure_engine_verdicts.py`` and the JSON
     behind the shipped table is
-    ``evidence/repin-258-20260828/engine-verdicts.json``.  This is the claim
+    ``evidence/repin-260-20260831/engine-verdicts.json``.  This is the claim
     the receipts make, kept true here so that editing a row without
     re-measuring is caught.
 
@@ -125,33 +125,46 @@ def test_the_shipped_table_says_what_the_measurement_said():
     that manifest: re-pinning moves the whole column, including rows for
     engines cut long before.  Loosening the gate would have been the wrong
     repair; re-measuring and restating it is the right one.
+
+    AND THEY MOVED AGAIN ON 2026-08-31, the same way for the same reason:
+    the engine published 2.6.0 (the repaired steepest-gradient meter and
+    P3), three manifest files moved at that cut -- ``gpuwm/config.py``,
+    ``gpuwm/core/rrtmg_legacy.py``, ``gpuwm/io/restart.py`` -- and the port
+    re-pinned to the published 2.6.0 bytes, so 2.5.8 joined the rows that
+    fail its own former manifest.
     """
 
-    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.5.8,<2.5.9"
-    assert engine_pin.gpuwm_floor() == "2.5.8"
-    assert engine_pin.gpuwm_ceiling() == "2.5.9"
+    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.6.0,<2.6.1"
+    assert engine_pin.gpuwm_floor() == "2.6.0"
+    assert engine_pin.gpuwm_ceiling() == "2.6.1"
 
     # EXACTLY ONE published engine is usable.  Asserted as a count, not as a
-    # membership test, because "2.5.8 works" would still pass if a stale row
+    # membership test, because "2.6.0 works" would still pass if a stale row
     # below it were left claiming to work too -- and that stale row is what
-    # a resolver would actually pick when 2.5.8 is unavailable.
+    # a resolver would actually pick when 2.6.0 is unavailable.
     usable = [row.version for row in engine_pin.PUBLISHED_ENGINES if row.usable]
-    assert usable == ["2.5.8"], (
+    assert usable == ["2.6.0"], (
         "the re-pinned manifest is satisfied by exactly one published "
         f"engine.  Usable: {usable}"
     )
-    assert engine_pin.engine("2.5.8").moved == ()
+    assert engine_pin.engine("2.6.0").moved == ()
 
     # The engine that was the floor the day before now fails, and so does
-    # every other pre-2.5.8 cut.  Named individually so that a row silently
+    # every other pre-2.6.0 cut.  Named individually so that a row silently
     # reverting to "matches" is a failure here rather than a wider range.
     assert not engine_pin.engine("2.5.6").usable
     assert not engine_pin.engine("2.5.7").usable
+    assert not engine_pin.engine("2.5.8").usable
+    assert engine_pin.engine("2.5.8").moved == (
+        "gpuwm/config.py",
+        "gpuwm/core/rrtmg_legacy.py",
+        "gpuwm/io/restart.py",
+    )
     for row in engine_pin.PUBLISHED_ENGINES:
-        if row.version != "2.5.8":
+        if row.version != "2.6.0":
             assert row.moved, (
-                f"{row.version} claims to satisfy the manifest.  Only 2.5.8 "
-                "does; a pre-2.5.8 row with an empty moved list means the "
+                f"{row.version} claims to satisfy the manifest.  Only 2.6.0 "
+                "does; a pre-2.6.0 row with an empty moved list means the "
                 "table was patched by hand instead of re-measured"
             )
 
@@ -190,7 +203,7 @@ def test_the_table_is_the_instruments_output_not_a_transcription(receipts):
     import json
 
     verdicts = json.loads(
-        (receipts / "repin-258-20260828" / "engine-verdicts.json").read_text(
+        (receipts / "repin-260-20260831" / "engine-verdicts.json").read_text(
             encoding="utf-8"
         )
     )
@@ -210,7 +223,7 @@ def test_the_table_is_the_instruments_output_not_a_transcription(receipts):
         "PUBLISHED_ENGINES disagrees with the JSON it is supposed to be "
         "rendered from.  Re-splice it: python "
         "evidence/repin-258-20260828/render_engine_pin_table.py "
-        "evidence/repin-258-20260828/engine-verdicts.json --splice "
+        "evidence/repin-260-20260831/engine-verdicts.json --splice "
         "src/hexcore/engine_pin.py"
     )
 

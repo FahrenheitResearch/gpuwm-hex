@@ -147,12 +147,12 @@ by omission.
 - Distribution and command: `gpuwm-hex`. Import namespace: `hexcore`,
   renamed from `mpas_port` at 0.2.0 and settled there (README, *The import
   namespace*). There is no alias shim.
-- Engine range: `gpuwm>=2.5.8,<2.5.9` is what pip enforces — a bounded
+- Engine range: `gpuwm>=2.6.0,<2.6.1` is what pip enforces — a bounded
   range, derived from a measured table in `hexcore.engine_pin` rather than
   typed. The floor is where it is for one reason and it is the strictest
-  one: 2.5.8 is the only published engine whose bytes match the sixteen-file
-  Arwen seam manifest, re-measured 2026-08-28 against every published 2.5.x
-  release. It clears, incidentally, the bundle rows that put the MPAS bridge
+  one: 2.6.0 is the only published engine whose bytes match the sixteen-file
+  Arwen seam manifest, re-measured 2026-08-31 against every published 2.5.x
+  and 2.6.x release. It clears, incidentally, the bundle rows that put the MPAS bridge
   binaries (`rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`,
   `rw_mpas_static`, `rw_mpas_lbc`) within reach of `gpuwm fetch-bridges`;
   published 2.5.2 carries none of them and would strand every door that
@@ -162,7 +162,7 @@ by omission.
   forecast lane's real wall is stricter still: the sixteen-file seam
   manifest, plus a *git* checkout at the pinned commit for receipt
   provenance (chapter 6.1). `gpuwm-hex doctor` compares the installed
-  engine's bytes against the manifest and names the version it found; at
+  engine's bytes against the manifest and names the version it found; since
   2.5.8 all sixteen pinned paths resolve from the install, so the checkout
   is owed for the commit rather than for a file.
 - Licence: Apache-2.0, with the MPAS-Atmosphere BSD-3-Clause notice

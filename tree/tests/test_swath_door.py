@@ -8,9 +8,12 @@ capability with no door is not a feature.
 
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -43,9 +46,57 @@ def _engine_or_skip() -> Path:
     from hexcore.swath.errors import SwathRefusal
 
     try:
-        return sizing.resolve_engine(None)
+        engine = sizing.resolve_engine(None)
     except SwathRefusal as refusal:
         pytest.skip(f"rw_mpas_mesh is not staged on this box: {refusal}")
+    if not _engine_measures_the_gradient_where_the_regions_are(str(engine)):
+        pytest.skip(
+            f"the staged {engine.name} predates the region-probed gradient "
+            f"(2026-08-29): its receipt carries no gradient_probe_coverage, so "
+            f"the transition-band gate correctly refuses to judge a spec on a "
+            f"number that was measured on a global lattice. Rebuild rw-mpas "
+            f"from the gpuwm tools/rustwx workspace"
+        )
+    return engine
+
+
+@functools.lru_cache(maxsize=None)
+def _engine_measures_the_gradient_where_the_regions_are(engine: str) -> bool:
+    """Does the staged engine probe the gradient at the spec's own regions?
+
+    A STAGING PRECONDITION, not a softened gate. Before 2026-08-29 the
+    generator sampled its steepest-gradient number on a Fibonacci lattice
+    uniform over the whole sphere, whose 50,000 points sit 101 km apart, so it
+    could not see a refinement transition narrower than that and reported the
+    flat background it landed on. A receipt from such an engine carries no
+    ``gradient_probe_coverage`` word, and
+    :func:`hexcore.mesh_spec_gates.gates_from_receipt` refuses to judge a spec
+    on a number that is not a measurement -- which is the correct behaviour and
+    is what these tests would otherwise be asserting against. The tests that
+    need a real reading skip until the engine is rebuilt from the gpuwm
+    ``tools/rustwx`` workspace; they do not lower the bar to meet it.
+    """
+
+    with tempfile.TemporaryDirectory() as work:
+        spec = Path(work) / "probe.mesh-spec.json"
+        spec.write_text(
+            json.dumps({"background_km": 240.0, "regions": []}),
+            encoding="utf-8",
+            newline="\n",
+        )
+        done = subprocess.run(
+            [engine, "--spec", str(spec), "--out", str(Path(work) / "x.nc"),
+             "--dry-run"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    if done.returncode != 0:
+        return False
+    try:
+        return "gradient_probe_coverage" in json.loads(done.stdout)
+    except json.JSONDecodeError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +176,24 @@ def test_plan_writes_documents_and_one_spec_pair_per_swath(
 def test_the_plan_quotes_attained_spacing_not_requested(history, tmp_path, capsys) -> None:
     """the ruling, enforced at the door.
 
-    A swath spec asks for 4 km and the ramp's own width means it does not
-    get there; the receipt must carry what it DOES get, measured through
-    the generator, with the basis named.
+    A swath spec asks for 4 km and does not get 4 km; the receipt must carry
+    what it DOES get, measured through the generator, with the basis named.
+
+    TWO THINGS MOVE THAT NUMBER NOW, IN OPPOSITE DIRECTIONS, and a receipt
+    that quoted only the request could not tell them apart:
+
+    * the ramp's own width means the resolution field does not reach the
+      request at the swath's deepest point, which makes the attainment
+      COARSER -- the original finding this test was written for;
+    * the graded ladder refines by midpoint insertion, which halves a spacing
+      exactly, so a refined core can only land on ``background / 2^k``.
+      ``rw-mpas`` ``mesh::ladder_snap`` moves the request onto the nearest such
+      rung, always FINER, and records the move.
+
+    So the number the attainment is compared against is the DELIVERED spacing
+    the generator will build, not the bare request, and the row now carries
+    all three -- requested, delivered, attained -- plus the generator's own
+    snap record. The ruling is unchanged: the receipt quotes what it gets.
     """
 
     _engine_or_skip()
@@ -141,7 +207,21 @@ def test_the_plan_quotes_attained_spacing_not_requested(history, tmp_path, capsy
         size = row["sizing"]
         requested = row["mesh_spec"]["regions"][0]["spacing_km"]
         assert size["attained_basis"] == "inscribed_cap_probe"
-        assert size["attained_spacing_km"] >= requested
+        assert size["requested_spacing_km"] == pytest.approx(requested)
+        delivered = size["delivered_spacing_km"]
+        # Never coarser than asked for: the snap only ever goes finer, and
+        # never by more than a factor of two.
+        assert requested / 2.0 - 1e-9 <= delivered <= requested + 1e-9
+        # The attainment is judged against what will be BUILT.  It is the
+        # spacing the field reaches at the inscribed cap's deepest point and
+        # is coarser everywhere nearer the boundary, so it is never finer than
+        # the delivered request.
+        assert size["attained_spacing_km"] >= delivered
+        # And the move is on the record rather than inferred from the gap.
+        if delivered != pytest.approx(requested):
+            snap = size["ladder_snap"]
+            assert snap is not None and snap["moved"] is True
+            assert snap["regions"][0]["delivered_spacing_km"] == pytest.approx(delivered)
         assert size["parent_basis"] == "generator_dry_run"
         assert size["swath_basis"] == "area_integral_at_attained_spacing"
         assert "polygon" in size["polygon_attainment"]

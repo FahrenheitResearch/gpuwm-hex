@@ -21,10 +21,12 @@ so, with the quantities that decide it, instead of being silent.
 
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -82,9 +84,57 @@ COARSE = {
 
 def _engine_or_skip() -> Path:
     try:
-        return sizing.resolve_engine(None)
+        engine = sizing.resolve_engine(None)
     except SwathRefusal as refusal:
         pytest.skip(f"rw_mpas_mesh is not staged on this box: {refusal}")
+    if not _engine_measures_the_gradient_where_the_regions_are(str(engine)):
+        pytest.skip(
+            f"the staged {engine.name} predates the region-probed gradient "
+            f"(2026-08-29): its receipt carries no gradient_probe_coverage, so "
+            f"the transition-band gate correctly refuses to judge a spec on a "
+            f"number that was measured on a global lattice. Rebuild rw-mpas "
+            f"from the gpuwm tools/rustwx workspace"
+        )
+    return engine
+
+
+@functools.lru_cache(maxsize=None)
+def _engine_measures_the_gradient_where_the_regions_are(engine: str) -> bool:
+    """Does the staged engine probe the gradient at the spec's own regions?
+
+    A STAGING PRECONDITION, not a softened gate. Before 2026-08-29 the
+    generator sampled its steepest-gradient number on a Fibonacci lattice
+    uniform over the whole sphere, whose 50,000 points sit 101 km apart, so it
+    could not see a refinement transition narrower than that and reported the
+    flat background it landed on. A receipt from such an engine carries no
+    ``gradient_probe_coverage`` word, and
+    :func:`hexcore.mesh_spec_gates.gates_from_receipt` refuses to judge a spec
+    on a number that is not a measurement -- which is the correct behaviour and
+    is what these tests would otherwise be asserting against. The tests that
+    need a real reading skip until the engine is rebuilt from the gpuwm
+    ``tools/rustwx`` workspace; they do not lower the bar to meet it.
+    """
+
+    with tempfile.TemporaryDirectory() as work:
+        spec = Path(work) / "probe.mesh-spec.json"
+        spec.write_text(
+            json.dumps({"background_km": 240.0, "regions": []}),
+            encoding="utf-8",
+            newline="\n",
+        )
+        done = subprocess.run(
+            [engine, "--spec", str(spec), "--out", str(Path(work) / "x.nc"),
+             "--dry-run"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    if done.returncode != 0:
+        return False
+    try:
+        return "gradient_probe_coverage" in json.loads(done.stdout)
+    except json.JSONDecodeError:
+        return False
 
 
 def _spec_file(tmp_path: Path, spec: dict) -> Path:
@@ -183,16 +233,27 @@ def test_a_spec_that_clears_the_band_gate_still_reports_the_length_floor() -> No
     edge = applied["short_dual_edge_floor"]
     assert applied["gates_this_sizing_cannot_apply"] == ["short_dual_edge_floor"]
     assert edge["decidable_before_the_build"] is False
-    assert edge["limit_m"] == 200.0
-    assert edge["verdict"] == "predicted_refusal"
-    # A 0.75 km finest request: no measured graded mesh's dv/finest ratio
-    # reaches 200 m from there, so the whole predicted band is under the
-    # floor.  The reported build measured 39.2 m.
+    # THE FLOOR MOVED WITH THE STORAGE (2026-08-29).  It is 400 coordinate
+    # quanta, and a mesh rw_mpas_mesh generates has no native MPAS-A
+    # counterpart, so its static stores coordinates at binary64 and the same
+    # budget reads 3.725e-7 m instead of 200.0 m.  This 0.75 km spec was the
+    # measured 1,251 s refusal at binary32; the reading it produces now is the
+    # unlock, and the 200.0 m figure survives beside it as the floor a mesh
+    # WITH a native counterpart is still judged by.
+    assert edge["limit_m"] == pytest.approx(3.725290298461914e-07, rel=1e-12)
+    assert edge["limit_quanta"] == 400.0
+    assert edge["coordinate_representation"] == "binary64_earth_centred"
+    assert edge["limit_m_for_a_mesh_with_a_native_counterpart"] == 200.0
+    assert edge["verdict"] == "cannot_bind"
+    # The 0.75 km request's own predicted band -- unchanged, and now decades
+    # above the floor rather than decades below it.  The reported binary32
+    # build measured 39.2 m.
     low, high = edge["predicted_shortest_dual_edge_m"]
     assert low < high < 200.0
-    assert edge["first_ladder_level_that_can_carry_a_refusal"] == 4
+    assert low > edge["limit_m"] * 1e6
+    assert edge["first_ladder_level_that_can_carry_a_refusal"] is None
     assert "711" not in edge["earliest_this_can_be_known"]  # a level, not a duration
-    assert "level 4 of 7" in edge["earliest_this_can_be_known"]
+    assert "not reachable" in edge["earliest_this_can_be_known"]
 
 
 def test_a_coarse_spec_reports_that_the_length_floor_cannot_bind() -> None:
@@ -201,6 +262,8 @@ def test_a_coarse_spec_reports_that_the_length_floor_cannot_bind() -> None:
     assert exposure["finest_requested_spacing_km"] == 15.0
     assert exposure["first_ladder_level_that_can_carry_a_refusal"] is None
     assert min(exposure["predicted_shortest_dual_edge_m"]) > 200.0
+    # Coarse or fine, the generated-mesh floor cannot bind either one now.
+    assert min(exposure["predicted_shortest_dual_edge_m"]) > exposure["limit_m"]
 
 
 def test_the_prediction_agrees_with_every_mesh_that_actually_built() -> None:
@@ -231,15 +294,19 @@ def test_the_prediction_agrees_with_every_mesh_that_actually_built() -> None:
             f"{label}: {measured_m} outside {low}-{high}"
         )
         assert ratio == pytest.approx(gates.SURGERY_FLAG_FLOOR_DV_OVER_DC, abs=0.003)
-        if emitted:
-            assert measured_m > gates.MIN_DV_EDGE_M, label
-            assert exposure["verdict"] != "predicted_refusal", (
-                f"{label} built at {measured_m:.1f} m and the predictor calls "
-                "it a refusal"
-            )
-        else:
-            assert measured_m < gates.MIN_DV_EDGE_M, label
-            assert exposure["verdict"] == "predicted_refusal", label
+        # The table is a record of what the BINARY32 floor did, and it still
+        # reproduces it exactly: `emitted` is `measured_m > 200.0 m` on every
+        # row.  That is the instrument check, and it is what makes the row
+        # that follows meaningful.
+        assert (measured_m > gates.PUBLISHED_MIN_DV_EDGE_M) == emitted, label
+        # Against the floor a GENERATED mesh is judged by today, every row
+        # clears -- including the two that were refused.  The predictor must
+        # never call one of them a refusal now.
+        assert measured_m > gates.MIN_DV_EDGE_M, label
+        assert exposure["verdict"] != "predicted_refusal", (
+            f"{label} measured {measured_m:.1f} m and the predictor calls it a "
+            "refusal against a 3.7e-7 m floor"
+        )
 
 
 def test_the_length_floor_is_never_a_refusal() -> None:
@@ -252,9 +319,13 @@ def test_the_length_floor_is_never_a_refusal() -> None:
     _engine_or_skip()
     receipt = sizing.dry_run(DEEP)
     assert receipt["predicted_cells"] > 0.0
+    # It is a prediction whatever it says.  At binary32 storage this spec read
+    # "predicted_refusal" and sizing still returned a receipt; at the
+    # generated-mesh representation it reads "cannot_bind" and sizing still
+    # returns one.  The contract under test is that neither verdict raises.
     assert (
         receipt["gates_applied_by_hexcore"]["short_dual_edge_floor"]["verdict"]
-        == "predicted_refusal"
+        == "cannot_bind"
     )
 
 
@@ -321,19 +392,92 @@ def test_every_constant_still_reads_the_same_in_the_rust_that_enforces_it() -> N
         pytest.skip(
             f"{engine} is not a checkout build, so the rw-mpas mesh source is "
             "not beside it and the transcribed constants "
-            "(SURGERY_LOCALITY_CELLS, MIN_DV_EDGE_M, MIN_DV_OVER_DC, "
+            "(SURGERY_LOCALITY_CELLS, DV_EDGE_FLOOR_QUANTA, MIN_DV_OVER_DC, "
             "LEVEL_SHIP_FLOOR_DV_OVER_DC, SURGERY_FLAG_FLOOR_DV_OVER_DC) "
             "go unchecked on this box"
         )
     hierarchy = (source / "hierarchy.rs").read_text(encoding="utf-8")
     validate = (source / "validate.rs").read_text(encoding="utf-8")
     surgery = (source / "surgery.rs").read_text(encoding="utf-8")
+    coordframe = (
+        source.parent / "staticfile" / "coordframe.rs"
+    ).read_text(encoding="utf-8")
     assert (
         f"const SURGERY_LOCALITY_CELLS: f64 = {gates.SURGERY_LOCALITY_CELLS};"
         in hierarchy
     )
     assert "band_cells < 2.0 * SURGERY_LOCALITY_CELLS" in hierarchy
-    assert f"min_dv_edge_m: {gates.MIN_DV_EDGE_M}," in validate
+    # The floor is DERIVED there and derived here, from the same two numbers,
+    # so a storage change moves both without an edit and a change to either
+    # number is caught by this grep.
+    assert (
+        f"pub const DV_EDGE_FLOOR_QUANTA: f64 = {gates.DV_EDGE_FLOOR_QUANTA};"
+        in validate
+    )
+    assert "min_dv_edge_m: DV_EDGE_FLOOR_QUANTA" in validate
+    assert (
+        "CoordinateRepresentation::Binary64EarthCentred" in coordframe
+        and "pub fn for_generated_mesh() -> Self" in coordframe
+    ), "the representation a generated mesh is stored at is no longer named there"
     assert f"min_dv_over_dc: {gates.MIN_DV_OVER_DC}," in validate
     assert f"flag_floor: {gates.SURGERY_FLAG_FLOOR_DV_OVER_DC}," in surgery
     assert f"ship_floor: {gates.LEVEL_SHIP_FLOOR_DV_OVER_DC}," in surgery
+
+
+# ---------------------------------------------------------------------------
+# the swath probe's gradient-gate verdict fails closed
+# ---------------------------------------------------------------------------
+def _swath_probe_module():
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "_swath_probe", root / "tools" / "probe_swath_spec_generable.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_swath_probe_does_not_call_an_unmeasured_spec_cleared() -> None:
+    """A refusal with no printed gradient is not a cleared gate.
+
+    The repaired meter refuses partial coverage and never-visited
+    refinements with NO number in the text; the probe's old verdict
+    (returncode == 0 or gradient is None) reported exactly those specs as
+    having cleared the gradient gate.
+    """
+    probe = _swath_probe_module()
+
+    numbered = probe._classify(1, "the requested gradient (65.20% per cell) "
+                                  "makes each level's transition band ...")
+    assert numbered["refused_on_gradient"] is True
+    assert numbered["cleared_gradient_gate"] is False
+    assert numbered["gradient_percent_per_cell"] == 65.20
+
+    for fragment in probe._UNMEASURED_FRAGMENTS:
+        unmeasured = probe._classify(1, f"refusal: {fragment} for cap-1")
+        assert unmeasured["refused_unmeasured"] is True
+        assert unmeasured["cleared_gradient_gate"] is False
+
+    elsewhere = probe._classify(1, "refused: dv edge floor, another gate")
+    assert elsewhere["cleared_gradient_gate"] is True
+    assert elsewhere["refused_unmeasured"] is False
+
+    built = probe._classify(0, "")
+    assert built["cleared_gradient_gate"] is True
+
+
+def test_the_swath_probe_fragments_still_read_the_same_in_the_rust() -> None:
+    """Skips on a box with only a staged binary, like the constants test."""
+
+    engine = _engine_or_skip()
+    source = _rust_mesh_source(engine)
+    if source is None:
+        pytest.skip(
+            f"{engine} is not a checkout build; the coverage-refusal "
+            "fragments the swath probe keys on go unchecked on this box")
+    probe = _swath_probe_module()
+    hierarchy = (source / "hierarchy.rs").read_text(encoding="utf-8")
+    for fragment in probe._UNMEASURED_FRAGMENTS:
+        assert fragment in hierarchy, fragment
+
