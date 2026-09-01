@@ -60,7 +60,7 @@ re-measured 2026-08-28 against the published bundle: the **limited-area lane**
 of chapter 6.8 and the `cull` door of chapter 9 have the engine capabilities
 they need, and the render door's **default window** is understood by the
 published converter. The third stands, with a narrower reason than it had: the forecast lane needs
-a `gpuwm` **git** checkout at **v2.6.0**, not just whatever pip installs — not
+a `gpuwm` **git** checkout at **v2.6.1**, not just whatever pip installs — not
 because a pinned file is missing from the wheel (at 2.5.8 all sixteen resolve
 from `site-packages`, measured 2026-08-28) but because the run records the
 checkout's HEAD, tree and dirty paths into every receipt. Each is written
@@ -77,7 +77,7 @@ three measured, physics-shaped ways. They are stated in chapter 3, quantified
 in [`docs/declared-divergences.md`](../declared-divergences.md), and never
 hidden behind an option. Read them before trusting a number.
 
-**Version.** This manual describes gpuwm-hex 0.2.1 with the gpuwm 2.6.x
+**Version.** This manual describes gpuwm-hex 0.2.2 with the gpuwm 2.6.x
 engine line. Where a measurement was taken on specific hardware, the card is
 named beside the number.
 

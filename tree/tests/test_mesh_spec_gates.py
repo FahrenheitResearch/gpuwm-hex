@@ -88,12 +88,28 @@ def _engine_or_skip() -> Path:
     except SwathRefusal as refusal:
         pytest.skip(f"rw_mpas_mesh is not staged on this box: {refusal}")
     if not _engine_measures_the_gradient_where_the_regions_are(str(engine)):
-        pytest.skip(
-            f"the staged {engine.name} predates the region-probed gradient "
-            f"(2026-08-29): its receipt carries no gradient_probe_coverage, so "
-            f"the transition-band gate correctly refuses to judge a spec on a "
-            f"number that was measured on a global lattice. Rebuild rw-mpas "
-            f"from the gpuwm tools/rustwx workspace"
+        pytest.fail(
+            f"REFUSED: the staged {engine.name} predates the pinned engine's "
+            f"own bridge bundle, so this box would judge nothing and read "
+            f"green. This distribution pins gpuwm>=2.6.1,<2.6.2 and every "
+            f"2.6.1 bundle probes the gradient at the spec's own regions "
+            f"(measured 2026-09-01: the published bundle's receipt reads "
+            f"gradient_probe_coverage 'complete'), so a staged binary whose "
+            f"--dry-run receipt carries no gradient_probe_coverage is a bridge "
+            f"left over from an earlier release -- measured on the proving "
+            f"desktop the same day as a v2.5.3-era bridge under a 2.6.1 "
+            f"engine, with these ten gates skipping quietly past it. "
+            f"THE BREAKAGE THIS REFUSAL PREVENTS: the transition-band gate "
+            f"correctly declines to judge a spec whose steepest-gradient "
+            f"number was measured on a 101 km global lattice, so every "
+            f"mesh-spec gate and every swath sizing call stops being judged "
+            f"while the battery still reports success. A bridge that is not "
+            f"staged at all skips above, because a box with no bridge cannot "
+            f"prove or disprove anything; a bridge that IS here and is older "
+            f"than the pin is this refusal. Re-stage with `gpuwm "
+            f"fetch-bridges`, which verifies every artifact against the "
+            f"packaged pins, or point $GPUWM_HEX_RW_MPAS_MESH at the binary "
+            f"from a 2.6.1 bundle.  staged: {engine}"
         )
     return engine
 

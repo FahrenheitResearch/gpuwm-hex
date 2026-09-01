@@ -6,6 +6,32 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
+## 0.2.2 (2026-09-01)
+
+New:
+- P3 microphysics (mp_physics = 50) routes through the physics seam: the
+  rime pair (qir/qirim, qib/birim) is carried, `mp_p3` is hexcore
+  vocabulary, and the scalar ladder requires WRF's eight P3 species. The
+  seam A/B proves the hex plumbing byte-identical to the engine's own call.
+  The production forecast door still speaks WSM6 only; generalizing the
+  v841 chain to eight species is its own campaign.
+
+Fixed:
+- Requires gpuwm 2.6.1. Three of the sixteen pinned seam files moved at
+  that cut, each re-measured against the published wheel; the x4
+  frozen-source proof re-run at the new pins hashes all four snapshots
+  byte-identical to the 2.6.0 proof (one mesh, one case, one hour).
+- A staged engine bridge older than the pinned engine release refuses by
+  name instead of skipping its gates; the remedy is the fetch-bridges door.
+- The sub-kilometre registry row `v0.9.120.110533` re-pins to the bytes the
+  published 2.6.1 toolchain makes, and its delivery proof is re-taken from
+  published artifacts only: mesh, static, GFS init, a 6 h forecast at
+  dt 5 s on a 16 GB card, and 637 rendered frames, all through the shipped
+  doors.
+- A published comment the release scrub had mangled reads correctly again,
+  and the scrub no longer doubles an article in front of a substituted
+  label.
+
 ## 0.2.1 (2026-08-31)
 
 New:

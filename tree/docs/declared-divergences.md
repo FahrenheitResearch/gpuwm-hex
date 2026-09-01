@@ -56,10 +56,10 @@ is no receipt directory, no card and no run commit for them anywhere in the
 tree -- which is the opposite of how the obs-referee numbers below are
 recorded, and the gap is worth naming rather than papering over. What can be
 established is a ceiling: the commit that introduced them pinned engine
-`629ddb6f0`, so the run happened at or before that pin. Four engine pin moves
+`629ddb6f0`, so the run happened at or before that pin. Five engine pin moves
 have landed since -- `0d04db712` (2026-08-24), `26daaab7e` (2026-08-25),
-`659962929` (2026-08-28, gpuwm 2.5.8) and `7e34a48` (2026-08-31, gpuwm
-2.6.0).
+`659962929` (2026-08-28, gpuwm 2.5.8), `7e34a48` (2026-08-31, gpuwm
+2.6.0) and `df5f34c5c` (2026-09-01, gpuwm 2.6.1).
 
 The 2.5.8 move crosses the executed seam and **has been measured**, in
 the strongest form available short of a re-run: a four-arm byte A/B on one
@@ -78,9 +78,19 @@ RRTMG is the prime suspect for the drift below), and it carries its own
 one-hour byte arm: the x4 frozen-source proof re-run at that pin wrote an
 F001 history byte-identical to the 2.5.8 proof's -- one SHA-256, two
 engines (receipt `evidence/repin-260-20260831/x4-proof/`).  One mesh, one
-case, one hour, same caveat as above.  The two EARLIER pin moves have no
-arm at all, and no magnitude above has been re-measured over 24 h since
-the original run. **Whether any of the three moved across those pins is
+case, one hour, same caveat as above.
+
+The 2026-09-01 move crosses the executed seam a third time, and at its
+centre: `gpuwm/core/mpas_column_batch.py`, the seam's own batch driver,
+gains restart schema v2 and the P3 eight-species transport (the engine's
+default WSM6 path declared byte-unchanged), with `gpuwm/config.py` and
+`docs/mpas-seam.md` moving beside it.  Its arm is the same one-hour byte
+arm: the x4 proof re-run at that pin wrote all four snapshots -- F000,
+F030, F001 and the restarted F001 -- byte-identical to the 2.6.0 proof's,
+so one F001 SHA-256 now spans three engines (receipt
+`evidence/repin-261-20260901/x4-proof/`).  Same scope, same caveat.  The
+two EARLIEST pin moves have no arm at all, and no magnitude above has been
+re-measured over 24 h since the original run. **Whether any of the three moved across those pins is
 NOT MEASURED.** Read them as pre-2026-08-20 numbers until somebody re-runs
 them.
 

@@ -51,7 +51,7 @@ def _sinf_correctly_rounded(phase: FloatArray) -> FloatArray:
 
 
 #: Rebindable hooks.  Default: correctly rounded via float64 (the pinned
-#: defined behaviour).  The the proving RTX 5090 authority ladder may rebind these to the
+#: defined behaviour).  The proving RTX 5090 authority ladder may rebind these to the
 #: reference executable's own libimf via ctypes to prove full byte identity.
 powf_rkind: Callable[[FloatArray, float], FloatArray] = _powf_correctly_rounded
 sinf_rkind: Callable[[FloatArray], FloatArray] = _sinf_correctly_rounded

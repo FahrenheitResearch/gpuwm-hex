@@ -45,7 +45,7 @@ def test_exact_release_scope_and_all_execution_sources_are_frozen() -> None:
     assert runner.FULL_STEPS == 30
     assert runner.CHECKPOINT_STEP == 15
     assert runner.ARWEN_CONTRACT_SURFACE_SHA256 == (
-        "f83b16185a50667d65d90771e1f32942ff31fbfbd52ce4e29e09ea0cb11e1007"
+        "3b45dd0c00ea61dc66eded1d79ba1999af95cee71a8a4c439cc49adb89d2cf79"
     )
     assert runner.ARWEN_GLACIER_COMPOSED_TU_SHA256 == (
         "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -168,7 +168,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # the x4 proof refusing before CUDA.  The rationale lives beside the
         # runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "e7c65f4809bbb4df9beb05d4d6e3c2e78fea8b14f3a2b590a1eb1a60d02bbd0b"
+            "7d31ff98b18016f965c48682371c1f05d3e883b7e35740175de83e4bb8902f4f"
         ),
         # Re-frozen for the regional CPU authority lane (#346 L4); the
         # rationale lives beside the runner's pin.

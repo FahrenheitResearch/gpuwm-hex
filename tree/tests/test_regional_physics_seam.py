@@ -513,15 +513,11 @@ def test_an_unrouted_selector_refuses_instead_of_declaring_qv_alone():
     from hexcore.errors import ConfigurationRefusal
     from hexcore import physics_seam as ps
 
-    # mp=50 carries its own reason row: the rime pair qir/qib is state this
-    # seam cannot yet transport, and the refusal must say so by name.
-    with pytest.raises(ConfigurationRefusal) as caught:
-        ps._required_scalar_names(_selection(50))
-    message = str(caught.value)
-    assert "qir" in message and "qib" in message
-    assert "rime" in message
-
     # A selector with no reason row gets the generic fall-through text.
+    # (The mp=50 reason row RETIRED 2026-08-31 with the defect it named:
+    # the rime pair is now seam vocabulary, the mp_p3 route exists, and
+    # the ladder's 50-arm requires all eight P3 scalars -- see
+    # test_the_p3_row_requires_wrfs_exact_eight below.)
     with pytest.raises(ConfigurationRefusal) as caught:
         ps._required_scalar_names(_selection(10))
     assert "no scalar" in str(caught.value)
@@ -538,4 +534,66 @@ def test_every_routed_selector_still_declares_its_rows():
         names = ps._required_scalar_names(_selection(mp))
         if mp:
             assert "qv" in names
-    assert 50 not in ps._ROUTED_MP_PHYSICS
+    assert 50 in ps._ROUTED_MP_PHYSICS
+
+
+def test_the_p3_row_requires_wrfs_exact_eight():
+    """mp=50 requires WRF's own P3 transport set -- no more, no less.
+
+    module_microphysics_driver.F:1569-1602 binds EIGHT scalars into
+    mp_p3_wrapper_wrf: qv, qc, qr, qi, ni, nr and the rime pair
+    qir/qib.  A row missing the rime pair would accept a batch carrying
+    no rime state (the state substitution the retired refusal existed
+    to stop); a row demanding qs or qg would require two species P3's
+    single ice category does not have.
+    """
+    from hexcore import physics_seam as ps
+
+    assert ps._required_scalar_names(_selection(50)) == frozenset(
+        ("qv", "qc", "qr", "qi", "ni", "nr", "qir", "qib"))
+
+
+def test_mp_p3_routes_as_declared_hexcore_vocabulary():
+    """The mp_p3 name arrives, routes to 50, and stays out of MPAS's
+    own inventory.
+
+    The name is post-divergence hexcore vocabulary (the 2026-08-20
+    physics-goes-its-own-way ruling), NOT an MPAS name: it must resolve
+    through the seam, and it must never leak into
+    MPAS_SELECTOR_INVENTORY, which records what MPAS itself accepts --
+    a leak would make the frozen-Registry refusal text lie.
+    """
+    from hexcore import physics_seam as ps
+
+    selection = ps.resolve_mpas_physics(config_microp_scheme="mp_p3")
+    assert selection.mp_physics == 50
+    assert selection.mpas_names["config_microp_scheme"] == "mp_p3"
+    assert "mp_p3" not in ps.MPAS_SELECTOR_INVENTORY["config_microp_scheme"]
+    assert "mp_p3" in ps.HEXCORE_SELECTOR_EXTENSIONS["config_microp_scheme"]
+    # The full requirement path is live end to end: mp-only selection,
+    # so the backend requirements are the P3 scalars plus vertical wind.
+    requirements = ps._gpuwm_requirements(selection)
+    assert requirements.scalars == frozenset(
+        ("qv", "qc", "qr", "qi", "ni", "nr", "qir", "qib"))
+    assert "w" in requirements.atmosphere
+
+
+def test_the_rime_pair_aliases_are_canonical():
+    """qir/qib arrive under WRF Registry and module_mp_p3.F spellings."""
+    from hexcore import physics_seam as ps
+
+    for alias, canonical in (("qir", "qir"), ("qirim", "qir"),
+                             ("QIR", "qir"), ("qib", "qib"),
+                             ("birim", "qib"), ("QIB", "qib")):
+        assert ps._canonical_scalar_name(alias) == canonical
+
+
+def test_an_unknown_scheme_name_still_refuses_with_both_vocabularies():
+    from hexcore.errors import ConfigurationRefusal
+    from hexcore import physics_seam as ps
+
+    with pytest.raises(ConfigurationRefusal) as caught:
+        ps.resolve_mpas_physics(config_microp_scheme="mp_morrison")
+    message = str(caught.value)
+    assert "MPAS-A v8.2.3" in message
+    assert "mp_p3" in message  # the extension vocabulary is named too

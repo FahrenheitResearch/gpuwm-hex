@@ -69,7 +69,7 @@ ARWEN_CONTRACT_DOCUMENT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
 ARWEN_CONTRACT_SURFACE_SHA256 = (
-    "f83b16185a50667d65d90771e1f32942ff31fbfbd52ce4e29e09ea0cb11e1007"
+    "3b45dd0c00ea61dc66eded1d79ba1999af95cee71a8a4c439cc49adb89d2cf79"
 )
 ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
     "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -519,7 +519,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # that tip.  Only the digest moved; no behaviour in this module changed
     # beyond the manifest constants the repin deliberately rewrote.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "e7c65f4809bbb4df9beb05d4d6e3c2e78fea8b14f3a2b590a1eb1a60d02bbd0b"
+        "7d31ff98b18016f965c48682371c1f05d3e883b7e35740175de83e4bb8902f4f"
     ),
     # The v8.4.1 horizontal-mixing execution boundary (2-D Smagorinsky):
     # CPU authorities and the CUDA operator modules the RK1 saved-Euler
@@ -641,7 +641,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "a440ee6fca12841f0959e87eb7772acc3d15ff3a7790f71fcf8fe6581c2308f4"
         ),
         "adapter_contract_sha256": (
-            "db1f9a8cb483e991bd668a35a352bcd4a0fdcfccb6283d7888ef5a221eaf6bad"
+            "de203082d26c6ec14bc8096795a810f49107bda7c9dbf3c86db41c9504cb4d44"
         ),
         "arwen_contract_surface_sha256": ARWEN_CONTRACT_SURFACE_SHA256,
         "arwen_glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,

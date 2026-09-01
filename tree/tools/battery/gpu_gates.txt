@@ -24,6 +24,14 @@
 # discover the same fact inside an allocation.
 tests/test_device_capacity.py
 
+# The P3 seam A/B (2026-08-31): the hex plumbing versus the engine's real
+# column batch on the same P3 columns, byte-compared.  Needs any CUDA
+# device (8 columns, 20 levels -- fits everything) AND
+# HEXCORE_AB_ARWEN_ROOT naming a gpuwm SOURCE CHECKOUT on the 2.6.1 line
+# (the P3 transport, microphysics_scheme="p3"); without the variable the
+# suite skips by name rather than grading whatever gpuwm sys.path holds.
+tests/test_p3_seam_ab.py
+
 # --- harness gates (not pytest; run as commands) ----------------------------
 #
 # These are the proof and forecast harnesses.  They are listed here rather

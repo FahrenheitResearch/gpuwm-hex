@@ -168,7 +168,7 @@ def test_the_correctly_rounded_control_is_the_portable_one() -> None:
 def test_the_artifact_path_still_uses_the_scalar_power_on_purpose() -> None:
     """`edge_dc_squared_over_twelve` must keep reproducing the record.
 
-    Until the coordinator rules on re-registration, this function's job is to
+    Until re-registration is ruled on, this function's job is to
     reproduce the artifact of record exactly -- which means the libm answer,
     not the correctly-rounded one.  If someone "fixes" it to ``np.square``,
     every registered vertical digest stops reproducing on the box that made
@@ -182,7 +182,7 @@ def test_the_artifact_path_still_uses_the_scalar_power_on_purpose() -> None:
     assert got.tobytes() == expected.tobytes(), (
         "edge_dc_squared_over_twelve no longer reproduces numpy's scalar "
         "power. Every registered vertical artifact digest was minted through "
-        "that path; changing it re-mints all of them and is a coordinator "
+        "that path; changing it re-mints all of them and is a re-registration "
         "decision, not a cleanup."
     )
 

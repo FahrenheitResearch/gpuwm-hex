@@ -249,7 +249,7 @@ def edge_dc_squared_over_twelve(
     So the portable form EXISTS and is one multiply away.  Adopting it is not
     this function's call to make: it would move ``zb``, ``zb3`` and the whole
     1,059,621,268-byte artifact every downstream digest is registered against,
-    which is a re-registration decision for the coordinator, written up in
+    which is a re-registration decision above this function, written up in
     ``evidence/pins-373-20260827/RECEIPT.md``.  Until that ruling exists this
     function stays exactly as it is, and the receipt says which libm minted the
     bytes -- see ``hexcore.libm_identity``.

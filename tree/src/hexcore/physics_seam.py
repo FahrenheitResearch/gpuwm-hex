@@ -102,16 +102,43 @@ MPAS_SELECTOR_INVENTORY: Mapping[str, tuple[str, ...]] = MappingProxyType(
 
 
 # gpuwm/config.py plus gpuwm/core/physics.py.  This is an inventory, not a
-# promise that every value can run in the local CUDA environment.
+# promise that every value can run in the local CUDA environment.  The
+# mp_physics row is engine MP_PHYSICS_ACCEPTED at the 2.6.1 pin line
+# (gpuwm/config.py at the engine's 2.6.1 line): re-synced 2026-08-31 when the P3 row
+# landed below -- the previous copy had already drifted (it lacked 9, 16
+# and 50), which is exactly the second-copy hazard the ladder docstring
+# names.
 GPUWM_SELECTOR_INVENTORY: Mapping[str, tuple[int, ...]] = MappingProxyType(
     {
-        "mp_physics": (0, 1, 6, 8, 10, 18, 28),
+        "mp_physics": (0, 1, 6, 8, 9, 10, 16, 18, 28, 50),
         "cu_physics": (0, 1, 3),
         "sf_surface_physics": (0, 2, 3, 4),
         "bl_pbl_physics": (0, 1, 5, 11, 900),
         "sf_sfclay_physics": (0, 1, 5, 91),
         "ra_lw_physics": (0, 1, 4, 90),
         "ra_sw_physics": (0, 1, 4, 90),
+    }
+)
+
+
+# Post-divergence hexcore vocabulary.  The 2026-08-20 ruling pins the
+# DYCORE to MPAS and sends the PHYSICS its own way; these are the scheme
+# names the port admits on its own authority.  They are NOT MPAS names --
+# neither the frozen v8.2.3 inventory above nor released v8.4.1 spells
+# them -- and they must never migrate into MPAS_SELECTOR_INVENTORY, which
+# records what MPAS itself accepts.  A name lands here only in the same
+# commit as its route in ``_ROUTES`` and its scalar-requirement row in
+# ``_required_scalar_names``; the retired mp=50 refusal (see
+# ``_UNROUTED_MP_PHYSICS_REASONS``) is the record of why the three move
+# together.
+HEXCORE_SELECTOR_EXTENSIONS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        # P3 one-category two-moment ice (gpuwm mp_physics=50), admitted
+        # 2026-08-31 once the seam vocabulary gained the rime pair
+        # qir/qib and the engine column batch gained the eight-scalar
+        # P3 transport (gpuwm/core/mpas_column_batch.py,
+        # microphysics_scheme="p3").
+        "config_microp_scheme": ("mp_p3",),
     }
 )
 
@@ -164,6 +191,14 @@ _ROUTES: Mapping[str, Mapping[str, int]] = MappingProxyType(
                 "mp_wsm6": 6,
                 "mp_thompson": 8,
                 "mp_thompson_aerosols": 28,
+                # HEXCORE EXTENSION, not an MPAS name (see
+                # HEXCORE_SELECTOR_EXTENSIONS): P3 one-category
+                # two-moment ice.  Routed 2026-08-31, the commit that
+                # gave this seam qir/qib and the engine column batch the
+                # eight-scalar P3 transport -- the two prerequisites the
+                # retired mp=50 refusal named as its own retirement
+                # condition.
+                "mp_p3": 50,
             }
         ),
         "config_convection_scheme": MappingProxyType(
@@ -243,6 +278,16 @@ _SCALAR_ALIASES: Mapping[str, str] = MappingProxyType(
         "ni": "ni",
         "nifa": "nifa",
         "nwfa": "nwfa",
+        # P3's rime pair (mp_physics=50): WRF Registry names QIR (rime
+        # ice mass) and QIB (rime ice volume); module_mp_p3.F spells the
+        # same fields qirim/birim.  MPAS-A allocates neither -- these
+        # rows are hexcore vocabulary, landed with the mp_p3 route.
+        "qir": "qir",
+        "qirim": "qir",
+        "rime_ice_mass": "qir",
+        "qib": "qib",
+        "birim": "qib",
+        "rime_ice_volume": "qib",
     }
 )
 
@@ -259,13 +304,15 @@ def _refuse(knob: str, value: object, reason: str, declaration: str) -> None:
 def _resolved_name(knob: str, value: str, suite: str) -> str:
     name = str(value).strip()
     inventory = MPAS_SELECTOR_INVENTORY[knob]
-    if name not in inventory:
-        _refuse(
-            knob,
-            name,
-            f"MPAS-A v8.2.3 accepts only {list(inventory)}",
-            f"{knob}='off'",
-        )
+    extensions = HEXCORE_SELECTOR_EXTENSIONS.get(knob, ())
+    if name not in inventory and name not in extensions:
+        reason = f"MPAS-A v8.2.3 accepts only {list(inventory)}"
+        if extensions:
+            reason += (
+                f" and the post-divergence hexcore vocabulary adds "
+                f"{list(extensions)}"
+            )
+        _refuse(knob, name, reason, f"{knob}='off'")
     return _SUITE_DEFAULTS[suite][knob] if name == "suite" else name
 
 
@@ -1166,31 +1213,23 @@ _ROUTED_MP_PHYSICS: frozenset[int] = frozenset(
 # each with its reason, in the shape ``_UNROUTED_REASONS`` uses for MPAS scheme
 # names.  An omission recorded here is a decision; an omission recorded nowhere
 # reads as an oversight, and the next reader has to guess which it was.
-_UNROUTED_MP_PHYSICS_REASONS: Mapping[int, str] = MappingProxyType(
-    {
-        50: (
-            "P3 one-category two-moment ice (gpuwm mp_physics=50) has no MPAS "
-            "name to arrive by: the frozen v8.2.3 config_microp_scheme "
-            "inventory above and MPAS-A v8.4.1 alike stop at mp_kessler, "
-            "mp_thompson, mp_thompson_aerosols and mp_wsm6.  Its carrier set "
-            "cannot be written in this vocabulary either.  WRF's mp=50 call "
-            "shape (module_microphysics_driver.F:1569-1602 into "
-            "mp_p3_wrapper_wrf, module_mp_p3.F:690-932) transports EIGHT "
-            "scalars -- qv, qc, qr, nr, qi, ni and the rime pair qir (rime "
-            "mass) and qib (rime volume) -- while MPAS-A allocates no rime "
-            "scalar at all, so _SCALAR_ALIASES can name six of the eight.  A "
-            "six-of-eight row would let _validate_requirements accept a batch "
-            "carrying no rime state, which is the state substitution this "
-            "function exists to refuse, so the answer is this refusal and not "
-            "a partial row.  One ice category is also why the (6, 8, 28) row "
-            "must never simply grow a 50: P3 writes neither qs nor qg, and "
-            "requiring them would demand two species the scheme does not "
-            "have.  Adding a P3 row to _ROUTES therefore means giving this "
-            "seam qir and qib first, and this refusal is what stops the route "
-            "landing without them"
-        ),
-    }
-)
+#
+# RETIRED 2026-08-31: the mp=50 (P3) reason row.  Its own text was the
+# spec of what had to be true first -- "adding a P3 row to _ROUTES
+# means giving this seam qir and qib first" -- and that is exactly what
+# the retiring commit does: _SCALAR_ALIASES names the rime pair
+# (qir/qirim, qib/birim), the mp_p3 route lands as declared hexcore
+# vocabulary (HEXCORE_SELECTOR_EXTENSIONS -- the "no MPAS name to
+# arrive by" half of the reason, answered by the 2026-08-20
+# physics-goes-its-own-way ruling rather than by inventing an MPAS
+# name), the ladder below requires all EIGHT of WRF's mp=50 scalars
+# (module_microphysics_driver.F:1569-1602: qv, qc, qr, qi, ni, nr,
+# qir, qib -- and neither qs nor qg, which P3 does not have), and the
+# engine column batch transports them (gpuwm/core/mpas_column_batch.py
+# microphysics_scheme="p3", landed on the 2.6.1 line).  The six-of-
+# eight state substitution the refusal existed to stop is now
+# structurally impossible: the row requires the rime pair by name.
+_UNROUTED_MP_PHYSICS_REASONS: Mapping[int, str] = MappingProxyType({})
 
 
 def _required_scalar_names(selection: GPUWMSchemeSelection) -> frozenset[str]:
@@ -1211,9 +1250,17 @@ def _required_scalar_names(selection: GPUWMSchemeSelection) -> frozenset[str]:
     than supplied -- with no error anywhere.  The rows cover exactly
     ``_ROUTED_MP_PHYSICS`` today, which is why no forecast has met that; nothing
     but this refusal keeps it true.  gpuwm publishes microphysics selectors this
-    seam does not route (10, 18 and 50 among them, and ``GPUWM_SELECTOR_INVENTORY``
-    above is a second copy that can drift from ``_ROUTES``), so the arrival is a
-    new route away, not a hypothetical.
+    seam does not route (9, 10, 16 and 18 among them, and
+    ``GPUWM_SELECTOR_INVENTORY`` above is a second copy that can drift from
+    ``_ROUTES``), so the arrival is a new route away, not a hypothetical.
+
+    The mp=50 row (2026-08-31) is WRF's own P3 transport set
+    (module_microphysics_driver.F:1569-1602 into mp_p3_wrapper_wrf):
+    the four moist masses, both number moments, and the rime pair
+    qir/qib.  P3 has ONE ice category -- it writes neither qs nor qg --
+    so the (6, 8, 28) ice row deliberately does not include 50:
+    requiring qs/qg would demand two species the scheme does not have,
+    and the engine column batch refuses them by name on a P3 batch.
     """
 
     if selection.mp_physics not in _ROUTED_MP_PHYSICS:
@@ -1239,9 +1286,9 @@ def _required_scalar_names(selection: GPUWMSchemeSelection) -> frozenset[str]:
     required: set[str] = set()
     if selection.mp_physics or selection.cu_physics or selection.bl_pbl_physics:
         required.add("qv")
-    if selection.mp_physics in (1, 6, 8, 28) or selection.bl_pbl_physics:
+    if selection.mp_physics in (1, 6, 8, 28, 50) or selection.bl_pbl_physics:
         required.add("qc")
-    if selection.mp_physics in (1, 6, 8, 28):
+    if selection.mp_physics in (1, 6, 8, 28, 50):
         required.add("qr")
     if selection.mp_physics in (6, 8, 28):
         required.update(("qi", "qs", "qg"))
@@ -1249,6 +1296,10 @@ def _required_scalar_names(selection: GPUWMSchemeSelection) -> frozenset[str]:
         required.update(("nr", "ni"))
     if selection.mp_physics == 28:
         required.update(("nc", "nifa", "nwfa"))
+    if selection.mp_physics == 50:
+        # P3 one-category: total ice mass + number, rain number, and the
+        # rime mass/volume pair.  No qs, no qg -- see the docstring.
+        required.update(("qi", "ni", "nr", "qir", "qib"))
     return frozenset(required)
 
 

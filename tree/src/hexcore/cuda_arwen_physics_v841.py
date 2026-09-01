@@ -64,12 +64,12 @@ from .cuda_physics_v841 import (
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "7e34a4877a8278970fcb16db3a117ef6cc5b9bbe"
+ARWEN_BUILD_COMMIT = "df5f34c5caddac935035faa20c32b2ff5297fd26"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
 MPAS_SEAM_CONTRACT_SURFACE_SHA256 = (
-    "f83b16185a50667d65d90771e1f32942ff31fbfbd52ce4e29e09ea0cb11e1007"
+    "3b45dd0c00ea61dc66eded1d79ba1999af95cee71a8a4c439cc49adb89d2cf79"
 )
 ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
     "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -81,7 +81,7 @@ ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
 ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
     {
         "gpuwm/core/mpas_column_batch.py": (
-            "f4335caa44687526089995f525c34b718465972531e75f2b8e908cc5ccbc6c7c"
+            "4e9770fc01190c2a2a04e224bfdb7df784f62be843601f13ff920a9613968cda"
         ),
         "gpuwm/core/physics.py": (
             "51b8c6067ebb27ef538dbe0291bd6a2e2d570823c78cf2e85f75e325ca8114af"
@@ -120,13 +120,13 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"
         ),
         "gpuwm/config.py": (
-            "73b91bb4f4b3de1e8521d6e932f5f7fa106e4f7efcfd400affa94effde861aa7"
+            "7f3b694f1746e18f6d6ea12f92282bf2284cbde8d89c560fdfbb747ff49325d0"
         ),
         "gpuwm/io/restart.py": (
             "8482a222c0ad096400a9154e5a6a706c21704b7cc17ebbbab9d15bbe4879f91f"
         ),
         "docs/mpas-seam.md": (
-            "7fe13aaa37fa944b160838c1fe5083ab79fe0d2e271da048c4dc92de8d9fc7fd"
+            "3b99487a86d23cd4b3136e115486b0051f1e0b34632e07d6801289dda762824e"
         ),
     }
 )

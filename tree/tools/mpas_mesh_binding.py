@@ -1051,10 +1051,10 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
             n_soil_levels=4,
             nominal_dx_m=937.5,
             dt_seconds=5.0,
-            grid_bytes=151_227_968,
-            grid_sha256="40e9e9f7449835af34f45a5510e169a49fd2145af826cad318ada0be1747d1af",
+            grid_bytes=151_228_504,
+            grid_sha256="39f0c8ae2b4b0373cf3889dec6837d0f0a842becbb75e157fe2c1a426423cbc6",
             static_bytes=224_613_208,
-            static_sha256="6e941739c3412f4df713346677216e26846e3179a28a8c5160345100d8b47528",
+            static_sha256="ff495ce89104629a73b5921d8174408fe4cd099a75b656f0d7d06acb463f8c4b",
             drop_carried_deformation=True,
             notes=(
                 "THE FIRST SUB-KILOMETRE ROW THIS PROGRAM HAS REGISTERED. A "
@@ -1100,7 +1100,42 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
                 "1,310.43 m. The finest REGISTERED mesh before this row has "
                 "min(dcEdge) 4,302.90 m, so x1.40962's and x4.163842's statics rebuild "
                 "BYTE-IDENTICALLY and no registered static moved. "
-                "Evidence: gpuwm evidence/fine-mesh-20260829/."
+                "Evidence: gpuwm evidence/fine-mesh-20260829/. "
+                "RE-PINNED 2026-09-01 by the 0.2.2 re-pin campaign: grid and "
+                "static rebuilt from the same spec through the PUBLISHED "
+                "2.6.1 artifacts (rw_mpas_mesh/rw_mpas_static from the "
+                "v2.6.1 bridge bundle, geography from gpuwm fetch-geog). "
+                "Both digests moved off the 2026-08-29 lane build's "
+                "(grid 40e9e9f7... -> 39f0c8ae..., static 6e941739... -> "
+                "ff495ce8...), and the movement is MEASURED rather than "
+                "assumed. Determinism: two builds from the same spec and "
+                "the same published binary emitted byte-identical grids. "
+                "Attribution, old grid against new, variable by variable: "
+                "the same mesh to roundoff. The seven index and topology "
+                "arrays (indexToCellID, indexToEdgeID, indexToVertexID, "
+                "nEdgesOnCell, nEdgesOnEdge, densityFunctionCode, "
+                "nominalMinDc) are byte-equal; every old cell centre has a "
+                "new counterpart within 3.1 mm (median 0.7 um, one-to-one "
+                "over all 110,533); 26 cells, 78 edges and 40 vertices "
+                "swapped index on near-tie ordering (193 cellsOnCell rows "
+                "follow them) and every other coordinate sits in place to "
+                "under 6e-10 rad; none of the embedded mesh receipt's 235 "
+                "integer keys changed (the same insertion, anneal and "
+                "surgery sequence), its float keys moved at roundoff or "
+                "in the extremal statistics that amplify it, its "
+                "steepest-gradient reading moved 10.05 -> 10.97 % per "
+                "cell because the 0.2.1 repaired meter reads the same "
+                "spec (still admitted against 12.25), and "
+                "the published receipt gains thirteen fields "
+                "(graded_levels[].insert_front_spacing_km, "
+                "gradient_probe_coverage, gradient_probe_points, "
+                "mesh.well_centredness.*), which is the 536 extra bytes. "
+                "So the published generator relaxes the same mesh with "
+                "roundoff-level arithmetic differences from the 08-29 "
+                "engine build, and the static moved with its input. The "
+                "derived categorical supersample reads 2 on all six "
+                "categorical passes in the static's own receipt. Evidence: "
+                "evidence/repin-261-20260901/subkm/."
             ),
         ),
     }
