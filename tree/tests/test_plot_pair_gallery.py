@@ -26,6 +26,15 @@ import numpy
 import pytest
 from netCDF4 import Dataset
 
+#: The gallery draws with matplotlib, which is the engine's dependency
+#: (gpuwm installs it) and not this package's.  The CI battery installs
+#: no engine, so on that box the gallery's tests skip by name rather than
+#: fail at the first figure; wherever the pair door runs, gpuwm is present.
+pytest.importorskip(
+    "matplotlib",
+    reason="the pair gallery draws with matplotlib, the engine's dependency; "
+           "absent on the engine-less CI battery")
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
 if str(ROOT / "src") not in sys.path:
