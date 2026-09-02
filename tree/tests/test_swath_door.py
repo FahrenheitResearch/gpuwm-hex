@@ -43,6 +43,7 @@ def history(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def _engine_or_skip() -> Path:
+    from hexcore import engine_pin as _engine_pin
     from hexcore.swath.errors import SwathRefusal
 
     try:
@@ -53,8 +54,9 @@ def _engine_or_skip() -> Path:
         pytest.fail(
             f"REFUSED: the staged {engine.name} predates the pinned engine's "
             f"own bridge bundle, so this box would judge nothing and read "
-            f"green. This distribution pins gpuwm>=2.6.1,<2.6.2 and every "
-            f"2.6.1 bundle probes the gradient at the spec's own regions "
+            f"green. This distribution pins {_engine_pin.gpuwm_requirement()} "
+            f"and every {_engine_pin.wanted_version()} bundle probes the "
+            f"gradient at the spec's own regions "
             f"(measured 2026-09-01: the published bundle's receipt reads "
             f"gradient_probe_coverage 'complete'), so a staged binary whose "
             f"--dry-run receipt carries no gradient_probe_coverage is a bridge "
@@ -71,7 +73,7 @@ def _engine_or_skip() -> Path:
             f"than the pin is this refusal. Re-stage with `gpuwm "
             f"fetch-bridges`, which verifies every artifact against the "
             f"packaged pins, or point $GPUWM_HEX_RW_MPAS_MESH at the binary "
-            f"from a 2.6.1 bundle.  staged: {engine}"
+            f"from a {_engine_pin.wanted_version()} bundle.  staged: {engine}"
         )
     return engine
 

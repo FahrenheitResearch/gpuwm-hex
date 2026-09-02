@@ -56,10 +56,11 @@ is no receipt directory, no card and no run commit for them anywhere in the
 tree -- which is the opposite of how the obs-referee numbers below are
 recorded, and the gap is worth naming rather than papering over. What can be
 established is a ceiling: the commit that introduced them pinned engine
-`629ddb6f0`, so the run happened at or before that pin. Five engine pin moves
+`629ddb6f0`, so the run happened at or before that pin. Seven engine pin moves
 have landed since -- `0d04db712` (2026-08-24), `26daaab7e` (2026-08-25),
 `659962929` (2026-08-28, gpuwm 2.5.8), `7e34a48` (2026-08-31, gpuwm
-2.6.0) and `df5f34c5c` (2026-09-01, gpuwm 2.6.1).
+2.6.0), `df5f34c5c` (2026-09-01, gpuwm 2.6.1), `636ab1b4b`
+(2026-09-02, gpuwm 2.6.3) and `d60b883e7` (2026-09-02, gpuwm 2.6.4).
 
 The 2.5.8 move crosses the executed seam and **has been measured**, in
 the strongest form available short of a re-run: a four-arm byte A/B on one
@@ -79,6 +80,42 @@ one-hour byte arm: the x4 frozen-source proof re-run at that pin wrote an
 F001 history byte-identical to the 2.5.8 proof's -- one SHA-256, two
 engines (receipt `evidence/repin-260-20260831/x4-proof/`).  One mesh, one
 case, one hour, same caveat as above.
+
+The 2026-09-01 move (gpuwm 2.6.1) and the 2026-09-02 move (gpuwm 2.6.3)
+both cross the executed seam at its centre -- the seam's own batch driver
+`gpuwm/core/mpas_column_batch.py` gains restart schema v2 and the P3
+transport at 2.6.1, and the aerosol-aware Thompson species row at 2.6.3 --
+and each carries its own one-hour byte arm.  The 2.6.1 x4 proof wrote all
+four snapshots byte-identical to the 2.6.0 proof's
+(`../evidence/repin-261-20260901/x4-proof/`); the 2.6.3 move's arm was not
+run separately, because the 2.6.4 arm below covers it by inclusion
+(`../evidence/repin-263-20260902/x4-proof/SKIPPED.md`).  One mesh, one case,
+one hour, same caveat.
+
+The 2026-09-02 move to gpuwm 2.6.4, three hours after the 2.6.3 one,
+crosses the executed seam more widely than any move since 2.5.8: six of
+the sixteen pinned files moved between the two published wheels, measured
+wheel against wheel (`../evidence/repin-264-20260902/wheel-pair-263-264.txt`)
+-- the phase-one driver `gpuwm/core/physics.py` (the cumulus adapter
+contract grew a result type and a column-tendency coupler for a third
+cumulus scheme), the Grell-Freitas adapter `gpuwm/core/gf.py` (a
+`release()` that breaks the driver/adapter reference cycle) and its kernel
+source `gpuwm/core/kernels/gf.cu` (the glibc float32 words moved into a
+header the loader prepends; the loader's own comment states the seven GF
+entry points kept byte-identical resource counts and the GF parity suites
+still grade at max_ulp 0), the kernel loader, the config loader and the
+restart identity table.  The column batch and the contract document did
+not move.  Its one-hour byte arm is the x4 frozen-source proof re-run at
+the 2.6.4 pins (`../evidence/repin-264-20260902/x4-proof/`): all four
+snapshots (F000, F030, F001 and the restarted F001) byte-identical to the
+2.6.1 proof's, so one F001 SHA-256 now spans 2.5.8, 2.6.0, 2.6.1 and 2.6.4,
+and the GF lift is measured byte-neutral THROUGH THIS SEAM at that scope.
+One mesh, one case, one hour, same caveat.
+
+The published 2.6.5 (2026-09-02, ninety minutes after 2.6.4) moved none of
+the sixteen pinned files, measured wheel against wheel
+(`../evidence/repin-265-20260902/wheel-pair-264-265.txt`), so it is
+admitted by the range without a pin move and the 2.6.4 arm covers it.
 
 The 2026-09-01 move crosses the executed seam a third time, and at its
 centre: `gpuwm/core/mpas_column_batch.py`, the seam's own batch driver,

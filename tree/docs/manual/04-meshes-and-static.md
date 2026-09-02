@@ -113,7 +113,7 @@ icosahedral Goldberg grid at the resolution you ask for and builds the
 matching static in the same run, with no native toolchain anywhere in the
 loop. (This door was not present on the published gpuwm 2.5.2 wheel; it
 arrives with the 2.5.3 bundle, well below the floor this distribution's
-declared `gpuwm>=2.6.1,<2.6.2` range requires. The commands below were proven from a `gpuwm` checkout.)
+declared `gpuwm>=2.6.4,<2.6.6` range requires. The commands below were proven from a `gpuwm` checkout.)
 
 **See what a card can hold:**
 

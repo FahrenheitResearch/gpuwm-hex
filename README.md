@@ -10,10 +10,10 @@ carries the install matrix, the front doors, the measured limitations and the
 assets a user must supply. This page is the repository-level orientation: what
 this project is, what it is pinned to, and what it is judged by.
 
-**Install:** `pip install gpuwm-hex`. It resolves only once `gpuwm>=2.5.3` is
-on PyPI — that is a hard dependency floor, not a soft one, and the reason is
-in [`tree/pyproject.toml`](tree/pyproject.toml) where it is declared. Until
-then, install from a checkout. `tree/README.md` carries the full matrix.
+**Install:** `pip install gpuwm-hex`. The engine range it declares
+(`gpuwm>=2.6.4,<2.6.6`, stated once in [`tree/pyproject.toml`](tree/pyproject.toml)
+and derived from a measured table rather than typed) is a hard floor and a hard
+ceiling, and pip resolves it for you. `tree/README.md` carries the full matrix.
 
 ---
 
@@ -89,7 +89,7 @@ verdict for each divergence in
 [`tree/docs/declared-divergences.md`](tree/docs/declared-divergences.md). It
 reaches two of the three. The theta drift is not one of them: rain gauges and
 airport thermometers do not measure the stratosphere, and the profile referee
-that would settle it is still open work, tracked in [`STATE.md`](STATE.md).
+that would settle it is still open work.
 
 ---
 
@@ -161,8 +161,7 @@ The pin has two further legs that no repository can carry:
   wants `tree/oracle/jw-x1.2562-v8.4.1-split3-endpoint-nonclaim`, six files
   pinned by SHA-256. That directory is not in this checkout.
 
-Both are stated in [`STATE.md`](STATE.md) as unverified-here rather than
-implied to be green.
+Both are stated here as unverified-here rather than implied to be green.
 
 ---
 
@@ -172,9 +171,7 @@ implied to be green.
 LICENSE          Apache-2.0
 NOTICE           MPAS-Atmosphere BSD-3-Clause verbatim + the derivative marking
 README.md        this page
-STATE.md         open items, carried forward with their measurements
-.github/         ci.yml, the battery; publish.yml, release-triggered only
-vtables/         authored RW-WPS Vtables (see tree/docs/source-matrix.md)
+.github/         the battery workflow (no publish job, deliberately)
 tree/            the gpuwm-hex distribution
   src/hexcore/     the port itself (`import hexcore`; `mpas_port` through 0.1.1)
   tools/           harnesses, proof guards, comparators

@@ -31,6 +31,7 @@ from typing import Any
 
 import numpy as np
 
+from .species_row import WSM6_SPECIES_ROW, species_row_for_names
 from .cuda_backend.containers import TransferStats, require_resident_array
 from .cuda_backend.runtime import KernelCache
 from .cuda_fp32 import CUDA_FTZ_HELPERS
@@ -46,19 +47,35 @@ MPAS_VECTOR_RECONSTRUCTION_V841_SHA256 = (
 MPAS_NOAHMP_SOUNDING_V841_SHA256 = (
     "000a926306737d78e29f997ca972f87fe5d55bc500281f4379b8114112b11929"
 )
-WSM6_SCALAR_NAMES = ("qv", "qc", "qr", "qi", "qs", "qg")
+#: The frozen lane's species, taken from the row rather than restated.  The
+#: tuple is unchanged in content and order; what changed is that it now has
+#: ONE definition in the tree (hexcore.species_row) instead of three.
+WSM6_SCALAR_NAMES = WSM6_SPECIES_ROW.names()
 GRAVITY_F32 = np.float32(9.80616)
 RD_F32 = np.float32(287.0)
 RV_F32 = np.float32(461.6)
 RV_OVER_RD_F32 = np.float32(RV_F32 / RD_F32)
 
-_AUTHORITY_DOCUMENT = {
+def _authority_document(species_names: Sequence[str]) -> dict:
+    """The preparation contract for ONE species row.
+
+    The document is generated from the row rather than restating it, and the
+    two species-bearing entries -- the scalar-input layout and the water
+    scratch's names -- are the only places the row appears.  The WSM6 row
+    regenerates today's document BYTE FOR BYTE, which is asserted below, so
+    the frozen lane's contract digest does not move and its receipts are
+    unchanged; a different row simply gets its own digest.
+    """
+
+    names = tuple(species_names)
+    return {
     "schema": CUDA_PHYSICS_PREP_V841_SCHEMA,
     "mpas_version": "8.4.1",
     "layout": {
         "mass": "float32 C [level,cell]",
         "interface": "float32 C [interface,cell]",
-        "scalar_input": "float32 C [qv,qc,qr,qi,qs,qg,level,cell]",
+        "scalar_input": (
+            "float32 C [" + ",".join(names) + ",level,cell]"),
         "vertical_order": "surface_to_top",
     },
     "cuda_authority": {
@@ -100,7 +117,7 @@ _AUTHORITY_DOCUMENT = {
         "hydrostatic_dry_surface": "psfc_hydd_p",
     },
     "water_scratch": {
-        "names": list(WSM6_SCALAR_NAMES),
+        "names": list(names),
         "operation": "bitwise max(+0,q), preserving positive subnormals",
         "mutates_prognostic_input": False,
     },
@@ -120,11 +137,37 @@ _AUTHORITY_DOCUMENT = {
     },
 }
 
-CUDA_PHYSICS_PREP_V841_CONTRACT_SHA256 = sha256(
-    json.dumps(_AUTHORITY_DOCUMENT, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
+
+def _contract_sha256(species_names: Sequence[str]) -> str:
+    """This preparation contract's digest for one row."""
+
+    return sha256(
+        json.dumps(
+            _authority_document(species_names),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+_AUTHORITY_DOCUMENT = _authority_document(WSM6_SCALAR_NAMES)
+
+CUDA_PHYSICS_PREP_V841_CONTRACT_SHA256 = _contract_sha256(WSM6_SCALAR_NAMES)
+
+#: The digest this contract carried before the row generalization, measured
+#: at 6652552.  The generator is faithful or this module refuses to import:
+#: WSM6's document has not moved a byte, so its receipts and every pin that
+#: quotes them are unchanged.
+_FROZEN_WSM6_CONTRACT_SHA256 = (
+    "a9436205305c4127dc38399288ad47839dc797d0c786e1118e9e800cc7223c1d"
+)
+if CUDA_PHYSICS_PREP_V841_CONTRACT_SHA256 != _FROZEN_WSM6_CONTRACT_SHA256:
+    raise AssertionError(
+        "the species-row generator no longer reproduces the frozen WSM6 "
+        "preparation contract: "
+        f"{CUDA_PHYSICS_PREP_V841_CONTRACT_SHA256} != "
+        f"{_FROZEN_WSM6_CONTRACT_SHA256}"
     )
-).hexdigest()
 CUDA_PHYSICS_PREP_V841_EVIDENCE: Mapping[str, Any] = MappingProxyType(
     _AUTHORITY_DOCUMENT
 )
@@ -465,13 +508,11 @@ class CudaMpasToPhysGeometryV841:
         }
 
 
-_MASS_FIELDS = (
-    "qv_p",
-    "qc_p",
-    "qr_p",
-    "qi_p",
-    "qs_p",
-    "qg_p",
+#: The mass-level outputs that are NOT species.  The species outputs are
+#: named by the scheme's row and prepended by ``_mass_fields``, so this
+#: tuple no longer grows when a scheme with more scalars arrives -- which
+#: is what "arbitrary" has to mean at this layer.
+_MASS_NONSPECIES_FIELDS = (
     "u_p",
     "v_p",
     "zz_p",
@@ -488,6 +529,32 @@ _MASS_FIELDS = (
     "znu_p",
     "znu_hyd_p",
 )
+
+
+def _device_pointer_table(cp: Any, arrays: Sequence[Any]) -> Any:
+    """A resident table of device pointers, one per array, in order.
+
+    This is what replaces the six welded kernel parameters.  The arrays must
+    stay alive for the launch; every caller here holds them in ``output``
+    for the whole body, so the table can never outlive its targets.
+    """
+
+    if not arrays:
+        raise ValueError("a pointer table needs at least one array")
+    return cp.asarray(
+        np.asarray([int(item.data.ptr) for item in arrays], dtype=np.uint64)
+    )
+
+
+def _mass_fields(species_names: Sequence[str]) -> tuple[str, ...]:
+    """Every mass-level output name for a row: species first, then the 15."""
+
+    return tuple(f"{name}_p" for name in species_names) + _MASS_NONSPECIES_FIELDS
+
+
+#: The frozen lane's list, unchanged in content and order from the constant
+#: this replaced, so a reader diffing the two sees no reordering.
+_MASS_FIELDS = _mass_fields(WSM6_SCALAR_NAMES)
 _INTERFACE_FIELDS = (
     "w_p",
     "z_p",
@@ -545,20 +612,26 @@ class CudaWsm6InputViewV841:
     dz: Any
     z: Any
     w: Any
-    qv: Any
-    qc: Any
-    qr: Any
-    qi: Any
-    qs: Any
-    qg: Any
+    #: Per-species dry-preparation aliases, keyed by the row's names.
+    species: Mapping[str, Any]
 
+
+    def __getattr__(self, name: str) -> Any:
+        """A species name still resolves as an attribute."""
+
+        species = object.__getattribute__(self, "species")
+        value = species.get(name)
+        if value is not None:
+            return value
+        raise AttributeError(
+            f"{type(self).__name__!r} has no attribute {name!r}")
     def validate(self) -> None:
         shape = tuple(self.rho_dry.shape)
         if len(shape) != 2 or shape[0] < 2 or shape[1] <= 0:
             raise ValueError("WSM6 view must be [level,cell]")
         for name in (
             "rho_dry", "theta_dry", "exner", "p_eos", "dz", "z", "w",
-            *WSM6_SCALAR_NAMES,
+            *self.species,
         ):
             require_resident_array(
                 f"wsm6_input.{name}",
@@ -583,12 +656,10 @@ class CudaWsm6InputViewV841:
 class CudaMpasToPhysColumnsV841:
     """Resident output using the exact native MPAS physics field names."""
 
-    qv_p: Any
-    qc_p: Any
-    qr_p: Any
-    qi_p: Any
-    qs_p: Any
-    qg_p: Any
+    #: Per-species clamped scratch, keyed by the row's names IN ROW ORDER.
+    #: This replaced six literal ``q*_p`` fields; ``__getattr__`` keeps the
+    #: old spelling working for every existing reader.
+    species_p: Mapping[str, Any]
     u_p: Any
     v_p: Any
     zz_p: Any
@@ -620,6 +691,23 @@ class CudaMpasToPhysColumnsV841:
     time_seconds: float
     validation_d2h: TransferStats
     geometry_receipt: Mapping[str, Any]
+
+    def __getattr__(self, name: str) -> Any:
+        """``<species>_p`` still resolves, whatever the row declares.
+
+        The six welded fields became one ordered mapping, and every existing
+        reader -- the GWDO adapter's ``prepared.qv_p``, the sealed adapter's
+        six -- keeps working without knowing that.  A name the row does not
+        declare raises AttributeError, so a typo is still a typo.
+        """
+
+        if name.endswith("_p"):
+            species = object.__getattribute__(self, "species_p")
+            value = species.get(name[:-2])
+            if value is not None:
+                return value
+        raise AttributeError(
+            f"{type(self).__name__!r} has no attribute {name!r}")
 
     @property
     def contract_sha256(self) -> str:
@@ -674,7 +762,7 @@ class CudaMpasToPhysColumnsV841:
     @property
     def scalar_scratch(self) -> Mapping[str, Any]:
         return MappingProxyType(
-            {name: getattr(self, f"{name}_p") for name in WSM6_SCALAR_NAMES}
+            dict(self.species_p)
         )
 
     def wsm6_input_view(self) -> CudaWsm6InputViewV841:
@@ -692,9 +780,9 @@ class CudaMpasToPhysColumnsV841:
             dz=self.dz_p,
             z=self.z_p[:-1],
             w=self.w_p[:-1],
-            **{
+            species={
                 name: self._source_scalars[index]
-                for index, name in enumerate(WSM6_SCALAR_NAMES)
+                for index, name in enumerate(self.species_p)
             },
         )
         result.validate()
@@ -714,7 +802,7 @@ class CudaMpasToPhysColumnsV841:
         nlev, ncells = tuple(self.rho_p.shape)
         if nlev < 2 or ncells <= 0:
             raise ValueError("prepared physics columns need at least two levels")
-        for name in _MASS_FIELDS:
+        for name in _mass_fields(self.species_p):
             require_resident_array(
                 f"physics_prep.{name}",
                 getattr(self, name),
@@ -739,7 +827,7 @@ class CudaMpasToPhysColumnsV841:
             "physics_prep.source_scalars",
             self._source_scalars,
             dtype=np.float32,
-            shape=(6, nlev, ncells),
+            shape=(len(self.species_p), nlev, ncells),
         )
         self.noahmp_sounding.validate(n_vert_levels=nlev, n_cells=ncells)
         if not isinstance(self.wsm6_ready, bool):
@@ -829,25 +917,30 @@ class CpuWsm6InputViewV841:
     dz: np.ndarray
     z: np.ndarray
     w: np.ndarray
-    qv: np.ndarray
-    qc: np.ndarray
-    qr: np.ndarray
-    qi: np.ndarray
-    qs: np.ndarray
-    qg: np.ndarray
+    species: Mapping[str, np.ndarray]
 
+
+    def __getattr__(self, name: str) -> Any:
+        """A species name still resolves as an attribute."""
+
+        species = object.__getattribute__(self, "species")
+        value = species.get(name)
+        if value is not None:
+            return value
+        raise AttributeError(
+            f"{type(self).__name__!r} has no attribute {name!r}")
     def validate(self) -> None:
         shape = self.rho_dry.shape
         for name in (
             "rho_dry", "theta_dry", "exner", "p_eos", "dz", "z", "w",
-            *WSM6_SCALAR_NAMES,
+            *self.species,
         ):
             value = getattr(self, name)
             if value.shape != shape or value.dtype != np.float32:
                 raise ValueError(f"WSM6 {name} must be FP32 {shape}")
             if not value.flags.c_contiguous or not np.all(np.isfinite(value)):
                 raise ValueError(f"WSM6 {name} must be finite and C-contiguous")
-        for name in WSM6_SCALAR_NAMES:
+        for name in self.species:
             bits = getattr(self, name).view(np.uint32)
             negative_nonzero = (
                 ((bits & np.uint32(0x80000000)) != 0)
@@ -863,12 +956,7 @@ class CpuWsm6InputViewV841:
 class CpuMpasToPhysColumnsV841:
     """Binary32 source-loop oracle with the same native field inventory."""
 
-    qv_p: np.ndarray
-    qc_p: np.ndarray
-    qr_p: np.ndarray
-    qi_p: np.ndarray
-    qs_p: np.ndarray
-    qg_p: np.ndarray
+    species_p: Mapping[str, np.ndarray]
     u_p: np.ndarray
     v_p: np.ndarray
     zz_p: np.ndarray
@@ -896,6 +984,23 @@ class CpuMpasToPhysColumnsV841:
     plrad: np.ndarray
     noahmp_sounding: CpuNoahmpSoundingV841
     _source_scalars: np.ndarray = field(repr=False, compare=False)
+
+    def __getattr__(self, name: str) -> Any:
+        """``<species>_p`` still resolves, whatever the row declares.
+
+        The six welded fields became one ordered mapping, and every existing
+        reader -- the GWDO adapter's ``prepared.qv_p``, the sealed adapter's
+        six -- keeps working without knowing that.  A name the row does not
+        declare raises AttributeError, so a typo is still a typo.
+        """
+
+        if name.endswith("_p"):
+            species = object.__getattribute__(self, "species_p")
+            value = species.get(name[:-2])
+            if value is not None:
+                return value
+        raise AttributeError(
+            f"{type(self).__name__!r} has no attribute {name!r}")
 
     @property
     def p_eos(self) -> np.ndarray:
@@ -944,7 +1049,7 @@ class CpuMpasToPhysColumnsV841:
     @property
     def scalar_scratch(self) -> Mapping[str, np.ndarray]:
         return MappingProxyType(
-            {name: getattr(self, f"{name}_p") for name in WSM6_SCALAR_NAMES}
+            dict(self.species_p)
         )
 
     def wsm6_input_view(self) -> CpuWsm6InputViewV841:
@@ -958,7 +1063,7 @@ class CpuMpasToPhysColumnsV841:
             w=np.ascontiguousarray(self.w_p[:-1]),
             **{
                 name: np.ascontiguousarray(self._source_scalars[index])
-                for index, name in enumerate(WSM6_SCALAR_NAMES)
+                for index, name in enumerate(self.species_p)
             },
         )
         result.validate()
@@ -966,7 +1071,7 @@ class CpuMpasToPhysColumnsV841:
 
     def validate(self) -> None:
         nlev, ncells = self.rho_p.shape
-        for name in _MASS_FIELDS:
+        for name in _mass_fields(self.species_p):
             value = getattr(self, name)
             if value.shape != (nlev, ncells) or value.dtype != np.float32:
                 raise ValueError(f"{name} is not FP32 [level,cell]")
@@ -984,12 +1089,14 @@ class CpuMpasToPhysColumnsV841:
                 raise ValueError(f"{name} is not an FP32 column vector")
             if not value.flags.c_contiguous or not np.all(np.isfinite(value)):
                 raise ValueError(f"{name} must be finite and C-contiguous")
-        if self._source_scalars.shape != (6, nlev, ncells):
-            raise ValueError("source scalars must retain exact WSM6 layout")
+        if self._source_scalars.shape != (
+                len(self.species_p), nlev, ncells):
+            raise ValueError(
+                "source scalars must retain the declared row's layout")
         if self._source_scalars.dtype != np.float32 or not self._source_scalars.flags.c_contiguous:
             raise ValueError("source scalars must remain FP32 C-contiguous")
         self.noahmp_sounding.validate()
-        for index, name in enumerate(WSM6_SCALAR_NAMES):
+        for index, name in enumerate(self.species_p):
             value = getattr(self, f"{name}_p")
             source_bits = self._source_scalars[index].view(np.uint32)
             expected_bits = np.where(
@@ -1319,8 +1426,9 @@ def prepare_mpas_to_phys_cpu_oracle_v841(
     """Readable FP32 oracle that follows the released loops and assignments."""
 
     names = tuple(str(name).strip().lower() for name in scalar_names)
-    if names != WSM6_SCALAR_NAMES:
-        raise ValueError(f"scalar_names must be exactly {WSM6_SCALAR_NAMES}")
+    # The oracle follows whatever row it is given, and refuses one nobody
+    # declared -- the same rule the device path applies.
+    species_row_for_names(names)
     density = np.asarray(rho_zz)
     if density.dtype != np.float32 or density.ndim != 2:
         raise TypeError("rho_zz must be FP32 [level,cell]")
@@ -1338,14 +1446,14 @@ def prepare_mpas_to_phys_cpu_oracle_v841(
     heights = _require_cpu_f32("zgrid", zgrid, interface_shape)
     metric = _require_cpu_f32("zz", zz, shape)
     scalar_input = _require_cpu_f32(
-        "scalars", scalars, (len(WSM6_SCALAR_NAMES), nlev, ncells)
+        "scalars", scalars, (len(names), nlev, ncells)
     )
     if np.any(np.diff(heights, axis=0) <= np.float32(0.0)):
         raise ValueError("zgrid vertical order must be surface_to_top")
     if np.any(density <= np.float32(0.0)) or np.any(theta <= np.float32(0.0)):
         raise ValueError("rho_zz and theta_m must be positive")
 
-    q_fields = [np.empty(shape, dtype=np.float32) for _ in WSM6_SCALAR_NAMES]
+    q_fields = [np.empty(shape, dtype=np.float32) for _ in names]
     u_p, v_p = reconstruct_winds_cpu_oracle_v841(
         normal_velocity,
         edges_on_cell=edges_on_cell,
@@ -1367,7 +1475,7 @@ def prepare_mpas_to_phys_cpu_oracle_v841(
     dz_p = np.empty(shape, dtype=np.float32)
     for level in range(nlev):
         for cell in range(ncells):
-            for scalar_index in range(len(WSM6_SCALAR_NAMES)):
+            for scalar_index in range(len(names)):
                 q_fields[scalar_index][level, cell] = _positive_q(
                     scalar_input[scalar_index, level, cell]
                 )
@@ -1529,12 +1637,9 @@ def prepare_mpas_to_phys_cpu_oracle_v841(
         v=v_p,
     )
     result = CpuMpasToPhysColumnsV841(
-        qv_p=q_fields[0],
-        qc_p=q_fields[1],
-        qr_p=q_fields[2],
-        qi_p=q_fields[3],
-        qs_p=q_fields[4],
-        qg_p=q_fields[5],
+        species_p={
+            name: q_fields[index] for index, name in enumerate(names)
+        },
         u_p=u_p,
         v_p=v_p,
         zz_p=zz_p,
@@ -1594,26 +1699,30 @@ __device__ __forceinline__ bool prep_negative_nonzero_bits_v841(
 }
 
 extern "C" __global__ void prep_mass_v841_f32(
-    const int nlev, const int ncells, const float rvord,
+    const int nlev, const int ncells, const int nspecies, const float rvord,
     const float *rho_zz, const float *theta_m, const float *scalars,
     const float *exner, const float *pressure_base, const float *pressure_p,
-    const float *zgrid, const float *zz, float *qv_p, float *qc_p,
-    float *qr_p, float *qi_p, float *qs_p, float *qg_p, float *zz_p,
+    const float *zgrid, const float *zz, float *const *qout, float *zz_p,
     float *rho_dry, float *rho_p, float *th_p, float *t_p, float *pi_p,
     float *pres_p, float *zmid_p, float *dz_p, int *invalid)
 {
     const int cell = blockDim.x * blockIdx.x + threadIdx.x;
     if (cell >= ncells) return;
     const int plane = nlev * ncells;
-    float *qout[6] = {qv_p, qc_p, qr_p, qi_p, qs_p, qg_p};
+    // qout is a DEVICE table of per-species output pointers, sized by the
+    // scheme's species row, in the row's order.  It replaces six welded
+    // parameters; the arithmetic below is unchanged, which is what the
+    // WSM6 byte-identity arm measures.  Slot 0 is water vapour by the row's
+    // own invariant -- the moist density, the dry-theta conversion, the
+    // NoahMP sounding and the interface extrapolation all read it.
     for (int k = 0; k < nlev; ++k) {
         const int i = k * ncells + cell;
-        for (int s = 0; s < 6; ++s) {
+        for (int s = 0; s < nspecies; ++s) {
             const float raw = scalars[s * plane + i];
             if (!prep_finite_bits_v841(raw)) atomicExch(invalid, 1);
             qout[s][i] = prep_positive_q_v841(raw);
         }
-        const float qv = qv_p[i];
+        const float qv = qout[0][i];
         zz_p[i] = zz[i];
         const float dry_rho = mpas_mul(zz[i], rho_zz[i]);
         rho_dry[i] = dry_rho;
@@ -1894,9 +2003,8 @@ extern "C" __global__ void validate_prep_v841_f32(
     const float *coeffs_reconstruct, const float *lat_cell,
     const float *lon_cell, const float *source_scalars,
     const float *source_theta_m, const float *source_exner,
-    const float *qv_p, const float *qc_p,
-    const float *qr_p, const float *qi_p, const float *qs_p,
-    const float *qg_p, const float *u_p, const float *v_p,
+    const int nspecies, const float *const *qspecies,
+    const float *u_p, const float *v_p,
     const float *zz_p, const float *rho_dry, const float *rho_p,
     const float *th_p, const float *t_p, const float *pi_p,
     const float *pres_p, const float *zmid_p, const float *dz_p,
@@ -1930,18 +2038,21 @@ extern "C" __global__ void validate_prep_v841_f32(
             atomicExch(invalid, 1);
         }
     }
-    const float *mass[21] = {
-        qv_p, qc_p, qr_p, qi_p, qs_p, qg_p, u_p, v_p, zz_p,
+    // The 15 non-species mass-level fields.  The species are checked from
+    // qspecies, whose length is the row's, so this table no longer grows
+    // with the scheme.
+    const float *mass[15] = {
+        u_p, v_p, zz_p,
         rho_dry, rho_p, th_p, t_p, pi_p, pres_p, zmid_p, dz_p,
         pres_hyd_p, pres_hydd_p, znu_p, znu_hyd_p};
-    const float *scratch[6] = {qv_p, qc_p, qr_p, qi_p, qs_p, qg_p};
     for (int k = 0; k < nlev; ++k) {
         const int i = k * ncells + cell;
-        for (int f = 0; f < 21; ++f)
+        for (int f = 0; f < 15; ++f)
             if (!isfinite(mass[f][i])) atomicExch(invalid, 1);
-        for (int q = 0; q < 6; ++q) {
+        for (int q = 0; q < nspecies; ++q) {
+            if (!isfinite(qspecies[q][i])) atomicExch(invalid, 1);
             const float raw = source_scalars[q * plane + i];
-            const float value = scratch[q][i];
+            const float value = qspecies[q][i];
             const unsigned int expected = prep_positive_q_bits_v841(raw);
             if (!prep_finite_bits_v841(raw)
                     || __float_as_uint(value) != expected)
@@ -1952,10 +2063,10 @@ extern "C" __global__ void validate_prep_v841_f32(
                 atomicExch(invalid, 1);
         }
         const float expected_rho = mpas_mul(
-            rho_dry[i], mpas_add(1.0f, qv_p[i]));
+            rho_dry[i], mpas_add(1.0f, qspecies[0][i]));
         const float expected_theta = mpas_div(
             source_theta_m[i],
-            mpas_add(1.0f, mpas_mul(rvord, qv_p[i])));
+            mpas_add(1.0f, mpas_mul(rvord, qspecies[0][i])));
         const float expected_temp = mpas_mul(expected_theta, source_exner[i]);
         const float expected_noah_temp = mpas_mul(
             mpas_div(
@@ -2088,7 +2199,7 @@ extern "C" __global__ void validate_prep_v841_f32(
     for (int k = nlev - 1; k >= 0; --k) {
         const int i = k * ncells + cell;
         const float rho_a = mpas_div(
-            rho_p[i], mpas_add(1.0f, qv_p[i]));
+            rho_p[i], mpas_add(1.0f, qspecies[0][i]));
         const float expected_p2_hyd = mpas_add(
             pres2_hyd_p[i + ncells],
             mpas_mul(mpas_mul(gravity, rho_p[i]), dz_p[i]));
@@ -2175,12 +2286,22 @@ def _launch(cache: KernelCache, name: str, count: int, args: tuple[Any, ...]) ->
 
 
 def _validate_scalar_names(names: Sequence[str], count: int) -> tuple[str, ...]:
+    """The block's names must be a DECLARED row, in that row's order.
+
+    This replaced a refusal that admitted exactly WSM6's six.  It still
+    refuses a block nobody declared -- which is the state substitution the
+    old text was guarding against -- but it now asks the species-row table
+    rather than one hardcoded tuple, so a scheme with a different inventory
+    is admitted on its own declaration instead of being impossible.
+    """
+
     result = tuple(str(name).strip().lower() for name in names)
-    if count != 6 or result != WSM6_SCALAR_NAMES:
+    if count != len(result):
         raise ValueError(
-            f"resident physics preparation requires scalar order {WSM6_SCALAR_NAMES}, "
-            f"got {result}"
+            f"resident physics preparation was given {count} scalar slots "
+            f"and {len(result)} names {result}"
         )
+    species_row_for_names(result)
     return result
 
 
@@ -2277,7 +2398,8 @@ def prepare_mpas_to_phys_cuda_v841(
             "preparation geometry/state mismatch: "
             f"state={(ncells, nedges)}, geometry={(geometry.n_cells, geometry.n_edges)}"
         )
-    _validate_scalar_names(scalar_names, int(state.scalars.shape[0]))
+    species_names = _validate_scalar_names(
+        scalar_names, int(state.scalars.shape[0]))
 
     mass_shape = (nlev, ncells)
     interface_shape = (nlev + 1, ncells)
@@ -2286,7 +2408,7 @@ def prepare_mpas_to_phys_cuda_v841(
         "state.scalars",
         state.scalars,
         dtype=np.float32,
-        shape=(6, nlev, ncells),
+        shape=(len(species_names), nlev, ncells),
     )
     for name, value in (
         ("saved.theta_m", saved.theta_m),
@@ -2313,7 +2435,8 @@ def prepare_mpas_to_phys_cuda_v841(
     )
 
     output: dict[str, Any] = {
-        name: cp.empty(mass_shape, dtype=cp.float32) for name in _MASS_FIELDS
+        name: cp.empty(mass_shape, dtype=cp.float32)
+        for name in _mass_fields(species_names)
     }
     output.update(
         {name: cp.empty(interface_shape, dtype=cp.float32) for name in _INTERFACE_FIELDS}
@@ -2436,6 +2559,11 @@ def _prepare_mpas_to_phys_body_v841(
 ) -> CudaMpasToPhysColumnsV841:
     """The launches themselves, split out so the lend above owns a finally."""
 
+    species_names = tuple(scalar_names)
+    species_outputs = frozenset(f"{name}_p" for name in species_names)
+    species_arrays = [output[f"{name}_p"] for name in species_names]
+    species_table = _device_pointer_table(cp, species_arrays)
+
     _launch(
         kernel_cache,
         "prep_mass_v841_f32",
@@ -2443,6 +2571,7 @@ def _prepare_mpas_to_phys_body_v841(
         (
             np.int32(nlev),
             np.int32(ncells),
+            np.int32(len(species_names)),
             RV_OVER_RD_F32,
             state.rho,
             saved.theta_m,
@@ -2452,12 +2581,7 @@ def _prepare_mpas_to_phys_body_v841(
             saved.pressure_perturbation,
             vertical.zgrid,
             vertical.zz,
-            output["qv_p"],
-            output["qc_p"],
-            output["qr_p"],
-            output["qi_p"],
-            output["qs_p"],
-            output["qg_p"],
+            species_table,
             output["zz_p"],
             output["rho_dry"],
             output["rho_p"],
@@ -2603,7 +2727,9 @@ def _prepare_mpas_to_phys_body_v841(
             state.scalars,
             saved.theta_m,
             saved.exner,
-            *(output[name] for name in _MASS_FIELDS),
+            np.int32(len(species_names)),
+            species_table,
+            *(output[name] for name in _MASS_NONSPECIES_FIELDS),
             *(output[name] for name in _INTERFACE_FIELDS),
             *(output[name] for name in _SURFACE_FIELDS),
             *(noahmp_output[name] for name in (
@@ -2634,7 +2760,13 @@ def _prepare_mpas_to_phys_body_v841(
             )
         )
     result = CudaMpasToPhysColumnsV841(
-        **output,
+        species_p={
+            name: output[f"{name}_p"] for name in species_names
+        },
+        **{
+            name: value for name, value in output.items()
+            if name not in species_outputs
+        },
         noahmp_sounding=CudaNoahmpSoundingV841(**noahmp_output),
         wsm6_ready=post_rk_wsm6,
         _source_scalars=state.scalars,

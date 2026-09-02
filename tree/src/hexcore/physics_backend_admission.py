@@ -146,6 +146,84 @@ class PhysicsBackendRow:
             f"{self.anchor_configuration_class!r}",
         )
 
+    def build_column_backend(
+        self,
+        *,
+        constructor: Any,
+        prep_geometry: Any,
+        kernel_cache: Any,
+        gwdo_static: Any = None,
+        gwdo_kernel_cache: Any = None,
+        checkout: Any = None,
+        cell_area_m2: Any = None,
+        seam_options: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Construct this row's column-physics backend -- ONE call site for
+        every row.
+
+        A provider publishes ``build_column_backend(row, **kwargs)`` on its
+        adapter module and receives everything, the per-column cell area
+        and the seam options included.  The frozen adapter publishes its
+        class instead, and a row naming it constructs that class with the
+        production keyword set alone: the frozen batch weighs nothing by
+        cell area and carries no point source, so either extra is refused
+        by name rather than accepted and never read.
+        """
+
+        module = self.load_adapter()
+        builder = getattr(module, "build_column_backend", None)
+        base = {
+            "constructor": constructor,
+            "prep_geometry": prep_geometry,
+            "kernel_cache": kernel_cache,
+            "gwdo_static": gwdo_static,
+            "gwdo_kernel_cache": gwdo_kernel_cache,
+        }
+        if builder is not None:
+            return builder(
+                self,
+                **base,
+                checkout=checkout,
+                cell_area_m2=cell_area_m2,
+                seam_options=seam_options,
+            )
+        extras = [
+            name
+            for name, value in (
+                ("cell_area_m2", cell_area_m2),
+                ("seam_options", seam_options),
+            )
+            if value is not None and (name != "seam_options" or len(value))
+        ]
+        if extras:
+            raise ConfigurationRefusal(
+                "physics_backend",
+                self.name,
+                (
+                    f"row {self.name!r} binds the frozen column batch, which "
+                    "weighs nothing by cell area and carries no point "
+                    f"source; {extras} would be accepted and never read, "
+                    "which is configuration the run does not have.  A "
+                    "point source selects a seeded row"
+                ),
+                f"a row whose adapter publishes build_column_backend, or no {extras}",
+            )
+        cls = getattr(module, "PersistentTwoPhaseCudaPhysicsBackendV841", None)
+        if cls is None:
+            raise ConfigurationRefusal(
+                "physics_backend",
+                self.name,
+                (
+                    f"row {self.name!r} names adapter module "
+                    f"{self.adapter_module!r}, which publishes neither "
+                    "build_column_backend nor "
+                    "PersistentTwoPhaseCudaPhysicsBackendV841; there is "
+                    "nothing to construct"
+                ),
+                "an adapter module publishing one of the two",
+            )
+        return cls(**base, arwen_checkout=checkout)
+
     def load_adapter(self):
         """Import this row's adapter module, or refuse by name."""
 

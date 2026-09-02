@@ -69,7 +69,7 @@ ARWEN_CONTRACT_DOCUMENT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
 ARWEN_CONTRACT_SURFACE_SHA256 = (
-    "3b45dd0c00ea61dc66eded1d79ba1999af95cee71a8a4c439cc49adb89d2cf79"
+    "45de852c6f8a8951d7e3f65b2b1e64462cf213d50707db4e52cb7eba17491ff2"
 )
 ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
     "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -237,13 +237,13 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # dycore state is not touched, because real elements gather its pool
     # values.  Every affected proof re-runs against this digest.
     "src/hexcore/cuda_physics_prep_v841.py": (
-        "0e8df0fa4c58df44d887aa5fe8aaf722da2273df6a900feb4de31f06d575fe60"
+        "3bd2d6a1a0217f4a91c70f0179e9dfebe210426a4f3ab6e0d48b6e29a7855f72"
     ),
     "src/hexcore/cuda_gwdo_v841.py": (
         "5b9dd5980e33d7a0b1760281bc1553c93fa5f4c4395f7b107c8d61dabe1b9f23"
     ),
     "src/hexcore/cuda_physics_v841.py": (
-        "c7ddcb52d879d4aa6ba8d9474aa73d77aaf3cfb94ee3137ba7413328fdd5e666"
+        "fed89ae26008b48a305f75af4db24c215cf5952d0ae28c67bbd05a5b925a569b"
     ),
     # Re-frozen during the 12 GiB capacity work: the dynamics subcycle stopped
     # copying a scalar block nothing writes, stopped taking a private image of
@@ -323,7 +323,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
     "src/hexcore/cuda_driver.py": (
-        "e6f51ea11e68f87ed011b61432a7178ef507ce6a518e834a115127ca1687694c"
+        "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb"
     ),
     # THE BREAKAGE THIS PREVENTS: the same lane that re-froze cuda_driver.py
     # also changed ``recover_state`` -- it gained ``include_pressure`` and
@@ -380,7 +380,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
     "src/hexcore/config_v841.py": (
-        "4e18842d7757db8de2a511fc78b9a650070d42b7a360838179b1d4b7df202367"
+        "fdbb45990de9b4e77cbb1987e2b960554764d4c5f2a43dd7a28470e7502a8fc0"
     ),
     # New pin (convection ruling, 2026-08-26): the frozen config ADMITS
     # config_convection_scheme from this module and the frozen timestep
@@ -519,7 +519,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # that tip.  Only the digest moved; no behaviour in this module changed
     # beyond the manifest constants the repin deliberately rewrote.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "7d31ff98b18016f965c48682371c1f05d3e883b7e35740175de83e4bb8902f4f"
+        "abf930c9eb34d4a2aaad79721c1db8dc8cfaec01f2c372fc54503e23f44745cb"
     ),
     # The v8.4.1 horizontal-mixing execution boundary (2-D Smagorinsky):
     # CPU authorities and the CUDA operator modules the RK1 saved-Euler
@@ -626,7 +626,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "a9436205305c4127dc38399288ad47839dc797d0c786e1118e9e800cc7223c1d"
         ),
         "prep_kernel_sha256": (
-            "8cf7ca0deb5ebe77baf00889a1c0de6a579a26ccb9c52a9d2ecb27bf544fc7c5"
+            "e5c5ebba387db8a8f82b2d0233ed3f9b336269d7e8b3dfbde746a56a14924710"
         ),
         "gwdo_contract_sha256": (
             "f3c92686b2b0f86b7076e10bd261a7897ef42b3ebd7f7a60789e2b8ee95e96ef"
@@ -638,10 +638,10 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "332899f64a24b45fc93a686ce056a674a4bd07a26d635447d0aff884ce13d001"
         ),
         "coupling_kernel_sha256": (
-            "a440ee6fca12841f0959e87eb7772acc3d15ff3a7790f71fcf8fe6581c2308f4"
+            "af9044f687dc9d50d66b035eba84373643218c55fb1872e0aeb7c523321c2365"
         ),
         "adapter_contract_sha256": (
-            "de203082d26c6ec14bc8096795a810f49107bda7c9dbf3c86db41c9504cb4d44"
+            "fea4fa9ac21b60ef52a9b07340f881de7727ef038c412faa1a94651ae50a1fde"
         ),
         "arwen_contract_surface_sha256": ARWEN_CONTRACT_SURFACE_SHA256,
         "arwen_glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
@@ -1256,6 +1256,57 @@ def negative_qv_fingerprint(logical_qv: Any) -> dict[str, Any]:
         "negative_count": int(values.size),
         "negative_indices_sha256": hashlib.sha256(negative.tobytes(order="C")).hexdigest(),
         "negative_values_sha256": hashlib.sha256(values.tobytes(order="C")).hexdigest(),
+    }
+
+
+def augment_cold_scalars(state: Any, scalar_names: Sequence[str]) -> dict[str, Any]:
+    """Append native-cold +0 FP32 planes for every species of the ROW beyond
+    the init's qv/qc/qr, without touching qv/qc/qr.
+
+    The row-generic form of :func:`augment_exact_wsm6_scalars`: the init
+    carries exactly the three source species for every row this port
+    admits, and every other species the row declares -- ice classes, number
+    moments, rime carriers, a lane's declared extras -- starts at exact
+    +0 FP32, which is the native cold start.  A row whose leading three are
+    not the source three is refused: the init's block would be read under
+    the wrong names.
+    """
+
+    names = tuple(str(name) for name in scalar_names)
+    if names[: len(SOURCE_SCALAR_NAMES)] != SOURCE_SCALAR_NAMES:
+        raise ValueError(
+            f"the row's leading species {names[:3]} are not the init's "
+            f"source species {SOURCE_SCALAR_NAMES}; the cold-start "
+            "augmentation would read the init's block under the wrong names"
+        )
+    cold_names = names[len(SOURCE_SCALAR_NAMES):]
+    source = np.asarray(state.scalars)
+    expected = (len(SOURCE_SCALAR_NAMES), N_LEVELS, N_CELLS)
+    if source.dtype != np.dtype(np.float32) or source.shape != expected:
+        raise TypeError(f"source qv/qc/qr must be FP32 {expected}, got {source.dtype} {source.shape}")
+    if not np.all(np.isfinite(source)):
+        raise FloatingPointError("source qv/qc/qr contains non-finite values")
+    source_hashes = {
+        name: array_sha256(source[index]) for index, name in enumerate(SOURCE_SCALAR_NAMES)
+    }
+    qv_fingerprint = negative_qv_fingerprint(source[0])
+    cold = np.zeros((len(cold_names), N_LEVELS, N_CELLS), dtype=np.float32, order="C")
+    if cold.size and np.any(cold.view(np.uint32) != np.uint32(0)):
+        raise RuntimeError("cold species are not exact +0 FP32")
+    augmented = np.concatenate((source, cold), axis=0)
+    if augmented.shape != (len(names), N_LEVELS, N_CELLS):
+        raise RuntimeError("row augmentation produced the wrong shape")
+    state.scalars = np.ascontiguousarray(augmented, dtype=np.float32)
+    return {
+        "source_present": list(SOURCE_SCALAR_NAMES),
+        "source_absent": list(cold_names),
+        "source_hashes": source_hashes,
+        "cold_zero_plane_sha256": array_sha256(cold[0]) if cold.size else None,
+        "cold_zero_planes_identical": True,
+        "cold_zero_uint32": 0,
+        "scalar_order": list(names),
+        "negative_qv": qv_fingerprint,
+        "negative_qv_preserved_until_candidate_pre_wsm6_clamp": True,
     }
 
 
@@ -2313,6 +2364,12 @@ def build_arwen_constructor_values(
         "surface_pbl_seconds": DT_SECONDS,
         "cumulus_seconds": DT_SECONDS,
         "cumulus_scheme": "gf",
+        # This proof IS the WSM6 authority case: its cold-start species,
+        # its native CPU counterpart and its snapshot digests are all the
+        # WSM6 row's, so the seam row is spelled once here beside the
+        # WSM6 hail knob rather than derived from a config this driver
+        # never reads.
+        "microphysics_scheme": "wsm6",
         "start_time": datetime.strptime(start_text, "%Y-%m-%d_%H:%M:%S"),
         "latitude_deg": latitude_deg,
         "longitude_deg": longitude_deg,
@@ -2545,8 +2602,13 @@ def execute_composite_step(
     before, allocation for allocation.
     """
 
-    if tuple(scalar_names) != SCALAR_NAMES:
-        raise ValueError(f"exact scalar order is {SCALAR_NAMES}")
+    # The block must be a DECLARED row in that row's order -- the frozen
+    # WSM6 six, P3's eight, or a registered row-with-extras; an undeclared
+    # block refuses by name (hexcore.species_row).  This asserted WSM6's
+    # exact six until the row generalization reached this step.
+    from hexcore.species_row import species_row_for_names
+
+    species_row_for_names(tuple(scalar_names))
     if couple is None or clamp is None or recover is None:
         from hexcore.cuda_physics_v841 import (
             clamp_wsm6_scalars_in_place_v841,
@@ -2802,8 +2864,14 @@ def capture_snapshot(
     f000_surface_diagnostics: Mapping[str, Any],
     expect_refl10cm: bool = False,
     solve_cells: int | None = None,
+    scalar_names: Sequence[str] = SCALAR_NAMES,
+    surface_accumulators: Sequence[str] = ("rainnc", "snownc", "graupelnc"),
 ) -> dict[str, Any]:
     """Download one committed diagnostic boundary outside step receipts.
+
+    ``scalar_names`` and ``surface_accumulators`` are the RUN's row (the
+    forecast driver hands the row it selected); the defaults are the frozen
+    WSM6 lane's, so this proof harness reads exactly what it always read.
 
     ``expect_refl10cm`` says this frame is a history frame whose step ran
     microphysics with ``refl_10cm_due=True``: the committed one-frame field is
@@ -2826,7 +2894,7 @@ def capture_snapshot(
         raise RuntimeError("snapshot is legal only at a committed backend boundary")
     prepared = prepare_mpas_to_phys_cuda_v841(
         driver.atmosphere,
-        scalar_names=SCALAR_NAMES,
+        scalar_names=tuple(scalar_names),
         geometry=prep_geometry,
         kernel_cache=kernel_cache,
         post_rk_wsm6=False,
@@ -2835,7 +2903,7 @@ def capture_snapshot(
     saved = driver.atmosphere.saved
     arrays = {
         name: _host_array(state.scalars[index], cp)
-        for index, name in enumerate(SCALAR_NAMES)
+        for index, name in enumerate(scalar_names)
     }
     arrays.update(
         {
@@ -2925,9 +2993,7 @@ def capture_snapshot(
         "u10",
         "v10",
         "rainc",
-        "rainnc",
-        "snownc",
-        "graupelnc",
+        *surface_accumulators,
         "dusfcg",
         "dvsfcg",
         "dtaux3d",
@@ -2966,7 +3032,13 @@ def capture_snapshot(
     return {"arrays": arrays, "receipt": receipt}
 
 
-def physical_snapshot_gate(snapshot: Mapping[str, Any], *, allow_initial_negative_qv: bool) -> dict[str, Any]:
+def physical_snapshot_gate(
+    snapshot: Mapping[str, Any],
+    *,
+    allow_initial_negative_qv: bool,
+    scalar_names: Sequence[str] = SCALAR_NAMES,
+    surface_accumulators: Sequence[str] = ("rainnc", "snownc", "graupelnc"),
+) -> dict[str, Any]:
     arrays = snapshot["arrays"]
     for name, value in arrays.items():
         array = np.asarray(value)
@@ -2978,19 +3050,19 @@ def physical_snapshot_gate(snapshot: Mapping[str, Any], *, allow_initial_negativ
         raise FloatingPointError("snapshot pressure must be strictly positive")
     moisture_negative = {
         name: int(np.count_nonzero(np.asarray(arrays[name]) < 0.0))
-        for name in SCALAR_NAMES
+        for name in scalar_names
     }
     expected_qv = NEGATIVE_QV_PIN["negative_count"] if allow_initial_negative_qv else 0
     if moisture_negative["qv"] != expected_qv:
         raise FloatingPointError(
             f"qv negative count {moisture_negative['qv']} != {expected_qv}"
         )
-    if any(moisture_negative[name] for name in SCALAR_NAMES[1:]):
+    if any(moisture_negative[name] for name in tuple(scalar_names)[1:]):
         raise FloatingPointError("a hydrometeor snapshot contains negative values")
     smois = np.asarray(arrays["smois"])
     if float(smois.min()) < 0.0 or float(smois.max()) > 1.0:
         raise FloatingPointError("soil moisture lies outside [0,1]")
-    for name in ("rainc", "rainnc", "snownc", "graupelnc"):
+    for name in ("rainc", *surface_accumulators):
         if np.min(arrays[name]) < 0.0:
             raise FloatingPointError(f"negative accumulated precipitation in {name}")
     # Native q2 has 44 negative values.  It is published bitwise and stays
@@ -3440,12 +3512,41 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
 
 
 def gpu_memory_admission(cp: Any, *, minimum: int = MIN_FREE_DEVICE_BYTES) -> dict[str, Any]:
+    """Refuse unless this run's predicted peak still fits on the card.
+
+    ``minimum`` is the door's own admission sum -- THIS run's predicted peak
+    plus the card's margin -- so the bytes this process already holds in its
+    CuPy pool are part of the peak being checked, not competition for it.
+    They are added back to the card's free count.  Measured 2026-09-02 on
+    the RTX 5070 Ti: two door-admitted runs (x1.40962 at 12,068 MiB free,
+    r0.9.120.40520 at 9,700+ MiB free) reached this floor with 5.4 to 9.1 GiB
+    of their own state already resident and were refused on the remainder
+    (needed 8,011,133,287 B, saw 3,358,261,248 B; needed 10,171,315,234 B,
+    saw 8,773,107,712 B), which double-counted the footprint and made every
+    run over half the card unreachable.  A fresh process holds nothing, so
+    the number is unchanged wherever the floor ran before any allocation.
+    """
+
     free, total = map(int, cp.cuda.runtime.memGetInfo())
-    if free < minimum:
+    try:
+        held = int(cp.get_default_memory_pool().total_bytes())
+    except Exception:  # a cupy without a default pool: nothing to add back
+        held = 0
+    available = free + held
+    if available < minimum:
         raise MemoryError(
-            f"full-physics x4 requires at least {minimum} free device bytes; got {free}"
+            f"full-physics x4 requires at least {minimum} free device bytes; got "
+            f"{free} free on the card plus {held} already held by this process's "
+            f"pool, {available} available"
         )
-    return {"free_bytes": free, "total_bytes": total, "minimum": minimum, "admitted": True}
+    return {
+        "free_bytes": free,
+        "total_bytes": total,
+        "held_by_this_process_bytes": held,
+        "available_bytes": available,
+        "minimum": minimum,
+        "admitted": True,
+    }
 
 
 def _prepare_host_execution(paths: Mapping[str, Path], authority_receipt: Mapping[str, Any]) -> dict[str, Any]:
@@ -3549,6 +3650,7 @@ def _construct_device_stack(
     saved_diagnostics: Any | None = None,
     backend_restart: Mapping[str, Any] | None = None,
     gf_dynamics_tendencies: Mapping[str, Any] | None = None,
+    backend_builder: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     from hexcore.cuda_arwen_physics_v841 import (
         PersistentTwoPhaseCudaPhysicsBackendV841,
@@ -3617,14 +3719,28 @@ def _construct_device_stack(
     physics_geometry = CudaPhysicsGeometryV841.from_host(physics_mesh)
     gwdo_static = CudaYsuGwdoStaticV841.from_host(host["gwdo_host"])
     constructor = SealedArwenConstructorV841.from_mapping(host["constructor_values"])
-    backend = PersistentTwoPhaseCudaPhysicsBackendV841(
-        constructor=constructor,
-        prep_geometry=prep_geometry,
-        kernel_cache=cache,
-        gwdo_static=gwdo_static,
-        gwdo_kernel_cache=cache,
-        arwen_checkout=arwen_checkout,
-    )
+    if backend_builder is None:
+        backend = PersistentTwoPhaseCudaPhysicsBackendV841(
+            constructor=constructor,
+            prep_geometry=prep_geometry,
+            kernel_cache=cache,
+            gwdo_static=gwdo_static,
+            gwdo_kernel_cache=cache,
+            arwen_checkout=arwen_checkout,
+        )
+    else:
+        # A backend ROW builds its own column backend (the forecast driver
+        # hands ``PhysicsBackendRow.build_column_backend`` through here);
+        # the frozen row above is what a run with no builder gets.
+        backend = backend_builder(
+            constructor=constructor,
+            prep_geometry=prep_geometry,
+            kernel_cache=cache,
+            gwdo_static=gwdo_static,
+            gwdo_kernel_cache=cache,
+            checkout=arwen_checkout,
+            physics_mesh=physics_mesh,
+        )
     api = require_staged_backend_api(backend)
     if backend_restart is not None:
         backend.restore_restart_state(backend_restart)
@@ -3697,22 +3813,27 @@ def _construct_device_stack(
     return stack
 
 
-def _previous_surface_updates(stack: Mapping[str, Any]) -> Mapping[str, Any] | None:
+def _previous_surface_updates(
+    stack: Mapping[str, Any],
+    surface_accumulators: Sequence[str] = ("rainnc", "snownc", "graupelnc"),
+) -> Mapping[str, Any] | None:
     snapshot = backend_diagnostic_mapping(stack["backend"].diagnostic_snapshot())
     # Adapter diagnostic schema may group these under precipitation.  Walk by
-    # leaf name without downloading the resident arrays.
+    # leaf name without downloading the resident arrays.  The leaves are the
+    # RUN's row's accumulators; the default is the frozen WSM6 lane's three.
+    wanted = set(surface_accumulators)
     leaves: dict[str, Any] = {}
 
     def walk(value: Any) -> None:
         if isinstance(value, Mapping):
             for key, item in value.items():
-                if key in ("rainnc", "snownc", "graupelnc"):
+                if key in wanted:
                     leaves[key] = item
                 else:
                     walk(item)
 
     walk(snapshot)
-    return leaves if set(leaves) == {"rainnc", "snownc", "graupelnc"} else None
+    return leaves if set(leaves) == wanted else None
 
 
 def _run_steps(
@@ -4469,7 +4590,9 @@ def _execute_restart_worker(input_path: Path, output_path: Path) -> int:
     return 0
 
 
-def verify_arwen_checkout_git(checkout: Path) -> dict[str, Any]:
+def verify_arwen_checkout_git(
+    checkout: Path, manifest: Mapping[str, str] | None = None
+) -> dict[str, Any]:
     """Admit an Arwen checkout iff its executed seam source is the proven one.
 
     The gate is ``ARWEN_SOURCE_MANIFEST`` -- the sha-freeze of the sixteen
@@ -4571,7 +4694,12 @@ def verify_arwen_checkout_git(checkout: Path) -> dict[str, Any]:
             expect_rename_origin = True
     dirty_paths = sorted(set(dirty_paths))
 
-    manifest = arwen_source_manifest()
+    # The bytes the RUN's row is bound by: the frozen sixteen unless the
+    # caller hands the manifest of the pin its row runs under (a provider's
+    # row binds a different column batch through its own manifest and can
+    # never match the frozen sixteen by design).  Git state is recorded
+    # either way.
+    manifest = arwen_source_manifest() if manifest is None else dict(manifest)
     files: dict[str, str] = {}
     for relative, expected in manifest.items():
         target = root / relative

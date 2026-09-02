@@ -33,6 +33,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
+from .species_row import WSM6_SPECIES_ROW, species_row_for_names
 from .cuda_backend.containers import TransferStats, require_resident_array
 from .cuda_backend.compile_contract import (
     CompileContractError,
@@ -106,25 +107,7 @@ _AUTHORITY_DOCUMENT = {
         "immutable exact pinned Arwen aggregate execution identity, with optional "
         "external YSU-GWDO execution/composition identity and four-byte validation"
     ),
-    "post_rk_wsm6": [
-        "theta",
-        "qv",
-        "qc",
-        "qr",
-        "qi",
-        "qs",
-        "qg",
-        "rainnc",
-        "rainncv",
-        "snownc",
-        "snowncv",
-        "graupelnc",
-        "graupelncv",
-        "sr",
-        "effc",
-        "effi",
-        "effs",
-    ],
+    "post_rk_wsm6": [],
     "wsm6_sr_roundoff": {
         "source": (
             "pinned Arwen gpuwm/core/physics.py:_wsm6_sr_roundoff_limit and "
@@ -138,11 +121,58 @@ _AUTHORITY_DOCUMENT = {
     },
 }
 
+def _post_rk_fields(row) -> list[str]:
+    """The post-RK carrier's field list for one row, in contract order.
+
+    theta, then the row's species in model order, then each accumulator
+    paired with its increment, then sr, then the row's effective radii.
+    The WSM6 row regenerates the frozen list exactly -- asserted below --
+    so the frozen lane's contract digest does not move.
+    """
+
+    fields = ["theta", *row.names()]
+    for item in row.surface_accumulators:
+        fields += [item.name, f"{item.name}v"]
+    fields.append("sr")
+    fields += list(row.radius_names)
+    return fields
+
+
+def _authority_document(row) -> dict:
+    """The physics contract document for one species row."""
+
+    document = dict(_AUTHORITY_DOCUMENT)
+    document["post_rk_wsm6"] = _post_rk_fields(row)
+    return document
+
+
+def _contract_sha256(row) -> str:
+    return sha256(
+        json.dumps(
+            _authority_document(row), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+_AUTHORITY_DOCUMENT["post_rk_wsm6"] = _post_rk_fields(WSM6_SPECIES_ROW)
+
 CUDA_PHYSICS_V841_CONTRACT_SHA256 = sha256(
     json.dumps(_AUTHORITY_DOCUMENT, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )
 ).hexdigest()
+
+#: The digest this contract carried before the row generalization, measured
+#: at 6652552.  The generator is faithful or this module refuses to import.
+_FROZEN_WSM6_PHYSICS_CONTRACT_SHA256 = (
+    "332899f64a24b45fc93a686ce056a674a4bd07a26d635447d0aff884ce13d001"
+)
+if CUDA_PHYSICS_V841_CONTRACT_SHA256 != _FROZEN_WSM6_PHYSICS_CONTRACT_SHA256:
+    raise AssertionError(
+        "the species-row generator no longer reproduces the frozen WSM6 "
+        f"physics contract: {CUDA_PHYSICS_V841_CONTRACT_SHA256} != "
+        f"{_FROZEN_WSM6_PHYSICS_CONTRACT_SHA256}"
+    )
 
 CUDA_PHYSICS_V841_EVIDENCE: Mapping[str, Any] = MappingProxyType(_AUTHORITY_DOCUMENT)
 
@@ -150,7 +180,8 @@ RV_OVER_RD_F32 = np.float32(np.float32(461.6) / np.float32(287.0))
 _WSM6_MINOR_DT_SECONDS_F32 = np.float32(120.0)
 _FP32_SIGNIFICAND_SCALE = 1 << 24
 _FP32_ONE_BITS = 0x3F800000
-WSM6_SCALAR_NAMES = ("qv", "qc", "qr", "qi", "qs", "qg")
+#: The frozen lane's species, taken from the row rather than restated.
+WSM6_SCALAR_NAMES = WSM6_SPECIES_ROW.names()
 WSM6_SURFACE_NAMES = (
     "rainnc",
     "rainncv",
@@ -719,6 +750,10 @@ class CudaRawColumnPhysicsV841:
     dscalars: Mapping[str, Any]
     time_seconds: float
     execution_provenance: CudaPhaseOneExecutionProvenanceV841
+    #: The row this carrier's state belongs to, in model array order.  It
+    #: defaults to the frozen lane so every existing construction site keeps
+    #: its meaning without naming it.
+    scalar_names: tuple[str, ...] = WSM6_SCALAR_NAMES
 
     def __post_init__(self) -> None:
         canonical: dict[str, Any] = {}
@@ -727,11 +762,21 @@ class CudaRawColumnPhysicsV841:
             if not name or name in canonical:
                 raise ValueError(f"duplicate or empty scalar rate name {raw_name!r}")
             canonical[name] = value
-        if set(canonical) != set(WSM6_SCALAR_NAMES):
-            missing = sorted(set(WSM6_SCALAR_NAMES) - set(canonical))
-            extra = sorted(set(canonical) - set(WSM6_SCALAR_NAMES))
+        row = species_row_for_names(self.scalar_names)
+        # THE RULE, stated once: phase one publishes a tendency for every
+        # mass-LOADING species and for nothing outside the row.  On WSM6 all
+        # six load the air, so this is the same requirement the WSM6-exact
+        # check made.  On P3 it is qv/qc/qr/qi -- ni, nr, qir and qib change
+        # in phase two alone, and demanding a phase-one rate for them would
+        # refuse a correct seam.
+        required = set(row.mass_loading_names())
+        missing = sorted(required - set(canonical))
+        extra = sorted(set(canonical) - set(row.names()))
+        if missing or extra:
             raise ValueError(
-                f"raw physics must return exactly WSM6 scalars; missing={missing}, extra={extra}"
+                f"raw physics must return a rate for every mass-loading "
+                f"species of {row.scheme_name!r} and for nothing outside "
+                f"its row; missing={missing}, extra={extra}"
             )
         object.__setattr__(self, "dscalars", MappingProxyType(canonical))
         _valid_clock(self.time_seconds, "raw physics time_seconds")
@@ -832,26 +877,31 @@ class CudaHeldMpasPhysicsTendenciesV841:
 
 @dataclass(frozen=True, slots=True)
 class CudaPostRkWsm6UpdateV841:
-    """Direct WSM6 state returned after RK; these are not RK tendencies."""
+    """Direct post-RK microphysics state; these are not RK tendencies.
+
+    The seventeen literal fields became three ordered mappings keyed by the
+    scheme's row, so P3's eight species and two radii fit the same carrier
+    that WSM6's six and three do.  ``__getattr__`` keeps every existing
+    reader's ``update.qv`` / ``update.effs`` / ``update.rainnc`` working.
+    """
 
     theta: Any
-    qv: Any
-    qc: Any
-    qr: Any
-    qi: Any
-    qs: Any
-    qg: Any
-    rainnc: Any
-    rainncv: Any
-    snownc: Any
-    snowncv: Any
-    graupelnc: Any
-    graupelncv: Any
-    sr: Any
-    effc: Any
-    effi: Any
-    effs: Any
+    #: Post-microphysics species, keyed by the row's names, in row order.
+    species: Mapping[str, Any]
+    #: The scheme's per-cell accumulators and rate diagnostics.
+    surface: Mapping[str, Any]
+    #: The scheme's effective radii, in the row's order.
+    radii: Mapping[str, Any]
     time_seconds: float
+
+    def __getattr__(self, name: str) -> Any:
+        for group in ("species", "surface", "radii"):
+            values = object.__getattribute__(self, group)
+            value = values.get(name)
+            if value is not None:
+                return value
+        raise AttributeError(
+            f"{type(self).__name__!r} has no attribute {name!r}")
 
     @property
     def contract_sha256(self) -> str:
@@ -860,14 +910,14 @@ class CudaPostRkWsm6UpdateV841:
     def validate(self, *, n_vert_levels: int, n_cells: int) -> None:
         _valid_clock(self.time_seconds, "post-RK WSM6 time_seconds")
         volume_shape = (n_vert_levels, n_cells)
-        for name in ("theta", *WSM6_SCALAR_NAMES, *WSM6_RADIUS_NAMES):
+        for name in ("theta", *self.species, *self.radii):
             require_resident_array(
                 f"post_rk_wsm6.{name}",
                 getattr(self, name),
                 dtype=np.float32,
                 shape=volume_shape,
             )
-        for name in WSM6_SURFACE_NAMES:
+        for name in self.surface:
             require_resident_array(
                 f"post_rk_wsm6.{name}",
                 getattr(self, name),
@@ -960,10 +1010,9 @@ def couple_raw_column_physics_v841(
     if np.dtype(state.dtype) != np.dtype(np.float32):
         raise TypeError("v8.4.1 CUDA physics coupling requires FP32 state")
     names = _scalar_names(scalar_names, int(state.scalars.shape[0]))
-    if names != WSM6_SCALAR_NAMES:
-        raise ValueError(
-            f"full WSM6 seam requires scalar order {WSM6_SCALAR_NAMES}, got {names}"
-        )
+    # Any DECLARED row, in that row's order.  This replaced a refusal that
+    # admitted WSM6's six alone; it still refuses a block nobody declared.
+    species_row_for_names(names)
     if float(raw.time_seconds) != float(state.time_seconds):
         raise ValueError(
             "raw physics time must equal the candidate step start exactly: "
@@ -981,6 +1030,14 @@ def couple_raw_column_physics_v841(
     rho_u = cp.empty_like(state.rho_u)
     scalars = cp.empty_like(state.scalars)
     invalid = cp.zeros((1,), dtype=cp.int32)
+    # One shared zero buffer stands in for every species the phase-one seam
+    # publishes no tendency for.  Allocated once and pointed at many times,
+    # so the table costs one array however many such species a row has.
+    zero_rate = cp.zeros((n_vert_levels, n_cells), dtype=cp.float32)
+    rate_arrays = [raw.dscalars.get(name, zero_rate) for name in names]
+    rate_table = cp.asarray(
+        np.asarray([int(item.data.ptr) for item in rate_arrays],
+                   dtype=np.uint64))
     _launch(
         kernel_cache,
         "couple_cells_v841_f32",
@@ -988,17 +1045,13 @@ def couple_raw_column_physics_v841(
         (
             np.int32(n_vert_levels),
             np.int32(n_cells),
+            np.int32(len(names)),
             RV_OVER_RD_F32,
             state.rho,
             state.rho_theta,
             state.scalars,
             raw.dtheta,
-            raw.dscalars["qv"],
-            raw.dscalars["qc"],
-            raw.dscalars["qr"],
-            raw.dscalars["qi"],
-            raw.dscalars["qs"],
-            raw.dscalars["qg"],
+            rate_table,
             rho,
             rho_theta,
             scalars,
@@ -1128,8 +1181,7 @@ def nonnegative_qv_scratch_v841(
 
     cp = _cp()
     names = _scalar_names(scalar_names, int(scalars.shape[0]))
-    if names != WSM6_SCALAR_NAMES:
-        raise ValueError(f"WSM6 scalar order must be {WSM6_SCALAR_NAMES}")
+    species_row_for_names(names)
     require_resident_array("state.scalars", scalars, dtype=np.float32, ndim=3)
     qv = cp.empty(tuple(scalars.shape[1:]), dtype=cp.float32)
     invalid = cp.zeros((1,), dtype=cp.int32)
@@ -1157,8 +1209,7 @@ def clamp_wsm6_scalars_in_place_v841(
 
     cp = _cp()
     names = _scalar_names(scalar_names, int(scalars.shape[0]))
-    if names != WSM6_SCALAR_NAMES:
-        raise ValueError(f"WSM6 scalar order must be {WSM6_SCALAR_NAMES}")
+    species_row_for_names(names)
     require_resident_array("state.scalars", scalars, dtype=np.float32, ndim=3)
     invalid = cp.zeros((1,), dtype=cp.int32)
     # Validate in a separate pass so a refusal cannot partially clamp the live
@@ -1203,10 +1254,7 @@ def recover_post_rk_wsm6_state_v841(
         raise TypeError("post-RK WSM6 recovery requires FP32 MPAS state")
     sr_upper, _, _ = _wsm6_sr_roundoff_limit_v841(phase2_dt_seconds)
     names = _scalar_names(scalar_names, int(state.scalars.shape[0]))
-    if names != WSM6_SCALAR_NAMES:
-        raise ValueError(
-            f"WSM6 recovery requires scalar order {WSM6_SCALAR_NAMES}, got {names}"
-        )
+    row = species_row_for_names(names)
     if float(update.time_seconds) != float(state.time_seconds):
         raise ValueError(
             "WSM6 update time must equal the candidate endpoint exactly: "
@@ -1220,61 +1268,67 @@ def recover_post_rk_wsm6_state_v841(
     candidate_scalars = cp.empty_like(state.scalars)
     invalid = cp.zeros((1,), dtype=cp.int32)
     count = n_vert_levels * n_cells
+    # Device tables in the ROW's order for the species, and in the row's
+    # declared order for the radii.  Both sizes travel with the row, so a
+    # scheme with two radii instead of three needs no kernel change.
+    water_table = cp.asarray(np.asarray(
+        [int(update.species[name].data.ptr) for name in names],
+        dtype=np.uint64))
+    radius_table = cp.asarray(np.asarray(
+        [int(update.radii[name].data.ptr) for name in row.radius_names],
+        dtype=np.uint64))
     _launch(
         kernel_cache,
         "recover_wsm6_v841_f32",
         count,
         (
             np.int32(count),
+            np.int32(len(names)),
+            np.int32(len(update.radii)),
             RV_OVER_RD_F32,
             state.rho,
             update.theta,
-            update.qv,
-            update.qc,
-            update.qr,
-            update.qi,
-            update.qs,
-            update.qg,
-            update.effc,
-            update.effi,
-            update.effs,
+            water_table,
+            radius_table,
             candidate_rho_theta,
             candidate_scalars,
             invalid,
         ),
     )
     previous = {} if previous_surface_updates is None else previous_surface_updates
-    old_rain = previous.get("rainnc", update.rainnc)
-    old_snow = previous.get("snownc", update.snownc)
-    old_graupel = previous.get("graupelnc", update.graupelnc)
-    for name, value in (
-        ("rainnc", old_rain),
-        ("snownc", old_snow),
-        ("graupelnc", old_graupel),
-    ):
+    # One bucket triple per accumulator the ROW declares, in its order.
+    bucket_names = tuple(
+        item.name for item in row.surface_accumulators)
+    old_values = [
+        previous.get(name, update.surface[name]) for name in bucket_names]
+    for name, value in zip(bucket_names, old_values):
         require_resident_array(
-            f"previous_wsm6_surface.{name}",
+            f"previous_surface.{name}",
             value,
             dtype=np.float32,
             shape=(n_cells,),
         )
+
+    def _table(arrays):
+        return cp.asarray(np.asarray(
+            [int(item.data.ptr) for item in arrays], dtype=np.uint64))
+
+    acc_table = _table([update.surface[name] for name in bucket_names])
+    inc_table = _table(
+        [update.surface[f"{name}v"] for name in bucket_names])
+    old_table = _table(old_values)
     _launch(
         kernel_cache,
         "validate_wsm6_surface_v841_f32",
         n_cells,
         (
             np.int32(n_cells),
+            np.int32(len(bucket_names)),
             sr_upper,
-            update.rainnc,
-            update.rainncv,
-            update.snownc,
-            update.snowncv,
-            update.graupelnc,
-            update.graupelncv,
+            acc_table,
+            inc_table,
+            old_table,
             update.sr,
-            old_rain,
-            old_snow,
-            old_graupel,
             invalid,
         ),
     )
@@ -1298,12 +1352,12 @@ def recover_post_rk_wsm6_state_v841(
             state.scalars,
         ),
     )
-    surface = MappingProxyType(
-        {name: getattr(update, name) for name in WSM6_SURFACE_NAMES}
-    )
-    radii = MappingProxyType(
-        {name: getattr(update, name) for name in WSM6_RADIUS_NAMES}
-    )
+    # The ROW's surface set (its accumulators, their per-call increments,
+    # sr) and its radii, exactly as validated above -- the last two WSM6
+    # literals in this path, which refused every P3 row's recovery on a
+    # missing graupel bucket.
+    surface = MappingProxyType(dict(update.surface))
+    radii = MappingProxyType(dict(update.radii))
     return CudaPostRkWsm6RecoveryV841(
         state=state,
         surface_updates=surface,
@@ -1340,17 +1394,21 @@ _CUDA_SOURCE = (
     CUDA_FTZ_HELPERS
     + r"""
 extern "C" __global__ void couple_cells_v841_f32(
-    const int nlev, const int ncells, const float rvord,
+    const int nlev, const int ncells, const int nspecies,
+    const float rvord,
     const float *rho, const float *rho_theta, const float *q,
-    const float *dtheta, const float *dqv, const float *dqc,
-    const float *dqr, const float *dqi, const float *dqs,
-    const float *dqg, float *out_rho, float *out_rtheta,
+    const float *dtheta, const float *const *rates,
+    float *out_rho, float *out_rtheta,
     float *out_q, int *invalid)
 {
     const int cell = blockDim.x * blockIdx.x + threadIdx.x;
     if (cell >= ncells) return;
     const int plane = nlev * ncells;
-    const float *rates[6] = {dqv, dqc, dqr, dqi, dqs, dqg};
+    // rates is a DEVICE table, one entry per species in the row's order.
+    // A species the phase-one seam publishes no tendency for (P3 carries
+    // ni, nr, qir and qib, which change only in phase two) points at a
+    // shared zero buffer, so the coupling stays one straight loop and the
+    // species still gets its coupled slot written.
     for (int k = 0; k < nlev; ++k) {
         const int i = k * ncells + cell;
         const float mass = rho[i];
@@ -1360,7 +1418,7 @@ extern "C" __global__ void couple_cells_v841_f32(
         if (!isfinite(mass) || mass <= 0.0f || !isfinite(rt)
                 || !isfinite(qt) || !isfinite(th_rate)) atomicExch(invalid, 1);
         out_rho[i] = 0.0f;
-        for (int s = 0; s < 6; ++s) {
+        for (int s = 0; s < nspecies; ++s) {
             const float rate = rates[s][i];
             if (!isfinite(rate)) atomicExch(invalid, 1);
             out_q[s * plane + i] = mpas_mul(mass, rate);
@@ -1443,18 +1501,19 @@ extern "C" __global__ void clamp_wsm6_v841_f32(
 }
 
 extern "C" __global__ void recover_wsm6_v841_f32(
-    const int count, const float rvord, const float *rho, const float *theta,
-    const float *qv, const float *qc, const float *qr, const float *qi,
-    const float *qs, const float *qg, const float *effc, const float *effi,
-    const float *effs, float *rho_theta, float *scalars, int *invalid)
+    const int count, const int nspecies, const int nradius,
+    const float rvord, const float *rho, const float *theta,
+    const float *const *water, const float *const *radius,
+    float *rho_theta, float *scalars, int *invalid)
 {
     const int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= count) return;
-    const float *water[6] = {qv, qc, qr, qi, qs, qg};
-    const float *radius[3] = {effc, effi, effs};
+    // water and radius are DEVICE tables sized by the scheme's row: its
+    // species in model order, and the effective radii it publishes (WSM6
+    // has three, P3 two -- its one ice category has no separate snow).
     if (!isfinite(rho[i]) || rho[i] <= 0.0f
             || !isfinite(theta[i]) || theta[i] <= 0.0f) atomicExch(invalid, 1);
-    for (int s = 0; s < 6; ++s) {
+    for (int s = 0; s < nspecies; ++s) {
         const float value = water[s][i];
         // MPAS mpas_atmphys_interface.F:914 writes the post-microphysics
         // carriers back to scalars RAW -- no clamp, no refusal.  The +0 clamp
@@ -1464,7 +1523,7 @@ extern "C" __global__ void recover_wsm6_v841_f32(
         if (!isfinite(value)) atomicExch(invalid, 1);
         scalars[s * count + i] = value;
     }
-    for (int r = 0; r < 3; ++r) {
+    for (int r = 0; r < nradius; ++r) {
         const float value = radius[r][i];
         if (!isfinite(value) || value < 0.0f) atomicExch(invalid, 1);
     }
@@ -1474,8 +1533,9 @@ extern "C" __global__ void recover_wsm6_v841_f32(
     // used instead of fmaxf because the certified terminal-FTZ route is
     // DAZ-sensitive: it maps -0 and every negative subnormal to the native +0
     // bit pattern while leaving positive subnormals exactly alone.
-    const unsigned int qv_bits = __float_as_uint(qv[i]);
-    const float qv_coupled = (qv_bits & 0x80000000u) != 0u ? 0.0f : qv[i];
+    const unsigned int qv_bits = __float_as_uint(water[0][i]);
+    const float qv_coupled =
+        (qv_bits & 0x80000000u) != 0u ? 0.0f : water[0][i];
     const float coeff = mpas_add(1.0f, mpas_mul(rvord, qv_coupled));
     const float result = mpas_mul(rho[i], mpas_mul(theta[i], coeff));
     if (!isfinite(coeff) || coeff <= 0.0f || !isfinite(result))
@@ -1495,20 +1555,23 @@ extern "C" __global__ void commit_wsm6_state_v841_f32(
     }
 }
 extern "C" __global__ void validate_wsm6_surface_v841_f32(
-    const int count, const float sr_upper, const float *rainnc,
-    const float *rainncv, const float *snownc, const float *snowncv,
-    const float *graupelnc,
-    const float *graupelncv, const float *sr, const float *old_rainnc,
-    const float *old_snownc, const float *old_graupelnc, int *invalid)
+    const int count, const int nbuckets, const float sr_upper,
+    const float *const *acc_p, const float *const *inc_p,
+    const float *const *old_p, const float *sr, int *invalid)
 {
     const int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= count) return;
-    const float acc[3] = {rainnc[i], snownc[i], graupelnc[i]};
-    const float inc[3] = {rainncv[i], snowncv[i], graupelncv[i]};
-    const float old[3] = {old_rainnc[i], old_snownc[i], old_graupelnc[i]};
-    for (int j = 0; j < 3; ++j) {
-        if (!isfinite(acc[j]) || acc[j] < 0.0f || acc[j] < old[j]
-                || !isfinite(inc[j]) || inc[j] < 0.0f) atomicExch(invalid, 1);
+    // One accumulator/increment/previous triple per bucket the ROW declares.
+    // WSM6 declares three (rain, snow, graupel); P3 declares two, because
+    // its single ice category has no graupel accumulator and reporting a
+    // permanent zero would let output claim a field the scheme never has.
+    for (int j = 0; j < nbuckets; ++j) {
+        const float acc[1] = {acc_p[j][i]};
+        const float inc[1] = {inc_p[j][i]};
+        const float old[1] = {old_p[j][i]};
+        const int k = 0;
+        if (!isfinite(acc[k]) || acc[k] < 0.0f || acc[k] < old[k]
+                || !isfinite(inc[k]) || inc[k] < 0.0f) atomicExch(invalid, 1);
     }
     if (!isfinite(sr[i]) || sr[i] < 0.0f || sr[i] > sr_upper)
         atomicExch(invalid, 1);

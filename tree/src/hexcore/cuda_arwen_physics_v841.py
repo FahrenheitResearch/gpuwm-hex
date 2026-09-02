@@ -37,7 +37,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .cuda_backend.containers import TransferStats, require_resident_array
+from .cuda_backend.containers import require_resident_array
 from .cuda_backend.runtime import KernelCache
 from .cuda_gwdo_v841 import (
     CUDA_GWDO_V841_CONTRACT_SHA256,
@@ -53,23 +53,23 @@ from .cuda_physics_prep_v841 import (
     CudaMpasToPhysGeometryV841,
     prepare_mpas_to_phys_cuda_v841,
 )
+from .species_row import registered_species_rows, species_row_for_names
 from .cuda_physics_v841 import (
     CUDA_PHYSICS_V841_CONTRACT_SHA256,
     CUDA_PHYSICS_V841_KERNEL_SHA256,
     CudaPhaseOneExecutionProvenanceV841,
     CudaPostRkWsm6UpdateV841,
     CudaRawColumnPhysicsV841,
-    WSM6_SCALAR_NAMES,
 )
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "df5f34c5caddac935035faa20c32b2ff5297fd26"
+ARWEN_BUILD_COMMIT = "d60b883e79a01b70b4f3e333b96b36f892889539"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
 MPAS_SEAM_CONTRACT_SURFACE_SHA256 = (
-    "3b45dd0c00ea61dc66eded1d79ba1999af95cee71a8a4c439cc49adb89d2cf79"
+    "45de852c6f8a8951d7e3f65b2b1e64462cf213d50707db4e52cb7eba17491ff2"
 )
 ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
     "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -81,19 +81,19 @@ ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
 ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
     {
         "gpuwm/core/mpas_column_batch.py": (
-            "4e9770fc01190c2a2a04e224bfdb7df784f62be843601f13ff920a9613968cda"
+            "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45"
         ),
         "gpuwm/core/physics.py": (
-            "51b8c6067ebb27ef538dbe0291bd6a2e2d570823c78cf2e85f75e325ca8114af"
+            "2049a8656e68f7854cf311950ea92f64f474768b02c87e99be904fb6fb0d60bf"
         ),
         "gpuwm/core/microphysics.py": (
             "4df5b7a3e46c348a98920c2c4b8cac46632dee955d7c8eea19136c183c8f8670"
         ),
         "gpuwm/core/gf.py": (
-            "12e2c59564aef91075339707cc2aba019f892b2f1e4b930ff1d3f064bdc38ca7"
+            "0fefb214381595ee1fd6a2cc0754e2676642846d01294bcdcad37d550b2550e9"
         ),
         "gpuwm/core/kernels/gf.cu": (
-            "27019d7fdd4ad31aec2e2e4b21ec339dd512a449aea5e35ab2386ca5217aae5e"
+            "2e6a0b59b669e3c35fc0138be14d7ce2a8d7781b2c02f46ea41a23efe0764142"
         ),
         "gpuwm/core/rrtmg_legacy.py": (
             "39af610f0df41f9a3eaef601cd55b8ba27928c7e477a1d4739048094a510214d"
@@ -111,7 +111,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "4b2fab2ac92e93669491cbe526f81d23bc94e075859ae849f2b8c84827057538"
         ),
         "gpuwm/core/kernels/__init__.py": (
-            "05102ff85fac24700858309f497694f9b3919b26cab3963b2cc35a4182c22919"
+            "38712db4161ea9f9ee03932f508cd1a377b661169b2bf84ca89781346cfa48f2"
         ),
         "gpuwm/core/kernels/noahmp_leaves.cu": (
             "0ce9461705395dccbfebed3d9d27e87eebaeaca79896ae369eaa02ec1e77307f"
@@ -120,13 +120,13 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"
         ),
         "gpuwm/config.py": (
-            "7f3b694f1746e18f6d6ea12f92282bf2284cbde8d89c560fdfbb747ff49325d0"
+            "54af6c0bc8ba0456fbbb4a80318d2e959a7056eb31de53cbaaa5bb8386f7a287"
         ),
         "gpuwm/io/restart.py": (
-            "8482a222c0ad096400a9154e5a6a706c21704b7cc17ebbbab9d15bbe4879f91f"
+            "026540622fe87f019ed137b4ea8e424df18f17a9e234532a25df636c3846f62a"
         ),
         "docs/mpas-seam.md": (
-            "3b99487a86d23cd4b3136e115486b0051f1e0b34632e07d6801289dda762824e"
+            "5cd6934ef8b4f3dabfb7fa2e621ceab309836875a6669319323451ea717f9035"
         ),
     }
 )
@@ -203,6 +203,11 @@ _CONSTRUCTOR_KEYS = frozenset(
         "surface_pbl_seconds",
         "cumulus_seconds",
         "cumulus_scheme",
+        # The seam's ``microphysics_scheme`` row, named from the species
+        # row's ``engine_scheme`` and never defaulted: the engine constructs
+        # a WSM6 seam when the key is absent, so a P3 or mp=28 door that
+        # left it out would seal a seam that refuses its own phase-one call.
+        "microphysics_scheme",
         "start_time",
         "p_top_pa",
         "dx_m",
@@ -414,6 +419,29 @@ class SealedArwenConstructorV841:
             or int(hail_opt) not in (0, 1)
         ):
             raise ValueError("wsm6_hail_opt must be the integer 0 or 1")
+        microphysics_scheme = values["microphysics_scheme"]
+        engine_schemes = tuple(
+            row.engine_scheme
+            for row in registered_species_rows().values()
+            if row.engine_scheme is not None
+        )
+        if (
+            not isinstance(microphysics_scheme, str)
+            or microphysics_scheme not in engine_schemes
+        ):
+            raise ValueError(
+                "microphysics_scheme must be one of the engine rows the "
+                f"species table declares {sorted(engine_schemes)}, got "
+                f"{microphysics_scheme!r}"
+            )
+        if microphysics_scheme != "wsm6" and int(hail_opt) != 0:
+            # The seam refuses this pair itself; refusing it here keeps the
+            # refusal ahead of every device allocation, like the rest.
+            raise ValueError(
+                "wsm6_hail_opt is a WSM6 hail-mode knob; on a "
+                f"microphysics_scheme={microphysics_scheme!r} seam it must "
+                "be 0"
+            )
         # GF shallow convection.  Native MPAS v8.4.1 hardwires ishallow = 1
         # (mpas_atmphys_vars.F:340); shallow OFF is reachable only as an
         # explicit A/B arm and is meaningless without GF.
@@ -434,6 +462,7 @@ class SealedArwenConstructorV841:
             "surface_pbl_seconds": surface_pbl_seconds,
             "cumulus_seconds": cumulus_seconds,
             "cumulus_scheme": scheme,
+            "microphysics_scheme": microphysics_scheme,
             "start_time": values["start_time"],
             "p_top_pa": _positive_real("p_top_pa", values["p_top_pa"]),
             "dx_m": _positive_real("dx_m", values["dx_m"]),
@@ -508,6 +537,10 @@ class SealedArwenConstructorV841:
     def xice_threshold(self) -> float:
         return float(self._values["xice_threshold"])
 
+    @property
+    def microphysics_scheme(self) -> str:
+        return str(self._values["microphysics_scheme"])
+
     def expected_surface_classification(self) -> Mapping[str, Any]:
         """Authority-only host classification for the sealed constructor."""
 
@@ -547,6 +580,7 @@ class SealedArwenConstructorV841:
                 "n_levels": self.n_levels,
                 "n_columns": self.n_columns,
                 "dt": self.dt,
+                "microphysics_scheme": self.microphysics_scheme,
                 "host_array_bytes": self.host_array_bytes,
                 "defaults_used": False,
                 "surface_soil_statics": "official-exhaustive-sealed-host-mapping",
@@ -573,7 +607,7 @@ _ADAPTER_AUTHORITY = {
     "phase1_pressure": "pres_hyd_p/pres2_hyd_p with explicit pi_p",
     "phase2_pressure": "pres_p EOS with rho_dry and z_p",
     "h_diabatic": "explicitly declined; never replayed or folded",
-    "constructor": "exhaustive sealed exact-real mapping including native xland and explicit xice_threshold; no defaults",
+    "constructor": "exhaustive sealed exact-real mapping including native xland, explicit xice_threshold and the row's microphysics_scheme; no defaults",
     "pin_order": "pin exact Arwen v2 before MPAS KernelCache construction",
     "execution_provenance": (
         "typed aggregate-executed carrier; actual GWDO result identity and 4B gate"
@@ -684,9 +718,15 @@ def _snapshot_nbytes(value: Any) -> int:
 
 
 def _scalar_names(names: Sequence[str]) -> tuple[str, ...]:
+    """The block must be a DECLARED row, in that row's order.
+
+    This asserted WSM6's exact six at four call sites.  It now asserts the
+    ROW's order -- still an exact order, still refusing a block nobody
+    declared, but the row it checks against is the one the run selected.
+    """
+
     result = tuple(str(name).strip().lower() for name in names)
-    if result != WSM6_SCALAR_NAMES:
-        raise ValueError(f"exact WSM6 scalar order is {WSM6_SCALAR_NAMES}, got {result}")
+    species_row_for_names(result)
     return result
 
 
@@ -1046,12 +1086,13 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                     z_interface=prepared.z_p,
                     w=prepared.w_p,
                     rho_dry=prepared.rho_dry,
-                    qv=prepared.qv_p,
-                    qc=prepared.qc_p,
-                    qr=prepared.qr_p,
-                    qi=prepared.qi_p,
-                    qs=prepared.qs_p,
-                    qg=prepared.qg_p,
+                    # The row's species, by name, in the row's order: the
+                    # seam takes them as keyword arguments and this is the
+                    # one place they are spelled.
+                    **{
+                        name: prepared.species_p[name]
+                        for name in scalar_names
+                    },
                     exner=prepared.pi_p,
                     rthdynten=rthdynten,
                     rqvdynten=rqvdynten,
@@ -1173,19 +1214,26 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             self._restore_boundary(snapshot)
             raise
 
-    def _private_radii(self) -> tuple[Any, Any, Any]:
+    def _private_radii(self, radius_names: Sequence[str]) -> dict[str, Any]:
+        """The scheme's effective radii, named by its row.
+
+        WSM6 publishes three; P3 publishes two, because its single ice
+        category has no separate snow radius.  Reading a fixed three would
+        raise AttributeError on a P3 seam rather than refuse by name.
+        """
+
         self._private_binding_guard()
         cp = __import__("cupy")
         state = self._seam._state
         shape = (self._constructor.n_levels, self._constructor.n_columns)
-        result = []
-        for name in ("effc", "effi", "effs"):
+        result = {}
+        for name in radius_names:
             value = getattr(state, name).reshape(shape)
             require_resident_array(
                 f"fa35_private.{name}", value, dtype=np.float32, shape=shape
             )
-            result.append(cp.array(value, copy=True, order="C"))
-        return tuple(result)
+            result[name] = cp.array(value, copy=True, order="C")
+        return result
 
     def finish_step(
         self,
@@ -1243,19 +1291,21 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             if float(prepared.time_seconds) != endpoint:
                 raise ValueError("phase-two prep time changed from the exact endpoint")
             wsm6 = prepared.wsm6_input_view()
-            receipt = self._seam.run_phase2(
-                theta=prepared.th_p,
-                qv=wsm6.qv,
-                qc=wsm6.qc,
-                qr=wsm6.qr,
-                qi=wsm6.qi,
-                qs=wsm6.qs,
-                qg=wsm6.qg,
-                pressure=prepared.pres_p,
-                rho_dry=prepared.rho_dry,
-                z_interface=prepared.z_p,
-                refl_10cm_due=bool(refl_10cm_due),
-            )
+            phase2_row = species_row_for_names(scalar_names)
+            phase2_kwargs = {
+                "theta": prepared.th_p,
+                "pressure": prepared.pres_p,
+                "z_interface": prepared.z_p,
+                "refl_10cm_due": bool(refl_10cm_due),
+                **{name: wsm6.species[name] for name in scalar_names},
+            }
+            # rho_dry is a WSM6 argument.  The pinned seam REFUSES it by name
+            # on a P3 batch ("does not consume rho_dry"), because P3's
+            # sedimentation does not take the dry-density alternative, so
+            # passing it unconditionally would refuse every P3 step.
+            if phase2_row.engine_scheme == "wsm6":
+                phase2_kwargs["rho_dry"] = prepared.rho_dry
+            receipt = self._seam.run_phase2(**phase2_kwargs)
             if float(self._seam.elapsed_seconds) != endpoint:
                 raise ValueError("Arwen phase two did not advance to the MPAS endpoint")
             staged_refl = None
@@ -1270,31 +1320,32 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                         self._constructor.n_columns,
                     ),
                 )
+            row = species_row_for_names(scalar_names)
             cumulative = self._seam.accumulated_precipitation()
-            required = {"RAINNC", "SNOWNC", "GRAUPELNC", "RAINC"}
+            # The buckets the ROW declares, plus RAINC which every scheme
+            # reports.  WSM6 declares three; P3 declares two and the seam
+            # binds no graupel accumulator for it, so demanding one here
+            # would refuse a correct P3 seam.
+            required = {
+                item.history_name for item in row.surface_accumulators
+            } | {"RAINC"}
             if set(cumulative) != required:
                 raise ValueError(
-                    f"frozen Arwen v2 cumulative precipitation keys changed: {sorted(cumulative)}"
+                    "frozen Arwen v2 cumulative precipitation keys changed: "
+                    f"{sorted(cumulative)}, expected {sorted(required)}"
                 )
-            effc, effi, effs = self._private_radii()
+            radii = self._private_radii(row.radius_names)
+            surface = {"sr": receipt["sr"]}
+            for item in row.surface_accumulators:
+                surface[item.name] = cumulative[item.history_name]
+                surface[f"{item.name}v"] = receipt[f"{item.name}v"]
             update = CudaPostRkWsm6UpdateV841(
                 theta=prepared.th_p,
-                qv=wsm6.qv,
-                qc=wsm6.qc,
-                qr=wsm6.qr,
-                qi=wsm6.qi,
-                qs=wsm6.qs,
-                qg=wsm6.qg,
-                rainnc=cumulative["RAINNC"],
-                rainncv=receipt["rainncv"],
-                snownc=cumulative["SNOWNC"],
-                snowncv=receipt["snowncv"],
-                graupelnc=cumulative["GRAUPELNC"],
-                graupelncv=receipt["graupelncv"],
-                sr=receipt["sr"],
-                effc=effc,
-                effi=effi,
-                effs=effs,
+                species={
+                    name: wsm6.species[name] for name in scalar_names
+                },
+                surface=surface,
+                radii=radii,
                 time_seconds=endpoint,
             )
             update.validate(
@@ -1328,25 +1379,25 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                         scalar_backup.nbytes
                     ),
                     "effective_radius_snapshot_d2d_bytes": int(
-                        effc.nbytes + effi.nbytes + effs.nbytes
+                        sum(value.nbytes for value in radii.values())
                     ),
                     "cumulative_precipitation": "frozen Arwen v2 public device copies",
                 },
                 "post_rk": {
-                    "in_place_species": list(WSM6_SCALAR_NAMES),
+                    "in_place_species": list(scalar_names),
                     "refl_10cm_due": bool(refl_10cm_due),
                     "theta": "prepared th_p dry theta",
                     "pressure": "prepared pres_p EOS",
                     "rho": "prepared rho_dry",
                     "z_interface": "prepared z_p",
-                    "cumulative_fields": ["rainnc", "snownc", "graupelnc"],
+                    "cumulative_fields": [
+                        item.name for item in row.surface_accumulators],
                     "increment_fields": [
-                        "rainncv",
-                        "snowncv",
-                        "graupelncv",
+                        *(f"{item.name}v"
+                          for item in row.surface_accumulators),
                         "sr",
                     ],
-                    "private_exact_hash_binding": ["effc", "effi", "effs"],
+                    "private_exact_hash_binding": list(row.radius_names),
                 },
             }
             return update
@@ -1524,14 +1575,20 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             selected_h2d_bytes += int(resident.nbytes)
 
         public_precip = self._seam.accumulated_precipitation()
-        precip_keys = {
-            "rainc": "RAINC",
-            "rainnc": "RAINNC",
-            "snownc": "SNOWNC",
-            "graupelnc": "GRAUPELNC",
-        }
-        if set(public_precip) != set(precip_keys.values()):
-            raise ValueError("frozen Arwen v2 public precipitation inventory changed")
+        # The seam's PUBLISHED inventory, not a welded four: every row's
+        # buckets are the row's own (WSM6 three, P3 two, a provider's
+        # declared extras), and finish_step checks the exact row set on
+        # every step.  What is fixed here is the shape of the contract --
+        # upper-case public keys, RAINC/RAINNC/SNOWNC always present, one
+        # lower-case leaf per key.
+        precip_keys = {key.lower(): key for key in public_precip}
+        if not {"RAINC", "RAINNC", "SNOWNC"} <= set(public_precip) or any(
+            key != key.upper() or not key for key in public_precip
+        ):
+            raise ValueError(
+                "frozen Arwen v2 public precipitation inventory changed: "
+                f"{sorted(public_precip)}"
+            )
         precipitation: dict[str, Any] = {}
         for public_name, fa35_name in precip_keys.items():
             source = public_precip[fa35_name]

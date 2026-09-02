@@ -13,6 +13,7 @@ import numpy as np
 
 from .driver import DryDycoreConfig
 from .errors import ConfigurationRefusal
+from .species_row import species_row_for_scheme as _species_row_for_scheme
 
 V841_SOURCE_RELEASE = "v8.4.1"
 V823_SOURCE_RELEASE = "v8.2.3"
@@ -427,6 +428,17 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
                 ),
             )
 
+        # The microphysics scheme is admitted by its species row: the row
+        # sizes the scalar block, the preparation pointer table, the moist
+        # coefficients, the carrier contracts and the history names, so a
+        # scheme with no row would run with an inventory nobody declared.
+        # A row with no engine counterparty refuses here by name rather
+        # than at the first phase-one call.
+        try:
+            _species_row_for_scheme(
+                self.config_microp_scheme).require_engine_scheme()
+        except ConfigurationRefusal:
+            raise
         exact = {
             "config_horiz_mixing": "off",
             "config_coef_3rd_order": 0.25,
@@ -449,7 +461,12 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
             "config_terrain_following": True,
             "config_moist_physics": True,
             "config_physics_suite": "arwen_mpas_column",
-            "config_microp_scheme": "mp_wsm6",
+            # config_microp_scheme is NOT a literal here either, and for the
+            # same shape of reason the convection knob is not: the species
+            # row makes a second microphysics a real configuration of this
+            # lane rather than a different lane.  It is admitted above from
+            # hexcore.species_row, which refuses a scheme with no row AND a
+            # declared scheme the pinned engine cannot run.
             # config_convection_scheme is NOT a literal here.  It is admitted
             # above from hexcore.convection_admission, because the
             # 2026-08-26 ruling made "off" a second real configuration of

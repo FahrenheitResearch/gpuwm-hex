@@ -973,6 +973,29 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
                 "Evidence: tree/evidence/nest-ratio-20260827/."
             ),
         ),
+        "r3.75.120.35842": MeshBinding(
+            name="r3.75.120.35842",
+            n_cells=35_842,
+            n_edges=108_249,
+            n_levels=55,
+            n_interfaces=56,
+            n_soil_levels=4,
+            nominal_dx_m=3750.0,
+            dt_seconds=20.0,
+            grid_bytes=50_226_220,
+            grid_sha256="548143032f166b85e38862e9cb1a8c814895be38252d038cc2a49b54ac24dca6",
+            static_bytes=73_181_844,
+            static_sha256="88a08a8257b4ef2c0962755b9b92351c227138f76948adb6aa237c6365e726d9",
+            drop_carried_deformation=True,
+            boundary_zone_width=7,
+            bdy_mask_sha256=(
+                "62d1b5ef8626628ddecd87955132dc64fb742a68420a3b90956bbf9bd59d1d3d"
+            ),
+            lbc_source="gfs-2026-08-12-06z-wps-intermediate/lbc-hourly",
+            notes=(
+                "Limited-area cull of a generated graded parent (3.75 km cap of 480 km radius at 42.0 N 86.0 W on a 120 km background, 120,941 cells) around a 600 x 600 km box over the Lower Great Lakes convection of the GFS 2026-08-12 06Z cycle. Init is the parent's own gpuwm-hex init culled; the boundary series is rw_mpas_lbc on the wps-intermediate route from the same GFS cycle, hourly 06-12Z. Staged for a forecast, not yet run: no regional anchor of this class exists and no forecast has been integrated on it."
+            ),
+        ),
         "r4.75.4440": MeshBinding(
             name="r4.75.4440",
             n_cells=4_440,
@@ -1136,6 +1159,101 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
                 "derived categorical supersample reads 2 on all six "
                 "categorical passes in the static's own receipt. Evidence: "
                 "evidence/repin-261-20260901/subkm/."
+            ),
+        ),
+        "u60.163632": MeshBinding(
+            name="u60.163632",
+            n_cells=163_632,
+            n_edges=490_890,
+            n_levels=55,
+            n_interfaces=56,
+            n_soil_levels=4,
+            nominal_dx_m=60_000.0,
+            dt_seconds=120.0,
+            grid_bytes=223_857_676,
+            grid_sha256="3ffcd78e03f85d2e8fd5d56792d173b172b27cb5d8e32f04b2a1f025d90d38a4",
+            static_bytes=332_510_380,
+            static_sha256="b820e95c647f5646ab8d630e3dd4c99c2392d90ef7714906190bc9fcfeedd476",
+            drop_carried_deformation=True,
+            notes=(
+                "HEX-SPEED 2026-09-02: generated uniform 60 km mesh, the 60 km rung of the "
+                "global speed ladder (the published x1.163842 is 163,842 cells; this is the "
+                "generator's own 60 km sizing, rw_mpas_mesh --background-km 60 from the v2.6.3 "
+                "bridge bundle, 26.6 s on the proving node's CPU). 163,632 cells, 490,890 edges, "
+                "dcEdge min 41,666.3 m, median 60,721.9 m, max 65,332.8 m; the static from "
+                "rw_mpas_static against that grid through the default geography ladder. Declared "
+                "dt 120 s against the door's Courant limit of 300.0 s (2.50x); the 120 s "
+                "Grell-Freitas anchor is a property of the timestep. Registered to run one "
+                "GFS-initialised 6 h forecast per card; nothing about its physics is proven "
+                "beyond that run's own receipt. Evidence: evidence/hex-speed-20260902/."
+            ),
+        ),
+        "r0.9.120.40520": MeshBinding(
+            name="r0.9.120.40520",
+            n_cells=40_520,
+            n_edges=121_848,
+            n_levels=55,
+            n_interfaces=56,
+            n_soil_levels=4,
+            nominal_dx_m=937.5,
+            dt_seconds=5.0,
+            grid_bytes=56_551_320,
+            grid_sha256="348592df56e53dfeb8dd1efa7cde38f1e4373f008b8c7ba0b543a11290a013eb",
+            static_bytes=82_483_960,
+            static_sha256="0ba6dfbb79ca82b8771f23390e18acb890fdc7a1b6b1000a861fdc1626a197ed",
+            drop_carried_deformation=True,
+            boundary_zone_width=7,
+            bdy_mask_sha256=(
+                "e52578a9bcffc1a019918f6e9fd01f6ac7bf54914dc916857860b539268e35b5"
+            ),
+            lbc_source="gfs-2026-08-28-18z-wps-intermediate/lbc-hourly",
+            notes=(
+                "HEX-SPEED 2026-09-02: a 125 km cap at 35.0 N 97.0 W culled from the registered v0.9.120.110533 parent (937.5 m core of 100 km radius on a 120 km background, the same bytes the 0.2.2 row pins) "
+                "with gpuwm-hex cull (rw_mpas_mesh --cull-parent from the v2.6.3 bridge bundle), "
+                "so the child's terrain, vertical grid and initial state ARE the parent's cell "
+                "for cell. 40,520 cells: the whole 937.5 m core plus the first 25 km of the 1.875 km ramp, where the seven boundary rings sit. "
+                "Rings 38,052/399/387/366/351/333/326/306 (zone width 7); "
+                "dcEdge min 869.251 m, median 976.9 m, max 4324.6 m (the outermost rings reach into the "
+                "ramp); declared dt 5 s against the door's Courant limit of 6.259 s "
+                "(1.252x). Convection is off by the 2026-08-26 sub-3-km ruling with no flag "
+                "passed. Init is the parent's own gpuwm-hex init (GFS 2026-08-28 18Z analysis, native-free "
+                "tc55-v1 vertical) culled; the boundary series is rw_mpas_lbc on the wps-intermediate route "
+                "from the same GFS cycle, hourly f000-f006 (18Z-00Z). Sibling of r0.8.102.56619 on the same cap. "
+                "Evidence: evidence/hex-speed-20260902/."
+            ),
+        ),
+        "r0.8.102.56619": MeshBinding(
+            name="r0.8.102.56619",
+            n_cells=56_619,
+            n_edges=170_231,
+            n_levels=55,
+            n_interfaces=56,
+            n_soil_levels=4,
+            nominal_dx_m=800.0,
+            dt_seconds=5.0,
+            grid_bytes=78_998_752,
+            grid_sha256="f09d5b1ac5f8cc9a0af782dd8817b34b4cc075b04365c0782cfc94bc886e5d93",
+            static_bytes=115_237_376,
+            static_sha256="533492c42e600324902797de817d234ba165ccd833378c003ab4eed3fba9375d",
+            drop_carried_deformation=True,
+            boundary_zone_width=7,
+            bdy_mask_sha256=(
+                "de0c858251b36b8592c8416f2dba8876127035229d4f3d88184831732c10b996"
+            ),
+            lbc_source="gfs-2026-08-28-18z-wps-intermediate/lbc-hourly",
+            notes=(
+                "HEX-SPEED 2026-09-02: a 125 km cap at 35.0 N 97.0 W culled from an 800 m parent generated for this lane: the registered 937.5 m ladder with every spacing, transition and the 102.4 km background scaled by 0.8/0.9375 and the cap radii kept (155,138 cells, 147 s on the proving node's CPU) "
+                "with gpuwm-hex cull (rw_mpas_mesh --cull-parent from the v2.6.3 bridge bundle), "
+                "so the child's terrain, vertical grid and initial state ARE the parent's cell "
+                "for cell. 56,619 cells: the whole 800 m core plus the first 25 km of the 1.6 km ramp, where the seven boundary rings sit. THE FINEST REGISTERED ROW: min dcEdge 710.869 m. "
+                "Rings 53,412/508/497/477/463/448/422/392 (zone width 7); "
+                "dcEdge min 710.869 m, median 831.3 m, max 3394.1 m (the outermost rings reach into the "
+                "ramp); declared dt 5 s against the door's Courant limit of 5.118 s "
+                "(1.024x). Convection is off by the 2026-08-26 sub-3-km ruling with no flag "
+                "passed. Init is the parent's own gpuwm-hex init (GFS 2026-08-28 18Z analysis, native-free "
+                "tc55-v1 vertical) culled; the boundary series is rw_mpas_lbc on the wps-intermediate route "
+                "from the same GFS cycle, hourly f000-f006 (18Z-00Z). Sibling of r0.9.120.40520 on the same cap. "
+                "Evidence: evidence/hex-speed-20260902/."
             ),
         ),
     }

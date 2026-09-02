@@ -403,7 +403,7 @@ class RegionalContract:
 #: v8.4.1 CPU authority on its own zone geometry, and a spelling cannot touch
 #: that.
 MINTED_KERNEL_SET_SHA256 = (
-    "eeec7042024d89ebbdbd18d8a401b90a9843f2783f5eb57a695a515f3ef657db"
+    "ce63c3ddf9c653ef500a178dba0cee2d43bf96f9701ef142fa58677358a17bfc"
 )
 
 _DRY_MINT_CAVEAT = (
@@ -422,6 +422,48 @@ _DRY_MINT_CAVEAT = (
 #: table work -- one entry naming evidence that exists in this repository.
 ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
     {
+        "graded-3315m-dt20-z7": RegionalClass(
+            class_id="graded-3315m-dt20-z7",
+            key=RegionalClassKey(
+                boundary_zone_width=7,
+                n_vert_levels=55,
+                finest_edge_mm=3_314_810,
+                dt_ms=20_000,
+                # The kernel set of the species-row generalization (the
+                # door lane's chain landed 2026-09-01), measured at the
+                # mint; the older classes above and below were minted at
+                # the pre-generalization set and record their own lapse.
+                kernel_set_sha256=(
+                    "ce63c3ddf9c653ef500a178dba0cee2d43bf96f9701ef142fa58677358a17bfc"
+                ),
+            ),
+            parent="generated graded parent: 3.75 km cap of 480 km radius at "
+            "42.0 N 86.0 W on a 120 km background, 120,941 cells",
+            card="NVIDIA GeForce RTX 3080 (sm_86)",
+            admitted_on="2026-09-02",
+            mint_receipts=(
+                "evidence/hex-mod-20260901/class-mint/mint-run1/forecast.json",
+                "evidence/hex-mod-20260901/class-mint/mint-run2/forecast.json",
+            ),
+            minted_on_geometries=("r3.75.120.35842",),
+            basis=(
+                "The class of a 3.75 km limited-area cull of a generated graded "
+                "parent: seven boundary rings, 55 levels, the cull's own finest "
+                "edge of 3,314.810 m, dt 20 s (a 23.867 s Courant limit at "
+                "125 m/s x 0.9), and this tree's regional kernel set after the "
+                "species-row generalization.  Two independent processes ran "
+                "1,080 steps -- six forecast hours from 2026-08-12_06:00:00, "
+                "config_apply_lbcs=true, config_len_disp 3,750 m, hourly GFS "
+                "boundaries -- in 915 s and 866 s on the desktop RTX 3080 "
+                "beside another tenant, and all THIRTEEN published history frames "
+                "agree under masked digests while every whole-file digest differs "
+                "on its own file_id.  Minted on the geometry it will run on; the "
+                "class inherits the graded-parent lane's finding that the "
+                "geometry is not in the key, and pays for that inheritance with "
+                "the cull's own contract deck below.  "
+                + _DRY_MINT_CAVEAT
+            ),
+        ),
         "graded-4457m-dt20-z7": RegionalClass(
             class_id="graded-4457m-dt20-z7",
             key=RegionalClassKey(
@@ -433,11 +475,11 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
             ),
             parent="v4.75.121182",
             card="NVIDIA GeForce RTX 5090 (sm_120)",
-            admitted_on="2026-08-27",
+            admitted_on="2026-09-01",
             mint_receipts=(
-                "evidence/scrub-pins-20260827/graded-class-mint/"
+                "evidence/door-species-20260901/graded-class-mint/"
                 "mint-run1/forecast.json",
-                "evidence/scrub-pins-20260827/graded-class-mint/"
+                "evidence/door-species-20260901/graded-class-mint/"
                 "mint-run2/forecast.json",
             ),
             minted_on_geometries=("r4.75.14050",),
@@ -466,6 +508,7 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "whole-file digest differing on its own file_id.  The "
                 "superseded pair was taken at kernel set bdcfe014... and its "
                 "receipts remain in the tree as the record of that run.  "
+                "  RE-MINTED 2026-09-01 at the kernel set the species-row door generalization produced: cuda_driver.py and cuda_regional_forecast_v841.py both moved, so every class lapsed exactly as a whole-file digest is meant to make them.  Same 14,050-cell cull, same namelist, 1,080 steps in two independent processes, 192 s and 183 s, all THIRTEEN published frames identical under masked digests (0 of 13 differing) and every whole-file digest differing on its own file_id (13 of 13).  What moved in the kernel set is measured rather than assumed: of the six kernels in the shared translation unit, only the two moist-coefficient kernels changed PTX at compute_120, and the regional step launches neither (evidence/door-species-20260901/regional-ptx-diff.txt).  "
                 + _DRY_MINT_CAVEAT
             ),
         ),
@@ -480,11 +523,11 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
             ),
             parent="x1.2562 (the v8.4.1 regional reference)",
             card="NVIDIA GeForce RTX 5090 (sm_120)",
-            admitted_on="2026-08-27",
+            admitted_on="2026-09-01",
             mint_receipts=(
-                "evidence/scrub-pins-20260827/conus-class-mint/"
+                "evidence/door-species-20260901/conus-class-mint/"
                 "mint-run1/forecast.json",
-                "evidence/scrub-pins-20260827/conus-class-mint/"
+                "evidence/door-species-20260901/conus-class-mint/"
                 "mint-run2/forecast.json",
             ),
             minted_on_geometries=("conus-x1.2971",),
@@ -526,6 +569,83 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "tree as the record of that run.  " + _DRY_MINT_CAVEAT
             ),
         ),
+        "graded-869m-dt5-z7": RegionalClass(
+            class_id="graded-869m-dt5-z7",
+            key=RegionalClassKey(
+                boundary_zone_width=7,
+                n_vert_levels=55,
+                finest_edge_mm=869_251,
+                dt_ms=5_000,
+                kernel_set_sha256=MINTED_KERNEL_SET_SHA256,
+            ),
+            parent="v0.9.120.110533",
+            card="NVIDIA GeForce RTX 5070 Ti (sm_120)",
+            admitted_on="2026-09-02",
+            mint_receipts=(
+                "evidence/hex-speed-20260902/class-mint-937/mint-run1/forecast.json",
+                "evidence/hex-speed-20260902/class-mint-937/mint-run2/forecast.json",
+            ),
+            minted_on_geometries=("r0.9.120.40520",),
+            basis=(
+                "The class of a 937.5 m limited-area cull of the registered "
+                "v0.9.120.110533 parent, the first sub-kilometre class this "
+                "program has minted: seven boundary rings, 55 levels, the "
+                "cull's own finest edge of 869.251 m (the parent's, in the "
+                "same float64 bits), dt 5 s (a 6.259 s Courant limit at "
+                "125 m/s x 0.9, 1.252x), and this tree's regional kernel set "
+                "at MINTED_KERNEL_SET_SHA256, measured at the mint.  Two "
+                "independent processes ran 1,080 steps -- 1.5 forecast hours "
+                "from 2026-08-28_18:00:00, config_apply_lbcs=true, "
+                "config_len_disp 937.5 m, hourly GFS boundaries -- in 764 s "
+                "and 562 s on the RTX 5070 Ti of the proving node beside other "
+                "tenants (the first beside a 10.8 GiB one), and all THIRTEEN "
+                "published history frames agree under masked digests while "
+                "every whole-file digest differs on its own file_id.  Minted "
+                "on the geometry it will run on, the 40,520-cell cull of the "
+                "speed ladder; the class inherits the graded-parent lane's "
+                "finding that the geometry is not in the key, and pays for "
+                "that inheritance with the cull's own contract deck below.  "
+                + _DRY_MINT_CAVEAT
+            ),
+        ),
+        "graded-711m-dt5-z7": RegionalClass(
+            class_id="graded-711m-dt5-z7",
+            key=RegionalClassKey(
+                boundary_zone_width=7,
+                n_vert_levels=55,
+                finest_edge_mm=710_869,
+                dt_ms=5_000,
+                kernel_set_sha256=MINTED_KERNEL_SET_SHA256,
+            ),
+            parent="generated 800 m parent: the registered 937.5 m ladder scaled "
+            "by 0.8/0.9375 with the cap radii kept, 155,138 cells",
+            card="NVIDIA GeForce RTX 5070 Ti (sm_120)",
+            admitted_on="2026-09-02",
+            mint_receipts=(
+                "evidence/hex-speed-20260902/class-mint-800/mint-run1/forecast.json",
+                "evidence/hex-speed-20260902/class-mint-800/mint-run2/forecast.json",
+            ),
+            minted_on_geometries=("r0.8.102.56619",),
+            basis=(
+                "The finest class this program has minted: an 800 m limited-area "
+                "cull of a generated 800 m parent, seven boundary rings, 55 "
+                "levels, the cull's own finest edge of 710.869 m, dt 5 s (a "
+                "5.118 s Courant limit at 125 m/s x 0.9, 1.024x, the tightest "
+                "margin of any registered row), and this tree's regional kernel "
+                "set at MINTED_KERNEL_SET_SHA256, measured at the mint.  Two "
+                "independent processes ran 1,080 steps -- 1.5 forecast hours "
+                "from 2026-08-28_18:00:00, config_apply_lbcs=true, "
+                "config_len_disp 800 m, hourly GFS boundaries -- in 697 s and "
+                "677 s on the proving node's NVIDIA GeForce RTX 5070 Ti, and all "
+                "THIRTEEN published history frames agree under masked digests "
+                "while every whole-file digest differs on its own file_id.  "
+                "Minted on the geometry it will run on, the 56,619-cell cull of "
+                "the speed ladder; the class inherits the graded-parent lane's "
+                "finding that the geometry is not in the key, and pays for that "
+                "inheritance with the cull's own contract deck below.  "
+                + _DRY_MINT_CAVEAT
+            ),
+        ),
     }
 )
 
@@ -536,6 +656,27 @@ SHIPPED_CONTRACTS: Mapping[str, RegionalContract] = MappingProxyType(
     {
         anchor.bdy_mask_sha256: anchor
         for anchor in (
+            RegionalContract(
+                bdy_mask_sha256=(
+                    "62d1b5ef8626628ddecd87955132dc64fb742a68420a3b90956bbf9bd59d1d3d"
+                ),
+                n_cells=35_842,
+                boundary_zone_width=7,
+                class_id="graded-3315m-dt20-z7",
+                mesh_row="r3.75.120.35842",
+                card="NVIDIA GeForce RTX 3080 (sm_86)",
+                admitted_on="2026-09-02",
+                contract_receipt=(
+                    "evidence/hex-mod-20260901/contract/records.json"
+                ),
+                basis=(
+                    "8 of 8 decks bitwise against the v8.4.1 CPU authority over "
+                    "124,848,922 float32 values compared as raw bit patterns (42 payloads), "
+                    "22 of 22 declared kernels covered, dual-run stable across "
+                    "two passes in one process, and every deck re-run with a "
+                    "deliberately wrong zone geometry FAILS."
+                ),
+            ),
             RegionalContract(
                 bdy_mask_sha256=(
                     "acc95da7ecc58253e0085332eb5acc827d42287ecae4fe9ea88bd64060f4d67e"
@@ -677,6 +818,62 @@ SHIPPED_CONTRACTS: Mapping[str, RegionalContract] = MappingProxyType(
                     "in element count than the 1.35x cull's while the domain "
                     "is larger, because the rings out here are made of much "
                     "wider cells."
+                ),
+            ),
+            RegionalContract(
+                bdy_mask_sha256=(
+                    "e52578a9bcffc1a019918f6e9fd01f6ac7bf54914dc916857860b539268e35b5"
+                ),
+                n_cells=40_520,
+                boundary_zone_width=7,
+                class_id="graded-869m-dt5-z7",
+                mesh_row="r0.9.120.40520",
+                card="NVIDIA GeForce RTX 5070 Ti (sm_120)",
+                admitted_on="2026-09-02",
+                contract_receipt=(
+                    "evidence/hex-speed-20260902/class-mint-937/contract/records.json"
+                ),
+                basis=(
+                    "The first sub-kilometre geometry earned: the 125 km cap "
+                    "at 35.0 N 97.0 W culled from the registered 937.5 m "
+                    "parent, 110,533 cells become 40,520, rings "
+                    "38,052/399/387/366/351/333/326/306.  8 of 8 decks "
+                    "bitwise against the v8.4.1 CPU authority on THIS cull's "
+                    "zone geometry (632 spec cells, 1,437 relax cells, 1,861 "
+                    "spec edges, 4,250 relax edges) over 140,794,482 float32 "
+                    "values compared as raw bit patterns (42 payloads), 22 of "
+                    "22 declared kernels covered, dual-run stable across two "
+                    "passes in one process, and every deck re-run with a "
+                    "deliberately wrong zone geometry FAILS.  468 s on the "
+                    "proving node's RTX 5070 Ti."
+                ),
+            ),
+            RegionalContract(
+                bdy_mask_sha256=(
+                    "de0c858251b36b8592c8416f2dba8876127035229d4f3d88184831732c10b996"
+                ),
+                n_cells=56_619,
+                boundary_zone_width=7,
+                class_id="graded-711m-dt5-z7",
+                mesh_row="r0.8.102.56619",
+                card="NVIDIA GeForce RTX 5070 Ti (sm_120)",
+                admitted_on="2026-09-02",
+                contract_receipt=(
+                    "evidence/hex-speed-20260902/class-mint-800/contract/records.json"
+                ),
+                basis=(
+                    "The finest geometry earned: the same 125 km cap at 35.0 N "
+                    "97.0 W culled from the generated 800 m parent, 155,138 "
+                    "cells become 56,619, rings 53,412/508/497/477/463/448/422/392.  "
+                    "8 of 8 decks bitwise against the v8.4.1 CPU authority on "
+                    "THIS cull's zone geometry (814 spec cells, "
+                    "1,885 relax cells, 2,397 spec edges, "
+                    "5,580 relax edges) over 196,714,772 float32 values "
+                    "compared as raw bit patterns (42 payloads), 22 of 22 "
+                    "declared kernels covered, dual-run stable across two passes "
+                    "in one process, and every deck re-run with a deliberately "
+                    "wrong zone geometry FAILS.  552 s on the "
+                    "proving node's NVIDIA GeForce RTX 5070 Ti."
                 ),
             ),
         )

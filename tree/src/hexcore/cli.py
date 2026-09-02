@@ -261,6 +261,16 @@ def build_parser() -> argparse.ArgumentParser:
     # capability the distribution has.
     add_forecast_parser(commands)
 
+    # Immediately after forecast, because it IS the forecast door: `pair`
+    # takes every forecast flag from `add_forecast_arguments`, runs that one
+    # authored request twice -- once with a point-source table and once
+    # without -- and differences the two.  The import is deferred for the
+    # same reason `forecast` is not: this module is stdlib-only, but keeping
+    # the two together here is what makes the adjacency visible in --help.
+    from .pair_door import add_pair_parser
+
+    add_pair_parser(commands)
+
     # After forecast and before render, because that is the order a cascade
     # meets them: a coarse forecast is what the placement reads, and the
     # swaths it places are what the next forecast and the render draw.  The

@@ -113,7 +113,7 @@ def test_the_shipped_table_says_what_the_measurement_said():
     Not a re-derivation -- the network instrument is
     ``evidence/standalone-20260827/measure_engine_verdicts.py`` and the JSON
     behind the shipped table is
-    ``evidence/repin-261-20260901/engine-verdicts.json``.  This is the claim
+    ``evidence/repin-265-20260902/engine-verdicts.json``.  This is the claim
     the receipts make, kept true here so that editing a row without
     re-measuring is caught.
 
@@ -139,40 +139,103 @@ def test_the_shipped_table_says_what_the_measurement_said():
     ``gpuwm/config.py``, ``docs/mpas-seam.md`` -- and the port re-pinned to
     the published 2.6.1 bytes, so 2.6.0 dropped to "fails the manifest"
     exactly as 2.5.8 did the time before.
+
+    AND A FOURTH TIME ON 2026-09-02: the engine published 2.6.3 (the
+    aerosol-aware Thompson seam row and a config-relative file key), the
+    same three manifest files moved at that cut, and the port re-pinned to
+    the published 2.6.3 bytes, so 2.6.1 dropped to "fails the manifest".
+    2.6.2 is the 2.5.5 shape again -- a tag whose bytes match and whose
+    publish job died, so nothing of it is on PyPI -- and is asserted below
+    as satisfying the manifest and still not usable.
+
+    AND A FIFTH TIME THE SAME DAY: the engine published 2.6.4 three hours
+    after 2.6.3 (a third cumulus scheme and two fixes), SIX manifest files
+    moved between the two published wheels -- ``gpuwm/core/physics.py``,
+    ``gpuwm/core/gf.py``, ``gpuwm/core/kernels/gf.cu``,
+    ``gpuwm/core/kernels/__init__.py``, ``gpuwm/config.py``,
+    ``gpuwm/io/restart.py`` -- and the port re-pinned to the published 2.6.4
+    bytes, so 2.6.3 dropped to "fails the manifest" by exactly those six.
+    2.6.2 fails by the same six now, so its tag-only clause no longer
+    decides anything; it is asserted below as failing on bytes AND absent
+    from PyPI, so neither clause can be edited back alone.
+
+    AND A SIXTH TIME THE SAME DAY, WITHOUT A PIN MOVE: the engine published
+    2.6.5 ninety minutes after 2.6.4 (a soil-archive layout fix off the
+    physics path), all sixteen manifest files are byte-identical between
+    the two published wheels (``evidence/repin-265-20260902/
+    wheel-pair-264-265.txt``), so the manifest stayed where it was, 2.6.4
+    stayed the floor, 2.6.5 joined the usable rows and the ceiling moved
+    one patch up to 2.6.6.  That is the only widening the derivation can
+    produce -- a measured engine that passed -- and it is asserted below as
+    exactly two usable rows, so a third appearing without a measurement is
+    a failure here.
     """
 
-    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.6.1,<2.6.2"
-    assert engine_pin.gpuwm_floor() == "2.6.1"
-    assert engine_pin.gpuwm_ceiling() == "2.6.2"
+    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.6.4,<2.6.6"
+    assert engine_pin.gpuwm_floor() == "2.6.4"
+    assert engine_pin.gpuwm_ceiling() == "2.6.6"
 
-    # EXACTLY ONE published engine is usable.  Asserted as a count, not as a
-    # membership test, because "2.6.1 works" would still pass if a stale row
-    # below it were left claiming to work too -- and that stale row is what
-    # a resolver would actually pick when 2.6.1 is unavailable.
+    # EXACTLY TWO published engines are usable, and they carry the same
+    # sixteen bytes.  Asserted as the whole list, not as a membership test,
+    # because "2.6.4 works" would still pass if a stale row below it were
+    # left claiming to work too -- and that stale row is what a resolver
+    # would actually pick when the admitted engines are unavailable.
     usable = [row.version for row in engine_pin.PUBLISHED_ENGINES if row.usable]
-    assert usable == ["2.6.1"], (
-        "the re-pinned manifest is satisfied by exactly one published "
-        f"engine.  Usable: {usable}"
+    assert usable == ["2.6.4", "2.6.5"], (
+        "the re-pinned manifest is satisfied by exactly two published "
+        f"engines, byte-identical on every pinned path.  Usable: {usable}"
     )
-    assert engine_pin.engine("2.6.1").moved == ()
+    assert engine_pin.engine("2.6.4").moved == ()
+    assert engine_pin.engine("2.6.5").moved == ()
+    assert engine_pin.engine("2.6.5").on_pypi
+    assert engine_pin.engine("2.6.5").offline_build_road
 
-    # The engine that was the floor the day before now fails, and so does
-    # every other pre-2.6.1 cut.  Named individually so that a row silently
+    # The engine that was the floor the same morning now fails, and so does
+    # every other pre-2.6.4 cut.  Named individually so that a row silently
     # reverting to "matches" is a failure here rather than a wider range.
     assert not engine_pin.engine("2.5.7").usable
     assert not engine_pin.engine("2.5.8").usable
     assert not engine_pin.engine("2.6.0").usable
-    assert engine_pin.engine("2.6.0").moved == (
+    assert not engine_pin.engine("2.6.1").usable
+    assert not engine_pin.engine("2.6.3").usable
+    assert engine_pin.engine("2.6.3").moved == (
+        "gpuwm/config.py",
+        "gpuwm/core/gf.py",
+        "gpuwm/core/kernels/__init__.py",
+        "gpuwm/core/kernels/gf.cu",
+        "gpuwm/core/physics.py",
+        "gpuwm/io/restart.py",
+    )
+    # 2.6.1 fails by those six plus the three the 2.6.3 cut moved (the
+    # column batch and the contract document did not move again at 2.6.4,
+    # so they stay in 2.6.1's list and are absent from 2.6.3's; config.py
+    # moved at both cuts and is counted once).
+    assert engine_pin.engine("2.6.1").moved == (
         "docs/mpas-seam.md",
         "gpuwm/config.py",
+        "gpuwm/core/gf.py",
+        "gpuwm/core/kernels/__init__.py",
+        "gpuwm/core/kernels/gf.cu",
         "gpuwm/core/mpas_column_batch.py",
+        "gpuwm/core/physics.py",
+        "gpuwm/io/restart.py",
     )
+    # 2.6.2: the tag whose publish job died.  It matched the 2.6.3 manifest
+    # byte for byte and fails this one by the same six files 2.6.3 does, so
+    # it is disqualified twice now; both clauses named so that neither can
+    # be quietly edited back on its own.
+    tagged_262 = engine_pin.engine("2.6.2")
+    assert not tagged_262.satisfies_manifest
+    assert tagged_262.moved == engine_pin.engine("2.6.3").moved
+    assert tagged_262.offline_build_road
+    assert not tagged_262.on_pypi
+    assert not tagged_262.usable
     for row in engine_pin.PUBLISHED_ENGINES:
-        if row.version != "2.6.1":
+        if row.version not in ("2.6.4", "2.6.5"):
             assert row.moved, (
-                f"{row.version} claims to satisfy the manifest.  Only 2.6.1 "
-                "does; a pre-2.6.1 row with an empty moved list means the "
-                "table was patched by hand instead of re-measured"
+                f"{row.version} claims to satisfy the manifest.  Only 2.6.4 "
+                "and 2.6.5 do; any other row with an empty moved list means "
+                "the table was patched by hand instead of re-measured"
             )
 
     # 2.5.5 is disqualified three separate ways now, and all three are
@@ -210,7 +273,7 @@ def test_the_table_is_the_instruments_output_not_a_transcription(receipts):
     import json
 
     verdicts = json.loads(
-        (receipts / "repin-261-20260901" / "engine-verdicts.json").read_text(
+        (receipts / "repin-265-20260902" / "engine-verdicts.json").read_text(
             encoding="utf-8"
         )
     )
@@ -230,7 +293,7 @@ def test_the_table_is_the_instruments_output_not_a_transcription(receipts):
         "PUBLISHED_ENGINES disagrees with the JSON it is supposed to be "
         "rendered from.  Re-splice it: python "
         "evidence/repin-258-20260828/render_engine_pin_table.py "
-        "evidence/repin-261-20260901/engine-verdicts.json --splice "
+        "evidence/repin-265-20260902/engine-verdicts.json --splice "
         "src/hexcore/engine_pin.py"
     )
 

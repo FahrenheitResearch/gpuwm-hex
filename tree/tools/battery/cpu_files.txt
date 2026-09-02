@@ -211,3 +211,12 @@ tests/test_tier_membership.py
 # CRLF worktree is invisible to every blob-reading check and only a
 # leg that RUNS this can see it.
 tests/test_tracked_file_writers_keep_lf.py
+
+# The mp=28 seeded-pair door and its scalar rows, added when the hex-mod lane
+# folded into the integration tip these files rode in on. No card, no assets,
+# no network: the pair door's argument surface and refusals, the gallery
+# caption logic, the backend row builder, and the species-row extras hook.
+tests/test_pair_door.py
+tests/test_plot_pair_gallery.py
+tests/test_backend_row_builder.py
+tests/test_species_row_extended.py

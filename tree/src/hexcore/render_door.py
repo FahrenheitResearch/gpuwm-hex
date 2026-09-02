@@ -261,7 +261,8 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
                    mesh: Path | None, scratch: Path, window: str,
                    field_set: str, simulation_start: str | None,
                    nc_format: str, compose: Path | None = None,
-                   compose_base_only: bool = False) -> tuple[dict, list[str]]:
+                   compose_base_only: bool = False,
+                   init: Path | None = None) -> tuple[dict, list[str]]:
     """Run ``rw_mpas_convert`` once over the whole series.
 
     Returns ``(report, invocation)`` where ``report`` is the converter's own
@@ -286,6 +287,12 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
     else:
         command.extend(("--history", *[str(item) for item in histories or []]))
         command.extend(("--mesh", str(mesh)))
+        if init is not None:
+            # The converter sources PHB (g * zgrid) from the run's init file
+            # and nothing else: a history frame carries no zgrid, so without
+            # this every pressure-level product (500 hPa height and winds,
+            # 850 hPa) is refused as missing-fields on every run.
+            command.extend(("--init", str(init)))
     command.extend((
         "--out-dir", str(frames_dir),
         "--window", window,
@@ -521,6 +528,16 @@ def run_render(args) -> int:
                 "not carry the 3-D state the converter reads.")
             for item in args.history
         ]
+    init = None
+    if getattr(args, "init", None):
+        if compose is not None:
+            raise RenderDoorError(
+                "--init belongs to a single-source render; a compose file "
+                "names each run's own files.")
+        init = _require_file(
+            Path(args.init), "--init",
+            "Point --init at the init netCDF the run started from; the "
+            "converter reads zgrid from it and from nothing else.")
 
     try:
         width_text, height_text = str(args.size).lower().split("x", 1)
@@ -538,7 +555,7 @@ def run_render(args) -> int:
         convert_exe, histories=histories, mesh=mesh, scratch=scratch,
         window=args.window, field_set=args.field_set,
         simulation_start=args.simulation_start, nc_format=args.nc_format,
-        compose=compose, compose_base_only=compose_base_only)
+        compose=compose, compose_base_only=compose_base_only, init=init)
     invocations.append(convert_invocation)
 
     frames_meta = report.get("frames", [])
@@ -695,6 +712,12 @@ def add_render_arguments(parser) -> None:
         "--mesh", default=None, metavar="FILE",
         help="the run's grid/static netCDF with cell coordinates. Required "
              "unless --compose names it instead")
+    parser.add_argument(
+        "--init", default=None, metavar="FILE",
+        help="the run's init netCDF (the file the forecast started from). "
+             "Optional: it is the converter's only source of zgrid, so the "
+             "pressure-level products (500mb_height_winds, "
+             "850mb_temperature_height_winds) render only when it is given")
     parser.add_argument(
         "--compose", default=None, metavar="FILE",
         help="compose SEVERAL runs of the same hours into one frame: the "

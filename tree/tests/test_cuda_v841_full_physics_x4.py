@@ -45,7 +45,7 @@ def test_exact_release_scope_and_all_execution_sources_are_frozen() -> None:
     assert runner.FULL_STEPS == 30
     assert runner.CHECKPOINT_STEP == 15
     assert runner.ARWEN_CONTRACT_SURFACE_SHA256 == (
-        "3b45dd0c00ea61dc66eded1d79ba1999af95cee71a8a4c439cc49adb89d2cf79"
+        "45de852c6f8a8951d7e3f65b2b1e64462cf213d50707db4e52cb7eba17491ff2"
     )
     assert runner.ARWEN_GLACIER_COMPOSED_TU_SHA256 == (
         "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
@@ -84,13 +84,13 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
     runner = _load_runner()
     assert runner.EXECUTION_SOURCE_PINS == {
         "src/hexcore/cuda_physics_prep_v841.py": (
-            "0e8df0fa4c58df44d887aa5fe8aaf722da2273df6a900feb4de31f06d575fe60"
+            "3bd2d6a1a0217f4a91c70f0179e9dfebe210426a4f3ab6e0d48b6e29a7855f72"
         ),
         "src/hexcore/cuda_gwdo_v841.py": (
             "5b9dd5980e33d7a0b1760281bc1553c93fa5f4c4395f7b107c8d61dabe1b9f23"
         ),
         "src/hexcore/cuda_physics_v841.py": (
-            "c7ddcb52d879d4aa6ba8d9474aa73d77aaf3cfb94ee3137ba7413328fdd5e666"
+            "fed89ae26008b48a305f75af4db24c215cf5952d0ae28c67bbd05a5b925a569b"
         ),
         # Re-frozen 2026-08-26 for the convection ruling: the physics cadence
         # table reports convection: None when no scheme is selected; and again
@@ -103,7 +103,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/cuda_driver.py": (
-            "e6f51ea11e68f87ed011b61432a7178ef507ce6a518e834a115127ca1687694c"
+            "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb"
         ),
         "src/hexcore/cuda_backend/recovery.py": (
             "ea5dd7837f411233210f8bb47086e2264a83e2d4334e5ab41dae2bd87ebc5147"
@@ -117,7 +117,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/config_v841.py": (
-            "4e18842d7757db8de2a511fc78b9a650070d42b7a360838179b1d4b7df202367"
+            "fdbb45990de9b4e77cbb1987e2b960554764d4c5f2a43dd7a28470e7502a8fc0"
         ),
         # New pin (convection ruling, 2026-08-26): the frozen config admits
         # config_convection_scheme from this module and the timestep registry
@@ -168,7 +168,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # the x4 proof refusing before CUDA.  The rationale lives beside the
         # runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "7d31ff98b18016f965c48682371c1f05d3e883b7e35740175de83e4bb8902f4f"
+            "abf930c9eb34d4a2aaad79721c1db8dc8cfaec01f2c372fc54503e23f44745cb"
         ),
         # Re-frozen for the regional CPU authority lane (#346 L4); the
         # rationale lives beside the runner's pin.

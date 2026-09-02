@@ -103,15 +103,19 @@ MPAS_SELECTOR_INVENTORY: Mapping[str, tuple[str, ...]] = MappingProxyType(
 
 # gpuwm/config.py plus gpuwm/core/physics.py.  This is an inventory, not a
 # promise that every value can run in the local CUDA environment.  The
-# mp_physics row is engine MP_PHYSICS_ACCEPTED at the 2.6.1 pin line
-# (gpuwm/config.py at the engine's 2.6.1 line): re-synced 2026-08-31 when the P3 row
+# mp_physics row is engine MP_PHYSICS_ACCEPTED at the 2.6.4 pin line
+# (gpuwm/config.py at the engine's 2.6.4 line, unchanged since 2.6.1 for
+# microphysics; the cu_physics row is engine CU_SCHEMES, which gained 16
+# (New Tiedtke) at the 2.6.4 cut and was re-synced here 2026-09-02 when the
+# pin moved -- the inventory names it, the routes below do not):
+# re-synced 2026-08-31 when the P3 row
 # landed below -- the previous copy had already drifted (it lacked 9, 16
 # and 50), which is exactly the second-copy hazard the ladder docstring
 # names.
 GPUWM_SELECTOR_INVENTORY: Mapping[str, tuple[int, ...]] = MappingProxyType(
     {
         "mp_physics": (0, 1, 6, 8, 9, 10, 16, 18, 28, 50),
-        "cu_physics": (0, 1, 3),
+        "cu_physics": (0, 1, 3, 16),
         "sf_surface_physics": (0, 2, 3, 4),
         "bl_pbl_physics": (0, 1, 5, 11, 900),
         "sf_sfclay_physics": (0, 1, 5, 91),

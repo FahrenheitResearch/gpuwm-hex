@@ -36,28 +36,48 @@ this.**  An engine nobody has measured against the manifest is never
 resolved onto by default; admitting one is a deliberate act that re-runs the
 instrument and moves this table.
 
-WHERE THIS STANDS NOW, re-measured 2026-09-01
-(``evidence/repin-261-20260901/``).  The engine cut 2.6.1 and published it
-to PyPI, this port re-pinned its manifest to that cut's bytes, and the
-instrument was re-run over every published engine.  The derivation now
-returns ``gpuwm>=2.6.1,<2.6.2``: 2.6.1 is measured usable and is ADMITTED.
-The ceiling did its work again rather than being bypassed -- while the
-table said ``<2.6.1``, 2.6.1 was excluded exactly as an unmeasured engine
-must be, and letting it in cost what it is meant to cost: re-run the
-instrument, move the table, let the literal follow.  The 2026-08-31 re-pin
-to 2.6.0 (``evidence/repin-260-20260831/``) and the 2026-08-28 re-pin to
-2.5.8 (``evidence/repin-258-20260828/``) paid the same toll the same way.
+WHERE THIS STANDS NOW, re-measured 2026-09-02
+(``evidence/repin-265-20260902/``, after ``evidence/repin-264-20260902/``
+the same day).  The engine cut 2.6.4 and published it to PyPI three hours
+after 2.6.3, this port re-pinned its manifest to that cut's bytes, and the
+instrument was re-run over every published engine plus the two tags that
+have no release.  The engine then published 2.6.5 ninety minutes after
+2.6.4, and the instrument was re-run once more over every tag through
+``v2.6.5``.  The derivation now returns ``gpuwm>=2.6.4,<2.6.6``: 2.6.4 and
+2.6.5 are both measured usable and both ADMITTED.  The ceiling did its work
+each time rather than being bypassed -- while the table said ``<2.6.4``,
+2.6.4 was excluded exactly as an unmeasured engine must be, and while it
+said ``<2.6.5``, 2.6.5 was; letting each in cost what it is meant to cost:
+re-run the instrument, move the table, let the literal follow.  The
+same-day re-pin to 2.6.3 (``evidence/repin-263-20260902/``), the
+2026-09-01 re-pin to 2.6.1 (``evidence/repin-261-20260901/``), the
+2026-08-31 re-pin to 2.6.0 (``evidence/repin-260-20260831/``) and the
+2026-08-28 re-pin to 2.5.8 (``evidence/repin-258-20260828/``) paid the
+same toll the same way.
 
-**EXACTLY ONE PUBLISHED ENGINE IS USABLE, and that is a measured finding
-rather than a cautious choice.**  Re-pinning the manifest moved the whole
-``moved`` column, because that column is relative to the manifest: every
-engine below 2.6.1 now fails it, INCLUDING the 2.6.0 that was the floor the
-day before.  Three manifest paths -- ``gpuwm/core/mpas_column_batch.py``,
-``gpuwm/config.py`` and ``docs/mpas-seam.md`` -- moved across that window,
-and no engine but 2.6.1 carries all sixteen.  So this port has no fallback
-engine at all: if 2.6.1 were yanked from PyPI, the correct answer is
-:class:`EnginePinError`, not a loosened bound.  Widening the range means
-measuring something that passes, and nothing published does.
+**EXACTLY TWO PUBLISHED ENGINES ARE USABLE, THEY CARRY THE SAME SIXTEEN
+BYTES, and that is a measured finding rather than a cautious choice.**
+Re-pinning the manifest to 2.6.4 moved the whole ``moved`` column, because
+that column is relative to the manifest: every engine below 2.6.4 fails it,
+INCLUDING the 2.6.3 that was the floor the same morning.  Six manifest
+paths moved across that window, measured wheel against wheel --
+``gpuwm/core/physics.py`` (the phase-one driver: the cumulus adapter
+contract grew a result type and a column-tendency coupler for a third
+cumulus scheme), ``gpuwm/core/gf.py`` (a ``release()`` that breaks the
+driver/adapter reference cycle), ``gpuwm/core/kernels/gf.cu`` and
+``gpuwm/core/kernels/__init__.py`` (the glibc float32 words moved out of
+the GF source into a header the loader prepends), ``gpuwm/config.py``
+(``CU_SCHEMES`` admits 16) and ``gpuwm/io/restart.py`` (the cumulus
+restart-identity rows) -- while ``gpuwm/core/mpas_column_batch.py`` and
+``docs/mpas-seam.md`` are byte-identical between the two wheels.  2.6.2,
+the tag whose publish job died, fails on bytes as well as on PyPI.  The
+2.6.5 wheel then moved NONE of the sixteen (a soil-archive layout fix for
+doctor, the mesh door and the static builder, off the physics path;
+``evidence/repin-265-20260902/wheel-pair-264-265.txt``), so the manifest
+stayed where it was and 2.6.5 joined the usable rows without a pin move --
+the one widening this derivation can ever produce, an engine that was
+measured and passed.  If both admitted engines were yanked from PyPI, the
+correct answer is :class:`EnginePinError`, not a loosened bound.
 
 Two facts the 2026-08-27 measurement turned up that no document in the tree
 carried.  Both are still true, and both are now moot for the FLOOR, because
@@ -121,12 +141,12 @@ class PublishedEngine:
         return self.on_pypi and self.satisfies_manifest and self.offline_build_road
 
 
-#: THE OUTPUT OF AN INSTRUMENT, NOT A TRANSCRIPTION.  Re-measured 2026-09-01
+#: THE OUTPUT OF AN INSTRUMENT, NOT A TRANSCRIPTION.  Re-measured 2026-09-02
 #: against the published bytes of every 2.5.x and 2.6.x gpuwm, plus the
-#: v2.5.5 tag that has no PyPI release.  The instrument is
+#: v2.5.5 and v2.6.2 tags that have no PyPI release.  The instrument is
 #: ``evidence/standalone-20260827/measure_engine_verdicts.py`` (network: it
 #: downloads every published wheel); the JSON behind THIS table is
-#: ``evidence/repin-261-20260901/engine-verdicts.json``, and the block below
+#: ``evidence/repin-265-20260902/engine-verdicts.json``, and the block below
 #: is that JSON rendered by
 #: ``evidence/repin-258-20260828/render_engine_pin_table.py --splice``.
 #:
@@ -183,6 +203,7 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "docs/mpas-seam.md",
             "gpuwm/config.py",
             "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
@@ -199,6 +220,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         moved=(
             "docs/mpas-seam.md",
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
             "gpuwm/core/physics.py",
@@ -213,6 +237,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         moved=(
             "docs/mpas-seam.md",
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
             "gpuwm/core/physics.py",
@@ -227,6 +254,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         moved=(
             "docs/mpas-seam.md",
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
             "gpuwm/core/physics.py",
@@ -241,6 +271,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         moved=(
             "docs/mpas-seam.md",
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
             "gpuwm/core/physics.py",
@@ -255,6 +288,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         moved=(
             "docs/mpas-seam.md",
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/mpas_column_batch.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
@@ -268,7 +304,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         moved=(
             "docs/mpas-seam.md",
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
         ),
@@ -280,12 +320,64 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         moved=(
             "docs/mpas-seam.md",
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/io/restart.py",
         ),
         offline_build_road=True,
     ),
     PublishedEngine(
         version="2.6.1",
+        on_pypi=True,
+        moved=(
+            "docs/mpas-seam.md",
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.6.2",
+        on_pypi=False,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/physics.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.6.3",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/physics.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.6.4",
+        on_pypi=True,
+        moved=(),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.6.5",
         on_pypi=True,
         moved=(),
         offline_build_road=True,

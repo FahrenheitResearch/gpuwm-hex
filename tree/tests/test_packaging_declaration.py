@@ -37,11 +37,11 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.2.2", (
-        "0.2.2 is the declared cut of the 0.2 line: the release forced by "
-        "gpuwm 2.6.1 (its pin window excludes every earlier engine), "
-        "carrying the P3 seam route with its byte-identical A/B and the "
-        "restart schema v2 acceptance; moving it is a release decision, "
+    assert declared == "0.2.3", (
+        "0.2.3 is the declared cut of the 0.2 line: the release forced by "
+        "gpuwm 2.6.4 (its pin window excludes every earlier engine), "
+        "carrying the mp=28 aerosol-aware Thompson row through the door "
+        "now that the engine publishes it; moving it is a release decision, "
         "not an edit"
     )
 

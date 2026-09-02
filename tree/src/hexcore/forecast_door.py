@@ -64,7 +64,12 @@ from .device_admission import (
     model_for_card,
     required_free_bytes,
 )
-from .errors import MpasPortError
+from .physics_backend_admission import (
+    DEFAULT_BACKEND,
+    registered_backend_names,
+    resolve_backend,
+)
+from .errors import ConfigurationRefusal, MpasPortError
 
 __all__ = [
     "AdmissionVerdict",
@@ -697,6 +702,14 @@ class ForecastRequest:
     #: The lateral-boundary series a limited-area grid is driven by.  ``None``
     #: on a global grid; the driver refuses either mismatch by name.
     lbc_dir: Path | None = None
+    #: The column-physics backend ROW this run selects
+    #: (``hexcore.physics_backend_admission``).  The default is the frozen
+    #: lane; a provider's row runs its own pinned column batch and may
+    #: declare extra prognostic scalars and a point source.
+    physics_backend: str = "wsm6_column"
+    #: A point-source table the selected row's seam releases from.  ``None``
+    #: is no release; a row that carries no point source refuses one.
+    source_table: Path | None = None
     #: Input problems collected rather than raised, preflight only.  Always
     #: empty on a real run, because there the same conditions refuse.
     input_problems: tuple[str, ...] = ()
@@ -970,6 +983,46 @@ def _schedule(hours: float, history_every_minutes: int, dt_seconds: float,
     return steps, len(range(0, steps + 1, stride))
 
 
+def resolve_physics_backend(arguments: argparse.Namespace):
+    """The backend row a request selects, or a refusal naming what exists."""
+
+    name = getattr(arguments, "physics_backend", None) or DEFAULT_BACKEND
+    try:
+        return resolve_backend(str(name))
+    except ConfigurationRefusal as error:
+        raise _refuse(
+            f"--physics-backend {name}: {error}"
+        ) from error
+
+
+def backend_pin_problem(row, checkout: Path) -> str | None:
+    """The seam pin the ROW is bound by, checked at the door.
+
+    The frozen row is pinned by this port's engine manifest
+    (:func:`seam_pin_problem`).  A provider's row binds a different column
+    batch through its own manifest, so its adapter module publishes
+    ``pin_problem(checkout)`` and answers for itself; a provider row whose
+    adapter publishes none is refused here rather than checked against a
+    pin it was never bound by.
+    """
+
+    if row.name == DEFAULT_BACKEND:
+        return seam_pin_problem(checkout)
+    try:
+        module = row.load_adapter()
+    except ConfigurationRefusal as error:
+        return str(error)
+    probe = getattr(module, "pin_problem", None)
+    if probe is None:
+        return (
+            f"--physics-backend {row.name} names adapter module "
+            f"{row.adapter_module}, which publishes no pin_problem(checkout); "
+            "the door cannot say which bytes this row would run and refuses "
+            "to run unpinned physics"
+        )
+    return probe(checkout)
+
+
 def seam_pin_problem(checkout: Path) -> str | None:
     """The seam pin, checked at the door, as a refusal that NAMES A VERSION.
 
@@ -1031,6 +1084,7 @@ def resolve_request(
     registry: Mapping[str, MeshRow] | None = None,
 ) -> ForecastRequest:
     """Every check that can be made before an expensive byte is read."""
+    backend_row = resolve_physics_backend(arguments)
 
     repo = resolve_repo(getattr(arguments, "repo", None))
     if registry is None:
@@ -1243,12 +1297,37 @@ def resolve_request(
                 raise _refuse(problem)
             collected.append(problem)
         else:
-            problem = seam_pin_problem(checkout)
+            problem = backend_pin_problem(backend_row, checkout)
             if problem is not None:
                 if collected is None:
                     raise _refuse(problem)
                 collected.append(problem)
 
+
+    # The point-source table.  A row that carries no point source refuses
+    # one by name: the frozen batch would accept the table and never read
+    # it, which is configuration the run does not have.
+    source_argument = getattr(arguments, "source_table", None)
+    source_table: Path | None = None
+    if source_argument is not None:
+        if not backend_row.appended_scalar_names:
+            problem = (
+                f"--source-table {source_argument} was given, but "
+                f"--physics-backend {backend_row.name} carries no point "
+                "source and no appended scalars to release into; the table "
+                "would be accepted and never read.  A point source selects "
+                "a row that declares one: "
+                f"{[name for name in registered_backend_names() if resolve_backend(name).appended_scalar_names]}"
+            )
+            if collected is None:
+                raise _refuse(problem)
+            collected.append(problem)
+        source_table = _require_file(
+            Path(source_argument), "--source-table",
+            "the point-source table file (one waypoint per line) the "
+            "treatment run releases from",
+            collected,
+        )
 
     # The lateral-boundary series.  The door checks only that the directory
     # exists and holds files: WHETHER this grid needs one is decided by the
@@ -1319,6 +1398,8 @@ def resolve_request(
         stop_on_refusal=bool(getattr(arguments, "stop_on_refusal", False)),
         preflight=preflight,
         lbc_dir=lbc_dir,
+        physics_backend=backend_row.name,
+        source_table=source_table,
         input_problems=tuple(collected or ()),
     )
 
@@ -1354,6 +1435,10 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
     ]
     if request.lbc_dir is not None:
         argv += ["--lbc-dir", str(request.lbc_dir)]
+    if request.physics_backend != DEFAULT_BACKEND:
+        argv += ["--physics-backend", request.physics_backend]
+    if request.source_table is not None:
+        argv += ["--source-table", str(request.source_table)]
     if request.start_time:
         argv += ["--start-time", request.start_time]
     if request.case_label:
@@ -1438,6 +1523,13 @@ def build_receipt(
             "static": str(request.static),
         },
         "init": {"path": str(request.init), "source": request.init_source},
+        "physics": {
+            "backend": request.physics_backend,
+            "source_table": (
+                None if request.source_table is None
+                else str(request.source_table)
+            ),
+        },
         "schedule": {
             "hours": request.hours,
             "steps": request.steps,
@@ -1741,8 +1833,26 @@ def run_forecast(arguments: argparse.Namespace) -> int:
     except ForecastDoorRefusal:
         raise
     except Exception as error:
+        # The CAUSE survives: a transactional driver raises its own summary
+        # ("composite step aborted without publication") over a chained
+        # exception, and a refusal that carries only the summary is a wall
+        # with no sign.  The whole chain is written beside the run.
+        import traceback
+
+        trace_path = request.out / "forecast-traceback.log"
+        cause_note = ""
+        try:
+            request.out.mkdir(parents=True, exist_ok=True)
+            trace_path.write_text(traceback.format_exc(), encoding="utf-8")
+            cause = error.__cause__ or error.__context__
+            if cause is not None:
+                cause_note = f"  Underlying cause: {type(cause).__name__}: {cause}"
+            cause_note += f"  Full traceback: {trace_path}."
+        except OSError:
+            pass
         raise _refuse(
             f"the forecast driver stopped with {type(error).__name__}: {error}"
+            f"{cause_note}"
             f"  The scratch tree is kept at {request.scratch} and any frames "
             f"already written are in {request.out}."
         ) from None
@@ -1832,6 +1942,21 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "integrated with nothing driving them the domain empties from "
              "the edge inward. Required when --grid carries the bdyMask "
              "triple, refused when it does not")
+    parser.add_argument(
+        "--physics-backend", default=DEFAULT_BACKEND, metavar="ROW",
+        help="the column-physics backend row this run selects "
+             "(hexcore.physics_backend_admission). The default is the "
+             "frozen lane. A provider's row runs its own pinned column "
+             "batch and may declare extra prognostic scalars and a point "
+             "source; an unregistered name is refused naming the rows "
+             "this installation carries")
+    parser.add_argument(
+        "--source-table", type=Path, default=None, metavar="FILE",
+        help="a point-source table the selected row's seam releases from "
+             "(one waypoint per line); recorded in the receipt and pinned "
+             "by its bytes into the run's identity. Refused on a row that "
+             "carries no point source, because the table would be "
+             "accepted and never read")
     parser.add_argument(
         "--start-time", default=None, metavar="YYYY-MM-DD_HH:MM:SS",
         help="asserted against the init's config_start_time; the init is "

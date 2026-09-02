@@ -393,17 +393,51 @@ class Context:
             detail.append(f"bdy_mask_edge[{edge}] {before}->{before - 1}")
         spec_edges = np.asarray(b.masks.spec_edges)
         if spec_edges.size:
-            edge = int(spec_edges[0])
+            # The de-masked edge must have BOTH cells.  A control is there to
+            # FAIL, not to kill the context: de-masking a one-cell ring edge
+            # sends the acoustic pressure-gradient stencil through the
+            # sentinel neighbour and the deck dies with cudaErrorIllegalAddress
+            # instead of mismatching (measured twice on r0.8.102.56619,
+            # 2026-09-02, whose lowest-index specified edge is one-celled;
+            # r0.9.120.40520's happened to have both cells and mismatched).
+            # The lie about the zone is the same, and so are its teeth.
+            coe = np.asarray(b.mesh.arrays["cellsOnEdge"], dtype=np.int64)
+            two_celled = spec_edges[(coe[spec_edges] >= 0).all(axis=1)]
+            edge = int(two_celled[0] if two_celled.size else spec_edges[0])
             masks.spec_zone_mask_edge[edge] = np.float32(0.0)
-            detail.append(f"spec_zone_mask_edge[{edge}] 1.0->0.0")
+            detail.append(
+                f"spec_zone_mask_edge[{edge}] 1.0->0.0 (the first specified "
+                f"edge with both cells present)"
+            )
         spec_cells = np.asarray(b.masks.spec_cells)
         if spec_cells.size > 1:
-            cell = int(spec_cells[0])
+            # The dropped cell must have two cells on EVERY edge.  This is
+            # the control that actually killed r0.8.102.56619's contract
+            # (twice, 2026-09-02, cudaErrorIllegalAddress in the acoustic
+            # deck's mutant): its first specified cell, 4, carries a one-cell
+            # edge (cellsOnEdge [4, -1]), and once the cell is de-masked the
+            # acoustic kernels walk its edges and read cell index -1.  The
+            # read is out of bounds always; it faults only when the memory
+            # before the buffer is unmapped, which is why the same mutant ran
+            # clean in a fresh process and died after six decks had reshaped
+            # the pool.  r0.9.120.40520's cell 7 had six real neighbours.
+            coe = np.asarray(b.mesh.arrays["cellsOnEdge"], dtype=np.int64)
+            eoc = np.asarray(b.mesh.arrays["edgesOnCell"], dtype=np.int64)
+            neoc = np.asarray(b.mesh.arrays["nEdgesOnCell"], dtype=np.int64)
+            index = 0
+            for i, candidate in enumerate(spec_cells.tolist()):
+                edges = eoc[candidate, : int(neoc[candidate])]
+                if edges.size and (edges >= 0).all() and (coe[edges] >= 0).all():
+                    index = i
+                    break
+            cell = int(spec_cells[index])
+            successor = index + 1 if index + 1 < spec_cells.size else index - 1
             masks.spec_zone_mask_cell[cell] = np.float32(0.0)
-            masks.spec_cells[0] = np.int32(int(spec_cells[1]))
+            masks.spec_cells[index] = np.int32(int(spec_cells[successor]))
             detail.append(
-                f"spec_zone_mask_cell[{cell}] 1.0->0.0 and spec_cells[0] "
-                "aliased to its successor"
+                f"spec_zone_mask_cell[{cell}] 1.0->0.0 and spec_cells[{index}] "
+                f"aliased to its neighbour (the first specified cell whose "
+                f"every edge has both cells)"
             )
         return "; ".join(detail)
 

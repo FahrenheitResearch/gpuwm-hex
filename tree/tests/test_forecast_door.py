@@ -892,3 +892,90 @@ def test_preflight_reports_the_architecture_refusal(monkeypatch, tmp_path):
     assert any(
         "no per-architecture anchor" in problem for problem in problems
     )
+
+
+# ---------------------------------------------------------------------------
+# the physics backend row and the point-source table
+# ---------------------------------------------------------------------------
+def test_help_names_the_backend_row_and_the_source_table() -> None:
+    parser = argparse.ArgumentParser()
+    door.add_forecast_arguments(parser)
+    text = parser.format_help()
+    for flag in ("--physics-backend", "--source-table"):
+        assert flag in text, flag
+
+
+def test_an_unregistered_physics_backend_refuses_naming_the_rows(tmp_path):
+    message = _refusal(_namespace(tmp_path, physics_backend="nope"))
+    assert "--physics-backend nope" in message
+    assert "wsm6_column" in message
+
+
+def test_a_source_table_on_the_frozen_row_refuses_as_never_read(tmp_path):
+    table = tmp_path / "sources.txt"
+    table.write_text("# epoch lat lon alt on rate src\n")
+    message = _refusal(_namespace(tmp_path, source_table=table))
+    assert "carries no point source" in message
+    assert "never read" in message
+
+
+def _provider_row_name() -> str:
+    """A PROVIDER row's name, read off the registry rather than spelled here.
+
+    This file ships in the public tree and the provider does not, so the
+    provider's own vocabulary must not be a byte of this file: the row is
+    found through the module that owns it (its P3 row, the one these tests
+    always exercised).  Skips by name where no provider is installed,
+    exactly as the tests that use it did already.
+    """
+
+    pytest.importorskip("hexcore.mod")
+    from hexcore import physics_backend_admission as admission
+
+    names = sorted(
+        name
+        for name, row in admission.backend_rows().items()
+        if row.adapter_module.startswith("hexcore.mod")
+    )
+    assert names, "the provider is importable but registered no row"
+    p3 = [name for name in names if name.endswith("_p3")]
+    return (p3 or names)[0]
+
+
+def test_a_provider_row_is_pinned_by_its_own_adapter_at_the_door(tmp_path):
+    """The frozen manifest can never verify a provider's engine, so the
+    door asks the row's adapter; the refusal is the second manifest's
+    own text, at the door, before a card is touched."""
+    provider = _provider_row_name()
+    message = _refusal(_namespace(tmp_path, physics_backend=provider))
+    assert "pinned sibling source is missing" in message
+    assert "re-pin" in message or "REMEDY" in message
+
+
+def test_preflight_carries_the_row_and_the_table_into_the_driver_argv(tmp_path):
+    provider = _provider_row_name()
+    table = tmp_path / "sources.txt"
+    table.write_text("# epoch lat lon alt on rate src\n")
+    arguments = _namespace(
+        tmp_path, physics_backend=provider, source_table=table, preflight=True
+    )
+    request = door.resolve_request(arguments, registry=_registry())
+    assert request.physics_backend == provider
+    assert request.source_table == table.absolute()
+    # The pin problem is COLLECTED in preflight, and it is the row's own.
+    assert any("pinned sibling source is missing" in p for p in request.input_problems)
+    argv = door.build_driver_argv(request)
+    assert argv[argv.index("--physics-backend") + 1] == provider
+    assert argv[argv.index("--source-table") + 1] == str(table.absolute())
+
+
+def test_a_default_run_carries_no_backend_token(tmp_path):
+    """Byte-stable: the frozen row's argv and receipt shape do not move."""
+    request = door.resolve_request(
+        _namespace(tmp_path, preflight=True), registry=_registry()
+    )
+    assert request.physics_backend == "wsm6_column"
+    assert request.source_table is None
+    argv = door.build_driver_argv(request)
+    assert "--physics-backend" not in argv
+    assert "--source-table" not in argv

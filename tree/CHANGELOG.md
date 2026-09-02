@@ -6,6 +6,49 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
+## 0.2.3 (2026-09-02)
+
+New:
+- Aerosol-aware Thompson microphysics (mp_physics = 28) routes through the
+  physics seam and the production forecast door. The eleven-species row (the
+  six WSM6 masses, the ni/nr/nc number moments and the nwfa/nifa aerosol
+  number tracers) is carried in the engine's own array order, nc prognostic,
+  and the door builds the seam with microphysics_scheme="thompson_aero" and
+  passes every species by name. The mp=28 refusal 0.2.2 declared, because the
+  pinned engine carried rows for wsm6 and p3 only, retired when the engine
+  published its thompson_aero row: the two-rows gate failed, the row took an
+  engine_scheme, and no other change in the door was needed.
+- Registry rows for a generated uniform 60 km global mesh and for the 937.5 m
+  and 800 m limited-area culls of one 125 km cap, each with its minted class
+  and contract deck, so a sub-kilometre limited-area run reaches the forecast
+  door the same way every other registered row does. The 3.75 km cull class
+  carries the same contract.
+
+Fixed:
+- Requires gpuwm 2.6.4 or 2.6.5. Eight of the sixteen pinned seam files
+  moved between the published 2.6.1 wheel 0.2.2 pinned and the published
+  2.6.4: three at the 2.6.3 cut (the column batch's mp=28 row, a
+  config-relative file key in the config loader, the contract document) and
+  six at the 2.6.4 cut (the phase-one physics driver's cumulus adapter
+  contract, the Grell-Freitas adapter's release method and its kernel
+  source, the kernel loader, the config loader's cumulus table, the restart
+  identity table), config.py moving at both; each re-measured against the
+  published wheel. 2.6.5 carries all sixteen byte for byte and is admitted
+  by the same measurement. 2.6.3 fails the re-pinned manifest by those six,
+  and 2.6.2, whose publish job died, fails on bytes as well as on PyPI. The
+  x4 frozen-source proof re-run at the 2.6.4 pin hashes all four snapshots
+  byte-identical to the 2.6.1 proof (one mesh, one case, one hour).
+- The render door passes its --init file to the converter, so pressure-level
+  products render; without it every pressure-level product refused as
+  missing fields on every history the door had rendered.
+- The device-memory floor counts the bytes this process already holds in its
+  CuPy pool, so a run the door admitted is no longer refused on the
+  remainder at its first step.
+- A driver failure keeps its chained cause and writes the full traceback
+  beside the run instead of a bare abort summary.
+- The repository page states the engine range the package enforces and no
+  longer links to a file the public repository does not carry.
+
 ## 0.2.2 (2026-09-01)
 
 New:

@@ -72,6 +72,10 @@ from .driver import (
     _mixing_config,
 )
 from .damping_v841 import build_v841_vertical_velocity_damping
+from .species_row import (
+    species_row_for_names,
+    species_row_for_scheme as species_row_for_selector,
+)
 from .dynamics_v841 import V841ReferenceWindProfiles
 from .errors import ConfigurationRefusal
 from .integration import RKSchedule
@@ -1306,7 +1310,7 @@ CUDA_V841_PHYSICS_DRIVER_SOURCE = CUDA_FTZ_HELPERS + r"""
 #define S3(s,k,c,nl,nc) ((((s)*(nl) + (k))*(nc)) + (c))
 
 extern "C" __global__ void moist_cell_coefficients_v841_f32(
-    const int nlev, const int ncells, const float *scalars,
+    const int nlev, const int ncells, const int nmass, const float *scalars,
     float *qtot, float *cqw, int *invalid)
 {
     const int cell = blockDim.x * blockIdx.x + threadIdx.x;
@@ -1314,7 +1318,12 @@ extern "C" __global__ void moist_cell_coefficients_v841_f32(
     for (int k = 0; k < nlev; ++k) {
         const int i = C2(k, cell, ncells);
         float total = 0.0f;
-        for (int species = 0; species < 6; ++species) {
+        // nmass, not nScalars: only the mass-LOADING species enter qtot.
+        // The species row orders them as a contiguous leading run, so one
+        // count is the whole rule (hexcore.species_row).  A number
+        // concentration folded in here would collapse 1/(1+qtot); a rime
+        // MASS that is a component of another species would double-count it.
+        for (int species = 0; species < nmass; ++species) {
             const float value = scalars[S3(species, k, cell, nlev, ncells)];
             if (!isfinite(value)) atomicExch(invalid, 1);
             total = mpas_add(total, value);
@@ -1335,7 +1344,7 @@ extern "C" __global__ void moist_cell_coefficients_v841_f32(
 }
 
 extern "C" __global__ void moist_edge_coefficients_v841_f32(
-    const int nlev, const int ncells, const int nedges,
+    const int nlev, const int ncells, const int nedges, const int nmass,
     const int *cells_on_edge, const float *scalars,
     float *cqu, int *invalid)
 {
@@ -1345,7 +1354,11 @@ extern "C" __global__ void moist_edge_coefficients_v841_f32(
     const int cell2 = cells_on_edge[2 * edge + 1];
     for (int k = 0; k < nlev; ++k) {
         float total = 0.0f;
-        for (int species = 0; species < 6; ++species) {
+        // See moist_cell_coefficients_v841_f32: nmass is the loading run.
+        // The per-species average is summed in species order, NOT summed
+        // then averaged -- that ordering is FP32-observable and is what the
+        // frozen WSM6 arm's bytes were measured under.
+        for (int species = 0; species < nmass; ++species) {
             const float q1 = scalars[S3(species, k, cell1, nlev, ncells)];
             const float q2 = scalars[S3(species, k, cell2, nlev, ncells)];
             if (!isfinite(q1) || !isfinite(q2)) atomicExch(invalid, 1);
@@ -1520,6 +1533,12 @@ def _validate_v841_physics_candidate_receipt(
         CudaPhaseOneExecutionProvenanceV841,
     )
 
+    # The RUN's scalar order, not the frozen lane's.  A receipt that names
+    # WSM6's six on a P3 step is a receipt that lies about what integrated,
+    # which is the stale-relay class this program has been bitten by.
+    receipt_scalar_order = species_row_for_selector(
+        getattr(config, "config_microp_scheme", "mp_wsm6")).names()
+
     if not isinstance(receipt, CudaV841PhysicsStepReceipt):
         raise TypeError("pending full-physics candidate receipt type changed")
     provenance = receipt.phase_one_execution_provenance
@@ -1557,12 +1576,12 @@ def _validate_v841_physics_candidate_receipt(
         "physics_components": lane["physics_components"],
         "gwd_scheme": lane["gwd_scheme"],
         "gwdo_validation_d2h": provenance.gwdo_validation_d2h,
-        "scalar_order": V841_WSM6_DYNAMICS_SCALAR_NAMES,
+        "scalar_order": receipt_scalar_order,
         "held_tendency_time_seconds": receipt.start_time_seconds,
         "phase2_validation_d2h": None,
         "final_commit_validation_d2h": None,
         "moist_dynamics_coefficients_applied": True,
-        "moist_dynamics_scalar_order": V841_WSM6_DYNAMICS_SCALAR_NAMES,
+        "moist_dynamics_scalar_order": receipt_scalar_order,
         "moist_dynamics_negative_qv_policy": (
             V841_MOIST_DYNAMICS_NEGATIVE_QV_POLICY
         ),
@@ -2817,9 +2836,12 @@ class CudaDryDycoreDriver:
         """Reproduce atm_compute_moist_coefficients from raw start-state q."""
 
         cp = self.cp
-        if tuple(scalar_names) != V841_WSM6_DYNAMICS_SCALAR_NAMES:
-            raise ValueError("moist dynamics requires exact qv/qc/qr/qi/qs/qg order")
-        expected = (len(V841_WSM6_DYNAMICS_SCALAR_NAMES), self.nlev, self.ncells)
+        # The species row replaces the WSM6 order assertion that stood here.
+        # It answers the question the assertion was standing in for -- how
+        # many LEADING species load the air -- for any declared scheme, and
+        # it refuses a block that matches no row at all (hexcore.species_row).
+        species_row = species_row_for_names(scalar_names)
+        expected = (len(tuple(scalar_names)), self.nlev, self.ncells)
         if not isinstance(scalars, cp.ndarray):
             raise TypeError("moist dynamics scalars must remain a resident cupy.ndarray")
         if scalars.dtype != cp.dtype(cp.float32) or tuple(scalars.shape) != expected:
@@ -2845,6 +2867,7 @@ class CudaDryDycoreDriver:
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
+                np.int32(species_row.n_mass_loading),
                 scalars,
                 qtot,
                 cqw,
@@ -2858,6 +2881,7 @@ class CudaDryDycoreDriver:
                 np.int32(self.nlev),
                 np.int32(self.ncells),
                 np.int32(self.nedges),
+                np.int32(species_row.n_mass_loading),
                 self.atmosphere.mesh.cells_on_edge,
                 scalars,
                 cqu,
@@ -3880,7 +3904,6 @@ class CudaDryDycoreDriver:
                 CUDA_PHYSICS_V841_CONTRACT_SHA256,
                 CudaHeldMpasPhysicsTendenciesV841,
                 CudaPhaseOneExecutionProvenanceV841,
-                WSM6_SCALAR_NAMES,
             )
 
             if not isinstance(
@@ -3893,15 +3916,22 @@ class CudaDryDycoreDriver:
                 CUDA_PHYSICS_V841_CONTRACT_SHA256
             ):
                 raise ValueError("held physics contract digest changed")
-            if tuple(WSM6_SCALAR_NAMES) != V841_WSM6_DYNAMICS_SCALAR_NAMES:
-                raise ValueError("bridge WSM6 scalar order changed from native dynamics")
-            if int(outer_saved.scalars.shape[0]) != len(WSM6_SCALAR_NAMES):
-                raise ValueError("full physics requires qv/qc/qr/qi/qs/qg scalar order")
+            # The row the RUN selected, not the frozen lane's: the scalar
+            # block's own width decides which declared row this is, and the
+            # dynamics, the preparation and the seam all read the same one.
+            run_row = species_row_for_selector(
+                self.config.config_microp_scheme)
+            if int(outer_saved.scalars.shape[0]) != run_row.n_species():
+                raise ValueError(
+                    f"{run_row.scheme_name!r} declares "
+                    f"{run_row.n_species()} scalars and the state carries "
+                    f"{int(outer_saved.scalars.shape[0])}"
+                )
             physics_tendencies.validate(
                 n_vert_levels=self.nlev,
                 n_cells=self.ncells,
                 n_edges=self.nedges,
-                n_scalars=len(WSM6_SCALAR_NAMES),
+                n_scalars=run_row.n_species(),
             )
             if float(physics_tendencies.time_seconds) != float(
                 outer_saved.time_seconds
@@ -3919,7 +3949,7 @@ class CudaDryDycoreDriver:
                 self.config, phase_one_provenance
             )
             physics_contract_sha256 = CUDA_PHYSICS_V841_CONTRACT_SHA256
-            scalar_names = WSM6_SCALAR_NAMES
+            scalar_names = run_row.names()
             moist_coefficients = self._compute_moist_dynamics_coefficients_v841(
                 outer_saved.scalars,
                 scalar_names=scalar_names,
@@ -4242,7 +4272,8 @@ class CudaDryDycoreDriver:
                 phase2_validation_d2h=None,
                 final_commit_validation_d2h=None,
                 moist_dynamics_coefficients_applied=True,
-                moist_dynamics_scalar_order=V841_WSM6_DYNAMICS_SCALAR_NAMES,
+                moist_dynamics_scalar_order=species_row_for_selector(
+                    self.config.config_microp_scheme).names(),
                 moist_dynamics_negative_qv_policy=(
                     V841_MOIST_DYNAMICS_NEGATIVE_QV_POLICY
                 ),
@@ -4475,7 +4506,8 @@ class CudaDryDycoreDriver:
             ),
             phase_one_execution_provenance=execution_provenance,
             gwdo_validation_d2h=execution_provenance.gwdo_validation_d2h,
-            scalar_order=V841_WSM6_DYNAMICS_SCALAR_NAMES,
+            scalar_order=species_row_for_selector(
+                self.config.config_microp_scheme).names(),
             held_tendency_time_seconds=candidate.receipt.start_time_seconds,
             held_tendency_validation_d2h=(
                 candidate.receipt.held_tendency_validation_d2h
@@ -4484,7 +4516,8 @@ class CudaDryDycoreDriver:
             phase2_validation_d2h=recovery.validation_d2h,
             final_commit_validation_d2h=final_validation_transfer,
             moist_dynamics_coefficients_applied=True,
-            moist_dynamics_scalar_order=V841_WSM6_DYNAMICS_SCALAR_NAMES,
+            moist_dynamics_scalar_order=species_row_for_selector(
+                self.config.config_microp_scheme).names(),
             moist_dynamics_negative_qv_policy=(
                 V841_MOIST_DYNAMICS_NEGATIVE_QV_POLICY
             ),

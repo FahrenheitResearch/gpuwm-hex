@@ -93,7 +93,7 @@ def test_the_named_forecast_pair_is_masked_digest_identical(receipts):
 SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     "src/hexcore/cuda_driver.py": {
         "recorded": "cb6477ef2fd02ad551e9b6c8af0724c94fc4d90bdc712fff1378d218662f5d04",
-        "current": "e6f51ea11e68f87ed011b61432a7178ef507ce6a518e834a115127ca1687694c",
+        "current": "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb",
         "why": (
             "convection ruling, 2026-08-26: _v841_physics_cadences reports "
             "convection: None when no cumulus scheme is selected instead of "
@@ -125,7 +125,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_regional_forecast_v841.py": {
         "recorded": "3aa30ec3c3a11c1152a67d1fcbc8b2d470fd8ac2446ec8f7ec34906873421e88",
-        "current": "f9f638c2ebd39cecad01b342da97881f5475a1a819964000f3fa107292bc31ec",
+        "current": "2b6b0bc0a36d61caab071e957ee634dc80dc244cde80d6e3e4954c2f06185bd3",
         "why": (
             "ANCHOR RE-KEYING, 2026-08-27: open_regional_forecast_v841 now "
             "measures the configuration CLASS off the run it is about to "

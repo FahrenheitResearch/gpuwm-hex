@@ -1769,11 +1769,24 @@ class CudaRegionalRuntimeV841:
 
         The CPU authority computes ``qtot``/``cqw``/``cqu`` on EVERY regional
         step (``driver.py:3090-3105``): the pinned record is
-        ``config_moist_physics=true`` with a single ``qv``.  The device's own
+        ``config_moist_physics=true`` with a single ``qv``.
+
+        GUARD WHOSE REASON EXPIRED 2026-09-01, handed up rather than
+        retired here.  This numpy path existed because
         ``moist_cell_coefficients_v841_f32`` and
-        ``moist_edge_coefficients_v841_f32`` hardwire the six WSM6 species,
-        so they cannot serve a one-species regional block without moving
-        ``cuda_driver``'s CUDA source.  The three expressions are formed here
+        ``moist_edge_coefficients_v841_f32`` hardwired the six WSM6
+        species "so they cannot serve a one-species regional block without
+        moving ``cuda_driver``'s CUDA source".  Both kernels now take
+        ``nmass`` from the species row, so a one-species block is exactly
+        what they can serve, and this workaround is the kind a fix is
+        supposed to retire.
+
+        It is NOT retired in this commit, deliberately: swapping the numpy
+        path for the device kernels changes the regional step's arithmetic,
+        which is the one thing this lane has been careful not to do while
+        the regional mint is already lapsed and owed a re-run.  Retiring it
+        is a change that must land WITH its own re-mint, not beside
+        somebody else's.  The three expressions are formed here
         with the same operations in the same order --
         ``qtot = 0 + q``, ``cqw(k>=1) = 1/(1 + 0.5*(qtot(k)+qtot(k-1)))``,
         ``cqu = 1/(1 + 0.5*(q(c1)+q(c2)))`` -- as separate float32 device

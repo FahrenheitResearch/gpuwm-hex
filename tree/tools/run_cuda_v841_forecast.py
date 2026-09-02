@@ -149,6 +149,7 @@ import run_cuda_v841_full_physics_x4 as proof  # noqa: E402
 
 from hexcore import dt_admission  # noqa: E402
 from hexcore.errors import ConfigurationRefusal  # noqa: E402
+from hexcore.species_row import species_row_for_scheme as _row_for_scheme  # noqa: E402
 from hexcore.mesh import (  # noqa: E402
     REGIONAL_BOUNDARY_MASK_NAMES,
     REGIONAL_BOUNDARY_ZONE_WIDTH,
@@ -916,6 +917,14 @@ def build_forecast_constructor_values(
             else float(config.config_cudt_seconds)
         ),
         "cumulus_scheme": cumulus_scheme,
+        # The seam row comes from the CONFIG's species row, never from a
+        # literal: the engine constructs a WSM6 seam when the key is absent,
+        # so a P3 or mp=28 request that left it out would seal a seam that
+        # refuses its own first phase-one call by name.  The config already
+        # admitted the scheme through require_engine_scheme().
+        "microphysics_scheme": _row_for_scheme(
+            config.config_microp_scheme
+        ).engine_scheme,
         "start_time": start_datetime,
         "latitude_deg": latitude_deg,
         "longitude_deg": longitude_deg,
@@ -1011,6 +1020,8 @@ def prepare_forecast_host(
     local_timestep_rates: tuple[int, ...] = (1, 3),
     local_timestep_buffer_rings: int = 1,
     lbc_paths: Sequence[str] | None = None,
+    physics_backend: str = "wsm6_column",
+    source_table: str | None = None,
 ) -> dict[str, Any]:
     from hexcore.cuda_arwen_physics_v841 import SealedArwenConstructorV841
     from hexcore.cuda_dualrun import PreparedCudaInputs
@@ -1090,7 +1101,22 @@ def prepare_forecast_host(
         local_timestep_buffer_rings=local_timestep_buffer_rings,
         apply_lbcs=bool(lbc_paths),
     )
+    backend_row, scheme_alias, seam_options = resolve_run_row(
+        physics_backend, source_table
+    )
+    if scheme_alias is not None:
+        # A provider's row names itself as a config_microp_scheme alias
+        # (hexcore.species_row), so the dynamics driver's width check, its
+        # receipts and the configuration's engine-scheme admission all
+        # resolve the RUN's row from the config.
+        from dataclasses import replace as _replace
+
+        config = _replace(config, config_microp_scheme=scheme_alias)
     config.validate()
+
+    run_row = _row_for_scheme(config.config_microp_scheme)
+    scalar_names = tuple(run_row.names())
+    surface_accumulators = tuple(item.name for item in run_row.surface_accumulators)
     mesh, output_mesh, mesh_evidence = load_precision_preserving_mesh_pair(
         paths["grid"], paths["static"]
     )
@@ -1150,7 +1176,10 @@ def prepare_forecast_host(
         allow_regional_sentinels=is_regional,
     )
     relaxation["negative_qv"] = relax_negative_qv_pin(state)
-    scalar_receipt = proof.augment_exact_wsm6_scalars(state)
+    if scalar_names == tuple(proof.SCALAR_NAMES):
+        scalar_receipt = proof.augment_exact_wsm6_scalars(state)
+    else:
+        scalar_receipt = proof.augment_cold_scalars(state, scalar_names)
     state.validate(n_cells=N_CELLS, n_edges=N_EDGES, n_vert_levels=N_LEVELS)
     saved.validate((N_LEVELS, N_CELLS), np.dtype(np.float32), N_EDGES)
     profiles = load_v841_reference_wind_profiles(paths["init"], n_vert_levels=N_LEVELS)
@@ -1317,6 +1346,10 @@ def prepare_forecast_host(
         "edge_normal_vectors": edge_normal_overlay,
         "defc": defc,
         "scalar_receipt": scalar_receipt,
+        "physics_backend": backend_row.name,
+        "scalar_names": scalar_names,
+        "surface_accumulators": surface_accumulators,
+        "seam_options": dict(seam_options),
         "case_pin_relaxation": relaxation,
         "start_time_text": constructor_receipt["config_start_time"],
     }
@@ -1612,7 +1645,7 @@ def execute_forecast(
 ) -> dict[str, Any]:
     from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
-    arwen_pin = dict(pin_arwen_physics_v841(arwen_checkout))
+    arwen_pin = dict(_pin_for_run(host, arwen_checkout, pin_arwen_physics_v841))
     # This must precede KernelCache's gpuwm platform-binding construction.
     from hexcore.cuda_backend import KernelCache, require_cuda
 
@@ -1633,7 +1666,10 @@ def execute_forecast(
         memory = proof.gpu_memory_admission(cp, minimum=int(required_free_bytes))
     cache = KernelCache(capability=capability, cache_dir=cache_root)
     stack = proof._construct_device_stack(
-        host=host, cache=cache, arwen_checkout=arwen_checkout
+        host=host,
+        cache=cache,
+        arwen_checkout=arwen_checkout,
+        backend_builder=_backend_builder(host, arwen_checkout),
     )
     # Opt-in local time stepping.  Returns None -- and rebinds nothing -- when
     # config_local_timestep is off, which is the default.
@@ -1689,11 +1725,20 @@ def execute_forecast(
             f000_surface_diagnostics=stack["f000_surface_diagnostics"],
             expect_refl10cm=True,
             solve_cells=stack.get("solve_cells"),
+            scalar_names=host["scalar_names"],
+            surface_accumulators=host["surface_accumulators"],
         )
         capture_seconds += time.perf_counter() - mark
         physical_gates[str(step)] = proof.physical_snapshot_gate(
-            snapshot, allow_initial_negative_qv=(step == 0)
+            snapshot,
+            allow_initial_negative_qv=(step == 0),
+            scalar_names=host["scalar_names"],
+            surface_accumulators=host["surface_accumulators"],
         )
+        if step == steps and hasattr(stack["backend"], "write_ledger"):
+            # A seeded backend dumps its conservation ledger beside the
+            # run's other receipts at the final frame (CSV + JSON).
+            stack["backend"].write_ledger(output_root)
         snapshot_projection[str(step)] = proof._snapshot_hash_projection(snapshot)
         snapshot_q2[str(step)] = _snapshot_q2_hash(snapshot)
         snapshot_receipts[str(step)] = snapshot["receipt"]
@@ -1709,7 +1754,9 @@ def execute_forecast(
     # BEFORE capturing its start-step snapshot; capture allocates device
     # memory, so keeping this order keeps the allocation history aligned with
     # the proof arm the fork-equivalence gate compares against.
-    previous = proof._previous_surface_updates(stack)
+    previous = proof._previous_surface_updates(
+        stack, host["surface_accumulators"]
+    )
     if 0 in capture_steps:
         capture(0)
     if fingerprints is not None:
@@ -1729,7 +1776,7 @@ def execute_forecast(
             result = proof.execute_composite_step(
                 driver=stack["driver"],
                 backend=stack["backend"],
-                scalar_names=SCALAR_NAMES,
+                scalar_names=host["scalar_names"],
                 physics_geometry=stack["physics_geometry"],
                 kernel_cache=stack["driver"].cache,
                 previous_surface_updates=previous,
@@ -2183,6 +2230,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "zone for one to drive"
         ),
     )
+    parser.add_argument(
+        "--physics-backend",
+        default="wsm6_column",
+        help=(
+            "the column-physics backend row (hexcore.physics_backend_admission); "
+            "the default is the frozen lane"
+        ),
+    )
+    parser.add_argument(
+        "--source-table",
+        type=Path,
+        default=None,
+        help="a point-source table the selected row's seam releases from",
+    )
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument(
         "--stop-on-refusal",
@@ -2228,6 +2289,147 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def resolve_run_row(physics_backend: str, source_table: str | None):
+    """The backend row, its scheme alias (None for the frozen row) and the
+    seam options the row's adapter derives from the door's neutral inputs."""
+
+    from hexcore.physics_backend_admission import DEFAULT_BACKEND, resolve_backend
+
+    row = resolve_backend(str(physics_backend))
+    if row.name == DEFAULT_BACKEND:
+        if source_table is not None:
+            raise ConfigurationRefusal(
+                "source_table",
+                str(source_table),
+                f"--physics-backend {row.name} carries no point source; the "
+                "table would be accepted and never read",
+                "a row whose adapter publishes seam_options_for",
+            )
+        return row, None, {}
+    adapter = row.load_adapter()
+    alias_for = getattr(adapter, "scheme_alias_for", None)
+    options_for = getattr(adapter, "seam_options_for", None)
+    if alias_for is None or options_for is None:
+        raise ConfigurationRefusal(
+            "physics_backend",
+            row.name,
+            (
+                f"row {row.name!r} names adapter module {row.adapter_module}, "
+                "which publishes no scheme_alias_for/seam_options_for; the "
+                "driver cannot name the run's row in the configuration or "
+                "derive the seam's options"
+            ),
+            "an adapter publishing scheme_alias_for and seam_options_for",
+        )
+    return row, str(alias_for(row.name)), dict(options_for(source_table=source_table))
+
+
+def _manifest_for_run(row, checkout: Path) -> dict[str, str] | None:
+    """The byte manifest the run's row is bound by: None (the frozen
+    sixteen) for the frozen row; a provider row's own pin files plus its
+    frozen-batch cross-pin, so the git verifier gates the bytes that will
+    actually execute and records the checkout's commit as before."""
+
+    from hexcore.physics_backend_admission import DEFAULT_BACKEND
+
+    if row.name == DEFAULT_BACKEND:
+        return None
+    probe = getattr(row.load_adapter(), "pin_column_batch", None)
+    if probe is None:
+        raise ConfigurationRefusal(
+            "physics_backend",
+            row.name,
+            f"adapter {row.adapter_module} publishes no pin_column_batch",
+            "an adapter publishing pin_column_batch",
+        )
+    pin = probe(checkout)["pin"]
+    manifest = {relative: entry["sha256"] for relative, entry in pin["files"].items()}
+    manifest.update(dict(pin.get("frozen_batch_cross_pin") or {}))
+    return manifest
+
+
+def _pin_for_run(host: Mapping[str, Any], checkout: Path, frozen_pin):
+    """The seam pin the RUN's row is bound by: the engine manifest for the
+    frozen row, the row's own adapter pin for a provider's row."""
+
+    from hexcore.physics_backend_admission import DEFAULT_BACKEND, resolve_backend
+
+    row = resolve_backend(str(host.get("physics_backend", DEFAULT_BACKEND)))
+    if row.name == DEFAULT_BACKEND:
+        return frozen_pin(checkout)
+    probe = getattr(row.load_adapter(), "pin_column_batch", None)
+    if probe is None:
+        raise ConfigurationRefusal(
+            "physics_backend",
+            row.name,
+            f"adapter {row.adapter_module} publishes no pin_column_batch; the "
+            "run cannot say which bytes this row would execute",
+            "an adapter publishing pin_column_batch",
+        )
+    return probe(checkout)
+
+
+def _backend_builder(host: Mapping[str, Any], checkout: Path):
+    """``None`` for the frozen row; otherwise the row's own builder, handed
+    the mesh's per-column area (the garbage column of a limited-area mesh
+    is padded with the mean area: it holds no atmosphere and is scrubbed)."""
+
+    from hexcore.physics_backend_admission import DEFAULT_BACKEND, resolve_backend
+
+    row = resolve_backend(str(host.get("physics_backend", DEFAULT_BACKEND)))
+    if row.name == DEFAULT_BACKEND:
+        return None
+
+    def build(*, physics_mesh: Any, **kwargs: Any):
+        area = np.asarray(proof._mesh_value(physics_mesh, "areaCell"), dtype=np.float64).reshape(-1)
+        good = np.isfinite(area) & (area > 0.0)
+        if not np.all(good):
+            area = np.where(good, area, float(np.mean(area[good])))
+        return row.build_column_backend(
+            cell_area_m2=area,
+            seam_options=dict(host.get("seam_options") or {}),
+            **kwargs,
+        )
+
+    return build
+
+
+def resolve_physics_backend_row(args: argparse.Namespace):
+    """The backend row this run selects, refused by name until routed.
+
+    THE BREAKAGE THIS REFUSES, dated 2026-09-01: the stack build below
+    constructs the frozen column batch through the frozen manifest and
+    sizes its scalar block from the frozen row.  A provider's row would
+    have its table accepted and never read and its appended scalars never
+    allocated -- a run under a name it does not honour.  The routing
+    (``PhysicsBackendRow.build_column_backend`` at the stack build, the
+    row's scalar block in the driver, the row's history names) retires
+    this refusal in the commit that lands it.
+    """
+
+    from hexcore.physics_backend_admission import DEFAULT_BACKEND, resolve_backend
+
+    row = resolve_backend(str(args.physics_backend))
+    table = getattr(args, "source_table", None)
+    if table is not None and not Path(table).is_file():
+        raise ConfigurationRefusal(
+            "source_table",
+            str(table),
+            "--source-table names a file that does not exist; the seam pins "
+            "the table's bytes into the run's identity",
+            "an existing point-source table file",
+        )
+    if table is not None and row.name == DEFAULT_BACKEND:
+        raise ConfigurationRefusal(
+            "source_table",
+            str(table),
+            f"--physics-backend {row.name} carries no point source; the "
+            "table would be accepted and never read",
+            "a row whose adapter publishes seam_options_for",
+        )
+    return row
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     paths = {
@@ -2238,12 +2440,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     arwen_checkout = proof._plain_absolute(args.arwen_checkout, "Arwen checkout")
     if not arwen_checkout.is_dir():
         raise FileNotFoundError(arwen_checkout)
+    physics_backend = resolve_physics_backend_row(args)
 
     # Source pins verify first: the checkout guard imports the seam manifest
     # from a pinned module, so that module's bytes are proven before its
     # constants are trusted.
     source_before = proof.require_frozen_execution_sources()
-    arwen_git_before = proof.verify_arwen_checkout_git(arwen_checkout)
+    run_manifest = _manifest_for_run(physics_backend, arwen_checkout)
+    arwen_git_before = proof.verify_arwen_checkout_git(
+        arwen_checkout, manifest=run_manifest
+    )
     authority_before = verify_forecast_authorities(paths)
     lbc_paths: list[str] | None = None
     if args.lbc_dir is not None:
@@ -2262,6 +2468,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths,
         authority_before,
         lbc_paths=lbc_paths,
+        physics_backend=physics_backend.name,
+        source_table=(
+            None if args.source_table is None else str(args.source_table)
+        ),
         start_time_text=args.start_time,
         horiz_mixing=args.horiz_mixing,
         convection=args.convection,
@@ -2325,7 +2535,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.preflight_only:
         source_after = proof.require_frozen_execution_sources()
         authority_after = verify_forecast_authorities(paths)
-        arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout)
+        arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout, manifest=run_manifest)
         if (
             source_after != source_before
             or authority_after != authority_before
@@ -2379,7 +2589,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     source_after = proof.require_frozen_execution_sources()
     authority_after = verify_forecast_authorities(paths)
-    arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout)
+    arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout, manifest=run_manifest)
     if (
         source_after != source_before
         or authority_after != authority_before
@@ -2395,6 +2605,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "arwen_git": {"before": arwen_git_before, "after": arwen_git_after},
         "arwen_checkout_unchanged": True,
+        "physics_backend": physics_backend.name,
+        "source_table": (
+            None if args.source_table is None else str(args.source_table)
+        ),
         "execution_seconds": time.perf_counter() - started,
         "forecast": forecast,
         "sources_unchanged": True,

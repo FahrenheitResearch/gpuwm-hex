@@ -27,8 +27,9 @@ tests/test_device_capacity.py
 # The P3 seam A/B (2026-08-31): the hex plumbing versus the engine's real
 # column batch on the same P3 columns, byte-compared.  Needs any CUDA
 # device (8 columns, 20 levels -- fits everything) AND
-# HEXCORE_AB_ARWEN_ROOT naming a gpuwm SOURCE CHECKOUT on the 2.6.1 line
-# (the P3 transport, microphysics_scheme="p3"); without the variable the
+# HEXCORE_AB_ARWEN_ROOT naming a gpuwm SOURCE CHECKOUT at or above the
+# 2.6.1 line (the P3 transport, microphysics_scheme="p3"; the pinned 2.6.4
+# carries it); without the variable the
 # suite skips by name rather than grading whatever gpuwm sys.path holds.
 tests/test_p3_seam_ab.py
 
@@ -76,3 +77,7 @@ tests/test_p3_seam_ab.py
 # site-packages is not a git working tree -- measured the same day, the guard
 # refuses one by name.  These harnesses therefore need a gpuwm GIT CHECKOUT
 # at the pinned commit, which is why neither is a console script.
+tests/test_species_row.py
+tests/test_moist_coefficients_species_row.py
+tests/test_prep_species_row.py
+tests/test_physics_carrier_kernels.py
