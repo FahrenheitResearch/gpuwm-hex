@@ -632,3 +632,293 @@ def test_the_remedy_stops_giving_a_reason_that_is_false_at_the_pinned_engine():
     assert "--gpuwm-checkout" in text
     assert "provenance" in text
     assert "HEAD, tree and dirty" in text
+
+
+# ---------------------------------------------------------------------------
+# admitted engines: a measured row for a build that is not on PyPI
+# ---------------------------------------------------------------------------
+#: The document the admitted table is rendered from; one file for every
+#: admitted engine, keyed by version, written by the instrument's --admit.
+ADMITTED_OF_RECORD = ROOT / "verification" / "engine-verdicts" / "admitted-engines.json"
+
+
+def _instrument():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_measure_engine_verdicts", ROOT / "tools" / "measure_engine_verdicts.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_admitted_table_is_the_instruments_output_not_a_transcription():
+    """The second generated block is held to the same standard as the first.
+
+    A row here admits an engine the published table cannot see, so a
+    hand-typed digest would admit whatever bytes the typist believed in.
+    The block must be the instrument's own rendering of the document it
+    wrote, field for field, and every shipped row must equal its JSON row.
+    """
+
+    import json
+
+    assert ADMITTED_OF_RECORD.is_file()
+    document = json.loads(ADMITTED_OF_RECORD.read_text(encoding="utf-8"))
+    instrument = _instrument()
+    assert document["schema"] == instrument.ADMITTED_SCHEMA
+    assert document["instrument"] == "tools/measure_engine_verdicts.py"
+
+    source = (ROOT / "src" / "hexcore" / "engine_pin.py").read_text(encoding="utf-8")
+    start = source.index(instrument.ADMITTED_BEGIN_MARK)
+    end = source.index(instrument.ADMITTED_END_MARK) + len(instrument.ADMITTED_END_MARK)
+    assert source[start:end] == instrument.render_admitted_rows(document["engines"]), (
+        "the ADMITTED_ENGINES block is not the instrument's own rendering of "
+        "admitted-engines.json; re-splice it with --splice-admitted"
+    )
+
+    shipped = {row.version: row for row in engine_pin.ADMITTED_ENGINES}
+    assert sorted(shipped) == sorted(row["version"] for row in document["engines"])
+    for measured in document["engines"]:
+        row = shipped[measured["version"]]
+        assert row.base == measured["base"]
+        assert row.build_commit == measured["build_commit"]
+        assert row.manifest == measured["digests"]
+        assert row.glacier_composed_tu_sha256 == measured["glacier_composed_tu_sha256"]
+        assert list(row.moved_from_base) == measured["moved_from_base"]
+        assert [list(pair) for pair in row.artifacts] == [
+            [artifact["name"], artifact["sha256"]] for artifact in measured["artifacts"]
+        ]
+        # The row was measured against the manifest this package ships:
+        # what it says moved is what differs from the shipped digests now.
+        manifest = engine_pin.seam_manifest()
+        assert set(row.manifest) == set(manifest)
+        assert row.moved_from_base == tuple(
+            sorted(path for path in manifest if row.manifest[path] != manifest[path])
+        )
+
+
+def test_an_admitted_row_rides_the_specifier_and_is_not_a_published_engine():
+    """What a row may be.  A local version on a base inside the derived
+    range, because the specifier is what pip enforces and the row only
+    decides bytes; distinct from the pin (a row that moved nothing would be
+    the pin under another name); and absent from the published table,
+    which measures PyPI and has no business admitting it."""
+
+    floor, ceiling = engine_pin.gpuwm_floor(), engine_pin.gpuwm_ceiling()
+    assert engine_pin.ADMITTED_ENGINES, "the release admits one private engine"
+    for row in engine_pin.ADMITTED_ENGINES:
+        assert "+" in row.version and row.version.split("+", 1)[0] == row.base
+        assert engine_pin._key(floor) <= engine_pin._key(row.base) < engine_pin._key(ceiling)
+        assert row.moved_from_base
+        assert engine_pin.engine(row.version) is None
+        assert engine_pin.admitted_engine(row.version) is row
+        identity = engine_pin.identity_for(row.version)
+        assert identity.admitted and identity.build_commit == row.build_commit
+        assert identity.manifest == row.manifest
+
+    # The one row this release ships, as measured: five of sixteen paths
+    # differ from the public 2.7.3 bytes and the composed glacier unit does
+    # not, so the Noah-MP compile site is the pin's even though the kernel
+    # loader beside it moved.
+    row = engine_pin.admitted_engine("2.7.3+soma.1")
+    assert row is not None and row.base == "2.7.3"
+    assert row.moved_from_base == (
+        "gpuwm/config.py",
+        "gpuwm/core/kernels/__init__.py",
+        "gpuwm/core/microphysics.py",
+        "gpuwm/core/physics.py",
+        "gpuwm/io/restart.py",
+    )
+    assert row.glacier_composed_tu_sha256 == engine_pin.pinned_engine().glacier_composed_tu_sha256
+    assert engine_pin.pinned_engine().version == "2.7.3"
+    assert not engine_pin.pinned_engine().admitted
+
+
+def _admitted_tree(tmp_path: Path, monkeypatch, version: str = "2.7.3+local.1"):
+    """A fake public checkout, a fake private build of it whose bytes differ
+    on one path, and the admitted row measured FROM that build's bytes.
+
+    Real files and real digests again: the row's manifest is computed from
+    what was written, so acceptance below is a byte match and every refusal
+    is a byte or a version string that actually differs.
+    """
+
+    root, manifest = _seam_tree(tmp_path, "2.7.3")
+    private = tmp_path / "gpuwm-private"
+    for relative in manifest:
+        target = private / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((root / relative).read_bytes())
+    (private / "gpuwm/core/microphysics.py").write_bytes(b"def apply(): ...  # private\n")
+    (private / "pyproject.toml").write_text(
+        f'[project]\nname = "gpuwm"\nversion = "{version}"\n', encoding="utf-8"
+    )
+    digests = {
+        relative: sha256((private / relative).read_bytes()).hexdigest()
+        for relative in manifest
+    }
+    row = engine_pin.AdmittedEngine(
+        version=version,
+        base="2.7.3",
+        build_commit="9" * 40,
+        digests=tuple(sorted(digests.items())),
+        glacier_composed_tu_sha256="7" * 64,
+        moved_from_base=("gpuwm/core/microphysics.py",),
+        artifacts=(("gpuwm-fake.whl", "0" * 64),),
+    )
+    monkeypatch.setattr(engine_pin, "seam_manifest", lambda: manifest)
+    monkeypatch.setattr(engine_pin, "ADMITTED_ENGINES", (row,))
+    return root, private, row
+
+
+def test_an_admitted_engines_bytes_under_its_own_version_are_accepted(
+    tmp_path, monkeypatch
+):
+    root, private, row = _admitted_tree(tmp_path, monkeypatch)
+
+    inspection = engine_pin.inspect_seam(private)
+    assert inspection.engine == row.version
+    assert inspection.declared == row.version
+    assert inspection.admitted and inspection.accepted
+    assert not inspection.drifted and inspection.moved == () and inspection.absent == ()
+    assert inspection.checked == len(row.manifest)
+    assert door.seam_pin_problem(private) is None
+
+    # The public tree beside it is untouched by the row's existence.
+    public = engine_pin.inspect_seam(root)
+    assert public.engine == engine_pin.wanted_version()
+    assert not public.admitted and public.accepted
+    assert door.seam_pin_problem(root) is None
+
+
+def test_the_same_bytes_under_another_version_string_are_refused_by_name(
+    tmp_path, monkeypatch
+):
+    """A re-versioned copy of a measured build is neither that build nor the
+    pin.  The refusal names the version the bytes belong to and the version
+    the tree claims, and the remedy is not a pip line."""
+
+    _, private, row = _admitted_tree(tmp_path, monkeypatch)
+    (private / "pyproject.toml").write_text(
+        '[project]\nname = "gpuwm"\nversion = "2.7.3"\n', encoding="utf-8"
+    )
+
+    inspection = engine_pin.inspect_seam(private)
+    assert inspection.engine == row.version and inspection.declared == "2.7.3"
+    assert inspection.misdeclared and not inspection.accepted
+    assert inspection.moved == (), "the bytes ARE the row's; only the name is wrong"
+
+    problem = door.seam_pin_problem(private)
+    assert problem is not None
+    assert f"gpuwm {row.version}" in problem and "gpuwm 2.7.3" in problem
+    assert "version string and its bytes together" in problem
+
+
+def test_an_admitted_version_over_other_bytes_is_refused_against_the_pin(
+    tmp_path, monkeypatch
+):
+    """The other half of the key.  A tree that calls itself the admitted
+    version and carries bytes the row did not measure is an unmeasured
+    engine, and is refused the way every unmeasured engine is: against the
+    public pin, naming what moved."""
+
+    _, private, row = _admitted_tree(tmp_path, monkeypatch)
+    (private / "gpuwm/io/restart.py").write_bytes(b"RESTART = 3  # nobody measured this\n")
+
+    inspection = engine_pin.inspect_seam(private)
+    assert inspection.engine is None and not inspection.admitted
+    assert inspection.declared == row.version
+    assert inspection.moved == ("gpuwm/core/microphysics.py", "gpuwm/io/restart.py"), (
+        "measured against the PUBLIC pin, so the row's own private byte "
+        "counts as moved too: the row admits one engine, not a family"
+    )
+    problem = door.seam_pin_problem(private)
+    assert problem is not None
+    assert f"gpuwm {row.version}" in problem
+    assert "gpuwm/io/restart.py" in problem
+    assert engine_pin.gpuwm_requirement() in problem
+
+
+def test_doctor_names_the_admitted_engine_it_verified(tmp_path, monkeypatch):
+    _, private, row = _admitted_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(engine_pin, "installed_root", lambda: private)
+    monkeypatch.setattr(doctor, "_distribution_version", lambda name: row.version)
+
+    findings = doctor.check_physics_seam()
+    seam = _doctor_seam_finding(findings)
+    assert seam.status == doctor.VERIFIED
+    assert row.version in seam.detail and "admitted engine" in seam.detail
+    assert seam.evidence["engine"] == row.version and seam.evidence["admitted"]
+    assert doctor.blocking_gaps(findings) == []
+
+
+def test_doctor_refuses_an_install_whose_metadata_disowns_its_bytes(
+    tmp_path, monkeypatch
+):
+    """An INSTALL root carries no pyproject.toml; what it declares is pip's
+    metadata.  Bytes of an admitted row under metadata that says the public
+    version is the misdeclared case seen from site-packages."""
+
+    _, private, row = _admitted_tree(tmp_path, monkeypatch)
+    (private / "pyproject.toml").unlink()
+    monkeypatch.setattr(engine_pin, "installed_root", lambda: private)
+    monkeypatch.setattr(engine_pin, "installed_version", lambda: "2.7.3")
+    monkeypatch.setattr(doctor, "_distribution_version", lambda name: "2.7.3")
+
+    assert engine_pin.declared_version(private) == "2.7.3"
+    findings = doctor.check_physics_seam()
+    seam = _doctor_seam_finding(findings)
+    assert seam.status == doctor.MISSING and seam.required
+    assert row.version in seam.detail and "2.7.3" in seam.detail
+    assert [f.subject for f in doctor.blocking_gaps(findings)] == [seam.subject]
+
+
+def test_the_adapter_admits_the_row_and_provenances_the_run_by_it(
+    tmp_path, monkeypatch
+):
+    """The wall itself.  The adapter's checkout guard must accept the
+    admitted tree, hand back THAT row's identity for the receipts, and
+    refuse the two impostors with the spelling every earlier refusal used."""
+
+    from hexcore import cuda_arwen_physics_v841 as adapter
+
+    root, private, row = _admitted_tree(tmp_path, monkeypatch)
+    surface = sha256()
+    for relative in ("gpuwm/core/mpas_column_batch.py", "docs/mpas-seam.md"):
+        surface.update((private / relative).read_bytes())
+    monkeypatch.setattr(adapter, "MPAS_SEAM_CONTRACT_SURFACE_SHA256", surface.hexdigest())
+
+    identity = adapter._verify_checkout_root(private)
+    assert identity.admitted and identity.version == row.version
+    assert identity.build_commit == row.build_commit
+    assert identity.manifest == row.manifest
+    assert identity.glacier_composed_tu_sha256 == row.glacier_composed_tu_sha256
+
+    (private / "pyproject.toml").write_text(
+        '[project]\nname = "gpuwm"\nversion = "2.7.3"\n', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="version string and its bytes together"):
+        adapter._verify_checkout_root(private)
+
+    (private / "pyproject.toml").write_text(
+        f'[project]\nname = "gpuwm"\nversion = "{row.version}"\n', encoding="utf-8"
+    )
+    (private / "gpuwm/io/restart.py").write_bytes(b"RESTART = 3\n")
+    with pytest.raises(
+        ValueError,
+        match="pinned Arwen source hash mismatch for gpuwm/core/microphysics.py",
+    ):
+        adapter._verify_checkout_root(private)
+
+    # And the public tree still resolves to the public pin's identity, with
+    # the surface digest the public tree actually has.
+    surface = sha256()
+    for relative in ("gpuwm/core/mpas_column_batch.py", "docs/mpas-seam.md"):
+        surface.update((root / relative).read_bytes())
+    monkeypatch.setattr(adapter, "MPAS_SEAM_CONTRACT_SURFACE_SHA256", surface.hexdigest())
+    public = adapter._verify_checkout_root(root)
+    assert not public.admitted and public.version == engine_pin.wanted_version()
+    assert public.build_commit == adapter.ARWEN_BUILD_COMMIT

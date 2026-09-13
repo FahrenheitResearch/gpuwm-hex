@@ -165,10 +165,11 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # Re-frozen 2026-08-28 for the 2.5.8 engine repin: 77f831b rewrote
         # this module's own ARWEN_SOURCE_MANIFEST/ARWEN_BUILD_COMMIT and did
         # not carry its new digest into either copy of the table, which left
-        # the x4 proof refusing before CUDA.  The rationale lives beside the
-        # runner's pin.
+        # the x4 proof refusing before CUDA.  Re-frozen again 2026-09-13
+        # when the checkout guard learned to resolve an admitted engine's
+        # identity.  The rationale lives beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "07cfad29e069e77a58176869dc624ba3daa473b1dd04eef58eac5c03085ac9d7"
+            "e99d2c4b1e4fbe538ad41633b85ee1edea56993372c601b5261d817803f4d68c"
         ),
         # Re-frozen for the regional CPU authority lane (#346 L4); the
         # rationale lives beside the runner's pin.

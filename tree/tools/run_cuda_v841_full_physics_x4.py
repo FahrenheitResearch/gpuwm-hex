@@ -518,8 +518,14 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # test_exact_release_scope_and_all_execution_sources_are_frozen was RED at
     # that tip.  Only the digest moved; no behaviour in this module changed
     # beyond the manifest constants the repin deliberately rewrote.
+    # Re-frozen again 2026-09-13: the checkout guard now resolves a tree to
+    # the engine identity its bytes were measured as -- the public pin, or
+    # a row of engine_pin.ADMITTED_ENGINES under that row's own version
+    # string -- and the receipts and restart identity name that identity's
+    # commit and digests.  On the public engine every value it writes is
+    # unchanged; the frozen row's own execution path did not move.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "07cfad29e069e77a58176869dc624ba3daa473b1dd04eef58eac5c03085ac9d7"
+        "e99d2c4b1e4fbe538ad41633b85ee1edea56993372c601b5261d817803f4d68c"
     ),
     # The v8.4.1 horizontal-mixing execution boundary (2-D Smagorinsky):
     # CPU authorities and the CUDA operator modules the RK1 saved-Euler

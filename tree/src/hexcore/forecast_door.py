@@ -1052,8 +1052,28 @@ def seam_pin_problem(checkout: Path) -> str | None:
     from . import engine_pin
 
     inspection = engine_pin.inspect_seam(checkout)
-    if not inspection.moved and not inspection.absent:
+    if inspection.accepted:
         return None
+    if inspection.misdeclared:
+        # The bytes are an admitted engine's, the version string is not.
+        # Named as its own refusal because the remedy is different: nothing
+        # needs installing, the tree needs to be the build it was measured
+        # as, under the version that build declares.
+        declared = (
+            f"declares itself gpuwm {inspection.declared}"
+            if inspection.declared is not None
+            else "declares no version this door could read"
+        )
+        return (
+            f"--gpuwm-checkout {checkout} carries the measured seam bytes of "
+            f"the admitted engine gpuwm {inspection.engine} and {declared}.  "
+            "An admitted engine is keyed by its version string and its bytes "
+            "together -- a re-versioned copy of a measured build is neither "
+            "that build nor the pin, and its receipts would name a version "
+            "the bytes never had.  Point --gpuwm-checkout at the build as it "
+            f"was measured, declaring gpuwm {inspection.engine}, or at a "
+            f"checkout of v{engine_pin.wanted_version()}."
+        )
 
     found = engine_pin.checkout_version(checkout)
     if found is None:

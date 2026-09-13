@@ -109,6 +109,26 @@ that one file.  Both are stated with their magnitudes in
 follow-up.  If the one admitted engine were yanked from PyPI, the correct
 answer is :class:`EnginePinError`, not a loosened bound.
 
+ADMITTED ENGINES, added 2026-09-13.  A build that is not on PyPI -- a
+private engine carrying a PEP 440 local version label on a published base,
+``2.7.3+x.1`` -- has no row in the published table, because that table is a
+measurement of what PyPI serves, and it satisfies the derived specifier
+anyway, because PEP 440 orders a local version immediately after its base.
+So the specifier is not the gate for it and was never meant to be; the
+bytes are.  :data:`ADMITTED_ENGINES` is the second table this module
+carries, written by the same instrument in its ``--admit`` mode from the
+engine's own artifacts (its wheels and its source tree, which must agree
+with each other and with the git tree's HEAD on all sixteen paths), keyed
+by the exact version string and the sixteen digests together, and carrying
+the build commit and glacier digest a run's receipts name instead of the
+public pin's.  :func:`inspect_seam` tries an admitted row only when the
+public pin is not matched, matches it only in full, and refuses the row's
+bytes under any other version string.  An engine with no row -- a private
+build nobody measured, a re-versioned copy -- is refused exactly as an
+unmeasured public engine is.  The one row shipped moves five of the
+sixteen paths from the public 2.7.3 bytes and leaves the composed glacier
+unit identical; what the row is for is not this module's business.
+
 Two facts the 2026-08-27 measurement turned up that no document in the tree
 carried.  Both are still true, and both are now moot for the FLOOR, because
 2.5.5 and 2.5.6 fail the re-pinned manifest on bytes before either one
@@ -540,6 +560,169 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
 # --- END GENERATED: PUBLISHED_ENGINES ---
 
 
+@dataclass(frozen=True)
+class AdmittedEngine:
+    """One engine admitted by a measured row of its own.
+
+    An engine that is not on PyPI -- a private build carrying a PEP 440
+    local version label such as ``2.7.3+x.1`` -- cannot appear in
+    :data:`PUBLISHED_ENGINES`, because that table is a measurement of what
+    PyPI serves.  It can still be the engine a user has installed, and the
+    dependency specifier already lets it through: PEP 440 orders a local
+    version immediately after its public base, so ``gpuwm>=2.7.3,<2.7.4``
+    resolves ``2.7.3+x.1``.  What decides whether this port RUNS on it is
+    the same thing that decides for a published engine -- its sixteen seam
+    bytes -- so an admitted engine is a row of the same kind: measured by
+    the instrument from the engine's own artifacts, keyed by its exact
+    version string AND its bytes, and refused when either differs.
+
+    A tree whose bytes match this row under this version string is accepted
+    by the seam check, the forecast door and ``doctor``, and its receipts
+    name THIS row's build commit and digests rather than the public pin's.
+    A tree that carries these bytes under another version string, or this
+    version string over other bytes, is refused by name: the row admits one
+    engine, not a family.
+    """
+
+    #: The exact version string, local label included.
+    version: str
+    #: The public version whose pip window this engine rides.
+    base: str
+    #: HEAD of the tree the measured artifacts were built from.
+    build_commit: str
+    #: All sixteen manifest paths and their digests in this engine, sorted.
+    digests: tuple[tuple[str, str], ...]
+    #: ``sha256(translation_unit_source('noahmp_glacier'))`` by this
+    #: engine's own hand, from its extracted wheel.
+    glacier_composed_tu_sha256: str
+    #: The manifest paths whose bytes differ from the public pin.
+    moved_from_base: tuple[str, ...]
+    #: The artifacts the row was hashed from, as (filename, sha256).  Every
+    #: one of them agreed on all sixteen paths, or the row was not written.
+    artifacts: tuple[tuple[str, str], ...]
+
+    @property
+    def manifest(self) -> dict[str, str]:
+        return dict(self.digests)
+
+
+#: THE OUTPUT OF THE SAME INSTRUMENT, in its ``--admit`` mode: it hashes the
+#: sixteen paths inside every artifact named (the engine's wheels and its
+#: source tree), refuses if they disagree with each other or with the git
+#: tree's HEAD, computes the glacier digest from the extracted wheel, and
+#: writes ``verification/engine-verdicts/admitted-engines.json``, which the
+#: block below is rendered from by ``--splice-admitted``.
+#: ``tests/test_engine_pin.py`` re-renders that JSON and demands equality.
+#:
+#: DO NOT HAND-PATCH A ROW, for the reason the published table gives.
+# --- BEGIN GENERATED: ADMITTED_ENGINES ---
+ADMITTED_ENGINES: tuple[AdmittedEngine, ...] = (
+    AdmittedEngine(
+        version="2.7.3+soma.1",
+        base="2.7.3",
+        build_commit="9c0d5f81c26903d2e5d69e79c02ca2cb1f8b5871",
+        digests=(
+            ("docs/mpas-seam.md", "5cd6934ef8b4f3dabfb7fa2e621ceab309836875a6669319323451ea717f9035"),
+            ("gpuwm/config.py", "475269810bcba69490d81a3dcdeba69991e52cad962cce7731b191839b07c658"),
+            ("gpuwm/core/gf.py", "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f"),
+            ("gpuwm/core/kernels/__init__.py", "5d8a0f17cf477d5a3ee67ae1010baca064572b8dd1e3f0708d72574bdadc9d69"),
+            ("gpuwm/core/kernels/gf.cu", "334c55ab764732be73d94504d54cb60ad7ca8bf12dbca879d7b3fc3f869d4386"),
+            ("gpuwm/core/kernels/noahmp_glacier.cu", "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"),
+            ("gpuwm/core/kernels/noahmp_leaves.cu", "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497"),
+            ("gpuwm/core/microphysics.py", "982194be9cf7893e871b211457b52bbea8abddc00ee565a323acf703f96e81b0"),
+            ("gpuwm/core/mpas_column_batch.py", "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45"),
+            ("gpuwm/core/noahmp_glacier.py", "1bb607569b5007c5d2817e879eb82112db7ed01f11931efe1802d35b3fb7b23b"),
+            ("gpuwm/core/noahmp_glacier_gpu.py", "86d3dbf5dcac3c084bca9a4d819f698122da434d9e994243fd09ea1332337d0a"),
+            ("gpuwm/core/noahmp_kernel_sources.py", "fcdc097d20f9d0453086bae5ba1007f015d4eca2ac21b39db10a59f15cff26c5"),
+            ("gpuwm/core/noahmp_runtime.py", "990780ab87764481c463b1fa2f8c988cd9538e0833dc390203d2a0396fee66bc"),
+            ("gpuwm/core/physics.py", "b3417d878eaab1c8756535dc2721e6f1071e63cf51454faba0376a9223f6e1f1"),
+            ("gpuwm/core/rrtmg_legacy.py", "8951ce770e10f823d964a4f4564cc9f8989035a7fb9d3fc1448b73f6816bc928"),
+            ("gpuwm/io/restart.py", "bc52ff0e54c2edf78c425fbe73c087b900f309085588177e787e6b4f4126a60f"),
+        ),
+        glacier_composed_tu_sha256="cde4bfccb40efd54be56700251849e8d18bcd7ae69d85f5737a2cabc32719d84",
+        moved_from_base=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/io/restart.py",
+        ),
+        artifacts=(
+            ("gpuwm-2.7.3+soma.1-py3-none-manylinux_2_28_x86_64.whl", "acd90adffa4cbf8cf0937f329d60baefd27d6642b85fd83092d045d04215814e"),
+            ("gpuwm-2.7.3+soma.1-py3-none-any.whl", "b01610a7ca2bb9939301ae2b67ac78265291e8a2707b6f33829b55653b480000"),
+            ("gpuwm-2.7.3+soma.1-py3-none-win_amd64.whl", "17e3aad7a3bd8eed895b9dd09d0a5f4bd1b587164dc75451d0db91c679cd7f77"),
+            ("engine (source tree)", None),
+        ),
+    ),
+)
+# --- END GENERATED: ADMITTED_ENGINES ---
+
+
+def admitted_engine(version: str) -> AdmittedEngine | None:
+    """The admitted row for ``version`` exactly, or ``None``."""
+
+    for row in ADMITTED_ENGINES:
+        if row.version == version:
+            return row
+    return None
+
+
+@dataclass(frozen=True)
+class EngineIdentity:
+    """The engine a tree's bytes were measured to be: what receipts name.
+
+    One shape for both kinds of admission.  For the public pin the fields
+    are the adapter module's own constants; for an admitted row they are
+    that row's.  The adapter records ``build_commit``, ``manifest`` and the
+    glacier digest into every receipt and restart identity, so a run on an
+    admitted engine is provenanced by the commit its bytes came from rather
+    than by the public pin it does not carry.
+    """
+
+    version: str
+    build_commit: str
+    manifest: dict[str, str]
+    glacier_composed_tu_sha256: str
+    #: ``False`` for the public pin, ``True`` for an admitted row.
+    admitted: bool
+
+
+def pinned_engine() -> EngineIdentity:
+    """The public pin as an identity, read from the adapter's constants."""
+
+    from .cuda_arwen_physics_v841 import (
+        ARWEN_BUILD_COMMIT,
+        ARWEN_GLACIER_COMPOSED_TU_SHA256,
+        ARWEN_SOURCE_MANIFEST,
+    )
+
+    return EngineIdentity(
+        version=wanted_version(),
+        build_commit=ARWEN_BUILD_COMMIT,
+        manifest=dict(ARWEN_SOURCE_MANIFEST),
+        glacier_composed_tu_sha256=ARWEN_GLACIER_COMPOSED_TU_SHA256,
+        admitted=False,
+    )
+
+
+def identity_for(version: str) -> EngineIdentity:
+    """The identity a matched engine version names; the pin or an admitted row."""
+
+    row = admitted_engine(version)
+    if row is None:
+        pinned = pinned_engine()
+        if version != pinned.version:
+            raise EnginePinError(f"gpuwm {version} is neither the pin nor an admitted engine")
+        return pinned
+    return EngineIdentity(
+        version=row.version,
+        build_commit=row.build_commit,
+        manifest=row.manifest,
+        glacier_composed_tu_sha256=row.glacier_composed_tu_sha256,
+        admitted=True,
+    )
+
+
 class EnginePinError(RuntimeError):
     """No published engine satisfies the pin, so no specifier can be derived."""
 
@@ -639,6 +822,16 @@ class SeamInspection:
     moved: tuple[str, ...]
     #: Manifest paths this tree does not carry at all.
     absent: tuple[str, ...]
+    #: The engine these bytes were measured to be: the pinned version when
+    #: every path matches the manifest, an admitted row's version when every
+    #: path matches that row, ``None`` when they match neither.
+    engine: str | None = None
+    #: The version the tree declares for itself (``pyproject.toml`` for a
+    #: checkout, installed metadata for an install root), or ``None``.
+    declared: str | None = None
+    #: The digest of every manifest path the tree carries, so a refusal can
+    #: print the byte it found beside the byte it wanted.
+    digests: tuple[tuple[str, str], ...] = ()
 
     @property
     def checked(self) -> int:
@@ -647,6 +840,45 @@ class SeamInspection:
     @property
     def drifted(self) -> bool:
         return bool(self.moved)
+
+    @property
+    def admitted(self) -> bool:
+        """Matched an ADMITTED row rather than the public pin."""
+
+        return self.engine is not None and admitted_engine(self.engine) is not None
+
+    @property
+    def misdeclared(self) -> bool:
+        """The bytes are an admitted engine's and the version string is not.
+
+        An admitted row is keyed by both.  Bytes alone would admit a
+        re-versioned copy of a private build and let its receipts name a
+        version the build never had; the version alone is the thing this
+        whole module exists to distrust.  The public pin keeps its old
+        contract -- bytes decide, whatever the tree calls itself -- because
+        its rows are measured from PyPI, where the version IS the bytes.
+        """
+
+        return self.admitted and self.declared != self.engine
+
+    @property
+    def accepted(self) -> bool:
+        """Nothing moved, nothing absent, and the version string agrees."""
+
+        return not self.moved and not self.absent and not self.misdeclared
+
+
+def declared_version(root: Path) -> str | None:
+    """What a tree says it is: its own ``pyproject.toml``, else pip's metadata
+    when ``root`` is the installed package's root, else ``None``."""
+
+    found = checkout_version(root)
+    if found is not None:
+        return found
+    installed = installed_root()
+    if installed is not None and installed == Path(root).resolve():
+        return installed_version()
+    return None
 
 
 def inspect_seam(root: Path) -> SeamInspection:
@@ -665,27 +897,47 @@ def inspect_seam(root: Path) -> SeamInspection:
     ``checked=16, matched=16, moved=(), absent=()``.  The branch stays,
     because an older engine still answers the old way and the two remedies
     are still different.
+
+    ADMITTED ROWS are tried only when the public pin is not matched in full,
+    and a row is matched only in full: all sixteen paths present and equal
+    to the row's digests.  Then ``moved`` and ``absent`` are empty and
+    ``engine`` names the row.  A tree that matches neither is reported
+    against the public pin, as before, so the refusal names the engine this
+    port actually pins.
     """
 
-    matched: list[str] = []
-    moved: list[str] = []
+    manifest = seam_manifest()
+    found: dict[str, str] = {}
     absent: list[str] = []
-    for relative, expected in seam_manifest().items():
+    for relative in manifest:
         path = root / relative
         try:
             payload = path.read_bytes()
         except OSError:
             absent.append(relative)
             continue
-        if sha256(payload).hexdigest() == expected:
-            matched.append(relative)
-        else:
-            moved.append(relative)
+        found[relative] = sha256(payload).hexdigest()
+
+    engine: str | None = None
+    against = manifest
+    if not absent and found == manifest:
+        engine = wanted_version()
+    elif not absent:
+        for row in ADMITTED_ENGINES:
+            if row.manifest == found:
+                engine = row.version
+                against = row.manifest
+                break
+    matched = [relative for relative, digest in found.items() if digest == against[relative]]
+    moved = [relative for relative, digest in found.items() if digest != against[relative]]
     return SeamInspection(
         root=root,
         matched=tuple(sorted(matched)),
         moved=tuple(sorted(moved)),
         absent=tuple(sorted(absent)),
+        engine=engine,
+        declared=declared_version(root),
+        digests=tuple(sorted(found.items())),
     )
 
 
@@ -801,20 +1053,27 @@ def remedy(found: str | None = None) -> str:
 
 
 __all__ = [
+    "ADMITTED_ENGINES",
+    "AdmittedEngine",
     "DISTRIBUTION",
+    "EngineIdentity",
     "EnginePinError",
     "PUBLISHED_ENGINES",
     "REPOSITORY",
     "PublishedEngine",
     "SeamInspection",
+    "admitted_engine",
     "checkout_version",
+    "declared_version",
     "engine",
     "gpuwm_ceiling",
     "gpuwm_floor",
     "gpuwm_requirement",
+    "identity_for",
     "inspect_seam",
     "installed_root",
     "installed_version",
+    "pinned_engine",
     "remedy",
     "seam_manifest",
     "version_from_moved",

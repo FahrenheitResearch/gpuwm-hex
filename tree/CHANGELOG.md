@@ -24,6 +24,28 @@ New:
   control arm and a capped-profile control. It is how this release states
   its physics movement below, and how a re-pin taken without the x4 assets
   and a 32 GiB card can still say what changed.
+- A private engine with a measured row is admitted. An engine that is not
+  on PyPI, carrying a PEP 440 local version label on the pinned base,
+  already satisfies the declared range (2.7.3+x.1 sits inside
+  gpuwm>=2.7.3,<2.7.4); what decides whether this port runs on it is now
+  the same thing that decides for a published engine, its sixteen seam
+  bytes. tools/measure_engine_verdicts.py --admit hashes those files
+  inside the engine's own wheels and source tree (which must agree with
+  each other and with the git tree's HEAD), computes the composed glacier
+  digest by the engine's own hand, and writes the row to
+  verification/engine-verdicts/admitted-engines.json, spliced into
+  hexcore.engine_pin.ADMITTED_ENGINES and gated by tests/test_engine_pin.py
+  like the published table. The seam check, the forecast door, doctor and
+  the adapter's checkout guard accept a tree whose bytes are exactly that
+  row's under that version string, and every receipt and restart identity
+  then names the row's build commit and digests instead of the public
+  pin's; the same bytes under another version string, that version string
+  over other bytes, and any engine with no row are refused by name as
+  before. One row ships, 2.7.3+soma.1: five of the sixteen paths differ
+  from the published 2.7.3 bytes (the config loader, the kernel loader,
+  the microphysics driver, the phase-one driver and the restart identity
+  table) and the composed glacier unit does not. On the public 2.7.3
+  engine nothing this release writes changes.
 
 Fixed:
 - Requires gpuwm 2.7.3 and refuses every earlier engine, 2.6.4 and 2.6.5

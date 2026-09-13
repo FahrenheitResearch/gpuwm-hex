@@ -160,7 +160,14 @@ by omission.
   published 2.5.2 carries none of them and would strand every door that
   drives one. The CEILING is exclusive and sits at the first engine not
   measured usable, so an engine that has not been compared against the
-  manifest is never resolved onto — including ones not published yet. The
+  manifest is never resolved onto — including ones not published yet. An
+  engine that is NOT on PyPI (a local version such as `2.7.3+x.1`, which
+  the range already resolves) is admitted only by a measured row of its
+  own in `hexcore.engine_pin.ADMITTED_ENGINES`, written by the same
+  instrument's `--admit` from the engine's wheels and source tree and
+  keyed by its exact version string and its sixteen digests together; the
+  seam check, the door, `doctor` and the adapter accept that row's bytes
+  under that version and refuse everything else by name. The
   forecast lane's real wall is stricter still: the sixteen-file seam
   manifest, plus a *git* checkout at the pinned commit for receipt
   provenance (chapter 6.1). `gpuwm-hex doctor` compares the installed

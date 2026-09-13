@@ -296,6 +296,22 @@ stops there with `failed to open file .../cc/src/target/generated.rs`.
 > constraint of your own is needed; if one is already in your environment,
 > `gpuwm-hex doctor` compares the installed engine's bytes against the pin
 > and names both the version it found and the version to install.
+>
+> **An engine that is not on PyPI can be admitted, by measurement only.**
+> A private build carrying a PEP 440 local version label on the pinned
+> base (`2.7.3+x.1`) already resolves inside `gpuwm>=2.7.3,<2.7.4`; the
+> byte verdict is the only gate. `tools/measure_engine_verdicts.py --admit`
+> hashes the sixteen files inside the engine's own wheels and source tree,
+> refuses if they disagree with each other or with the git tree's HEAD,
+> and writes a row to `verification/engine-verdicts/admitted-engines.json`
+> that `--splice-admitted` renders into `hexcore.engine_pin.ADMITTED_ENGINES`.
+> A tree whose bytes are exactly that row's, under that version string, is
+> accepted by the door, by `doctor` and by the adapter's checkout guard,
+> and its receipts name the row's build commit rather than the public
+> pin's. The same bytes under another version, that version over other
+> bytes, and a build nobody measured are refused by name. One row ships:
+> `2.7.3+soma.1`, five of sixteen paths moved from the published 2.7.3
+> bytes, composed glacier unit identical.
 
 The range also keeps a **second and independent** refusal where pip can make
 it. The MPAS bridge binaries — `rw_mpas_init`, `rw_mpas_convert`,

@@ -49,6 +49,23 @@ the running adapter will compare against.  Validated in both directions on
 2026-09-13: run against the 2.6.5 wheel it reproduces the digest the 0.2.3
 tree shipped, and against the 2.7.3 wheel it produces a different one.
 
+``--admit`` MEASURES AN ENGINE THAT IS NOT ON PYPI -- a private build
+carrying a PEP 440 local version label on a published base -- from its own
+artifacts and registers it as a row of ``ADMITTED_ENGINES`` in the same
+module.  Every artifact named (wheels, a source tree) must declare the same
+version and carry the same sixteen bytes, none absent; ``--admit-git`` names
+a git working tree whose HEAD becomes the row's build commit and whose blobs
+at HEAD must equal those bytes with the paths clean; the base version must
+sit inside the derived specifier, because the specifier is what pip
+enforces and the row is what the seam enforces; the glacier digest is
+computed by the engine's own hand from the extracted wheel, as above.  The
+row is written into ``verification/engine-verdicts/admitted-engines.json``
+(one document for every admitted engine, keyed by version) and
+``--splice-admitted`` renders that document into the module's second
+generated block.  The row records what moved from the public pin and the
+digest of every artifact it was hashed from, and nothing about what the
+engine is for.
+
 NETWORK.  Reads ``pypi.org`` (the project JSON and the wheel files) and
 nothing else; every download is verified against PyPI's own SHA-256 before
 it is opened, and the cache directory is reused on the next run.  A git
@@ -62,6 +79,10 @@ Usage::
         --wheel-cache <dir> --json verification/engine-verdicts/<name>.json \\
         [--pin-to 2.7.3 [--write-manifest]] [--splice src/hexcore/engine_pin.py] \\
         [--table]
+
+    python tools/measure_engine_verdicts.py --admit <wheel>... <tree> \\
+        --admit-git <tree> [--admit-json verification/engine-verdicts/admitted-engines.json] \\
+        [--splice-admitted src/hexcore/engine_pin.py]
 """
 
 from __future__ import annotations
@@ -101,6 +122,15 @@ BUILD_ROAD_FILES = (
 
 BEGIN_MARK = "# --- BEGIN GENERATED: PUBLISHED_ENGINES ---"
 END_MARK = "# --- END GENERATED: PUBLISHED_ENGINES ---"
+
+ADMITTED_BEGIN_MARK = "# --- BEGIN GENERATED: ADMITTED_ENGINES ---"
+ADMITTED_END_MARK = "# --- END GENERATED: ADMITTED_ENGINES ---"
+ADMITTED_JSON = TREE / "verification" / "engine-verdicts" / "admitted-engines.json"
+ADMITTED_SCHEMA = "gpuwm-hex.admitted-engines/v1"
+
+#: A PEP 440 public release followed by a local version label.  An engine
+#: without the label is a published one and goes through the table above.
+LOCAL_VERSION = re.compile(r"\d+\.\d+\.\d+\+[A-Za-z0-9]+(\.[A-Za-z0-9]+)*")
 
 
 # ---------------------------------------------------------------------------
@@ -375,31 +405,41 @@ def pinned_manifest(version: str, paths: list[str], store: WheelStore,
     return dict(digests), commit
 
 
-def glacier_composed_digest(version: str, store: WheelStore) -> str:
+def _glacier_digest_from_root(root: Path) -> str:
     """``sha256(translation_unit_source('noahmp_glacier'))`` by the engine's
-    own hand, from the extracted wheel, in a subprocess."""
+    own hand, with ``root`` (an extracted wheel or a source tree) as the
+    only ``PYTHONPATH`` entry, in a subprocess."""
 
-    project = store.project()
-    wheels = [f for f in project["releases"][version]
-              if f["filename"].endswith(".whl") and not f.get("yanked")]
-    wheel = store.fetch(wheels[0])
-    with tempfile.TemporaryDirectory(prefix="gpuwm-wheel-") as scratch:
-        with zipfile.ZipFile(wheel) as archive:
-            archive.extractall(scratch)
-        program = (
-            "from hashlib import sha256\n"
-            "from gpuwm.core import noahmp_kernel_sources as n\n"
-            "s = n.translation_unit_source('noahmp_glacier')\n"
-            "print(sha256(s.encode('ascii')).hexdigest())\n"
-        )
-        env = dict(os.environ, PYTHONPATH=scratch)
-        completed = subprocess.run(
-            [sys.executable, "-c", program], env=env, capture_output=True,
-            text=True, check=True)
+    program = (
+        "from hashlib import sha256\n"
+        "from gpuwm.core import noahmp_kernel_sources as n\n"
+        "s = n.translation_unit_source('noahmp_glacier')\n"
+        "print(sha256(s.encode('ascii')).hexdigest())\n"
+    )
+    env = dict(os.environ, PYTHONPATH=str(root))
+    completed = subprocess.run(
+        [sys.executable, "-c", program], env=env, capture_output=True,
+        text=True, check=True)
     digest = completed.stdout.strip()
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise SystemExit(f"glacier digest subprocess printed {digest!r}")
     return digest
+
+
+def glacier_digest_from_wheel(wheel: Path) -> str:
+    with tempfile.TemporaryDirectory(prefix="gpuwm-wheel-") as scratch:
+        with zipfile.ZipFile(wheel) as archive:
+            archive.extractall(scratch)
+        return _glacier_digest_from_root(Path(scratch))
+
+
+def glacier_composed_digest(version: str, store: WheelStore) -> str:
+    """The glacier digest of a PUBLISHED version, from its first wheel."""
+
+    project = store.project()
+    wheels = [f for f in project["releases"][version]
+              if f["filename"].endswith(".whl") and not f.get("yanked")]
+    return glacier_digest_from_wheel(store.fetch(wheels[0]))
 
 
 def _rewrite_hex_on_line(lines: list[str], line: int, found: str, expected: str) -> None:
@@ -441,6 +481,236 @@ def write_manifest(module: Path, manifest: dict[str, str], commit: str,
             moved += 1
     module.write_text("\n".join(lines), encoding="utf-8", newline="")
     return moved
+
+
+# ---------------------------------------------------------------------------
+# --admit: an engine that is not on PyPI, measured from its own artifacts
+# ---------------------------------------------------------------------------
+def wheel_version(wheel: Path) -> str:
+    """The version the wheel's own METADATA declares."""
+
+    with zipfile.ZipFile(wheel) as archive:
+        names = [n for n in archive.namelist()
+                 if n.endswith(".dist-info/METADATA") and n.count("/") == 1]
+        if len(names) != 1:
+            raise SystemExit(f"{wheel.name}: expected one dist-info METADATA, found {names}")
+        text = archive.read(names[0]).decode("utf-8")
+    match = re.search(r"(?m)^Version:\s*(\S+)\s*$", text)
+    if match is None:
+        raise SystemExit(f"{wheel.name}: METADATA declares no Version")
+    return match.group(1)
+
+
+def tree_version(root: Path) -> str:
+    """The version a source tree's ``pyproject.toml`` declares."""
+
+    import tomllib
+
+    declaration = root / "pyproject.toml"
+    if not declaration.is_file():
+        raise SystemExit(f"{root}: no pyproject.toml, so no version to key a row by")
+    parsed = tomllib.loads(declaration.read_text(encoding="utf-8"))
+    version = parsed.get("project", {}).get("version")
+    if not isinstance(version, str):
+        raise SystemExit(f"{root}: pyproject.toml states no static project.version")
+    return version
+
+
+def tree_digests(root: Path, paths: list[str]) -> tuple[dict[str, str], list[str]]:
+    present: dict[str, str] = {}
+    absent: list[str] = []
+    for relative in paths:
+        path = root / relative
+        if path.is_file():
+            present[relative] = sha256_bytes(path.read_bytes())
+        else:
+            absent.append(relative)
+    return present, sorted(absent)
+
+
+def _engine_pin_module():
+    """``hexcore.engine_pin`` from this tree, for the specifier the row must
+    sit inside.  The module imports nothing heavy; the package init reads
+    installed metadata only."""
+
+    import importlib
+
+    source = str(TREE / "src")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    return importlib.import_module("hexcore.engine_pin")
+
+
+def measure_admitted(
+    *,
+    manifest: dict[str, str],
+    artifacts: list[Path],
+    git_tree: Path,
+) -> dict:
+    """One admitted-engine row, or a refusal naming what disagreed."""
+
+    paths = sorted(manifest)
+    if not artifacts:
+        raise SystemExit("--admit needs at least one wheel or source tree")
+    measured: list[dict] = []
+    for artifact in artifacts:
+        artifact = artifact.resolve()
+        if artifact.is_file() and artifact.suffix == ".whl":
+            present, absent = wheel_digests(artifact, paths)
+            measured.append({
+                "name": artifact.name, "kind": "wheel",
+                "sha256": sha256_bytes(artifact.read_bytes()),
+                "version": wheel_version(artifact),
+                "digests": present, "absent": absent, "path": artifact,
+            })
+        elif artifact.is_dir():
+            present, absent = tree_digests(artifact, paths)
+            measured.append({
+                "name": f"{artifact.name} (source tree)", "kind": "tree", "sha256": None,
+                "version": tree_version(artifact),
+                "digests": present, "absent": absent, "path": artifact,
+            })
+        else:
+            raise SystemExit(f"--admit {artifact}: neither a .whl nor a directory")
+
+    for entry in measured:
+        if entry["absent"]:
+            raise SystemExit(
+                f"--admit {entry['name']} lacks {entry['absent']}; an engine "
+                "that does not carry a pinned path cannot be admitted")
+    versions = sorted({entry["version"] for entry in measured})
+    if len(versions) != 1:
+        raise SystemExit(
+            f"--admit: the artifacts declare different versions {versions}; "
+            "refusing to key one row by several")
+    version = versions[0]
+    if not LOCAL_VERSION.fullmatch(version):
+        raise SystemExit(
+            f"--admit: {version} carries no PEP 440 local version label; a "
+            "published engine is measured by the table above, not admitted")
+    first = measured[0]
+    for entry in measured[1:]:
+        if entry["digests"] != first["digests"]:
+            differing = sorted(p for p in paths if entry["digests"][p] != first["digests"][p])
+            raise SystemExit(
+                f"--admit: {entry['name']} and {first['name']} disagree on "
+                f"{differing}; refusing to admit an engine off one artifact's bytes")
+    digests = dict(first["digests"])
+
+    base = version.split("+", 1)[0]
+    engine_pin = _engine_pin_module()
+    floor, ceiling = engine_pin.gpuwm_floor(), engine_pin.gpuwm_ceiling()
+    if not (version_key(floor) <= version_key(base) < version_key(ceiling)):
+        raise SystemExit(
+            f"--admit: {version} rides base {base}, outside the derived "
+            f"specifier {engine_pin.gpuwm_requirement()}; pip would never "
+            "resolve it, so a row for it would admit nothing")
+
+    git_tree = git_tree.resolve()
+    commit = _git(git_tree, "rev-parse", "HEAD")
+    dirty = _git(git_tree, "status", "--porcelain", "--", *paths)
+    if dirty:
+        raise SystemExit(
+            f"--admit-git {git_tree}: pinned paths are dirty at HEAD:\n{dirty}\n"
+            "a row must name the commit its bytes came from")
+    head_present, head_absent = tag_digests(git_tree, commit, paths)
+    disagree = sorted(p for p in paths if head_present.get(p) != digests[p]) + head_absent
+    if disagree:
+        raise SystemExit(
+            f"--admit-git {git_tree}: HEAD {commit[:12]} disagrees with the "
+            f"artifacts on {disagree}; the row would name a commit that does "
+            "not carry its bytes")
+
+    wheels = [entry for entry in measured if entry["kind"] == "wheel"]
+    if wheels:
+        glacier = glacier_digest_from_wheel(wheels[0]["path"])
+    else:
+        glacier = _glacier_digest_from_root(first["path"])
+
+    return {
+        "version": version,
+        "base": base,
+        "build_commit": commit,
+        "measured_at": _dt.datetime.now(_dt.timezone.utc).replace(
+            microsecond=0).isoformat(),
+        "instrument_sha256": sha256_bytes(Path(__file__).read_bytes()),
+        "pip_requirement": engine_pin.gpuwm_requirement(),
+        "digests": digests,
+        "moved_from_base": sorted(p for p in paths if digests[p] != manifest[p]),
+        "glacier_composed_tu_sha256": glacier,
+        "artifacts": [
+            {"name": entry["name"], "kind": entry["kind"], "sha256": entry["sha256"]}
+            for entry in measured
+        ],
+    }
+
+
+def load_admitted(document: Path) -> dict:
+    if document.is_file():
+        loaded = json.loads(document.read_text(encoding="utf-8"))
+        if loaded.get("schema") != ADMITTED_SCHEMA:
+            raise SystemExit(f"{document}: schema {loaded.get('schema')!r} is not {ADMITTED_SCHEMA}")
+        return loaded
+    return {
+        "schema": ADMITTED_SCHEMA,
+        "instrument": Path(__file__).relative_to(TREE).as_posix(),
+        "distribution": DISTRIBUTION,
+        "engines": [],
+    }
+
+
+def write_admitted(document: Path, loaded: dict, row: dict) -> None:
+    engines = [entry for entry in loaded["engines"] if entry["version"] != row["version"]]
+    engines.append(row)
+    engines.sort(key=lambda entry: (version_key(entry["version"]), entry["version"]))
+    loaded["engines"] = engines
+    loaded["instrument"] = Path(__file__).relative_to(TREE).as_posix()
+    document.parent.mkdir(parents=True, exist_ok=True)
+    document.write_text(json.dumps(loaded, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8", newline="\n")
+
+
+def render_admitted_rows(rows: list[dict]) -> str:
+    out = [ADMITTED_BEGIN_MARK]
+    if not rows:
+        out.append("ADMITTED_ENGINES: tuple[AdmittedEngine, ...] = ()")
+    else:
+        out.append("ADMITTED_ENGINES: tuple[AdmittedEngine, ...] = (")
+        for row in rows:
+            out.append("    AdmittedEngine(")
+            out.append(f'        version="{row["version"]}",')
+            out.append(f'        base="{row["base"]}",')
+            out.append(f'        build_commit="{row["build_commit"]}",')
+            out.append("        digests=(")
+            for relative in sorted(row["digests"]):
+                out.append(f'            ("{relative}", "{row["digests"][relative]}"),')
+            out.append("        ),")
+            out.append(
+                f'        glacier_composed_tu_sha256="{row["glacier_composed_tu_sha256"]}",')
+            if row["moved_from_base"]:
+                out.append("        moved_from_base=(")
+                for relative in row["moved_from_base"]:
+                    out.append(f'            "{relative}",')
+                out.append("        ),")
+            else:
+                out.append("        moved_from_base=(),")
+            out.append("        artifacts=(")
+            for artifact in row["artifacts"]:
+                digest = "None" if artifact["sha256"] is None else f'"{artifact["sha256"]}"'
+                out.append(f'            ("{artifact["name"]}", {digest}),')
+            out.append("        ),")
+            out.append("    ),")
+        out.append(")")
+    out.append(ADMITTED_END_MARK)
+    return "\n".join(out)
+
+
+def splice_admitted(module: Path, rows: list[dict]) -> None:
+    text = module.read_text(encoding="utf-8")
+    start = text.index(ADMITTED_BEGIN_MARK)
+    end = text.index(ADMITTED_END_MARK) + len(ADMITTED_END_MARK)
+    module.write_text(text[:start] + render_admitted_rows(rows) + text[end:],
+                      encoding="utf-8", newline="")
 
 
 # ---------------------------------------------------------------------------
@@ -491,10 +761,22 @@ def render_table(rows: list[dict], manifest_size: int) -> str:
 # ---------------------------------------------------------------------------
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--engine-git", type=Path, required=True,
+    parser.add_argument("--engine-git", type=Path,
                         help="a clone of the engine repository carrying its tags")
-    parser.add_argument("--wheel-cache", type=Path, required=True,
+    parser.add_argument("--wheel-cache", type=Path,
                         help="where downloaded wheels and the PyPI JSON are kept")
+    parser.add_argument("--admit", type=Path, nargs="+", metavar="ARTIFACT",
+                        help="admit an engine that is not on PyPI: its wheels "
+                             "and/or source tree, which must agree")
+    parser.add_argument("--admit-git", type=Path, metavar="TREE",
+                        help="with --admit: the git working tree whose HEAD is "
+                             "the row's build commit")
+    parser.add_argument("--admit-json", type=Path, default=ADMITTED_JSON,
+                        help="the admitted-engines document to read and write")
+    parser.add_argument("--splice-admitted", type=Path, nargs="?",
+                        const=ENGINE_PIN_MODULE,
+                        help="render the admitted-engines document into "
+                             "engine_pin.py's ADMITTED_ENGINES block")
     parser.add_argument("--floor", default=DEFAULT_FLOOR,
                         help=f"lowest version measured (default {DEFAULT_FLOOR})")
     parser.add_argument("--manifest-module", type=Path, default=MANIFEST_MODULE)
@@ -514,6 +796,35 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.write_manifest and not args.pin_to:
         parser.error("--write-manifest needs --pin-to")
+    if args.admit:
+        if args.admit_git is None:
+            parser.error("--admit needs --admit-git")
+        if args.pin_to or args.json or args.splice:
+            parser.error("--admit measures against the shipped manifest and "
+                         "writes only the admitted-engines document")
+        row = measure_admitted(
+            manifest=shipped_manifest(args.manifest_module),
+            artifacts=list(args.admit), git_tree=args.admit_git)
+        loaded = load_admitted(args.admit_json)
+        write_admitted(args.admit_json, loaded, row)
+        print(f"admitted gpuwm {row['version']} (base {row['base']}, commit "
+              f"{row['build_commit'][:12]}): {len(row['moved_from_base'])} of "
+              f"{len(row['digests'])} paths moved from the pin; wrote "
+              f"{args.admit_json}", file=sys.stderr)
+        if args.splice_admitted:
+            splice_admitted(args.splice_admitted, loaded["engines"])
+            print(f"spliced {len(loaded['engines'])} admitted row(s) into "
+                  f"{args.splice_admitted}", file=sys.stderr)
+        return 0
+    if args.splice_admitted and not (args.engine_git or args.wheel_cache):
+        loaded = load_admitted(args.admit_json)
+        splice_admitted(args.splice_admitted, loaded["engines"])
+        print(f"spliced {len(loaded['engines'])} admitted row(s) into "
+              f"{args.splice_admitted}", file=sys.stderr)
+        return 0
+    if args.engine_git is None or args.wheel_cache is None:
+        parser.error("--engine-git and --wheel-cache are required to measure "
+                     "the published engines")
 
     store = WheelStore(args.wheel_cache, args.offline)
     shipped = shipped_manifest(args.manifest_module)
@@ -557,6 +868,11 @@ def main(argv=None) -> int:
     if args.splice:
         splice(args.splice, rows)
         print(f"spliced {len(rows)} rows into {args.splice}", file=sys.stderr)
+    if args.splice_admitted:
+        loaded = load_admitted(args.admit_json)
+        splice_admitted(args.splice_admitted, loaded["engines"])
+        print(f"spliced {len(loaded['engines'])} admitted row(s) into "
+              f"{args.splice_admitted}", file=sys.stderr)
     if args.table or not (args.json or args.splice):
         print(render_table(rows, len(manifest)))
     usable = [row["version"] for row in rows
