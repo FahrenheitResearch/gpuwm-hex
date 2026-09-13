@@ -24,6 +24,7 @@ from hexcore import device_admission
 from hexcore import dt_admission
 from hexcore import cascade_row
 from hexcore import mesh_row_candidate
+from hexcore import mesh_rows
 from hexcore.cell_coordination_admission import (
     CellCoordinationAdmissionError,
     CellCoordinationPolicy,
@@ -1270,6 +1271,16 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
 # the forecast door's by-path re-execution of this file picks it up as the
 # first copy did.
 MESH_BINDINGS = mesh_row_candidate.apply_overrides(MESH_BINDINGS)
+
+# A mesh GENERATED AT A POINT -- ``gpuwm-hex mesh-plan --point --generate``
+# -- cannot be a row in this file either: the point is arbitrary and the
+# mesh did not exist when this file was written.  ``hexcore.mesh_rows``
+# adds the generated global parent and its cull from the row file the
+# door leaves beside the mesh (``$GPUWM_HEX_MESH_ROWS``), and returns the
+# mapping UNCHANGED on every ordinary run.  Applied BEFORE the cascade rows
+# so a cascade may cull a generated parent, and every admission behind such
+# a row is a measurement of the files it names at bind.
+MESH_BINDINGS = mesh_rows.apply_rows(MESH_BINDINGS, MeshBinding)
 
 # A CYCLING CASCADE cuts a new limited-area mesh every cycle -- a
 # storm-following swath re-places itself -- so its culls cannot be rows in

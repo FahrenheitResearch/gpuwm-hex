@@ -158,10 +158,30 @@ MESH = EngineSpec(
     cargo_package="rw-mpas",
 )
 
+#: The static builder: geography onto a generated grid.
+#:
+#: ``gpuwm-hex mesh-plan --point --generate`` drives it right after the
+#: generator, because a grid without its static is not a deliverable: the
+#: registry pins the two together by byte count and SHA-256 and refuses a
+#: grid carrying one.  Staged by the same bundle as the four above.
+STATIC = EngineSpec(
+    name="rw_mpas_static",
+    flag="--static-exe",
+    env_names=("GPUWM_HEX_RW_MPAS_STATIC", "RW_MPAS_STATIC"),
+    gpuwm_env="GPUWM_RW_MPAS_STATIC",
+    subject="the static builder",
+    what_breaks=(
+        "a generated grid gets no static -- no terrain, land use, soil or "
+        "deriv_two -- and the registry refuses a grid with no matching static, "
+        "so a mesh generated at a point can never be run"
+    ),
+    cargo_package="rw-mpas",
+)
+
 #: Every engine a front door of this distribution drives, best-known name
 #: first.  ``hexcore.doctor`` reads this, so adding an engine is a row
 #: here and is reported without a second edit.
-ENGINES: tuple[EngineSpec, ...] = (INIT, CONVERT, MESH, RENDERER)
+ENGINES: tuple[EngineSpec, ...] = (INIT, CONVERT, MESH, STATIC, RENDERER)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +474,7 @@ __all__ = [
     "FETCH_COMMAND",
     "INIT",
     "RENDERER",
+    "STATIC",
     "USER_BRIDGE_DIR",
     "EngineRefusal",
     "EngineSpec",

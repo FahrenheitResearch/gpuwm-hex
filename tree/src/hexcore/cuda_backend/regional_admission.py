@@ -202,6 +202,13 @@ def kernel_set_sha256(root: Path | None = None) -> str:
 #: presented receipt, so it cannot grow to cover a cull nobody looked at.
 UNMEASURED_FINEST_EDGE_MM = -1
 
+#: The relative finest-edge band a same-ladder class admits (see
+#: :meth:`RegionalClassKey.finest_edge_within`).  Five per cent: wide enough
+#: for the relaxation noise between two generations of one ladder spec at
+#: different points, narrow enough that the two sub-kilometre classes (869 m
+#: and 711 m, 18 % apart) can never both admit one measured edge.
+SAME_LADDER_FINEST_EDGE_BAND = 0.05
+
 
 @dataclass(frozen=True, slots=True)
 class RegionalClassKey:
@@ -243,13 +250,38 @@ class RegionalClassKey:
     def finest_edge_measured(self) -> bool:
         return self.finest_edge_mm != UNMEASURED_FINEST_EDGE_MM
 
-    def matches(self, other: "RegionalClassKey") -> bool:
+    def finest_edge_within(self, other: "RegionalClassKey", band: float) -> bool:
+        """Does ``other``'s finest edge sit inside this class's band?
+
+        ``band`` is RELATIVE (0.05 is five per cent either way) and 0.0 is
+        exact equality in millimetres, which is what every class declared
+        until 2026-09-13.  The quantisation was "protection against a value
+        that arrived through a printed number, not against real drift"
+        (above): two culls of ONE parent carry ``min(dcEdge)`` in identical
+        bits.  A parent GENERATED AT ANOTHER POINT from the same ladder spec
+        carries the same delivered rung and a finest edge that differs by
+        relaxation noise -- a few tenths of a per cent to a few per cent --
+        and exact millimetres would refuse it as a different resolution
+        class, which it is not.  A class that admits a band says so in its
+        row (``finest_edge_band_relative``) and the receipt records the
+        measured edge beside the class's own.
+        """
+
+        if not self.finest_edge_measured:
+            return True
+        if band <= 0.0:
+            return self.finest_edge_mm == other.finest_edge_mm
+        return abs(other.finest_edge_mm - self.finest_edge_mm) <= band * self.finest_edge_mm
+
+    def matches(self, other: "RegionalClassKey", *, band: float = 0.0) -> bool:
         """Is ``other`` -- a key measured off a real run -- this class?
 
         Every field compares exactly, except that a class declaring an
-        unmeasured finest edge does not compare one.  Such a class buys that
+        unmeasured finest edge does not compare one (such a class buys that
         looseness back by refusing every geometry that is not already a
-        shipped contract row (see :func:`require_regional_anchor`).
+        shipped contract row, see :func:`require_regional_anchor`), and a
+        class declaring a finest-edge band compares the edge within it
+        (:meth:`finest_edge_within`).
         """
 
         if (
@@ -259,15 +291,14 @@ class RegionalClassKey:
             or self.kernel_set_sha256 != other.kernel_set_sha256
         ):
             return False
-        if not self.finest_edge_measured:
-            return True
-        return self.finest_edge_mm == other.finest_edge_mm
+        return self.finest_edge_within(other, band)
 
-    def differing_fields(self, other: "RegionalClassKey") -> list[str]:
+    def differing_fields(self, other: "RegionalClassKey", *, band: float = 0.0) -> list[str]:
         names = ["boundary_zone_width", "n_vert_levels", "dt_ms", "kernel_set_sha256"]
-        if self.finest_edge_measured:
-            names.append("finest_edge_mm")
-        return [name for name in names if getattr(self, name) != getattr(other, name)]
+        differing = [name for name in names if getattr(self, name) != getattr(other, name)]
+        if self.finest_edge_measured and not self.finest_edge_within(other, band):
+            differing.append("finest_edge_mm")
+        return differing
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -309,11 +340,17 @@ class RegionalClass:
     mint_receipts: tuple[str, ...]
     minted_on_geometries: tuple[str, ...]
     basis: str
+    #: How far, relatively, a measured finest edge may sit from this class's
+    #: own and still be this class.  0.0 (the default) is exact millimetres.
+    #: A class declares a band only when its basis says why; see
+    #: :meth:`RegionalClassKey.finest_edge_within`.
+    finest_edge_band_relative: float = 0.0
 
     def as_dict(self) -> dict[str, object]:
         return {
             "class_id": self.class_id,
             "key": self.key.as_dict(),
+            "finest_edge_band_relative": self.finest_edge_band_relative,
             "parent": self.parent,
             "card": self.card,
             "admitted_on": self.admitted_on,
@@ -586,7 +623,16 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "evidence/hex-speed-20260902/class-mint-937/mint-run2/forecast.json",
             ),
             minted_on_geometries=("r0.9.120.40520",),
+            finest_edge_band_relative=SAME_LADDER_FINEST_EDGE_BAND,
             basis=(
+                "BAND 2026-09-13 (hex-point-hrrr lane): a cull of a parent "
+                "GENERATED AT ANOTHER POINT from the same 937.5 m ladder spec "
+                "(gpuwm-hex mesh-plan --point) delivers the same rung and a "
+                "finest edge that differs from 869.251 m by relaxation noise; "
+                "it is this resolution class, and the key admits it within "
+                "5 % either way -- a band that cannot reach the 711 m class "
+                "beside it (18 % apart) and that the Courant admission "
+                "re-measures against the cull's own dcEdge regardless.  "
                 "The class of a 937.5 m limited-area cull of the registered "
                 "v0.9.120.110533 parent, the first sub-kilometre class this "
                 "program has minted: seven boundary rings, 55 levels, the "
@@ -626,7 +672,11 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "evidence/hex-speed-20260902/class-mint-800/mint-run2/forecast.json",
             ),
             minted_on_geometries=("r0.8.102.56619",),
+            finest_edge_band_relative=SAME_LADDER_FINEST_EDGE_BAND,
             basis=(
+                "BAND 2026-09-13 (hex-point-hrrr lane): the same-ladder band the "
+                "937.5 m class carries, for the same reason; the two bands do "
+                "not overlap.  "
                 "The finest class this program has minted: an 800 m limited-area "
                 "cull of a generated 800 m parent, seven boundary rings, 55 "
                 "levels, the cull's own finest edge of 710.869 m, dt 5 s (a "
@@ -1064,8 +1114,16 @@ def admitted_class(class_id: str | None) -> RegionalClass | None:
 
 
 def admitted_class_for_key(key: RegionalClassKey) -> RegionalClass | None:
+    # Exact matches first, then the banded ones, so a class that names a
+    # measured edge to the millimetre is never out-ranked by a band around
+    # a neighbour.
     for row in ADMITTED_CLASSES.values():
         if row.key.matches(key):
+            return row
+    for row in ADMITTED_CLASSES.values():
+        if row.finest_edge_band_relative > 0.0 and row.key.matches(
+            key, band=row.finest_edge_band_relative
+        ):
             return row
     return None
 
@@ -1148,11 +1206,12 @@ def uncontracted_geometry_refusal(
 
 
 def class_mismatch_refusal(
-    mesh_row: str, expected: RegionalClassKey, measured: RegionalClassKey
+    mesh_row: str, expected: RegionalClassKey, measured: RegionalClassKey,
+    *, band: float = 0.0,
 ) -> str:
     """The named refusal when a contracted geometry is run off its class."""
 
-    differing = expected.differing_fields(measured)
+    differing = expected.differing_fields(measured, band=band)
     return (
         f"regional CUDA execution is refused for {mesh_row!r}: its contract "
         f"deck belongs to a class minted at [{expected.describe()}] and this "
@@ -1360,12 +1419,15 @@ def require_regional_anchor(
             f"forecast mint.  Minted classes: {admitted_summary()}"
         )
 
-    if measured_key is not None and not klass.key.matches(measured_key):
+    if measured_key is not None and not klass.key.matches(
+        measured_key, band=klass.finest_edge_band_relative
+    ):
         raise RegionalAdmissionRefusal(
             class_mismatch_refusal(
                 str(mesh_row or contract.mesh_row or "an unregistered cull"),
                 klass.key,
                 measured_key,
+                band=klass.finest_edge_band_relative,
             )
         )
     if route == "presented" and not klass.key.finest_edge_measured:

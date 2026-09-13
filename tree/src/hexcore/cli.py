@@ -251,7 +251,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_cull_parser(commands)
 
+    # Between cull and init, because that is where a regional case meets it:
+    # a cull needs a regional meteorological source the init and boundary
+    # engines can read, and a projected product (HRRR) is not one until it
+    # is resampled onto a regular lat-lon intermediate.  Deferred import:
+    # the door pulls numpy and the engine's ingest.
+    from .hrrr_intermediate import add_intermediate_parser, add_lbc_parser
+
+    add_intermediate_parser(commands)
+
     add_init_parser(commands)
+
+    # After init, because it consumes the culled init: one boundary file per
+    # intermediate valid time, through rw_mpas_lbc on its wps-intermediate
+    # route.
+    add_lbc_parser(commands)
 
     # Between init and render, because that is the order a user meets them:
     # an init is what a forecast starts from and history is what a render
