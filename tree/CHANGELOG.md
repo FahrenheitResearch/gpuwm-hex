@@ -48,6 +48,16 @@ New:
   engine nothing this release writes changes.
 
 Fixed:
+- The forecast driver's checkout guard follows an admitted engine's row.
+  verify_arwen_checkout_git in tools/run_cuda_v841_full_physics_x4.py read
+  the public pin's sixteen digests unconditionally, so on the admitted
+  2.7.3+soma.1 engine the frozen row's --preflight refused with
+  "gpuwm/core/physics.py does not match the proven manifest" while the
+  adapter, the forecast door and doctor admitted the same tree (measured
+  2026-09-13). The guard now asks engine_pin.inspect_seam which row the
+  tree's bytes are and gates on that row's digests; a tree matching no
+  row is still measured against the public pin and refused naming the
+  pin's digest, as before. Three tests in tests/test_proof_guard_pins.py.
 - Requires gpuwm 2.7.3 and refuses every earlier engine, 2.6.4 and 2.6.5
   included. Eleven of the sixteen pinned seam files moved between the
   published 2.6.5 wheel 0.2.3 pinned and the published 2.7.3 wheel: the

@@ -1017,6 +1017,40 @@ def arwen_source_manifest() -> Mapping[str, str]:
     return ARWEN_SOURCE_MANIFEST
 
 
+def checkout_manifest_for(root: Path) -> dict[str, str]:
+    """The sixteen-file manifest THIS checkout's seam bytes are bound by.
+
+    The public pin's sixteen digests, unless the tree's seam bytes are, in
+    full and under its own version string, the measured row of an engine
+    :mod:`hexcore.engine_pin` admits (``ADMITTED_ENGINES``): then that
+    row's digests, so a run on an admitted engine is gated and provenanced
+    by the bytes it executes.  The comparison is ``engine_pin.inspect_seam``,
+    the same one the adapter, the forecast door and ``doctor`` run, so the
+    four surfaces cannot disagree about a tree.  A tree that matches no row
+    is measured against the public pin, so the refusal below names the
+    digest the pin wants, as it always has.
+
+    THE BREAKAGE THIS CLOSES (measured 2026-09-13, weather-node-1): the
+    frozen row's ``--preflight`` on the admitted ``2.7.3+soma.1`` engine
+    refused at this guard with ``gpuwm/core/physics.py does not match the
+    proven manifest (expected 898b694b..., found b3417d87...)`` while the
+    adapter, the forecast door and ``doctor`` all admitted the same tree,
+    because this guard read the public sixteen unconditionally.
+    """
+
+    from hexcore import engine_pin
+
+    inspection = engine_pin.inspect_seam(root)
+    if (
+        inspection.engine is None
+        or inspection.absent
+        or inspection.moved
+        or inspection.misdeclared
+    ):
+        return dict(arwen_source_manifest())
+    return dict(engine_pin.identity_for(inspection.engine).manifest)
+
+
 _NETCDF_FILE_ID_ATTRIBUTE = "file_id"
 _NC_CHAR = 2
 _NC_DIMENSION = 0x0A
@@ -4700,12 +4734,13 @@ def verify_arwen_checkout_git(
             expect_rename_origin = True
     dirty_paths = sorted(set(dirty_paths))
 
-    # The bytes the RUN's row is bound by: the frozen sixteen unless the
-    # caller hands the manifest of the pin its row runs under (a provider's
-    # row binds a different column batch through its own manifest and can
-    # never match the frozen sixteen by design).  Git state is recorded
-    # either way.
-    manifest = arwen_source_manifest() if manifest is None else dict(manifest)
+    # The bytes the RUN's row is bound by: the sixteen this tree's bytes
+    # name (the public pin, or an admitted engine's own row --
+    # checkout_manifest_for) unless the caller hands the manifest of the pin
+    # its row runs under (a provider's row binds a different column batch
+    # through its own manifest and can never match the frozen sixteen by
+    # design).  Git state is recorded either way.
+    manifest = checkout_manifest_for(root) if manifest is None else dict(manifest)
     files: dict[str, str] = {}
     for relative, expected in manifest.items():
         target = root / relative

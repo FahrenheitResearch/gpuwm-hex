@@ -493,3 +493,101 @@ def test_retired_whole_file_digests_are_gone_from_the_execution_path() -> None:
     source = RUNNER_PATH.read_text(encoding="utf-8")
     for digest in RETIRED_WHOLE_FILE_DIGESTS:
         assert digest not in source
+
+
+# ---------------------------------------------------------------------------
+# Leg 3 (2026-09-13): the checkout guard follows an ADMITTED engine's row.
+#
+# THE BREAKAGE THIS PREVENTS, measured on weather-node-1: the frozen row's
+# ``--preflight`` on the admitted ``2.7.3+soma.1`` engine refused at
+# ``verify_arwen_checkout_git`` with ``gpuwm/core/physics.py does not match
+# the proven manifest`` while the adapter, the forecast door and ``doctor``
+# all admitted the same tree -- the guard read the public sixteen
+# unconditionally.  The guard now asks ``engine_pin.inspect_seam`` which row
+# the tree's bytes are, exactly as the other three surfaces do.
+# ---------------------------------------------------------------------------
+
+
+def _inspection(engine_pin, root: Path, row):
+    return engine_pin.SeamInspection(
+        root=root,
+        matched=tuple(path for path, _ in row.digests),
+        moved=(),
+        absent=(),
+        engine=row.version,
+        declared=row.version,
+        digests=row.digests,
+    )
+
+
+def test_checkout_manifest_follows_an_admitted_engines_row(monkeypatch) -> None:
+    from hexcore import engine_pin
+
+    if not engine_pin.ADMITTED_ENGINES:
+        pytest.skip("no admitted engine row to follow")
+    runner = _load_runner()
+    row = engine_pin.ADMITTED_ENGINES[0]
+    root = Path("/an/admitted/engine/tree")
+    seen: list[Path] = []
+
+    def fake_inspect(tree):
+        seen.append(tree)
+        return _inspection(engine_pin, tree, row)
+
+    monkeypatch.setattr(engine_pin, "inspect_seam", fake_inspect)
+    manifest = runner.checkout_manifest_for(root)
+    assert seen == [root]
+    assert manifest == row.manifest
+    assert manifest != dict(runner.arwen_source_manifest()), (
+        "an admitted row that differs from the pin in no file is not a row "
+        "this test can tell apart from the pin"
+    )
+
+
+def test_checkout_manifest_is_the_public_pin_when_no_row_matches(monkeypatch) -> None:
+    from hexcore import engine_pin
+
+    runner = _load_runner()
+    root = Path("/a/tree/matching/no/row")
+
+    def fake_inspect(tree):
+        return engine_pin.SeamInspection(
+            root=tree,
+            matched=(),
+            moved=("gpuwm/core/physics.py",),
+            absent=(),
+            engine=None,
+            declared="9.9.9",
+            digests=(("gpuwm/core/physics.py", "0" * 64),),
+        )
+
+    monkeypatch.setattr(engine_pin, "inspect_seam", fake_inspect)
+    assert runner.checkout_manifest_for(root) == dict(runner.arwen_source_manifest())
+
+
+def test_checkout_manifest_is_the_public_pin_when_the_version_is_misdeclared(monkeypatch) -> None:
+    """An admitted row is keyed by bytes AND version: the bytes under another
+    version string fall back to the public pin, so the refusal names the pin."""
+
+    from hexcore import engine_pin
+
+    if not engine_pin.ADMITTED_ENGINES:
+        pytest.skip("no admitted engine row to misdeclare")
+    runner = _load_runner()
+    row = engine_pin.ADMITTED_ENGINES[0]
+    root = Path("/an/admitted/engine/tree/relabelled")
+
+    def fake_inspect(tree):
+        inspection = _inspection(engine_pin, tree, row)
+        return engine_pin.SeamInspection(
+            root=inspection.root,
+            matched=inspection.matched,
+            moved=inspection.moved,
+            absent=inspection.absent,
+            engine=inspection.engine,
+            declared="not-" + row.version,
+            digests=inspection.digests,
+        )
+
+    monkeypatch.setattr(engine_pin, "inspect_seam", fake_inspect)
+    assert runner.checkout_manifest_for(root) == dict(runner.arwen_source_manifest())
