@@ -60,6 +60,13 @@ New:
   engine nothing this release writes changes.
 
 Fixed:
+- rw_mpas_lbc resolves through the engine ladder. The boundary producer was
+  read from $RW_MPAS_LBC and PATH alone, so a box where gpuwm fetch-bridges
+  had staged it beside rw_mpas_init refused the lbc leg of the very chain
+  whose init leg had just resolved from that directory. hexcore.engines
+  carries an LBC row ($GPUWM_HEX_RW_MPAS_LBC, $RW_MPAS_LBC kept as the
+  legacy spelling, $GPUWM_RW_MPAS_LBC, the bridge directories, PATH), the
+  cycle chain and gpuwm-hex lbc resolve through it, and doctor reports it.
 - Requires gpuwm 2.7.3 and refuses every earlier engine, 2.6.4 and 2.6.5
   included. Eleven of the sixteen pinned seam files moved between the
   published 2.6.5 wheel 0.2.3 pinned and the published 2.7.3 wheel: the

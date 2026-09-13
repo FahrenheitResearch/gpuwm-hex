@@ -145,6 +145,13 @@ series that does not cover `--start-time..--stop-time` at both ends, or that
 is unevenly spaced, is refused by name: a boundary series with a missing end
 freezes the boundary there without saying so.
 
+The binary resolves through the engine ladder (`hexcore.engines.LBC`):
+`--lbc-exe`, `$GPUWM_HEX_RW_MPAS_LBC`, `$RW_MPAS_LBC`, `$GPUWM_RW_MPAS_LBC`,
+gpuwm's bridge directories (`libexec/bridges` beside the installed package and
+`~/.gpuwm/bridges`, where `gpuwm fetch-bridges` stages the 2.7.3 bundle that
+carries it), then `PATH`. `gpuwm-hex doctor` reports it beside the other
+engines.
+
 ## The same-ladder class band
 
 The regional forecast opener measures a class key off the run (zone width,

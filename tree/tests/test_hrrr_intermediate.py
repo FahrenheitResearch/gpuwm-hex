@@ -181,3 +181,66 @@ def test_intermediate_valid_times_read_the_header_not_the_name(tmp_path: Path) -
     times = hi.intermediate_valid_times(tmp_path)
     assert [t for t, _ in times] == [datetime(2026, 9, 13, 15), datetime(2026, 9, 13, 16)]
     assert times[0][1].name == "anything-0"
+
+
+# ---------------------------------------------------------------------------
+# the boundary producer resolves through the one ladder
+# ---------------------------------------------------------------------------
+def _no_lbc_anywhere(monkeypatch) -> None:
+    from hexcore import engines
+
+    for name in ("GPUWM_HEX_RW_MPAS_LBC", "RW_MPAS_LBC", "GPUWM_RW_MPAS_LBC"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(engines, "gpuwm_candidates", lambda spec: ())
+
+
+def test_a_staged_lbc_engine_resolves_with_no_environment_variable(monkeypatch, tmp_path: Path) -> None:
+    """``gpuwm fetch-bridges`` alone opens the boundary leg.
+
+    The chain's own resolver read one variable and PATH, so a box where the
+    init leg had just resolved ``rw_mpas_init`` out of ``~/.gpuwm/bridges``
+    refused the lbc leg of the same chain for a file sitting beside it.
+    """
+
+    from hexcore import engines
+    from hexcore.cycle.chain import resolve_lbc_engine
+
+    staged = tmp_path / engines.executable_name("rw_mpas_lbc")
+    staged.write_bytes(b"")
+    staged.chmod(0o755)
+    for name in ("GPUWM_HEX_RW_MPAS_LBC", "RW_MPAS_LBC", "GPUWM_RW_MPAS_LBC"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(engines, "gpuwm_candidates", lambda spec: (staged,))
+
+    assert resolve_lbc_engine(None) == staged.resolve()
+
+
+def test_lbc_engine_absent_refusal_names_the_ladder_and_the_breakage(monkeypatch) -> None:
+    from hexcore.cycle.chain import CycleRefusal, resolve_lbc_engine
+
+    _no_lbc_anywhere(monkeypatch)
+    with pytest.raises(CycleRefusal) as caught:
+        resolve_lbc_engine(None)
+    message = str(caught.value)
+    assert "rw_mpas_lbc not found" in message
+    assert "--lbc-exe" in message
+    assert "RW_MPAS_LBC" in message
+    assert "gpuwm fetch-bridges" in message
+    assert "seven boundary rings" in message
+
+
+def test_lbc_engine_named_but_missing_is_refused_not_skipped(tmp_path: Path) -> None:
+    from hexcore.cycle.chain import CycleRefusal, resolve_lbc_engine
+
+    with pytest.raises(CycleRefusal) as caught:
+        resolve_lbc_engine(tmp_path / "no-such-exe")
+    assert "which is not a file" in str(caught.value)
+
+
+def test_the_lbc_engine_is_a_row_of_the_ladder_the_doctor_reads() -> None:
+    from hexcore import engines
+
+    assert engines.LBC in engines.ENGINES
+    assert engines.LBC.name == "rw_mpas_lbc"

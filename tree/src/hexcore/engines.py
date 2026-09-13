@@ -178,10 +178,35 @@ STATIC = EngineSpec(
     cargo_package="rw-mpas",
 )
 
+#: The lateral-boundary producer: one boundary file per driving time.
+#:
+#: Every fine grid this distribution cuts is a limited-area cull whose
+#: seven boundary rings hold no atmosphere of their own, so without this
+#: binary a mesh can be generated, initialised and never integrated.  It
+#: used to be resolved by ``hexcore.cycle.chain`` alone, through one
+#: environment variable and PATH, which is exactly the shape that made
+#: the init door refuse on a box where ``gpuwm fetch-bridges`` had already
+#: staged the file: the 2.7.3 bundle carries ``rw_mpas_lbc`` beside the
+#: other four, and the ladder reads it from there.
+LBC = EngineSpec(
+    name="rw_mpas_lbc",
+    flag="--lbc-exe",
+    env_names=("GPUWM_HEX_RW_MPAS_LBC", "RW_MPAS_LBC"),
+    gpuwm_env="GPUWM_RW_MPAS_LBC",
+    subject="the lateral-boundary producer",
+    what_breaks=(
+        "no boundary series can be built: every fine grid in a cascade is a "
+        "limited-area cull whose seven boundary rings hold no atmosphere of "
+        "their own, so a mesh can be cut and initialised that can never be "
+        "integrated"
+    ),
+    cargo_package="rw-mpas",
+)
+
 #: Every engine a front door of this distribution drives, best-known name
 #: first.  ``hexcore.doctor`` reads this, so adding an engine is a row
 #: here and is reported without a second edit.
-ENGINES: tuple[EngineSpec, ...] = (INIT, CONVERT, MESH, STATIC, RENDERER)
+ENGINES: tuple[EngineSpec, ...] = (INIT, CONVERT, MESH, STATIC, LBC, RENDERER)
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +498,7 @@ __all__ = [
     "ENGINES",
     "FETCH_COMMAND",
     "INIT",
+    "LBC",
     "RENDERER",
     "STATIC",
     "USER_BRIDGE_DIR",
