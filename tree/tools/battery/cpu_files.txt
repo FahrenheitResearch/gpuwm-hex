@@ -218,5 +218,9 @@ tests/test_tracked_file_writers_keep_lf.py
 # caption logic, the backend row builder, and the species-row extras hook.
 tests/test_pair_door.py
 tests/test_plot_pair_gallery.py
+# The point-source placement instrument: the table arithmetic pinned to the
+# proven 3.75 km table's own epoch, and the census and upwind placement run
+# over a synthetic leg with one supercooled strip. No card, no assets.
+tests/test_point_source_placement.py
 tests/test_backend_row_builder.py
 tests/test_species_row_extended.py
