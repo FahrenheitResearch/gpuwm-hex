@@ -147,13 +147,14 @@ by omission.
 - Distribution and command: `gpuwm-hex`. Import namespace: `hexcore`,
   renamed from `mpas_port` at 0.2.0 and settled there (README, *The import
   namespace*). There is no alias shim.
-- Engine range: `gpuwm>=2.6.4,<2.6.6` is what pip enforces — a bounded
+- Engine range: `gpuwm>=2.7.3,<2.7.4` is what pip enforces — a bounded
   range, derived from a measured table in `hexcore.engine_pin` rather than
   typed. The floor is where it is for one reason and it is the strictest
-  one: 2.6.4 and 2.6.5 are the only published engines whose bytes match the
-  sixteen-file Arwen seam manifest (byte-identical to each other on every
-  pinned path), re-measured 2026-09-02 against every published 2.5.x and
-  2.6.x release. It clears, incidentally, the bundle rows that put the MPAS bridge
+  one: 2.7.3 is the only published engine whose bytes match the
+  sixteen-file Arwen seam manifest, re-measured 2026-09-13 against every
+  published 2.5.x, 2.6.x and 2.7.x release
+  (`verification/engine-verdicts/repin-273-20260913.json`, written by
+  `tools/measure_engine_verdicts.py`). It clears, incidentally, the bundle rows that put the MPAS bridge
   binaries (`rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`,
   `rw_mpas_static`, `rw_mpas_lbc`) within reach of `gpuwm fetch-bridges`;
   published 2.5.2 carries none of them and would strand every door that

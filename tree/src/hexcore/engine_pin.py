@@ -15,15 +15,21 @@ definition the one this port has never measured.
 So the specifier is DERIVED rather than transcribed:
 
 * :data:`PUBLISHED_ENGINES` is the OUTPUT of a network measurement --
-  ``evidence/standalone-20260827/measure_engine_verdicts.py`` -- not a
-  restatement of anybody's prose.  Every hand-written statement of these
-  numbers in this tree was wrong: the declaration said 5 of 16 files differ
-  at 2.5.0 (measured: 9) and 3 at 2.5.4 (measured: 2), and the test guarding
-  it said 13 at 2.5.0 and 6 at 2.5.1 (measured: 9 and 8).  Three
-  transcriptions, three different wrong answers.  The table is now SPLICED
-  from the instrument's JSON by
-  ``evidence/repin-258-20260828/render_engine_pin_table.py``, so there is no
-  fourth transcription to get wrong.
+  ``tools/measure_engine_verdicts.py``, which downloads every published
+  wheel of every engine from 2.5.0 up, hashes the sixteen pinned paths
+  inside each one, and reads the build road off the engine's git tags --
+  not a restatement of anybody's prose.  Every hand-written statement of
+  these numbers in this tree was wrong: the declaration said 5 of 16 files
+  differ at 2.5.0 (measured: 9) and 3 at 2.5.4 (measured: 2), and the test
+  guarding it said 13 at 2.5.0 and 6 at 2.5.1 (measured: 9 and 8).  Three
+  transcriptions, three different wrong answers.  The table is SPLICED into
+  the generated block below by the instrument itself (``--splice``), its
+  JSON ships beside the contracts in ``verification/engine-verdicts/``, and
+  ``tests/test_engine_pin.py`` re-renders that JSON and demands equality, so
+  there is no fourth transcription to get wrong.  The instrument used to
+  live under ``evidence/``, which every published surface holds out; it
+  moved into ``tools/`` on 2026-09-13 so a reader of the public tree can run
+  the thing the table cites.
 * :func:`gpuwm_floor`, :func:`gpuwm_ceiling` and :func:`gpuwm_requirement`
   compute the specifier from that table.  ``pyproject.toml`` states the
   result as a literal because a dependency specifier has to be static
@@ -36,48 +42,72 @@ this.**  An engine nobody has measured against the manifest is never
 resolved onto by default; admitting one is a deliberate act that re-runs the
 instrument and moves this table.
 
-WHERE THIS STANDS NOW, re-measured 2026-09-02
-(``evidence/repin-265-20260902/``, after ``evidence/repin-264-20260902/``
-the same day).  The engine cut 2.6.4 and published it to PyPI three hours
-after 2.6.3, this port re-pinned its manifest to that cut's bytes, and the
-instrument was re-run over every published engine plus the two tags that
-have no release.  The engine then published 2.6.5 ninety minutes after
-2.6.4, and the instrument was re-run once more over every tag through
-``v2.6.5``.  The derivation now returns ``gpuwm>=2.6.4,<2.6.6``: 2.6.4 and
-2.6.5 are both measured usable and both ADMITTED.  The ceiling did its work
-each time rather than being bypassed -- while the table said ``<2.6.4``,
-2.6.4 was excluded exactly as an unmeasured engine must be, and while it
-said ``<2.6.5``, 2.6.5 was; letting each in cost what it is meant to cost:
-re-run the instrument, move the table, let the literal follow.  The
-same-day re-pin to 2.6.3 (``evidence/repin-263-20260902/``), the
-2026-09-01 re-pin to 2.6.1 (``evidence/repin-261-20260901/``), the
-2026-08-31 re-pin to 2.6.0 (``evidence/repin-260-20260831/``) and the
-2026-08-28 re-pin to 2.5.8 (``evidence/repin-258-20260828/``) paid the
-same toll the same way.
+WHERE THIS STANDS NOW, re-measured 2026-09-13
+(``verification/engine-verdicts/repin-273-20260913.json``, after the
+pre-move measurement ``premeasure-273-20260913.json`` the same day).  The
+engine published 2.7.0, 2.7.1, 2.7.2 and then 2.7.3 (2026-09-12); measured
+against the manifest 0.2.3 shipped, every one of the four fails it -- the
+three earlier 2.7 wheels by seven paths and 2.7.3 by eleven -- so the
+``<2.6.6`` ceiling did exactly what it exists to do for ten days: a user who
+installed gpuwm-hex 0.2.3 after 2.7.0 was published got 2.6.5, not the
+newest engine, and no run died on a digest.  This port then re-pinned its
+manifest to the published 2.7.3 wheel's bytes and the instrument was re-run
+over every published engine plus the two tags that have no release.  The
+derivation now returns ``gpuwm>=2.7.3,<2.7.4``: 2.7.3 is the one engine
+measured usable.  Letting it in cost what it is meant to cost: re-run the
+instrument, move the table, let the literal follow.  The 2026-09-02 re-pins
+to 2.6.4 and 2.6.5, the same day's re-pin to 2.6.3, the 2026-09-01 re-pin
+to 2.6.1, the 2026-08-31 re-pin to 2.6.0 and the 2026-08-28 re-pin to 2.5.8
+paid the same toll the same way (their receipts are under the private
+tree's ``evidence/repin-*``; this tree carries the current measurement).
 
-**EXACTLY TWO PUBLISHED ENGINES ARE USABLE, THEY CARRY THE SAME SIXTEEN
-BYTES, and that is a measured finding rather than a cautious choice.**
-Re-pinning the manifest to 2.6.4 moved the whole ``moved`` column, because
-that column is relative to the manifest: every engine below 2.6.4 fails it,
-INCLUDING the 2.6.3 that was the floor the same morning.  Six manifest
-paths moved across that window, measured wheel against wheel --
-``gpuwm/core/physics.py`` (the phase-one driver: the cumulus adapter
-contract grew a result type and a column-tendency coupler for a third
-cumulus scheme), ``gpuwm/core/gf.py`` (a ``release()`` that breaks the
-driver/adapter reference cycle), ``gpuwm/core/kernels/gf.cu`` and
-``gpuwm/core/kernels/__init__.py`` (the glibc float32 words moved out of
-the GF source into a header the loader prepends), ``gpuwm/config.py``
-(``CU_SCHEMES`` admits 16) and ``gpuwm/io/restart.py`` (the cumulus
-restart-identity rows) -- while ``gpuwm/core/mpas_column_batch.py`` and
-``docs/mpas-seam.md`` are byte-identical between the two wheels.  2.6.2,
-the tag whose publish job died, fails on bytes as well as on PyPI.  The
-2.6.5 wheel then moved NONE of the sixteen (a soil-archive layout fix for
-doctor, the mesh door and the static builder, off the physics path;
-``evidence/repin-265-20260902/wheel-pair-264-265.txt``), so the manifest
-stayed where it was and 2.6.5 joined the usable rows without a pin move --
-the one widening this derivation can ever produce, an engine that was
-measured and passed.  If both admitted engines were yanked from PyPI, the
-correct answer is :class:`EnginePinError`, not a loosened bound.
+**EXACTLY ONE PUBLISHED ENGINE IS USABLE, and that is a measured finding
+rather than a cautious choice.**  Re-pinning the manifest to 2.7.3 moved the
+whole ``moved`` column, because that column is relative to the manifest:
+every engine below 2.7.3 fails it, INCLUDING the 2.6.4 and 2.6.5 that were
+the whole admitted range the day before.  Eleven manifest paths moved
+between the published 2.6.5 wheel and the published 2.7.3 wheel, measured
+wheel against wheel -- ``gpuwm/core/kernels/gf.cu`` (the Grell-Freitas
+kernel: the glibc ``tgammaf`` transcription is gone and the scheme's
+``fzu`` normalisation now uses the engine's own correctly rounded gamma;
+the cloud-work integral's level loop now includes the ``kbcon`` layer;
+three per-column ``fzu`` override slots the shipped path leaves at zero),
+``gpuwm/core/gf.py`` (the adapter's scalar block grew from six slots to
+nine for those overrides), ``gpuwm/core/physics.py`` (the phase-one driver:
+adaptive-clock overrides for the radiation and cumulus due predicates that
+stay ``None`` on every fixed-step run, the cumulus advective-forcing
+carriers owned from construction and copied into rather than rebound, the
+held PBL raw rates, the SASE vertical-momentum component),
+``gpuwm/core/microphysics.py`` (the ring-state field list is derived from
+the scheme registry), ``gpuwm/core/rrtmg_legacy.py`` (selectable spectra
+and trace-gas overrides with unchanged defaults, a registry-agreement check
+at import, the third-party notice header), ``gpuwm/core/noahmp_kernel_sources.py``,
+``gpuwm/core/noahmp_glacier_gpu.py`` and ``gpuwm/core/kernels/__init__.py``
+(one Noah-MP compile site with a recorded unit identity; the composed
+glacier unit's text moves with it, so ``ARWEN_GLACIER_COMPOSED_TU_SHA256``
+moved too), ``gpuwm/core/kernels/noahmp_leaves.cu`` (the ``log10(+-0)``
+spelling, which the engine compared equal on every float32 bit pattern),
+``gpuwm/config.py`` (adaptive time-step fields and run-preparation
+preconditions; ``MP_PHYSICS_ACCEPTED`` and ``CU_SCHEMES`` did not move) and
+``gpuwm/io/restart.py`` (restart format 6, the algorithm-identity tables
+moved into the registry) -- while ``gpuwm/core/mpas_column_batch.py``,
+``gpuwm/core/noahmp_runtime.py``, ``gpuwm/core/noahmp_glacier.py``,
+``gpuwm/core/kernels/noahmp_glacier.cu`` and ``docs/mpas-seam.md`` are
+byte-identical between the two wheels.  The seam's own driver did not move
+and its constructor takes the same keywords, which is why the port's
+adapter needed no change to admit the new engine.  2.7.0, 2.7.1 and 2.7.2
+carry the same sixteen bytes as each other and fail the re-pinned manifest
+by eight paths.  Of the eleven moved files, ONE moves a physics number
+through the seam on a fixed-step run: the Grell-Freitas kernel, measured
+seam against seam by ``tools/measure_engine_seam_ab.py``; the rest are off
+the fixed-step path, bit-equal by the engine's own measurement, or identity
+plumbing.  The same instrument found a SECOND move that sits outside the
+sixteen -- ``gpuwm/core/kernels/ysu.cu``, the boundary-layer kernel, which
+this manifest has never pinned -- and attributed it exactly, by swapping
+that one file.  Both are stated with their magnitudes in
+``docs/declared-divergences.md``; the manifest's reach is a named
+follow-up.  If the one admitted engine were yanked from PyPI, the correct
+answer is :class:`EnginePinError`, not a loosened bound.
 
 Two facts the 2026-08-27 measurement turned up that no document in the tree
 carried.  Both are still true, and both are now moot for the FLOOR, because
@@ -141,14 +171,14 @@ class PublishedEngine:
         return self.on_pypi and self.satisfies_manifest and self.offline_build_road
 
 
-#: THE OUTPUT OF AN INSTRUMENT, NOT A TRANSCRIPTION.  Re-measured 2026-09-02
-#: against the published bytes of every 2.5.x and 2.6.x gpuwm, plus the
-#: v2.5.5 and v2.6.2 tags that have no PyPI release.  The instrument is
-#: ``evidence/standalone-20260827/measure_engine_verdicts.py`` (network: it
-#: downloads every published wheel); the JSON behind THIS table is
-#: ``evidence/repin-265-20260902/engine-verdicts.json``, and the block below
-#: is that JSON rendered by
-#: ``evidence/repin-258-20260828/render_engine_pin_table.py --splice``.
+#: THE OUTPUT OF AN INSTRUMENT, NOT A TRANSCRIPTION.  Re-measured 2026-09-13
+#: against the published bytes of every 2.5.x, 2.6.x and 2.7.x gpuwm, plus
+#: the v2.5.5 and v2.6.2 tags that have no PyPI release.  The instrument is
+#: ``tools/measure_engine_verdicts.py`` (network: it downloads every
+#: published wheel of every version and refuses a version whose platform
+#: wheels disagree); the JSON behind THIS table is
+#: ``verification/engine-verdicts/repin-273-20260913.json``, and the block
+#: below is that JSON rendered by the same instrument's ``--splice``.
 #:
 #: DO NOT HAND-PATCH A ROW.  ``moved`` is measured against THIS port's
 #: sixteen-file seam manifest, so re-pinning the manifest moves the whole
@@ -169,8 +199,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/noahmp_runtime.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
@@ -187,8 +220,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/noahmp_runtime.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
@@ -205,8 +241,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/noahmp_runtime.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
@@ -223,8 +262,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
@@ -240,8 +282,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
@@ -257,8 +302,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
@@ -274,8 +322,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
@@ -291,7 +342,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
+            "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
@@ -307,7 +362,11 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
+            "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
@@ -323,8 +382,13 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
+            "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
         ),
         offline_build_road=True,
@@ -338,8 +402,13 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
+            "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
         ),
         offline_build_road=True,
@@ -352,7 +421,12 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
         ),
         offline_build_road=True,
@@ -365,7 +439,12 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
             "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
             "gpuwm/io/restart.py",
         ),
         offline_build_road=True,
@@ -373,11 +452,86 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
     PublishedEngine(
         version="2.6.4",
         on_pypi=True,
-        moved=(),
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
         offline_build_road=True,
     ),
     PublishedEngine(
         version="2.6.5",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/kernels/noahmp_leaves.cu",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.7.0",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.7.1",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.7.2",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.7.3",
         on_pypi=True,
         moved=(),
         offline_build_road=True,
@@ -418,8 +572,8 @@ def gpuwm_floor() -> str:
             "no published gpuwm satisfies this port's seam manifest, is on "
             "PyPI and carries a complete vendored crate tree, so no "
             "dependency specifier can be derived.  Re-run "
-            "evidence/standalone-20260827/measure_engine_verdicts.py; if it "
-            "agrees, the engine has to publish before this distribution can"
+            "tools/measure_engine_verdicts.py; if it agrees, the engine has "
+            "to publish before this distribution can"
         )
     return min(usable, key=lambda row: _key(row.version)).version
 

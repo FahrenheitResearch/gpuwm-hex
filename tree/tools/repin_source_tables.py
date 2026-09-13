@@ -587,6 +587,20 @@ def gated_file_list() -> list[str]:
 
 
 def table_gated_files() -> list[Drift]:
+    if not GATED_FILES.is_file():
+        # The receipt tree is held out of every published surface (see
+        # tests/conftest.py, RECEIPTS_ABSENT_REASON), so on the public tree
+        # there is no list to re-derive.  A held-out record is not a drift;
+        # the union it would hold is still computed by gated_file_list()
+        # for anyone who asks.
+        print(
+            "note: "
+            f"{GATED_FILES.relative_to(TREE).as_posix()} is not carried by "
+            "this tree (receipts are held out); the gated-files table is "
+            "not checked here",
+            file=sys.stderr,
+        )
+        return []
     declared = [line for line in GATED_FILES.read_text(encoding="utf-8").split() if line]
     expected = gated_file_list()
     if declared == expected:

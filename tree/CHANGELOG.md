@@ -6,6 +6,63 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
+## 0.3.0 (2026-09-13)
+
+New:
+- The engine-verdict instrument ships in the tree. tools/measure_engine_verdicts.py
+  downloads every wheel of every published gpuwm from 2.5.0 up, hashes the
+  sixteen pinned seam files inside each, reads the build road off the
+  engine's tags, and writes the JSON that hexcore.engine_pin's table is
+  spliced from (verification/engine-verdicts/). The table gate in
+  tests/test_engine_pin.py now runs on the published tree and in the sdist
+  instead of skipping there, and a re-pin is one command
+  (--pin-to VERSION --write-manifest --splice) rather than hand-typed
+  digests.
+- A seam-level engine A/B. tools/measure_engine_seam_ab.py drives the
+  engine's column-batch seam on fixed columns under two engines and
+  reports, field by field, what moved and by how much, with a no-cumulus
+  control arm and a capped-profile control. It is how this release states
+  its physics movement below, and how a re-pin taken without the x4 assets
+  and a 32 GiB card can still say what changed.
+
+Fixed:
+- Requires gpuwm 2.7.3 and refuses every earlier engine, 2.6.4 and 2.6.5
+  included. Eleven of the sixteen pinned seam files moved between the
+  published 2.6.5 wheel 0.2.3 pinned and the published 2.7.3 wheel: the
+  Grell-Freitas adapter and its kernel, the phase-one physics driver, the
+  microphysics driver, legacy RRTMG, the Noah-MP compile site and glacier
+  unit with the kernel loader and the Noah-MP libm unit, the config loader
+  and the restart identity table; the column batch, the contract document,
+  the Noah-MP runtime and glacier sources did not move, and the seam's
+  constructor takes the same keywords, so no adapter change was needed.
+  2.7.0, 2.7.1 and 2.7.2 carry the same sixteen bytes as each other and
+  fail the re-pinned manifest by eight. Measured the other way first, every
+  2.7 engine failed the 0.2.3 manifest, so the previous ceiling kept
+  installs on 2.6.5 for the ten days the 2.7 line was out. The composed
+  glacier unit's digest and the adapter contract digest moved with the
+  engine's compile-site change and are re-derived by the instrument, not
+  typed.
+- Measured physics movement at this pin, seam against seam on one card
+  (eight columns, forty levels, twenty 120 s steps): Grell-Freitas, whose
+  kernel now uses the engine's own correctly rounded gamma and includes the
+  kbcon layer in the cloud-work integral, moves the convective rain bucket
+  by up to 5.1e-4 mm in forty minutes (0.21 per cent of the largest
+  bucket), the phase-one theta rate by up to 2.9e-5 K/s and theta by up to
+  9.4e-3 K after forty minutes on columns where it fires, and nothing where
+  it does not. The YSU boundary-layer kernel, a file the manifest does not
+  pin, keeps a column whose first-guess boundary-layer top sits below the
+  second model level in the local-K regime for the whole step, and moves
+  the lowest three levels of five of eight capped columns by up to
+  1.9e-4 m/s² in the u rate and 0.139 K in theta after forty minutes;
+  swapping that one file alone reproduces 2.7.3 byte for byte. The x4 F001
+  byte chain that spans 2.5.8 to 2.6.5 is not re-run at this pin and is not
+  expected to survive it. Details and receipts in
+  docs/declared-divergences.md and verification/engine-verdicts/.
+- tools/repin_source_tables.py runs on a tree that holds evidence/ out: the
+  gated-files table is reported as not carried instead of raising, and the
+  stale runner pin it then found on the x1.163842 stabilized-products tool
+  is re-derived.
+
 ## 0.2.3 (2026-09-02)
 
 New:

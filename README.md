@@ -11,7 +11,7 @@ assets a user must supply. This page is the repository-level orientation: what
 this project is, what it is pinned to, and what it is judged by.
 
 **Install:** `pip install gpuwm-hex`. The engine range it declares
-(`gpuwm>=2.6.4,<2.6.6`, stated once in [`tree/pyproject.toml`](tree/pyproject.toml)
+(`gpuwm>=2.7.3,<2.7.4`, stated once in [`tree/pyproject.toml`](tree/pyproject.toml)
 and derived from a measured table rather than typed) is a hard floor and a hard
 ceiling, and pip resolves it for you. `tree/README.md` carries the full matrix.
 

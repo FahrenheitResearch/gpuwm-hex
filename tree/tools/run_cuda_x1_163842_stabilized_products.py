@@ -48,7 +48,7 @@ RUNNER_PATH = TOOLS / "run_real_gfs_cuda_x1_163842.py"
 # refused its own high-resolution runner at _verify_runner -- before a device is
 # touched, and only ever on a machine that has one.
 EXPECTED_RUNNER_SHA256 = (
-    "5b80b191ad974226e53f9dd9d61c03b82e165ef3eedaa206f2742205cbe5a728"
+    "e3883d7f4e98bbde5a1aba86b1e9a3dfedbd137ef1b92eddccd627b6c9c6dfbd"
 )
 REMOTE_EVIDENCE_VALIDATOR_PATH = TOOLS / "validate_cuda_x1_163842_remote_evidence.py"
 EXPECTED_REMOTE_EVIDENCE_VALIDATOR_SHA256 = (

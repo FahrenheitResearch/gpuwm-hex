@@ -37,12 +37,11 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.2.3", (
-        "0.2.3 is the declared cut of the 0.2 line: the release forced by "
-        "gpuwm 2.6.4 (its pin window excludes every earlier engine), "
-        "carrying the mp=28 aerosol-aware Thompson row through the door "
-        "now that the engine publishes it; moving it is a release decision, "
-        "not an edit"
+    assert declared == "0.3.0", (
+        "0.3.0 is the declared cut: the release forced by gpuwm 2.7.3 (its "
+        "pin window excludes every earlier engine, 2.6.4 and 2.6.5 included), "
+        "carrying the in-tree engine-verdict instrument and the seam-level "
+        "engine A/B; moving it is a release decision, not an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")
@@ -332,9 +331,8 @@ def test_the_declared_engine_range_is_the_one_the_measurement_derives(
         "hexcore.engine_pin derives from its measured table.  Derived: "
         f"{engine_pin.gpuwm_requirement()!r}.  Declared: {pins}.  If the "
         "engine has published a new version, re-run "
-        "evidence/standalone-20260827/measure_engine_verdicts.py, move the "
-        "table, and let this literal follow it -- do not edit the literal on "
-        "its own"
+        "tools/measure_engine_verdicts.py --splice, move the table, and let "
+        "this literal follow it -- do not edit the literal on its own"
     )
 
     # The ceiling is EXCLUSIVE and sits at the first engine that is not

@@ -111,11 +111,24 @@ def test_the_shipped_table_says_what_the_measurement_said():
     """The rows this distribution actually ships, against the measurement.
 
     Not a re-derivation -- the network instrument is
-    ``evidence/standalone-20260827/measure_engine_verdicts.py`` and the JSON
-    behind the shipped table is
-    ``evidence/repin-265-20260902/engine-verdicts.json``.  This is the claim
-    the receipts make, kept true here so that editing a row without
-    re-measuring is caught.
+    ``tools/measure_engine_verdicts.py`` and the JSON behind the shipped
+    table is ``verification/engine-verdicts/repin-273-20260913.json``.  This
+    is the claim the measurement makes, kept true here so that editing a row
+    without re-measuring is caught.
+
+    AND A SEVENTH TIME ON 2026-09-13, the widest move yet: the engine
+    published 2.7.0, 2.7.1, 2.7.2 and 2.7.3, ELEVEN manifest files moved
+    between the published 2.6.5 wheel and the published 2.7.3 wheel, and
+    the port re-pinned to the 2.7.3 bytes, so 2.6.4 and 2.6.5 -- the whole
+    admitted range the day before -- dropped to "fails the manifest" by
+    those eleven.  2.7.0, 2.7.1 and 2.7.2 carry the same sixteen bytes as
+    each other and fail by eight (the Grell-Freitas adapter, its kernel and
+    the Noah-MP libm unit moved at 2.7.0 and stayed; the rest moved again
+    at 2.7.3).  Measured first the other way, against the manifest 0.2.3
+    shipped, all four 2.7 engines failed it -- the three earlier by seven
+    and 2.7.3 by eleven -- which is the ``<2.6.6`` ceiling doing its work
+    for the ten days between the 2.7.0 publish and this re-pin.  Exactly
+    one engine is usable now, asserted below as the whole list.
 
     THIS TEST'S OWN FIGURES MOVED ON 2026-08-28, and the gate was the stale
     side rather than the table.  It used to assert floor 2.5.6, ceiling
@@ -171,71 +184,85 @@ def test_the_shipped_table_says_what_the_measurement_said():
     a failure here.
     """
 
-    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.6.4,<2.6.6"
-    assert engine_pin.gpuwm_floor() == "2.6.4"
-    assert engine_pin.gpuwm_ceiling() == "2.6.6"
+    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.7.3,<2.7.4"
+    assert engine_pin.gpuwm_floor() == "2.7.3"
+    assert engine_pin.gpuwm_ceiling() == "2.7.4"
 
-    # EXACTLY TWO published engines are usable, and they carry the same
-    # sixteen bytes.  Asserted as the whole list, not as a membership test,
-    # because "2.6.4 works" would still pass if a stale row below it were
-    # left claiming to work too -- and that stale row is what a resolver
-    # would actually pick when the admitted engines are unavailable.
+    # EXACTLY ONE published engine is usable.  Asserted as the whole list,
+    # not as a membership test, because "2.7.3 works" would still pass if a
+    # stale row below it were left claiming to work too -- and that stale
+    # row is what a resolver would actually pick when the admitted engine
+    # is unavailable.
     usable = [row.version for row in engine_pin.PUBLISHED_ENGINES if row.usable]
-    assert usable == ["2.6.4", "2.6.5"], (
-        "the re-pinned manifest is satisfied by exactly two published "
-        f"engines, byte-identical on every pinned path.  Usable: {usable}"
+    assert usable == ["2.7.3"], (
+        "the re-pinned manifest is satisfied by exactly one published "
+        f"engine.  Usable: {usable}"
     )
-    assert engine_pin.engine("2.6.4").moved == ()
-    assert engine_pin.engine("2.6.5").moved == ()
-    assert engine_pin.engine("2.6.5").on_pypi
-    assert engine_pin.engine("2.6.5").offline_build_road
+    assert engine_pin.engine("2.7.3").moved == ()
+    assert engine_pin.engine("2.7.3").on_pypi
+    assert engine_pin.engine("2.7.3").offline_build_road
 
-    # The engine that was the floor the same morning now fails, and so does
-    # every other pre-2.6.4 cut.  Named individually so that a row silently
-    # reverting to "matches" is a failure here rather than a wider range.
+    # The two engines that were the whole range the day before now fail,
+    # and so does every other pre-2.7.3 cut.  Named individually so that a
+    # row silently reverting to "matches" is a failure here rather than a
+    # wider range.
     assert not engine_pin.engine("2.5.7").usable
     assert not engine_pin.engine("2.5.8").usable
     assert not engine_pin.engine("2.6.0").usable
     assert not engine_pin.engine("2.6.1").usable
     assert not engine_pin.engine("2.6.3").usable
-    assert engine_pin.engine("2.6.3").moved == (
+    assert not engine_pin.engine("2.6.4").usable
+    assert not engine_pin.engine("2.6.5").usable
+    moved_at_273 = (
         "gpuwm/config.py",
         "gpuwm/core/gf.py",
         "gpuwm/core/kernels/__init__.py",
         "gpuwm/core/kernels/gf.cu",
+        "gpuwm/core/kernels/noahmp_leaves.cu",
+        "gpuwm/core/microphysics.py",
+        "gpuwm/core/noahmp_glacier_gpu.py",
+        "gpuwm/core/noahmp_kernel_sources.py",
         "gpuwm/core/physics.py",
+        "gpuwm/core/rrtmg_legacy.py",
         "gpuwm/io/restart.py",
     )
-    # 2.6.1 fails by those six plus the three the 2.6.3 cut moved (the
-    # column batch and the contract document did not move again at 2.6.4,
-    # so they stay in 2.6.1's list and are absent from 2.6.3's; config.py
-    # moved at both cuts and is counted once).
-    assert engine_pin.engine("2.6.1").moved == (
-        "docs/mpas-seam.md",
+    assert engine_pin.engine("2.6.5").moved == moved_at_273
+    # 2.6.4 and 2.6.5 carried the same sixteen bytes, so they fail the same
+    # way; a row that differs between them was edited, not measured.
+    assert engine_pin.engine("2.6.4").moved == moved_at_273
+    # The three earlier 2.7 engines carry the same sixteen bytes as each
+    # other and fail by the eight that moved again at 2.7.3 -- the GF
+    # adapter, its kernel and the Noah-MP libm unit moved at 2.7.0 and did
+    # not move again.
+    moved_at_273_since_270 = (
         "gpuwm/config.py",
-        "gpuwm/core/gf.py",
         "gpuwm/core/kernels/__init__.py",
-        "gpuwm/core/kernels/gf.cu",
-        "gpuwm/core/mpas_column_batch.py",
+        "gpuwm/core/microphysics.py",
+        "gpuwm/core/noahmp_glacier_gpu.py",
+        "gpuwm/core/noahmp_kernel_sources.py",
         "gpuwm/core/physics.py",
+        "gpuwm/core/rrtmg_legacy.py",
         "gpuwm/io/restart.py",
     )
-    # 2.6.2: the tag whose publish job died.  It matched the 2.6.3 manifest
-    # byte for byte and fails this one by the same six files 2.6.3 does, so
-    # it is disqualified twice now; both clauses named so that neither can
-    # be quietly edited back on its own.
+    for version in ("2.7.0", "2.7.1", "2.7.2"):
+        row = engine_pin.engine(version)
+        assert row.moved == moved_at_273_since_270, version
+        assert row.on_pypi and row.offline_build_road and not row.usable
+    # 2.6.2: the tag whose publish job died.  It fails this manifest by the
+    # same eleven files 2.6.5 does, so it is disqualified twice; both
+    # clauses named so that neither can be quietly edited back on its own.
     tagged_262 = engine_pin.engine("2.6.2")
     assert not tagged_262.satisfies_manifest
-    assert tagged_262.moved == engine_pin.engine("2.6.3").moved
+    assert tagged_262.moved == moved_at_273
     assert tagged_262.offline_build_road
     assert not tagged_262.on_pypi
     assert not tagged_262.usable
     for row in engine_pin.PUBLISHED_ENGINES:
-        if row.version not in ("2.6.4", "2.6.5"):
+        if row.version != "2.7.3":
             assert row.moved, (
-                f"{row.version} claims to satisfy the manifest.  Only 2.6.4 "
-                "and 2.6.5 do; any other row with an empty moved list means "
-                "the table was patched by hand instead of re-measured"
+                f"{row.version} claims to satisfy the manifest.  Only 2.7.3 "
+                "does; any other row with an empty moved list means the "
+                "table was patched by hand instead of re-measured"
             )
 
     # 2.5.5 is disqualified three separate ways now, and all three are
@@ -248,35 +275,43 @@ def test_the_shipped_table_says_what_the_measurement_said():
     assert not tag_only.offline_build_road
 
 
-def test_the_table_is_the_instruments_output_not_a_transcription(receipts):
-    """The shipped rows must equal the shipped JSON, field for field.
+#: The measurement the shipped table is rendered from.  Under ``verification/``
+#: rather than ``evidence/`` because it is the table's SOURCE, not a record of
+#: a run: the sdist grafts ``verification/`` and holds ``evidence/`` out, so
+#: this gate runs on every published surface instead of skipping there.
+VERDICTS_OF_RECORD = (
+    ROOT / "verification" / "engine-verdicts" / "repin-273-20260913.json"
+)
+
+
+def test_the_table_is_the_instruments_output_not_a_transcription():
+    """The shipped rows must equal the shipped JSON, field for field, and
+    the generated block must be the instrument's own rendering of it.
 
     THE BREAKAGE THIS PREVENTS is the one this module's docstring counts:
     three separate hand-transcriptions of these figures, three different
     wrong answers.  The defence is that the table is rendered from the
-    instrument's JSON, so this test re-renders it and demands equality --
-    which fails on a hand-patched row even when the patch looks plausible.
+    instrument's JSON, so this test re-renders it -- with the instrument's
+    own renderer, imported from ``tools/`` -- and demands equality, which
+    fails on a hand-patched row even when the patch looks plausible.
 
-    It takes the ``receipts`` fixture because it reads a receipt, and #378
-    closed exactly this shape thirty times over: a tree that holds
-    ``evidence/`` out -- the assembled public tree, and the sdist -- has no
-    JSON to re-render, and a direct read raises ``FileNotFoundError`` there
-    instead of skipping with the reason.  This file is in CI's tier-1 list
-    (``tools/battery/cpu_files.txt``), and ``ci.yml`` runs tier 1 on push, so
-    the direct read fired a RED CI on the public repository on the release
-    commit itself.  Measured on a full assembly of the public tree,
-    2026-08-28: 1 failed / 799 passed, and this was the one.  The fixture
-    keeps the gate real where the receipts exist -- a tree that carries them
-    and is missing THIS one still fails.
+    Until 2026-09-13 this read a receipt under ``evidence/`` and took the
+    ``receipts`` fixture, so on the assembled public tree and in the sdist
+    it SKIPPED: the one gate that keeps the table honest was disarmed on
+    exactly the surfaces a user installs from.  The JSON now ships beside
+    the contracts and the gate runs everywhere.
     """
 
+    import importlib.util
     import json
 
-    verdicts = json.loads(
-        (receipts / "repin-265-20260902" / "engine-verdicts.json").read_text(
-            encoding="utf-8"
-        )
+    assert VERDICTS_OF_RECORD.is_file(), (
+        f"{VERDICTS_OF_RECORD.relative_to(ROOT).as_posix()} is missing; the "
+        "table has no measurement to be rendered from"
     )
+    verdicts = json.loads(VERDICTS_OF_RECORD.read_text(encoding="utf-8"))
+    assert verdicts["pin"]["version"] == "2.7.3"
+    assert verdicts["instrument"] == "tools/measure_engine_verdicts.py"
     measured = {
         row["tag"].lstrip("v"): (
             bool(row["on_pypi"]),
@@ -291,10 +326,28 @@ def test_the_table_is_the_instruments_output_not_a_transcription(receipts):
     }
     assert shipped == measured, (
         "PUBLISHED_ENGINES disagrees with the JSON it is supposed to be "
-        "rendered from.  Re-splice it: python "
-        "evidence/repin-258-20260828/render_engine_pin_table.py "
-        "evidence/repin-265-20260902/engine-verdicts.json --splice "
-        "src/hexcore/engine_pin.py"
+        "rendered from.  Re-splice it: python tools/measure_engine_verdicts.py "
+        "--offline --engine-git <arwen clone> --wheel-cache <cache> "
+        "--pin-to 2.7.3 --splice"
+    )
+
+    # The manifest the JSON was measured against is the one the package
+    # ships: a JSON re-measured against some other bytes would render the
+    # same shape of table for the wrong pin.
+    assert verdicts["manifest"] == engine_pin.seam_manifest()
+
+    spec = importlib.util.spec_from_file_location(
+        "_measure_engine_verdicts", ROOT / "tools" / "measure_engine_verdicts.py"
+    )
+    assert spec is not None and spec.loader is not None
+    instrument = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(instrument)
+    source = (ROOT / "src" / "hexcore" / "engine_pin.py").read_text(encoding="utf-8")
+    start = source.index(instrument.BEGIN_MARK)
+    end = source.index(instrument.END_MARK) + len(instrument.END_MARK)
+    assert source[start:end] == instrument.render_rows(verdicts["tags"]), (
+        "the generated block in engine_pin.py is not the instrument's own "
+        "rendering of the JSON of record; it was edited by hand"
     )
 
 
