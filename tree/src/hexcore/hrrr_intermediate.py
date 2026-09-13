@@ -167,7 +167,7 @@ SOURCE_ROWS: Mapping[str, SourceRow] = {
             ("ST100200", "SM100200"),
         ),
         levels=50,
-        map_source="NCEP HRRR (gpuwm-hex projected road)",
+        map_source="NCEP HRRR via gpuwm-hex latlon",
         description="the 3 km Lambert CONUS HRRR (native hybrid wrfnat + wrfprs soil)",
     ),
 }

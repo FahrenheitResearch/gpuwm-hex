@@ -139,6 +139,10 @@ def test_the_source_table_is_the_only_place_a_source_lives() -> None:
     assert row.grib_names[0].format(cycle=datetime(2026, 9, 13, 15), hour=2) == "hrrr.t15z.wrfnatf02.grib2"
     assert row.grib_names[1].format(cycle=datetime(2026, 9, 13, 15), hour=0) == "hrrr.t15z.soilf00.grib2"
     assert row.soil_layer_names[0] == ("ST000010", "SM000010")
+    # The map source lands in a 32-character WPS field; a longer one refused
+    # the first real regrid on 2026-09-13 after the decode had already run.
+    for each in hi.SOURCE_ROWS.values():
+        assert len(each.map_source.encode("ascii")) <= 32, each.map_source
     with pytest.raises(IntermediateRefusal) as refusal:
         hi.source_row("rap")
     assert "SOURCE_ROWS" in str(refusal.value)
