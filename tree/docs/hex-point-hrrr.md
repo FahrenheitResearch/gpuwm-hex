@@ -193,4 +193,70 @@ geometry half is relaxed.
 See the section below; it is written from the receipts under
 `C:\Users\drew\Downloads\evidence-gallery\soma-hex-point-hrrr-2026-09-13\`.
 
-MEASURED-SECTION
+Point 41.95 N 94.79 W (central Iowa), HRRR cycle 2026-09-13 15Z, f00 to
+f03, node-2 (RTX 5090, 32,607 MiB, sm_120), gpuwm 2.7.3 from PyPI with its
+2.7.3 bridge bundle, gpuwm-hex 0.3.0 at this lane's tip. Every number below
+is copied from a receipt in that folder; the chain scripts that produced them
+are beside the receipts.
+
+The mesh (`mesh-plan --point 41.95,-94.79 --fine-dx-m 937.5 --radius-km 100
+--card 32gb --generate`, 276 s wall on node-2's CPU):
+
+- Ladder 120 / 60 / 30 / 15 / 7.5 / 3.75 / 1.875 / 0.9375 km, transition
+  factor 18, fine core radius 100 km, fine flat radius 83.1 km, cut radius
+  135 km (pad scale 1.35), spacing at the cut 2.88 km, halo 20.2 km.
+- Parent `p0.9375.120.112246.n41.95w94.79`: 112,246 cells, 336,732 edges;
+  `rw_mpas_mesh` 90.0 s, `rw_mpas_static` 100.6 s; min `dcEdge` 841.324 m,
+  min `dvEdge/dcEdge` 0.0402 (floor 0.02), coordination {5: 2000, 6: 108260,
+  7: 1984, 8: 2}, dt 5 s against a 6.058 s Courant limit (1.21x).
+- Cull `q0.9375.120.43884.n41.95w94.79`: 43,884 cells (43,421 predicted,
+  1.1 % over), 131,956 edges, seven boundary rings, attained fine spacing
+  0.93751 km; the same finest edge and dt; registered as the second runtime
+  row in `mesh-rows.json` with `lbc_source` naming the boundary directory.
+- Priced for the 32 GB card: 11,827.9 MiB predicted for the cull on the
+  measured limited-area row (96,582 B per cell over a 663 MB core), margin
+  1,756.8 MiB, 248,102 cells would fit, so the largest fine core this card
+  admits at 937.5 m is 240 km in radius.
+
+The state (`intermediate`, `init`, `lbc`, all CPU):
+
+- `intermediate --source hrrr --hours 0-3 --workers 4`: `hrrr_grib2_bridge`
+  decoded the four `wrfnat` + `soil` pairs in 17.6 s onto the cull's lat-lon
+  box (rows 908 to 1043, columns 591 to 726 of the HRRR grid); each WPS file
+  holds 318 records (51 levels of TT, UU, VV, SPECHUMD; 50 of GHT and
+  PRESSURE; the surface and soil set) in 31.2 MB, regridded in 0.08 s.
+- `init`: `rw_mpas_init` 1.44 s, 317 met records used, 55 levels; the door
+  stamped all nine run declarations onto the init (`run_declarations.stamped`
+  in its receipt; `already_present` empty), which is what the section above
+  is about.
+- `lbc`: four boundary files (15Z to 18Z, 87.3 MB each) in 2.08 s through
+  `rw_mpas_lbc` resolved from the venv's own bridge directory.
+
+The card (both passes under the shared mutex; 23.3 minutes of card time in
+total):
+
+- Contract deck on the cull's own rings (`run_cuda_regional_contract.py
+  --class-id graded-869m-dt5-z7`): 8 decks, 8 passed, 22 of 22 regional
+  kernels covered, every deck bitwise, every control with teeth, dual run
+  identical; 422 s, peak 1,026 MiB.
+- `forecast --hours 3 --history-every-minutes 60 --lbc-dir ...`: admitted on
+  the measured limited-area row (11,874.3 MiB predicted, 31,642.6 MiB free,
+  margin 1,756.8 MiB), convection off by resolution (841 m against the 3 km
+  threshold), surface/PBL every step (the welded cadence, 720 calls an hour);
+  2,160 steps of 5 s in 721.3 s of integration, **0.334 s per step**, 912.2 s
+  driver execution, 943.6 s door wall including the pinned-source
+  verification of 23 modules; four history frames; status passed. Peak
+  memory on the card 9,485 MiB (nvidia-smi at 5 s cadence), utilisation
+  75 to 97 %. Load average at launch 0.34 with nothing else on the node's
+  CPUs; the mutex had been held 420 s by another lane before this pass.
+- The first pass stopped at the forecast opener on the clockless init after
+  the deck had run; the deck's receipt pins the boundary mask, the cell count
+  and the kernel set, none of which the remade init changes, so the second
+  pass reused it (`SKIP_DECK=1` in the chain script).
+
+The picture (`render --products composite_reflectivity,2m_temperature_10m_winds`
+on the 18Z frame): `rw_mpas_convert` framed the mesh window at 233 x 235
+columns (924 m, mean nearest-neighbour 0.51 km) in 0.81 s and `rw_wrfbatch`
+drew both panels; 5 s in all. `theta_e_2m_10m_winds` is in the renderer's
+catalog but not realised by the wrfout import lane for this history, and the
+door refuses it by name before drawing anything.
