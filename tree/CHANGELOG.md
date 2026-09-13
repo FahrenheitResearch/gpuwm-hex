@@ -9,6 +9,18 @@ contained. From 0.2.0 forward the file is cut at the release.*
 ## 0.3.0 (2026-09-13)
 
 New:
+- A fine hex core at any point, from HRRR. gpuwm-hex mesh-plan --point
+  LAT,LON writes the registered 937.5 m ladder spec centred on the point,
+  prices parent and cull for a named card, and with --generate builds,
+  admits, registers (a runtime row file beside the mesh, hexcore.mesh_rows,
+  read by tools/mpas_mesh_binding.py through $GPUWM_HEX_MESH_ROWS) and
+  culls it, minting the parent's vertical and culling that too. gpuwm-hex
+  intermediate --source hrrr writes regular lat-lon WPS intermediates from
+  the projected HRRR product through the engine's own decoder, operator and
+  soil layering; gpuwm-hex lbc drives rw_mpas_lbc over the hourly
+  intermediates. rw_mpas_static joins the engine ladder. The two
+  sub-kilometre regional classes admit a same-ladder finest-edge band of
+  five per cent. docs/hex-point-hrrr.md.
 - The engine-verdict instrument ships in the tree. tools/measure_engine_verdicts.py
   downloads every wheel of every published gpuwm from 2.5.0 up, hashes the
   sixteen pinned seam files inside each, reads the build road off the

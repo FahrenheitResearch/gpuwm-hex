@@ -389,7 +389,7 @@ def _usable(path: Path) -> bool:
 
 def _refuse_not_executable(spec: EngineSpec, path: Path) -> None:
     raise EngineRefusal(
-        f"the {spec.subject} at {path} exists but is not executable.  pip does "
+        f"{spec.subject} at {path} exists but is not executable.  pip does "
         f"not preserve executable bits on package data, so a staged copy can "
         f"arrive present and unrunnable.\n"
         f"  chmod +x {path}"
