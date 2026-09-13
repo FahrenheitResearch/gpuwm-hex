@@ -152,6 +152,26 @@ gpuwm's bridge directories (`libexec/bridges` beside the installed package and
 carries it), then `PATH`. `gpuwm-hex doctor` reports it beside the other
 engines.
 
+## The init carries its own clock
+
+`rw_mpas_init` writes the init's global attributes by copying the
+capsule's and does not stamp `config_start_time` itself. A native capsule
+carries it from its namelist; the constructed route writes it into the
+vertical artifact; the vertical `--generate` culls at mesh time is minted
+before any start time exists and carries neither. The forecast driver
+asserts `--start-time` against that attribute and refuses an init without
+one, so the first point cull reached the card, spent seven minutes on the
+contract deck, and stopped at the forecast opener. `gpuwm-hex init` now
+stamps every run declaration the capsule copy left absent
+(`hexcore.init_door.stamp_run_declarations`, the same nine `config_*`
+attributes the constructed route writes, encoded by the one encoder both
+share) and records `run_declarations.stamped` and
+`run_declarations.already_present` in the init receipt. Attributes the
+capsule carried are left byte for byte, so the native x4 route is untouched;
+a carried clock that disagrees with `--start-time` is reported on stderr and
+left for the forecast door's own refusal, because the cascade's delayed
+start moves it on purpose.
+
 ## The same-ladder class band
 
 The regional forecast opener measures a class key off the run (zone width,

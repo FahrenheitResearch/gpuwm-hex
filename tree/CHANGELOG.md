@@ -60,6 +60,15 @@ New:
   engine nothing this release writes changes.
 
 Fixed:
+- gpuwm-hex init stamps the run declarations the engine's capsule copy
+  left absent (config_start_time, the first-guess level counts, the
+  moisture, sea-ice, extrapolation and land-use switches) onto the init on
+  the compatibility-capsule route, and records in the receipt which were
+  stamped and which the capsule already carried. A capsule minted at mesh
+  time, which is what mesh-plan --point culls, carries no clock, and the
+  forecast driver refused the first 937.5 m point cull with "init carries
+  no config_start_time" after the contract deck had spent seven minutes on
+  the card. Attributes a native capsule carries are left byte for byte.
 - rw_mpas_lbc resolves through the engine ladder. The boundary producer was
   read from $RW_MPAS_LBC and PATH alone, so a box where gpuwm fetch-bridges
   had staged it beside rw_mpas_init refused the lbc leg of the very chain

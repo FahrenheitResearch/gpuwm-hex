@@ -418,6 +418,72 @@ def _port_version() -> str:
     return str(__version__)
 
 
+def run_declarations(arguments: argparse.Namespace) -> dict[str, Any]:
+    """The ``config_*`` global attributes this init declares about itself.
+
+    They are what the forecast driver parses off the init (it asserts
+    ``--start-time`` against ``config_start_time`` and refuses an init that
+    carries none), and both routes through this door put them there: the
+    constructed route writes them into the vertical artifact, whose global
+    attributes the engine copies verbatim; the compatibility route stamps
+    whichever of them the capsule did not carry (:func:`stamp_run_declarations`).
+    """
+
+    return {
+        "config_start_time": arguments.start_time,
+        "config_nfglevels": int(arguments.nfglevels),
+        "config_nfgsoillevels": int(arguments.nfgsoillevels),
+        "config_nsoillevels": 4,
+        "config_use_spechumd": arguments.use_spechumd == "yes",
+        "config_frac_seaice": arguments.frac_seaice == "yes",
+        "config_extrap_airtemp": arguments.extrap_airtemp,
+        "config_tsk_seaice_threshold": float(arguments.tsk_seaice_threshold),
+        "config_landuse_data": arguments.landuse_table,
+    }
+
+
+def stamp_run_declarations(init: Path, declarations: dict[str, Any]) -> dict[str, Any]:
+    """Put the run declarations the engine's capsule copy left absent onto the init.
+
+    ``rw_mpas_init`` writes the init's global attributes by copying the
+    capsule's, and it does not stamp ``config_start_time`` itself.  A native
+    capsule carries the attribute from its own namelist; a vertical artifact
+    the constructed route minted carries it because that route wrote it; a
+    capsule minted at mesh time -- ``mesh-plan --point`` culls the parent's
+    vertical before any start time exists -- carries neither, and the init
+    reached the forecast door without a clock.  MEASURED (2026-09-13, the
+    first 937.5 m cull at a point, 43,884 cells): the forecast driver stopped
+    with "init carries no config_start_time" after the contract deck had
+    already spent seven minutes on the card.  The ``--start-time`` switch is
+    documented as "it stamps the init"; this is where that becomes true on
+    every route.
+
+    Only ABSENT attributes are written.  An attribute the capsule carried is
+    left in the file byte for byte (the native x4 anchor route carries all of
+    them and is not touched) and recorded here with its value, so a receipt
+    reader sees what the file says beside what the switch said.
+    """
+
+    try:
+        from netCDF4 import Dataset
+    except ImportError as error:  # pragma: no cover
+        _refuse(f"python package netCDF4 is unavailable ({error}); install it")
+    from .vertical_spec import encode_config_attribute
+
+    stamped: dict[str, Any] = {}
+    present: dict[str, Any] = {}
+    with Dataset(init, mode="r+") as dataset:
+        held = set(dataset.ncattrs())
+        for key, value in declarations.items():
+            if key in held:
+                found = dataset.getncattr(key)
+                present[key] = found.item() if hasattr(found, "item") else found
+                continue
+            dataset.setncattr(key, encode_config_attribute(value))
+            stamped[key] = value
+    return {"stamped": stamped, "already_present": present}
+
+
 def prepare_vertical_source(arguments: argparse.Namespace) -> VerticalSource:
     mode = select_vertical_mode(arguments)
     if mode == "compatibility-capsule":
@@ -452,18 +518,7 @@ def prepare_vertical_source(arguments: argparse.Namespace) -> VerticalSource:
         # forecast driver parses them from the init, so the artifact must
         # carry THIS run's declarations, not the static template's
         # placeholders.
-        run_config={
-            "config_start_time": arguments.start_time,
-            "config_nfglevels": int(arguments.nfglevels),
-            "config_nfgsoillevels": int(arguments.nfgsoillevels),
-            "config_nsoillevels": 4,
-            "config_use_spechumd": arguments.use_spechumd == "yes",
-            "config_frac_seaice": arguments.frac_seaice == "yes",
-            "config_extrap_airtemp": arguments.extrap_airtemp,
-            "config_tsk_seaice_threshold": float(
-                arguments.tsk_seaice_threshold),
-            "config_landuse_data": arguments.landuse_table,
-        },
+        run_config=run_declarations(arguments),
     )
     summary = {
         **summary,
@@ -642,6 +697,15 @@ def run_init_command(arguments: argparse.Namespace) -> int:
             f"the engine reported success but {out} does not exist; rebuild the current rw_mpas_init "
             "or inspect an ABI mismatch between door and engine"
         )
+    declarations = stamp_run_declarations(out, run_declarations(arguments))
+    carried_clock = declarations["already_present"].get("config_start_time")
+    if carried_clock is not None and str(carried_clock) != arguments.start_time:
+        sys.stderr.write(
+            f"gpuwm-hex init: the capsule carried config_start_time {carried_clock!r} and "
+            f"--start-time is {arguments.start_time!r}; the file keeps the capsule's, and the "
+            "forecast door will refuse it by name unless the clock is moved (the cascade's "
+            "delayed start does that) or the init is remade from a capsule of this run\n"
+        )
 
     from . import __version__
 
@@ -688,6 +752,7 @@ def run_init_command(arguments: argparse.Namespace) -> int:
         },
         "engine_argv": argv,
         "engine_receipt": engine_receipt,
+        "run_declarations": declarations,
         "output": _described(out),
         "door_seconds": round(time.time() - started, 3),
     }

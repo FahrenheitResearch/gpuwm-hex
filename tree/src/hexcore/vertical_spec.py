@@ -116,6 +116,21 @@ ZERO_STATE_VARIABLES: tuple[tuple[str, tuple[str, ...], str, str], ...] = (
 )
 
 
+def encode_config_attribute(value: Any) -> Any:
+    """A run declaration as the ``config_*`` global attribute the forecast
+    driver parses: a bool is the namelist's ``YES``/``NO``, an int is int32,
+    a float is float32, text is text.  One encoder, because the constructed
+    vertical artifact and ``gpuwm-hex init`` both write these and a reader
+    compares them byte for byte."""
+    if isinstance(value, bool):
+        return "YES" if value else "NO"
+    if isinstance(value, int):
+        return np.int32(value)
+    if isinstance(value, float):
+        return np.float32(value)
+    return value
+
+
 class VerticalSpecError(MpasPortError):
     """A vertical declaration or produced artifact violates a named contract."""
 
@@ -679,13 +694,7 @@ def materialize_vertical_artifact(
                     raise VerticalSpecError(
                         f"run_config key {key!r} is not a config_* attribute"
                     )
-                if isinstance(value, bool):
-                    value = "YES" if value else "NO"
-                if isinstance(value, int) and not isinstance(value, bool):
-                    value = np.int32(value)
-                elif isinstance(value, float):
-                    value = np.float32(value)
-                dataset.setncattr(str(key), value)
+                dataset.setncattr(str(key), encode_config_attribute(value))
             dataset.setncattr("config_nvertlevels", np.int32(spec.n_vert_levels))
             dataset.setncattr("config_ztop", np.float32(spec.ztop_m))
             dataset.gpuwm_hex_vertical_artifact_schema = ARTIFACT_SCHEMA
