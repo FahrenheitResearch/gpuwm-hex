@@ -191,7 +191,7 @@ geometry half is relaxed.
 ## Measured, 2026-09-13
 
 See the section below; it is written from the receipts under
-`C:\Users\drew\Downloads\evidence-gallery\soma-hex-point-hrrr-2026-09-13\`.
+`C:\Users\drew\Downloads\evidence-gallery\hex-point-hrrr-2026-09-13\`.
 
 Point 41.95 N 94.79 W (central Iowa), HRRR cycle 2026-09-13 15Z, f00 to
 f03, node-2 (RTX 5090, 32,607 MiB, sm_120), gpuwm 2.7.3 from PyPI with its
