@@ -45,6 +45,10 @@ New:
 - launch_checked in hexcore.cuda_backend: one launch, the error state
   checked, no event and no synchronize. recover_state uses it by default
   (timing_repeats=0); the timed path stays for the benchmark.
+- tools/lts_forced_classing.py and --local-timestep-classing FILE on the
+  forecast door and the driver tool: an A/B instrument that places a rate
+  class where the spacing would not, recorded in receipts as
+  rate_source: explicit.
 
 Fixed:
 - --pbl-cadence that is not a whole number of steps is refused by name at
@@ -79,6 +83,18 @@ Fixed:
   test_regional_class_band.py are named by the CPU tier list; they arrived
   with the point door on no list, which tests/test_tier_membership.py
   refused.
+- --local-timestep runs on a limited-area cull. The classing admits a
+  ring-7 edge's missing cell, the attachment counts the regional memory
+  model's padded cell and edge, the regional acoustic sub-step is rebound
+  per rate class (its three kernels derived from the regional translation
+  unit by the same asserted gather), every driven boundary cell is held at
+  rate 1 and a class interface touching the driven zone is refused by
+  name. On the culls the doors make this leaves one class and the run is
+  byte-identical to the default; measured on the RTX 5090, with an
+  interface forced into the interior it is 1.07x slower, so the option
+  stays off by default on every mesh class. docs/local-timestep-lam.md.
+- An explicit local-timestep classing's receipt reports the instrument's
+  request as cells_requested instead of cells_qualified_by_spacing.
 
 ## 0.3.0 (2026-09-13)
 

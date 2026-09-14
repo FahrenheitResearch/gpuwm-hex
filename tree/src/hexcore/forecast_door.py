@@ -705,6 +705,9 @@ class ForecastRequest:
     local_timestep: bool
     local_timestep_rates: tuple[int, ...]
     local_timestep_buffer_rings: int
+    #: A/B instrument: an explicit per-cell rate file, ``None`` for the
+    #: option's own classing from dcEdge.
+    local_timestep_classing: Path | None
     #: ``None`` means "the model's own margin" -- the default.
     headroom_bytes: int | None
     #: ``None`` means "read the card and select its row at decision time",
@@ -1254,6 +1257,22 @@ def resolve_request(
             "ring a class boundary has no cells demoted to the finer rate and "
             "the coarse class reads values one sub-step stale."
         )
+    classing_raw = getattr(arguments, "local_timestep_classing", None)
+    local_timestep_classing = (
+        None if classing_raw is None else Path(classing_raw).expanduser().absolute()
+    )
+    if local_timestep_classing is not None:
+        if not local_timestep:
+            raise _refuse(
+                "--local-timestep-classing is an A/B instrument for the option "
+                "and needs --local-timestep; without the switch the file would "
+                "be read and never used, and the arm would measure nothing."
+            )
+        if not local_timestep_classing.is_file():
+            raise _refuse(
+                f"--local-timestep-classing {local_timestep_classing} is not a "
+                "file. tools/lts_forced_classing.py writes one from a grid file."
+            )
 
     # None means "the model's own margin", which is now the DEFAULT: the
     # margin is two named, measured terms priced from the card, not a flat
@@ -1429,6 +1448,7 @@ def resolve_request(
         local_timestep=local_timestep,
         local_timestep_rates=rates,
         local_timestep_buffer_rings=rings,
+        local_timestep_classing=local_timestep_classing,
         headroom_bytes=headroom_bytes,
         model=model,
         stop_on_refusal=bool(getattr(arguments, "stop_on_refusal", False)),
@@ -1487,6 +1507,8 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
             "--local-timestep-buffer-rings",
             str(request.local_timestep_buffer_rings),
         ]
+        if request.local_timestep_classing is not None:
+            argv += ["--local-timestep-classing", str(request.local_timestep_classing)]
     if request.stop_on_refusal:
         argv.append("--stop-on-refusal")
     if request.preflight:
@@ -1592,6 +1614,11 @@ def build_receipt(
             "local_timestep": request.local_timestep,
             "local_timestep_rates": list(request.local_timestep_rates),
             "local_timestep_buffer_rings": request.local_timestep_buffer_rings,
+            "local_timestep_classing": (
+                None
+                if request.local_timestep_classing is None
+                else str(request.local_timestep_classing)
+            ),
             "stop_on_refusal": request.stop_on_refusal,
         },
         "admission": admission.as_dict() if admission is not None else None,
@@ -2070,7 +2097,10 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
         help="OPT-IN, default off: advance coarse columns on fewer, longer "
              "acoustic sub-steps. Native v8.4.1 has none, so this is a "
              "declared divergence and does not pay on the published "
-             "variable-resolution mesh (0.988x measured)")
+             "variable-resolution mesh (0.988x measured). On a limited-area "
+             "cull every driven boundary cell is held at rate 1, and on the "
+             "culls mesh-plan makes that leaves one class: the run is then "
+             "bit-identical to the default (measured 2026-09-14)")
     parser.add_argument(
         "--local-timestep-rates", default="1,3", metavar="LADDER",
         help="acoustic rate ladder; strictly increasing, starts at 1 "
@@ -2078,6 +2108,12 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--local-timestep-buffer-rings", type=int, default=1, metavar="N",
         help="rings demoted to the finer rate at a class boundary (default: 1)")
+    parser.add_argument(
+        "--local-timestep-classing", default=None, metavar="NPZ",
+        help="A/B INSTRUMENT, not a feature: per-cell acoustic rates from a "
+             ".npz (key cell_rate) instead of the grid file's dcEdge, so a "
+             "class interface can be placed in a cull's interior and measured. "
+             "Needs --local-timestep. tools/lts_forced_classing.py writes it")
     parser.add_argument(
         "--headroom-mib", type=float, default=None, metavar="MIB",
         help="override the margin the admission decision holds back from the "

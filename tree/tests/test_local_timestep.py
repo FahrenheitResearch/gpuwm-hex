@@ -25,6 +25,7 @@ from hexcore.errors import ConfigurationRefusal
 from hexcore.lts_v841 import (
     admissible_rates,
     cell_min_spacing,
+    classify_from_cell_rates,
     classify_local_timestep,
 )
 
@@ -395,14 +396,16 @@ def test_the_reflux_settle_carries_no_atomics():
     # The stripper has to work, or the test passes for the wrong reason.
     assert "atomicAdd" in source, "the explanatory comment names the hazard"
     assert "ONE THREAD PER COARSE CELL" not in code, "comments were not stripped"
-    # No accumulating atomic anywhere in the translation unit.  The one atomic
-    # that remains is the ancestor's ``atomicExch(singular, 1)``, which writes
-    # the same constant from every racing thread and so has one outcome
-    # whatever the order; it is pinned text and is not touched here.
+    # No accumulating atomic anywhere in the translation unit.  The atomics
+    # that remain are the ancestors' ``atomicExch(singular, 1)`` (the global
+    # coefficient kernel) and ``atomicExch(invalid, 1)`` (the regional
+    # momentum kernel's validity flag), each of which writes the same constant
+    # from every racing thread and so has one outcome whatever the order; both
+    # are pinned text and are not touched here.
     assert "atomicAdd" not in code
     assert "atomicSub" not in code
-    assert code.count("atomicExch") == 1
-    assert "atomicExch(singular, 1)" in code
+    exchanges = re.findall(r"atomicExch\([^)]*\)", code)
+    assert sorted(exchanges) == ["atomicExch(invalid, 1)", "atomicExch(singular, 1)"]
 
     settle = lts._extract_kernel(source, "lts_reflux_settle")
     accumulate = lts._extract_kernel(source, "lts_reflux_accumulate")
@@ -456,3 +459,283 @@ def test_the_derived_translation_unit_declares_every_kernel_once():
         "lts_recover_interfaces",
     ):
         assert source.count(f"void {name}(") == 1, name
+
+
+# --------------------------------------------------------------------------
+# limited-area culls: the driven-zone hold, one-cell edges, explicit rates
+# --------------------------------------------------------------------------
+def _chain_with_open_end(spacings):
+    """The chain, plus one ring-7 style edge on the last cell with no second cell."""
+
+    dc, eoc, counts, coe = _chain(spacings)
+    n_cells = len(spacings)
+    open_edge = len(dc)  # 0-based index of the new edge
+    dc = np.append(dc, dc[-1])
+    coe = np.vstack([coe, [[n_cells, 0]]])  # 1-based: last cell, then 0 = no cell
+    eoc = np.hstack([eoc, np.zeros((n_cells, 1), dtype=np.int64)])
+    eoc[n_cells - 1, counts[n_cells - 1]] = open_edge + 1
+    counts = counts.copy()
+    counts[n_cells - 1] += 1
+    return dc, eoc, counts, coe
+
+
+def test_a_one_cell_edge_takes_its_present_cells_rate_and_is_never_an_interface():
+    # Before 2026-09-14 the classing raised on the 0 a limited-area grid file
+    # writes for the missing cell of a ring-7 edge, so --local-timestep could
+    # not run on any cull at all.
+    dc, eoc, counts, coe = _chain_with_open_end([10.0] + [50.0] * 8)
+    classing = classify_local_timestep(
+        dc_edge=dc, edges_on_cell=eoc, n_edges_on_cell=counts,
+        cells_on_edge=coe, rates=(1, 3), buffer_rings=1,
+    )
+    open_edge = len(dc) - 1
+    assert open_edge not in set(classing.interface_edges.tolist())
+    assert classing.edge_rate[open_edge] == classing.cell_rate[-1]
+    assert classing.cell_rate[-1] == 3
+
+
+def test_an_edge_with_no_cell_at_all_is_refused():
+    dc, eoc, counts, coe = _chain([10.0] * 4)
+    coe = np.vstack([coe, [[0, 0]]])
+    dc = np.append(dc, 10.0)
+    with pytest.raises(ValueError):
+        classify_local_timestep(
+            dc_edge=dc, edges_on_cell=eoc, n_edges_on_cell=counts,
+            cells_on_edge=coe, rates=(1, 3),
+        )
+
+
+def test_every_driven_zone_cell_is_held_at_rate_one_and_the_hold_is_recorded():
+    # Nine cells, the last four in driven rings 1..4 (a cull's boundary).  All
+    # nine but the first would earn rate 3 from spacing; the driven four are
+    # held, the buffer then demotes the interior cell next to ring 1.
+    dc, eoc, counts, coe = _chain([10.0] + [50.0] * 8)
+    ring = np.array([0, 0, 0, 0, 0, 1, 2, 3, 4])
+    classing = classify_local_timestep(
+        dc_edge=dc, edges_on_cell=eoc, n_edges_on_cell=counts,
+        cells_on_edge=coe, rates=(1, 3), buffer_rings=1,
+        driven_ring=ring, driven_zone_source="bdyMaskCell",
+    )
+    assert np.all(classing.cell_rate[ring > 0] == 1)
+    summary = classing.summary()
+    assert summary["driven_zone_source"] == "bdyMaskCell"
+    # Cells 0 and 1 share the 10 m edge, so both earn rate 1 from spacing.
+    assert summary["cells_qualified_by_spacing"] == {1: 2, 3: 7}
+    assert summary["cells_requested"] is None
+    assert summary["cells_held_in_driven_zone"] == 4
+    assert summary["cells_held_in_driven_zone_by_ring"] == {1: 1, 2: 1, 3: 1, 4: 1}
+    # The interior cell adjacent to ring 1 is demoted by the buffer, and the
+    # cell adjacent to the fine cell 0 likewise; both are charged to the
+    # buffer, not to the driven zone.
+    assert summary["cells_demoted_by_buffer"] == 2
+    # No interface may touch a driven cell.
+    cells = np.asarray(classing.interface_cells)
+    assert cells.size and np.all(ring[cells] == 0)
+
+
+def test_the_driven_hold_leaves_a_global_mesh_alone():
+    dc, eoc, counts, coe = _chain([10.0] + [50.0] * 8)
+    without = classify_local_timestep(
+        dc_edge=dc, edges_on_cell=eoc, n_edges_on_cell=counts,
+        cells_on_edge=coe, rates=(1, 3), buffer_rings=1,
+    )
+    with_zero_ring = classify_local_timestep(
+        dc_edge=dc, edges_on_cell=eoc, n_edges_on_cell=counts,
+        cells_on_edge=coe, rates=(1, 3), buffer_rings=1,
+        driven_ring=np.zeros(9, dtype=np.int32),
+    )
+    assert np.array_equal(without.cell_rate, with_zero_ring.cell_rate)
+    assert without.summary()["driven_zone_source"] is None
+    assert without.summary()["cells_held_in_driven_zone"] is None
+    assert with_zero_ring.summary()["cells_held_in_driven_zone"] == 0
+
+
+def test_explicit_rates_class_the_interior_where_spacing_would_not():
+    # The instrument: a uniform chain, which spacing classes into one class,
+    # handed rate 3 on its right half.  The interface exists, the driven hold
+    # and the buffer still apply, and the result says it is explicit.
+    dc, eoc, counts, coe = _chain([10.0] * 9)
+    requested = np.array([1, 1, 1, 1, 3, 3, 3, 3, 3], dtype=np.int32)
+    ring = np.array([0, 0, 0, 0, 0, 0, 0, 0, 1])
+    classing = classify_from_cell_rates(
+        cell_rate=requested, dc_edge=dc, edges_on_cell=eoc,
+        n_edges_on_cell=counts, cells_on_edge=coe, rates=(1, 3),
+        buffer_rings=1, driven_ring=ring, driven_zone_source="bdyMaskCell",
+    )
+    assert classing.rate_source == "explicit"
+    assert classing.rates == (1, 3)
+    assert classing.cell_rate[-1] == 1  # held: driven
+    assert classing.cell_rate[-2] == 1  # buffer next to the held cell
+    assert classing.cell_rate[4] == 1  # buffer next to the fine half
+    assert classing.cell_rate.tolist() == [1, 1, 1, 1, 1, 3, 3, 1, 1]
+    assert classing.interface_edges.size == 2
+    summary = classing.summary()
+    assert summary["rate_source"] == "explicit"
+    # The receipt must not present the instrument's request as something the
+    # spacing said: the requested rates go out under their own key and the
+    # spacing key is empty for an explicit classing.
+    assert summary["cells_qualified_by_spacing"] is None
+    assert summary["cells_requested"] == {1: 4, 3: 5}
+    # Two cells were demoted from the request by the buffer (cell 4 beside the
+    # fine half, cell 7 beside the held driven cell); the driven cell itself is
+    # charged to the hold, not to the buffer.
+    assert summary["cells_demoted_by_buffer"] == 2
+    assert summary["cells_held_in_driven_zone"] == 1
+
+
+def test_explicit_rates_off_the_ladder_are_refused():
+    dc, eoc, counts, coe = _chain([10.0] * 5)
+    with pytest.raises(ConfigurationRefusal):
+        classify_from_cell_rates(
+            cell_rate=np.array([1, 2, 1, 1, 1]), dc_edge=dc, edges_on_cell=eoc,
+            n_edges_on_cell=counts, cells_on_edge=coe, rates=(1, 3),
+        )
+
+
+def test_an_interface_touching_a_driven_cell_is_refused_on_the_driver():
+    from hexcore.cuda_driver_lts import refuse_interface_in_driven_zone
+
+    dc, eoc, counts, coe = _chain([10.0] * 9)
+    requested = np.array([1, 1, 1, 1, 3, 3, 3, 3, 3], dtype=np.int32)
+    # Built with no driven mask, so the coarse class reaches the last cell.
+    classing = classify_from_cell_rates(
+        cell_rate=requested, dc_edge=dc, edges_on_cell=eoc,
+        n_edges_on_cell=counts, cells_on_edge=coe, rates=(1, 3), buffer_rings=1,
+    )
+    assert classing.cell_rate[-1] == 3
+    # The driver's own mask says the last two cells are driven: refused.
+    with pytest.raises(ConfigurationRefusal) as caught:
+        refuse_interface_in_driven_zone(classing, np.array([0, 0, 0, 0, 0, 0, 0, 1, 2]))
+    assert "driven" in str(caught.value)
+    # An interface next to a driven cell with every driven cell at rate 1
+    # cannot come out of either classing route (the buffer ring moves the
+    # jump one cell inward), so the second condition is exercised on a
+    # classing whose interface is set by hand.
+    import dataclasses
+
+    held = classify_from_cell_rates(
+        cell_rate=np.array([1, 1, 1, 1, 3, 3, 3, 3, 1], dtype=np.int32),
+        dc_edge=dc, edges_on_cell=eoc, n_edges_on_cell=counts,
+        cells_on_edge=coe, rates=(1, 3), buffer_rings=1,
+        driven_ring=np.array([0, 0, 0, 0, 0, 0, 0, 0, 1]),
+    )
+    assert held.cell_rate.tolist() == [1, 1, 1, 1, 1, 3, 3, 1, 1]
+    # Interior interfaces, driven cell at rate 1: admitted.
+    refuse_interface_in_driven_zone(held, np.array([0, 0, 0, 0, 0, 0, 0, 0, 1]))
+    forged = dataclasses.replace(
+        held,
+        interface_edges=np.array([7], dtype=np.int32),
+        interface_cells=np.array([[7, 8]], dtype=np.int32),
+    )
+    with pytest.raises(ConfigurationRefusal) as caught:
+        refuse_interface_in_driven_zone(forged, np.array([0, 0, 0, 0, 0, 0, 0, 0, 1]))
+    assert "interface" in str(caught.value)
+
+
+def test_the_derived_regional_kernels_are_their_ancestors_plus_the_gather():
+    from hexcore import cuda_acoustic_lts as lts
+    from hexcore import cuda_regional_v841
+
+    source = cuda_regional_v841._CUDA_SOURCE
+    assert len(lts.REGIONAL_GATHERED) == 3
+    for name, index, bound in lts.REGIONAL_GATHERED:
+        original = lts._extract_kernel(source, name)
+        derived = lts._gather(
+            original, name=name, index=index, bound=bound,
+            new_name=name.replace("_v841", "_lts"),
+        )
+        restored = derived.replace(
+            "const int lts_slot = blockDim.x * blockIdx.x + threadIdx.x;\n"
+            "    if (lts_slot >= lts_n_active) return;\n"
+            f"    const int {index} = lts_active[lts_slot];",
+            f"const int {index} = blockDim.x * blockIdx.x + threadIdx.x;\n"
+            f"    if ({index} >= {bound}) return;",
+        )
+        restored = restored.replace(
+            ",\n    const int *lts_active, const int lts_n_active", ""
+        )
+        restored = restored.replace(name.replace("_v841", "_lts"), name)
+        assert restored == original, name
+        # The specified-zone masking survives the gather byte for byte.
+        assert "spec_zone_mask" in derived
+
+
+def test_the_derived_translation_unit_declares_the_regional_kernels_once():
+    from hexcore import cuda_acoustic_lts as lts
+
+    source = lts.local_timestep_cuda_source()
+    for name in (
+        "acoustic_ru_regional_lts",
+        "acoustic_rs_ts_regional_lts",
+        "acoustic_column_solve_regional_lts",
+    ):
+        assert source.count(f"void {name}(") == 1, name
+
+
+def test_the_regional_sub_step_is_rebound_and_restored():
+    # The pinned driver imports the regional sub-step from its module at every
+    # sub-step, so the module attribute is where the attachment must bind;
+    # rebinding only the global name leaves a regional run on the global rate
+    # under class-rate coefficients.  Checked without a card: the attach and
+    # detach methods are exercised on a stand-in with the device work stubbed.
+    import types
+
+    from hexcore import cuda_driver as driver_module
+    from hexcore import cuda_driver_lts
+    from hexcore import cuda_regional_forecast_v841 as regional_module
+
+    before_global = driver_module.advance_acoustic_step_cuda_v841
+    before_regional = regional_module.advance_acoustic_step_regional_cuda_v841
+    attachment = cuda_driver_lts.LocalTimestepAttachment.__new__(
+        cuda_driver_lts.LocalTimestepAttachment
+    )
+    horizontal = types.SimpleNamespace(divergence_damping_3d=lambda *a, **k: None)
+    driver = types.SimpleNamespace(
+        horizontal=horizontal, _recover_candidate=lambda *a, **k: None
+    )
+    attachment.driver = driver
+    attachment._saved = {}
+    attachment.attach()
+    assert driver_module.advance_acoustic_step_cuda_v841 == attachment.advance_acoustic_step
+    assert (
+        regional_module.advance_acoustic_step_regional_cuda_v841
+        == attachment.advance_acoustic_step_regional
+    )
+    attachment.detach()
+    assert driver_module.advance_acoustic_step_cuda_v841 is before_global
+    assert regional_module.advance_acoustic_step_regional_cuda_v841 is before_regional
+
+
+def test_a_regional_driver_counts_its_padding_in_the_mesh_check():
+    # A regional driver's ncells/nedges carry one garbage element each.  The
+    # attachment is exercised up to the mesh check with a classing one short
+    # on edges, so the refusal names the padded expectation.
+    import types
+
+    from hexcore import cuda_driver_lts
+
+    dc, eoc, counts, coe = _chain([10.0] * 5)
+    classing = classify_local_timestep(
+        dc_edge=dc, edges_on_cell=eoc, n_edges_on_cell=counts,
+        cells_on_edge=coe, rates=(1, 3),
+    )
+    config = types.SimpleNamespace(
+        config_local_timestep=True, config_monotonic=False,
+        config_positive_definite=False, config_time_integration_order=3,
+        config_number_of_sub_steps=6, config_local_timestep_rates=(1, 3),
+        config_local_timestep_buffer_rings=1,
+        config_local_timestep_safety_factor=1.0,
+    )
+    regional = types.SimpleNamespace(
+        masks_host=types.SimpleNamespace(bdy_mask_cell=np.zeros(5, dtype=np.int32))
+    )
+    # Global shape: 5 cells, 4 edges, no padding -> passes the check.
+    driver = types.SimpleNamespace(
+        config=config, v841_context=object(), halo_exchanger_v841=None,
+        regional_v841=regional, ncells=5, nedges=4,
+    )
+    with pytest.raises(ConfigurationRefusal) as caught:
+        cuda_driver_lts.attach_local_timestep(driver, classing=classing)
+    assert "padded" in str(caught.value)
+    assert "4 cells and 3 edges" in str(caught.value)
+
