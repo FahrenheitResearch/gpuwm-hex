@@ -79,6 +79,21 @@ Fixed:
   and no CUDA source string; the constant is re-derived, the one class row
   that carried a literal follows the constant, and the note at the constant
   records what moved and that the point class was re-minted at it.
+- The campaign's lanes measured together: the tree with the cadence, hostpath
+  and lts lanes merged runs the 3 h point-cull forecast (2,160 steps, HRRR
+  15Z, RTX 5090, both arms in one session) at 0.2978 s per step against the
+  untouched 0.3.0 tree's 0.3193 (1.07x; the loop as a user waits for it
+  679.6 s against 864.7 s, 1.27x; door 728 s against 907 s), with all four
+  history frames byte-identical, the contract deck at the merged kernel set
+  8 of 8 decks bitwise and dual-run identical, and the peak card memory
+  unchanged at 9,485 MiB. The merged tree's kernel-set digest is the
+  hostpath re-mint's. docs/hex-point-hrrr.md, the integrated section.
+- The NVRTC reciprocal-rewrite census names hexcore.cuda_solve_region_v841,
+  which the census's own control (every CUDA-bearing module under src must
+  be a listed translation unit) found unregistered on the GPU tier's first
+  pass over the merged tree.
+- The four point-door test files are named once on the CPU tier list; two
+  lanes had each added them and the tier census refuses a file named twice.
 - tests/test_hrrr_intermediate.py, test_mesh_point.py, test_mesh_rows.py and
   test_regional_class_band.py are named by the CPU tier list; they arrived
   with the point door on no list, which tests/test_tier_membership.py

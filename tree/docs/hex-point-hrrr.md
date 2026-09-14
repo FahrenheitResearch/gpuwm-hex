@@ -386,3 +386,72 @@ recovered-state validation 1.19 to 0.04; the garbage scrub 15.6 to 5.9.
 The loop as a user waits for it (integration, gate and history) went
 from 0.3973 to 0.3011 s per step, 1.32x. The pictures and every receipt are
 in the hostpath folder of the evidence gallery.
+
+## The integrated performance tree, measured 2026-09-14
+
+`lane/hex-perf` is `lane/hex-point-hrrr` with the cadence, hostpath and lts
+lanes merged in that order (the kernels lane is not merged: its per-kernel
+capture-and-replay instrument reported 49 kernels compared and one,
+`transport_standard_finish_regional_v841`, not bitwise, so it stays on its
+own branch until that is bitwise). The merged tree's regional kernel-set
+digest is the one the hostpath lane re-minted (`191af5f9...`), computed on the
+merged sources and equal to `MINTED_KERNEL_SET_SHA256`; the four frozen-source
+digests the two lanes moved (`dt_admission.py`, `pbl_cadence.py` from cadence;
+`cuda_driver.py`, `cuda_backend/recovery.py` from hostpath) were each moved by
+exactly one lane and the CPU battery's pin tests hold them on the merged tree.
+
+Same point cull (`q0.9375.120.43884.n41.95w94.79`, 43,884 cells, 55 levels,
+dt 5 s; grid `e4fb6704...`, init `4c6deb1c...`), same HRRR 15Z init and
+boundary files, node-2's RTX 5090 (32,607 MiB, sm_120), one mutex hold, the
+card otherwise idle (no other GPU process during any step; load average 1.14
+at the first arm's launch, 3.91 at the second's, the first arm's own writer
+tail), gpuwm 2.7.3 from PyPI with its 2.7.3 bridge bundle in both venvs. Every
+number is from a receipt under
+`C:\Users\drew\Downloads\evidence-gallery\hex-perf-integrate-2026-09-13\raw\`.
+
+- Contract deck on the cull's own rings at the merged tree's kernel set
+  (`run_cuda_regional_contract.py --class-id graded-869m-dt5-z7`): 8 of 8
+  decks bitwise, 22 of 22 regional kernels covered, dual run identical, every
+  control with teeth; 424 s, peak 1,597 MiB.
+- `forecast --hours 3 --history-every-minutes 60` at the defaults each lane
+  recommended (surface/PBL every step, local time stepping off, the hostpath
+  device checks on), 2,160 steps of 5 s, both arms back to back:
+
+| arm | door wall | driver execution | integration | s/step after the first | median typical step | health gate | loop incl. I/O | peak card memory | utilisation, mean |
+|---|---|---|---|---|---|---|---|---|---|
+| `lane/hex-point-hrrr` (untouched, shared venv) | 906.8 s | 875.5 s | 692.1 s | 0.3193 s | 0.3007 s | 168.6 s | 864.7 s | 9,485 MiB | 85.1 % |
+| `lane/hex-perf` (this tree, its own venv) | 728.1 s | 696.6 s | 675.0 s | 0.2978 s | 0.2797 s | 0.6 s | 679.6 s | 9,485 MiB | 79.8 % |
+| ratio | 1.245 | 1.257 | 1.025 | 1.072 | 1.075 | 293 | 1.272 | 1.000 | |
+
+  The integration ratio reads low because the second arm's first step was
+  32.0 s of cold NVRTC compilation into its venv's fresh kernel cache against
+  2.7 s in the first arm (whose cache was warm); excluding the first step the
+  integration is 689.4 s against 642.9 s, 1.072x, the same number as the
+  per-step column. The door wall carries that 29 s as well; with a warm cache
+  the door ratio would be about 1.30, which is not a measured number and is
+  not claimed. The health gate's 168 s over three hours became 0.6 s, which is
+  where the loop's 1.27x comes from.
+- Identity: all four history frames (15Z, 16Z, 17Z, 18Z) sha256-identical
+  between the arms (`85cb8196...`, `4ed8001f...`, `8943dcf9...`,
+  `9f332aa8...`; the first two are the digests every lane of the campaign
+  recorded for the untouched tree), the 2,160 `step_health` envelopes
+  identical entry for entry, and the 18Z composite-reflectivity panel through
+  `gpuwm-hex render` the same PNG byte for byte (`3b02745f...`). The receipt's
+  `physics.cadence` reads consistent: 2,160 surface-layer, Noah-MP and YSU
+  calls, 18 radiation calls, nothing held.
+- The tree's GPU tier (`-m "gpu and not bigcard and not assets"`) on the card
+  in the same session: one failure on the first pass, the NVRTC
+  reciprocal-rewrite census finding `cuda_solve_region_v841.py` unregistered
+  (the control that test exists for); registered, the tier is 47 passed, 1
+  skipped, and the CPU battery on node-1 is 1,194 passed, 70 skipped, 16
+  deselected. Card time for the whole chain 2,080 s, plus 8 s for the tier's
+  re-run.
+- Not run: the x4 full-physics dycore anchor. Its nine authority assets are not
+  on node-2 (no `work/v841-vr-static/` or
+  `work/v841-full-physics-gf-gwdo-native-authority-20260820a/` under any
+  checkout there), and the tool refuses by name without them.
+
+What ships as the default from this campaign is the hostpath lane's host path,
+which changes no bytes; the cadence knob and local time stepping ship
+selectable and off, each with the measurement that kept it off in its own
+section above and in `docs/local-timestep-lam.md`.
