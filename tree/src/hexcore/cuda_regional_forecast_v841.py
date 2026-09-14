@@ -1085,7 +1085,7 @@ def advance_acoustic_step_regional_cuda_v841(
     max_edges = int(mesh.max_edges)
     kernels.launch(
         "acoustic_ru_regional_v841",
-        nedges,
+        nlev * nedges,
         (
             np.int32(nlev), np.int32(nedges), np.int32(ncells),
             np.int32(small_step), np.float32(dts), np.float32(gravity),
@@ -1109,7 +1109,7 @@ def advance_acoustic_step_regional_cuda_v841(
     ts = cp.zeros_like(rs)
     kernels.launch(
         "acoustic_rs_ts_regional_v841",
-        ncells,
+        nlev * ncells,
         (
             np.int32(nlev), np.int32(ncells), np.int32(nedges),
             np.int32(max_edges), np.float32(dts), mesh.n_edges_on_cell,
@@ -1179,7 +1179,7 @@ def advance_scalars_regional_cuda_v841(
     edge_values = cp.zeros((ntracers, nlev, nedges), dtype=cp.float32)
     runtime.kernels.launch(
         "transport_edge_values_regional_v841",
-        nedges,
+        ntracers * nlev * nedges,
         (
             np.int32(ntracers), np.int32(nlev), np.int32(ncells),
             np.int32(nedges), np.int32(width),
@@ -1213,7 +1213,7 @@ def advance_scalars_regional_cuda_v841(
     output = cp.empty_like(scalar_old)
     runtime.kernels.launch(
         "transport_standard_finish_regional_v841",
-        ncells,
+        ntracers * nlev * ncells,
         (
             np.int32(ntracers), np.int32(nlev), np.int32(ncells),
             np.int32(nedges), np.int32(max_edges), np.float32(dt),
@@ -1498,7 +1498,7 @@ class CudaRegionalRuntimeV841:
         masks = self.masks
         self.kernels.launch(
             "regional_speczone_tend_cell_v841",
-            max(masks.n_spec_cells, 1),
+            max(nlev * masks.n_spec_cells, 1),
             (
                 np.int32(nlev), np.int32(ncells),
                 np.int32(masks.n_spec_cells), masks.spec_cells,
@@ -1509,7 +1509,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_speczone_tend_edge_v841",
-            max(masks.n_spec_edges, 1),
+            max(nlev * masks.n_spec_edges, 1),
             (
                 np.int32(nlev), np.int32(nedges),
                 np.int32(masks.n_spec_edges), masks.spec_edges,
@@ -1525,7 +1525,7 @@ class CudaRegionalRuntimeV841:
         mesh = self.atmosphere.mesh
         self.kernels.launch(
             "regional_relaxzone_rayleigh_cell_v841",
-            max(masks.n_relax_cells, 1),
+            max(nlev * masks.n_relax_cells, 1),
             (
                 np.int32(nlev), np.int32(ncells),
                 np.int32(masks.n_relax_cells), fifty_dt, relax_zone,
@@ -1536,7 +1536,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_relaxzone_rayleigh_edge_v841",
-            max(masks.n_relax_edges, 1),
+            max(nlev * masks.n_relax_edges, 1),
             (
                 np.int32(nlev), np.int32(nedges),
                 np.int32(masks.n_relax_edges), fifty_dt, relax_zone,
@@ -1546,7 +1546,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_relaxzone_filter_cell_v841",
-            max(masks.n_relax_cells, 1),
+            max(nlev * masks.n_relax_cells, 1),
             (
                 np.int32(nlev), np.int32(ncells), np.int32(nedges),
                 np.int32(mesh.max_edges), np.int32(masks.n_relax_cells),
@@ -1560,7 +1560,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_relaxzone_filter_edge_v841",
-            max(masks.n_relax_edges, 1),
+            max(nlev * masks.n_relax_edges, 1),
             (
                 np.int32(nlev), np.int32(ncells), np.int32(nedges),
                 np.int32(mesh.n_vertices), np.int32(mesh.max_edges),
@@ -1596,7 +1596,7 @@ class CudaRegionalRuntimeV841:
         masks = self.masks
         self.kernels.launch(
             "regional_speczone_u_ru_v841",
-            max(masks.n_spec_edges, 1),
+            max(self.nlev * masks.n_spec_edges, 1),
             (
                 np.int32(self.nlev), np.int32(int(rho_u.shape[-1])),
                 np.int32(masks.n_spec_edges), masks.spec_edges,
@@ -1618,7 +1618,7 @@ class CudaRegionalRuntimeV841:
         masks = self.masks
         self.kernels.launch(
             "regional_speczone_u_ru_v841",
-            max(masks.n_spec_edges, 1),
+            max(self.nlev * masks.n_spec_edges, 1),
             (
                 np.int32(self.nlev),
                 np.int32(int(normal_velocity.shape[-1])),
@@ -1672,7 +1672,7 @@ class CudaRegionalRuntimeV841:
         masks = self.masks
         self.kernels.launch(
             "regional_zero_speczone_w_v841",
-            max(masks.n_spec_cells, 1),
+            max((self.nlev + 1) * masks.n_spec_cells, 1),
             (
                 np.int32(self.nlev + 1),
                 np.int32(int(vertical_velocity.shape[-1])),
@@ -1699,7 +1699,8 @@ class CudaRegionalRuntimeV841:
         updates = self.cp.zeros_like(scalars)
         self.kernels.launch(
             "regional_bdy_adjust_scalars_compute_v841",
-            max(masks.n_relax_cells + masks.n_spec_cells, 1),
+            max(ntracers * self.nlev
+                * (masks.n_relax_cells + masks.n_spec_cells), 1),
             (
                 np.int32(ntracers), np.int32(self.nlev), np.int32(ncells),
                 np.int32(nedges), np.int32(mesh.max_edges),
@@ -1714,7 +1715,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_bdy_adjust_scalars_copyback_v841",
-            max(masks.n_nudged_cells, 1),
+            max(ntracers * self.nlev * masks.n_nudged_cells, 1),
             (
                 np.int32(ntracers), np.int32(self.nlev), np.int32(ncells),
                 np.int32(masks.n_nudged_cells), masks.nudged_cells,
@@ -1750,7 +1751,7 @@ class CudaRegionalRuntimeV841:
         ncells = int(theta_m.shape[-1])
         self.kernels.launch(
             "regional_reset_speczone_values_v841",
-            max(masks.n_spec_cells, 1),
+            max(self.nlev * masks.n_spec_cells, 1),
             (
                 np.int32(self.nlev), np.int32(ncells),
                 np.int32(masks.n_spec_cells), masks.spec_cells,
@@ -1762,7 +1763,8 @@ class CudaRegionalRuntimeV841:
         driving = self.driving.state_at("scalars", self.clock, dt_f32)
         self.kernels.launch(
             "regional_bdy_set_scalars_v841",
-            max(masks.n_spec_cells, 1),
+            max(self._driven_tracer_count(scalars) * self.nlev
+                * masks.n_spec_cells, 1),
             (
                 np.int32(self._driven_tracer_count(scalars)), np.int32(self.nlev),
                 np.int32(int(scalars.shape[-1])), np.int32(masks.n_spec_cells),

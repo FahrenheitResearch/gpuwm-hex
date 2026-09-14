@@ -461,8 +461,35 @@ class RegionalContract:
 #: other four classes carry this digest through the constant and record the
 #: lapse here rather than pretend a re-mint; their kernels launch the same
 #: compiled text they were minted on.
+#:
+#: RE-DERIVED 2026-09-14 for the element-parallel launch geometry of the
+#: level-independent dycore kernels (the hex performance campaign's kernels
+#: lane).  Six of the fourteen sources moved, and this time the CUDA source
+#: strings themselves moved: ``cuda_driver.py``, ``cuda_dynamics_v841.py``,
+#: ``cuda_horizontal.py``, ``cuda_horizontal_v841.py``,
+#: ``cuda_regional_v841.py`` and ``cuda_transport.py`` re-map every kernel
+#: whose levels are independent from one thread per owner looping over
+#: levels to one thread per ``(tracer, level, owner)`` element in a
+#: grid-stride loop, and ``cuda_regional_forecast_v841.py`` launches them
+#: per element; the momentum kernel gathers a once-per-run reference wind
+#: instead of evaluating cosf/sinf per neighbour per stage.  What did NOT
+#: move is the per-element arithmetic: each element runs the former loop
+#: body for its level with the same operands in the same order, the
+#: vertically implicit column solve keeps its per-column form, and the claim
+#: is measured rather than argued -- the cull's own contract deck at this
+#: digest (8 of 8 decks bitwise against the v8.4.1 CPU authority, 22 of 22
+#: kernels, dual run identical) and a per-kernel capture-and-replay of every
+#: re-mapped kernel against the previous translation units on the point
+#: cull's live state (``tools/kernel_element_ab.py``).  What was RE-MINTED
+#: at this digest: the point class ``graded-869m-dt5-z7``, on the 43,884-cell
+#: point cull, in the same session as a forecast of the untouched tree (its
+#: row says what was measured).  The other four classes carry this digest
+#: through the constant and record the lapse here rather than pretend a
+#: re-mint: their kernels now launch re-mapped text, and the evidence that
+#: the re-mapped text computes the minted bits is the deck and the per-kernel
+#: replay above, not a re-run of their own mints.
 MINTED_KERNEL_SET_SHA256 = (
-    "191af5f935bce84fa2b0becf3c6b04cfb9a821ba171a7be1c5468171909b062e"
+    "4723097abdc04be06d28f50d21ac5a993c08dc4e2a0c80b949d9f9733668c76e"
 )
 
 _DRY_MINT_CAVEAT = (
@@ -490,10 +517,11 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 dt_ms=20_000,
                 # Minted at the kernel set of the species-row generalization
                 # (the door lane's chain landed 2026-09-01), ce63c3dd...,
-                # measured at the mint; the host-path move of 2026-09-14
-                # carried it onto the tree's constant like every other row,
-                # and the constant's own note says what moved and what was
-                # re-minted.
+                # measured at the mint; the host-path move and the
+                # element-parallel re-map of 2026-09-14 each carried it onto
+                # the tree's constant like every other row, and the
+                # constant's own note says what moved, what was measured
+                # and what was re-minted.
                 kernel_set_sha256=MINTED_KERNEL_SET_SHA256,
             ),
             parent="generated graded parent: 3.75 km cap of 480 km radius at "

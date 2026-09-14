@@ -93,7 +93,7 @@ def test_the_named_forecast_pair_is_masked_digest_identical(receipts):
 SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     "src/hexcore/cuda_driver.py": {
         "recorded": "cb6477ef2fd02ad551e9b6c8af0724c94fc4d90bdc712fff1378d218662f5d04",
-        "current": "e22e0a991ef7734929a9f72a6b2a748d4fc36ee9d6da0bb815055748e87826fc",
+        "current": "cb914d37558d65fc20582a1257e75fec0599e05d2af41044f79a8d8166d628b4",
         "why": (
             "convection ruling, 2026-08-26: _v841_physics_cadences reports "
             "convection: None when no cumulus scheme is selected instead of "
@@ -125,7 +125,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_regional_forecast_v841.py": {
         "recorded": "3aa30ec3c3a11c1152a67d1fcbc8b2d470fd8ac2446ec8f7ec34906873421e88",
-        "current": "f9f752964d8e17c1fce00c072c4a0fc42cdd61725328c0e0921afafbaa48e6de",
+        "current": "4863e7600b4e1615e7d0e7729d8ab4aae70f155e5f66f9d2393206134b9557c5",
         "why": (
             "ANCHOR RE-KEYING, 2026-08-27: open_regional_forecast_v841 now "
             "measures the configuration CLASS off the run it is about to "
@@ -256,7 +256,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_dynamics_v841.py": {
         "recorded": "d050cabd1a1d199f014de0306f2987a68fb3184bf45291c57dafdb528569e9e7",
-        "current": "185da6e666b00ed54db956da418d289c041c1e1f9196c53e472afa932daa489b",
+        "current": "fed210892a9f2553d0f6ac49866251fab2d1d6b12d8397fa2066b6507095ff98",
         "why": (
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
@@ -271,7 +271,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_horizontal.py": {
         "recorded": "97faf0869a0a5ea9ebbc4c67b3c2d6c68cefdfa10dece73cd204d818962efde4",
-        "current": "fd09f38619ef3fe9b4b61e6665bd5dd440804f45af6c2ffebf9e47d05573d910",
+        "current": "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5",
         "why": (
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
@@ -287,7 +287,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_horizontal_v841.py": {
         "recorded": "3fc0b860ebd67dfed453617c348810964ea1110e782fe85db10283afb406e2fe",
-        "current": "037f094c55417bef3c3c9a9131d46195bed464122523e7de4f1e9fa286b75412",
+        "current": "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455",
         "why": (
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
@@ -303,7 +303,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_regional_v841.py": {
         "recorded": "b9f1dbdbbd123066f1fec2ebebbb664da7b4d5b62bce06a15f42dc96193a4ab5",
-        "current": "c5533fdce28149eab3a3929a5b3096a1f7cdd98b94bd35f309d7fb3d82652368",
+        "current": "a9ab181e06766953eab9f85e7529f2676358f631fee522b15490eafda95f4b16",
         "why": (
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
@@ -319,7 +319,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_transport.py": {
         "recorded": "44c1147fe06fdcd2eacb6198260918c02670297108e9533e850a239180ced850",
-        "current": "e2d3e173e39891e51b578805fc29787a893ed57d7475dc64f8cc49ac8ad36f92",
+        "current": "0cf68d55d00a094590d23ec0c7af6bae8595b2b954c2cdc8efc3e9eff49c112a",
         "why": (
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "

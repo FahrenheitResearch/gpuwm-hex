@@ -31,6 +31,20 @@ index, because a clamp changes a sum (``x + garbage`` becomes ``x + x``) and
 that difference reaches a live relaxation edge through the fourth-order
 filters.
 
+**Element-parallel launch geometry (2026-09-14).**  Every kernel whose
+levels are independent -- all of them but the vertically implicit column
+solve -- indexes a flat element ``(tracer, level, owner)`` with the owner
+fastest, through the ``REGIONAL_ELEMENT_LOOP`` grid-stride macro.  The body
+each element runs is the former per-owner loop body for that level, with
+its edge-slot accumulation in the same ascending order, so the value written
+for an element does not depend on which thread computed it or how many
+threads the launch had.  The forecast launches one thread per element (the
+relaxation-zone filters go from 10 and 28 blocks to hundreds, the
+edge-parallel kernels from under one wave of the card to many); the
+contract deck keeps launching one thread per owner and its bits are the
+proof that the geometry is not in the arithmetic.  Measured on the point
+cull (``docs/hex-point-hrrr.md``, the performance section).
+
 **No literal divisors.**  MEASURED on this stack (RTX 5070 Ti, NVRTC through
 CuPy 14.2.0, the port's own ``--std=c++17 --fmad=false`` options): NVRTC
 rewrites ``x / <float literal>`` into ``x * (1/<literal>)``, which is a
@@ -83,6 +97,15 @@ _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
 #define RCES(c,s,me) ((c)*(me) + (s))
 #define RADV(e,s,w) ((e)*(w) + (s))
 
+/* Every level-independent kernel below walks a flat element index with the
+   owner (cell, edge or zone slot) fastest and the level, then the tracer,
+   above it, in a grid-stride loop: any grid size computes every element, so
+   the contract deck's one-thread-per-owner launch and the forecast's
+   one-thread-per-element launch run the same per-element arithmetic. */
+#define REGIONAL_ELEMENT_LOOP(total) \
+    for (int element = blockDim.x * blockIdx.x + threadIdx.x; \
+         element < (total); element += gridDim.x * blockDim.x)
+
 /* ------------------------------------------------------------------ */
 /* the lateral-boundary pool: derivation, tendency, time interpolation  */
 /* ------------------------------------------------------------------ */
@@ -114,12 +137,12 @@ extern "C" __global__ void regional_lbc_rho_edge_v841(
     const int *cells_on_edge, const float *rho_zz, const float *lbc_u,
     float *rho_edge, float *ru)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    const int c0 = cells_on_edge[2 * edge];
-    const int c1 = cells_on_edge[2 * edge + 1];
-    const int present = (c0 >= 0 && c1 >= 0);
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
+        const int c0 = cells_on_edge[2 * edge];
+        const int c1 = cells_on_edge[2 * edge + 1];
+        const int present = (c0 >= 0 && c1 >= 0);
         const int i = RE2(k, edge, nedges);
         float value = rho_edge[i];
         if (present) {
@@ -167,10 +190,10 @@ extern "C" __global__ void regional_speczone_tend_cell_v841(
     const float *rt_driving_tend,
     float *tend_rho, float *tend_rt, float *tend_rw)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nspec) return;
-    const int cell = spec_cells[slot];
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nspec) {
+        const int slot = element % nspec;
+        const int k = element / nspec;
+        const int cell = spec_cells[slot];
         const int i = RC2(k, cell, ncells);
         tend_rho[i] = rho_driving_tend[i];
         tend_rt[i] = rt_driving_tend[i];
@@ -184,10 +207,10 @@ extern "C" __global__ void regional_speczone_tend_edge_v841(
     const int nlev, const int nedges, const int nspec,
     const int *spec_edges, const float *ru_driving_tend, float *tend_ru)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nspec) return;
-    const int edge = spec_edges[slot];
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nspec) {
+        const int slot = element % nspec;
+        const int k = element / nspec;
+        const int edge = spec_edges[slot];
         const int i = RE2(k, edge, nedges);
         tend_ru[i] = ru_driving_tend[i];
     }
@@ -208,14 +231,14 @@ extern "C" __global__ void regional_relaxzone_rayleigh_cell_v841(
     const float *rho_driving, const float *rt_driving,
     float *tend_rho, float *tend_rt)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nrelax) return;
-    const int cell = relax_cells[slot];
-    const float mask = (float)bdy_mask_cell[cell];
-    const float coef = mpas_div(
-        mpas_div(mpas_sub(mask, 1.0f), relax_zone),
-        mpas_mul(fifty_dt, mesh_scaling_cell[cell]));
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nrelax) {
+        const int slot = element % nrelax;
+        const int k = element / nrelax;
+        const int cell = relax_cells[slot];
+        const float mask = (float)bdy_mask_cell[cell];
+        const float coef = mpas_div(
+            mpas_div(mpas_sub(mask, 1.0f), relax_zone),
+            mpas_mul(fifty_dt, mesh_scaling_cell[cell]));
         const int i = RC2(k, cell, ncells);
         tend_rho[i] = mpas_sub(tend_rho[i], mpas_mul(
             coef, mpas_sub(rho_zz[i], rho_driving[i])));
@@ -231,14 +254,14 @@ extern "C" __global__ void regional_relaxzone_rayleigh_edge_v841(
     const float *mesh_scaling_edge, const float *ru,
     const float *ru_driving, float *tend_ru)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nrelax) return;
-    const int edge = relax_edges[slot];
-    const float mask = (float)bdy_mask_edge[edge];
-    const float coef = mpas_div(
-        mpas_div(mpas_sub(mask, 1.0f), relax_zone),
-        mpas_mul(fifty_dt, mesh_scaling_edge[edge]));
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nrelax) {
+        const int slot = element % nrelax;
+        const int k = element / nrelax;
+        const int edge = relax_edges[slot];
+        const float mask = (float)bdy_mask_edge[edge];
+        const float coef = mpas_div(
+            mpas_div(mpas_sub(mask, 1.0f), relax_zone),
+            mpas_mul(fifty_dt, mesh_scaling_edge[edge]));
         const int i = RE2(k, edge, nedges);
         tend_ru[i] = mpas_sub(tend_ru[i], mpas_mul(
             coef, mpas_sub(ru[i], ru_driving[i])));
@@ -259,15 +282,15 @@ extern "C" __global__ void regional_relaxzone_filter_cell_v841(
     const float *rho_driving, const float *rt_driving,
     float *tend_rho, float *tend_rt)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nrelax) return;
-    const int cell = relax_cells[slot];
-    const float mask = (float)bdy_mask_cell[cell];
-    const float filter_coef = mpas_div(
-        mpas_div(mpas_sub(mask, 1.0f), relax_zone),
-        mpas_mul(ten_dt, mesh_scaling_cell[cell]));
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nrelax) {
+        const int slot = element % nrelax;
+        const int k = element / nrelax;
+        const int cell = relax_cells[slot];
+        const float mask = (float)bdy_mask_cell[cell];
+        const float filter_coef = mpas_div(
+            mpas_div(mpas_sub(mask, 1.0f), relax_zone),
+            mpas_mul(ten_dt, mesh_scaling_cell[cell]));
+        const int count = n_edges_on_cell[cell];
         const int i = RC2(k, cell, ncells);
         float rt = tend_rt[i];
         float rho = tend_rho[i];
@@ -315,28 +338,28 @@ extern "C" __global__ void regional_relaxzone_filter_edge_v841(
     const float *inv_area_triangle, const float *ru,
     const float *ru_driving, float *tend_ru)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nrelax) return;
-    const int edge = relax_edges[slot];
-    const float mask = (float)bdy_mask_edge[edge];
-    const float dc = dc_edge[edge];
-    const float dc_squared = mpas_mul(dc, dc);
-    const float filter_coef = mpas_div(
-        mpas_div(mpas_mul(dc_squared, mpas_sub(mask, 1.0f)),
-                 relax_zone),
-        mpas_mul(ten_dt, mesh_scaling_edge[edge]));
-    const int cell1 = cells_on_edge[2 * edge];
-    const int cell2 = cells_on_edge[2 * edge + 1];
-    const int vertex1 = vertices_on_edge[2 * edge];
-    const int vertex2 = vertices_on_edge[2 * edge + 1];
-    const float r_dc = inv_dc_edge[edge];
-    const float r_dv = mpas_min(inv_dv_edge[edge],
-        mpas_mul(4.0f, inv_dc_edge[edge]));
-    const int count1 = n_edges_on_cell[cell1];
-    const int count2 = n_edges_on_cell[cell2];
-    const float inv_area1 = inv_area_cell[cell1];
-    const float inv_area2 = inv_area_cell[cell2];
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nrelax) {
+        const int slot = element % nrelax;
+        const int k = element / nrelax;
+        const int edge = relax_edges[slot];
+        const float mask = (float)bdy_mask_edge[edge];
+        const float dc = dc_edge[edge];
+        const float dc_squared = mpas_mul(dc, dc);
+        const float filter_coef = mpas_div(
+            mpas_div(mpas_mul(dc_squared, mpas_sub(mask, 1.0f)),
+                     relax_zone),
+            mpas_mul(ten_dt, mesh_scaling_edge[edge]));
+        const int cell1 = cells_on_edge[2 * edge];
+        const int cell2 = cells_on_edge[2 * edge + 1];
+        const int vertex1 = vertices_on_edge[2 * edge];
+        const int vertex2 = vertices_on_edge[2 * edge + 1];
+        const float r_dc = inv_dc_edge[edge];
+        const float r_dv = mpas_min(inv_dv_edge[edge],
+            mpas_mul(4.0f, inv_dc_edge[edge]));
+        const int count1 = n_edges_on_cell[cell1];
+        const int count2 = n_edges_on_cell[cell2];
+        const float inv_area1 = inv_area_cell[cell1];
+        const float inv_area2 = inv_area_cell[cell2];
         float divergence1 = 0.0f;
         float divergence2 = 0.0f;
         float vorticity1 = 0.0f;
@@ -396,10 +419,10 @@ extern "C" __global__ void regional_speczone_u_ru_v841(
     const float *u_driving, const float *ru_driving,
     float *normal_velocity, float *rho_u)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nspec) return;
-    const int edge = spec_edges[slot];
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nspec) {
+        const int slot = element % nspec;
+        const int k = element / nspec;
+        const int edge = spec_edges[slot];
         const int i = RE2(k, edge, nedges);
         normal_velocity[i] = u_driving[i];
         rho_u[i] = ru_driving[i];
@@ -412,10 +435,12 @@ extern "C" __global__ void regional_zero_speczone_w_v841(
     const int nrows, const int ncells, const int nspec,
     const int *spec_cells, float *w)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nspec) return;
-    const int cell = spec_cells[slot];
-    for (int k = 0; k < nrows; ++k) w[RC2(k, cell, ncells)] = 0.0f;
+    REGIONAL_ELEMENT_LOOP(nrows * nspec) {
+        const int slot = element % nspec;
+        const int k = element / nspec;
+        const int cell = spec_cells[slot];
+        w[RC2(k, cell, ncells)] = 0.0f;
+    }
 }
 
 /* atm_bdy_reset_speczone_values (F:8201-8244) plus the F:8238 perturbation
@@ -427,10 +452,10 @@ extern "C" __global__ void regional_reset_speczone_values_v841(
     const float *rho_theta_base,
     float *theta_m, float *rho_theta, float *rho_theta_perturbation)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nspec) return;
-    const int cell = spec_cells[slot];
-    for (int k = 0; k < nlev; ++k) {
+    REGIONAL_ELEMENT_LOOP(nlev * nspec) {
+        const int slot = element % nspec;
+        const int k = element / nspec;
+        const int cell = spec_cells[slot];
         const int i = RC2(k, cell, ncells);
         theta_m[i] = mpas_div(rt_driving[i], rho_driving[i]);
         rho_theta[i] = rt_driving[i];
@@ -457,49 +482,45 @@ extern "C" __global__ void regional_bdy_adjust_scalars_compute_v841(
     const float *inv_dc_edge, const float *scalars_new,
     const float *scalars_driving, float *updates)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot < nrelax) {
-        const int cell = relax_cells[slot];
-        const float mask = (float)bdy_mask_cell[cell];
-        const float filter_coef = mpas_div(
-            mpas_div(mpas_mul(dt_rk, mpas_sub(mask, 1.0f)),
-                     relax_zone),
-            mpas_mul(ten_dt, mesh_scaling_cell[cell]));
-        const float rayleigh_coef = mpas_div(filter_coef, relax_zone);
-        const int count = n_edges_on_cell[cell];
-        for (int t = 0; t < ntracers; ++t) {
-            for (int k = 0; k < nlev; ++k) {
-                const int i = RQ3(t, k, cell, nlev, ncells);
-                float column = scalars_new[i];
-                for (int s = 0; s < count; ++s) {
-                    const int edge = edges_on_cell[RCES(cell, s, max_edges)];
-                    float edge_sign = mpas_mul(
-                        edge_sign_on_cell[RCES(cell, s, max_edges)],
-                        dv_edge[edge]);
-                    edge_sign = mpas_mul(edge_sign, inv_dc_edge[edge]);
-                    edge_sign = mpas_mul(edge_sign, filter_coef);
-                    const int cell1 = cells_on_edge[2 * edge];
-                    const int cell2 = cells_on_edge[2 * edge + 1];
-                    const int i1 = RQ3(t, k, cell1, nlev, ncells);
-                    const int i2 = RQ3(t, k, cell2, nlev, ncells);
-                    column = mpas_add(column, mpas_mul(edge_sign, mpas_sub(
-                        mpas_sub(scalars_new[i2], scalars_driving[i2]),
-                        mpas_sub(scalars_new[i1], scalars_driving[i1]))));
-                }
-                column = mpas_sub(column, mpas_mul(rayleigh_coef,
-                    mpas_sub(scalars_new[i], scalars_driving[i])));
-                updates[i] = column;
+    const int nowners = nrelax + nspec;
+    REGIONAL_ELEMENT_LOOP(ntracers * nlev * nowners) {
+        const int slot = element % nowners;
+        const int rest = element / nowners;
+        const int k = rest % nlev;
+        const int t = rest / nlev;
+        if (slot < nrelax) {
+            const int cell = relax_cells[slot];
+            const float mask = (float)bdy_mask_cell[cell];
+            const float filter_coef = mpas_div(
+                mpas_div(mpas_mul(dt_rk, mpas_sub(mask, 1.0f)),
+                         relax_zone),
+                mpas_mul(ten_dt, mesh_scaling_cell[cell]));
+            const float rayleigh_coef = mpas_div(filter_coef, relax_zone);
+            const int count = n_edges_on_cell[cell];
+            const int i = RQ3(t, k, cell, nlev, ncells);
+            float column = scalars_new[i];
+            for (int s = 0; s < count; ++s) {
+                const int edge = edges_on_cell[RCES(cell, s, max_edges)];
+                float edge_sign = mpas_mul(
+                    edge_sign_on_cell[RCES(cell, s, max_edges)],
+                    dv_edge[edge]);
+                edge_sign = mpas_mul(edge_sign, inv_dc_edge[edge]);
+                edge_sign = mpas_mul(edge_sign, filter_coef);
+                const int cell1 = cells_on_edge[2 * edge];
+                const int cell2 = cells_on_edge[2 * edge + 1];
+                const int i1 = RQ3(t, k, cell1, nlev, ncells);
+                const int i2 = RQ3(t, k, cell2, nlev, ncells);
+                column = mpas_add(column, mpas_mul(edge_sign, mpas_sub(
+                    mpas_sub(scalars_new[i2], scalars_driving[i2]),
+                    mpas_sub(scalars_new[i1], scalars_driving[i1]))));
             }
-        }
-    }
-    const int spec_slot = slot - nrelax;
-    if (spec_slot >= 0 && spec_slot < nspec) {
-        const int cell = spec_cells[spec_slot];
-        for (int t = 0; t < ntracers; ++t) {
-            for (int k = 0; k < nlev; ++k) {
-                const int i = RQ3(t, k, cell, nlev, ncells);
-                updates[i] = scalars_driving[i];
-            }
+            column = mpas_sub(column, mpas_mul(rayleigh_coef,
+                mpas_sub(scalars_new[i], scalars_driving[i])));
+            updates[i] = column;
+        } else {
+            const int cell = spec_cells[slot - nrelax];
+            const int i = RQ3(t, k, cell, nlev, ncells);
+            updates[i] = scalars_driving[i];
         }
     }
 }
@@ -510,14 +531,14 @@ extern "C" __global__ void regional_bdy_adjust_scalars_copyback_v841(
     const int ntracers, const int nlev, const int ncells, const int nnudged,
     const int *nudged_cells, const float *updates, float *scalars_new)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nnudged) return;
-    const int cell = nudged_cells[slot];
-    for (int t = 0; t < ntracers; ++t) {
-        for (int k = 0; k < nlev; ++k) {
-            const int i = RQ3(t, k, cell, nlev, ncells);
-            scalars_new[i] = updates[i];
-        }
+    REGIONAL_ELEMENT_LOOP(ntracers * nlev * nnudged) {
+        const int slot = element % nnudged;
+        const int rest = element / nnudged;
+        const int k = rest % nlev;
+        const int t = rest / nlev;
+        const int cell = nudged_cells[slot];
+        const int i = RQ3(t, k, cell, nlev, ncells);
+        scalars_new[i] = updates[i];
     }
 }
 
@@ -527,14 +548,14 @@ extern "C" __global__ void regional_bdy_set_scalars_v841(
     const int ntracers, const int nlev, const int ncells, const int nspec,
     const int *spec_cells, const float *scalars_driving, float *scalars_new)
 {
-    const int slot = blockDim.x * blockIdx.x + threadIdx.x;
-    if (slot >= nspec) return;
-    const int cell = spec_cells[slot];
-    for (int t = 0; t < ntracers; ++t) {
-        for (int k = 0; k < nlev; ++k) {
-            const int i = RQ3(t, k, cell, nlev, ncells);
-            scalars_new[i] = scalars_driving[i];
-        }
+    REGIONAL_ELEMENT_LOOP(ntracers * nlev * nspec) {
+        const int slot = element % nspec;
+        const int rest = element / nspec;
+        const int k = rest % nlev;
+        const int t = rest / nlev;
+        const int cell = spec_cells[slot];
+        const int i = RQ3(t, k, cell, nlev, ncells);
+        scalars_new[i] = scalars_driving[i];
     }
 }
 
@@ -569,36 +590,30 @@ extern "C" __global__ void acoustic_ru_regional_v841(
     const float *rho_pp, const float *rtheta_pp,
     float *ru_p, float *ru_avg, int *invalid)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    const int c0 = cells_on_edge[2 * edge];
-    const int c1 = cells_on_edge[2 * edge + 1];
-    const float half = 0.5f;
-    const float one = 1.0f;
-    const float rcv = mpas_div(rgas, mpas_sub(cp, rgas));
-    const float csquared = mpas_mul(cp, rcv);
-    const float spec = spec_zone_mask_edge[edge];
-    if (small_step == 1) {
-        for (int k = 0; k < nlev; ++k) {
-            const int index = RE2(k, edge, nedges);
+    REGIONAL_ELEMENT_LOOP(nlev * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
+        const int c0 = cells_on_edge[2 * edge];
+        const int c1 = cells_on_edge[2 * edge + 1];
+        const float half = 0.5f;
+        const float one = 1.0f;
+        const float rcv = mpas_div(rgas, mpas_sub(cp, rgas));
+        const float csquared = mpas_mul(cp, rcv);
+        const float spec = spec_zone_mask_edge[edge];
+        const int index = RE2(k, edge, nedges);
+        if (small_step == 1) {
             const float value = mpas_mul(dts, tend_ru[index]);
             ru_p[index] = value;
             ru_avg[index] = value;
+            continue;
         }
-        return;
-    }
-    if (c0 < 0 || c1 < 0) {
-        if (spec != one) atomicExch(invalid, 1);
-        for (int k = 0; k < nlev; ++k) {
-            const int index = RE2(k, edge, nedges);
+        if (c0 < 0 || c1 < 0) {
+            if (spec != one) atomicExch(invalid, 1);
             ru_p[index] = mpas_add(ru_p[index],
                 mpas_mul(dts, tend_ru[index]));
             ru_avg[index] = mpas_add(ru_avg[index], ru_p[index]);
+            continue;
         }
-        return;
-    }
-    for (int k = 0; k < nlev; ++k) {
-        const int index = RE2(k, edge, nedges);
         const float normal = mpas_mul(mpas_sub(
             rtheta_pp[RC2(k, c1, ncells)],
             rtheta_pp[RC2(k, c0, ncells)]), inv_dc_edge[edge]);
@@ -636,19 +651,16 @@ extern "C" __global__ void acoustic_rs_ts_regional_v841(
     const float *tend_rho, const float *tend_rt,
     float *rs, float *ts)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    if (spec_zone_mask_cell[cell] != 0.0f) {
-        for (int k = 0; k < nlev; ++k) {
-            const int index = RC2(k, cell, ncells);
+    REGIONAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int index = RC2(k, cell, ncells);
+        if (spec_zone_mask_cell[cell] != 0.0f) {
             rs[index] = 0.0f;
             ts[index] = 0.0f;
+            continue;
         }
-        return;
-    }
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
-        const int index = RC2(k, cell, ncells);
+        const int count = n_edges_on_cell[cell];
         float r = 0.0f;
         float t = 0.0f;
         for (int slot = 0; slot < count; ++slot) {
@@ -800,112 +812,104 @@ extern "C" __global__ void transport_edge_values_regional_v841(
     const float *adv, const float *adv3,
     const int *n_adv, const int *adv_cells, float *edge_values)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    const int mask = bdy_mask_edge[edge];
-    if (mask > REGIONAL_N_RELAX_ZONE) {
-        /* Native leaves the scratch unwritten here (F:4764-4842) and no
-           updated cell reads it: an edge above nRelaxZone touches only
-           specified-zone cells, which this routine does not update.  A
-           device scratch buffer is uninitialized memory, so the lane is
-           written zero instead of left alone -- unread either way, but
-           byte-reproducible between two runs of the same configuration,
-           which "left alone" is not. */
-        for (int t = 0; t < ntracers; ++t) {
-            for (int k = 0; k < nlev; ++k) {
-                edge_values[RQE3(t, k, edge, nlev, nedges)] = 0.0f;
-            }
+    REGIONAL_ELEMENT_LOOP(ntracers * nlev * nedges) {
+        const int edge = element % nedges;
+        const int rest = element / nedges;
+        const int k = rest % nlev;
+        const int tracer = rest / nlev;
+        const int mask = bdy_mask_edge[edge];
+        if (mask > REGIONAL_N_RELAX_ZONE) {
+            /* Native leaves the scratch unwritten here (F:4764-4842) and no
+               updated cell reads it: an edge above nRelaxZone touches only
+               specified-zone cells, which this routine does not update.  A
+               device scratch buffer is uninitialized memory, so the lane is
+               written zero instead of left alone -- unread either way, but
+               byte-reproducible between two runs of the same configuration,
+               which "left alone" is not. */
+            edge_values[RQE3(tracer, k, edge, nlev, nedges)] = 0.0f;
+            continue;
         }
-        return;
-    }
-    if (mask >= REGIONAL_N_RELAX_ZONE - 1) {
-        const int cell1 = cells_on_edge[2 * edge];
-        const int cell2 = cells_on_edge[2 * edge + 1];
-        for (int k = 0; k < nlev; ++k) {
+        if (mask >= REGIONAL_N_RELAX_ZONE - 1) {
+            const int cell1 = cells_on_edge[2 * edge];
+            const int cell2 = cells_on_edge[2 * edge + 1];
             const float vel = velocity[RE2(k, edge, nedges)];
             const float direction = mpas_copysign(0.5f, vel);
             const float u_positive = mpas_mul(
                 dv_edge[edge], mpas_abs(mpas_add(direction, 0.5f)));
             const float u_negative = mpas_mul(
                 dv_edge[edge], mpas_abs(mpas_sub(direction, 0.5f)));
-            for (int t = 0; t < ntracers; ++t) {
-                edge_values[RQE3(t, k, edge, nlev, nedges)] = mpas_add(
-                    mpas_mul(u_positive,
-                        stage[RQ3(t, k, cell1, nlev, ncells)]),
-                    mpas_mul(u_negative,
-                        stage[RQ3(t, k, cell2, nlev, ncells)]));
-            }
+            edge_values[RQE3(tracer, k, edge, nlev, nedges)] = mpas_add(
+                mpas_mul(u_positive,
+                    stage[RQ3(tracer, k, cell1, nlev, ncells)]),
+                mpas_mul(u_negative,
+                    stage[RQ3(tracer, k, cell2, nlev, ncells)]));
+            continue;
         }
-        return;
-    }
-    /* The full branch is the released transport_edge_values body verbatim,
-       guarded fallback included, so a non-boundary edge produces the same
-       bits as the global translation unit.  The contract deck proves that
-       claim rather than asserting it. */
-    for (int tracer = 0; tracer < ntracers; ++tracer) {
-        for (int k = 0; k < nlev; ++k) {
-            float value = 0.0f;
-            const float velocity_sign = mpas_copysign(
-                1.0f, velocity[RE2(k, edge, nedges)]);
-            bool ftz_sensitive = false;
+        /* The full branch is the released transport_edge_values body verbatim,
+           guarded fallback included, so a non-boundary edge produces the same
+           bits as the global translation unit.  The contract deck proves that
+           claim rather than asserting it. */
+        float value = 0.0f;
+        const float velocity_sign = mpas_copysign(
+            1.0f, velocity[RE2(k, edge, nedges)]);
+        bool ftz_sensitive = false;
+        for (int slot = 0; slot < n_adv[edge]; ++slot) {
+            const int cell = adv_cells[RADV(edge, slot, width)];
+            const float base_weight = adv[RADV(edge, slot, width)];
+            const float third_weight = adv3[RADV(edge, slot, width)];
+            const float stage_value = stage[RQ3(
+                tracer, k, cell, nlev, ncells)];
+            const float correction = coefficient * velocity_sign
+                * third_weight;
+            const float weight = base_weight + correction;
+            const float contribution = weight * stage_value;
+            const float next = value + contribution;
+#if MPAS_FTZ_FALLBACK_ENABLED
+            const unsigned int coefficient_mag =
+                mpas_f32_magnitude_bits(coefficient);
+            const unsigned int third_mag =
+                mpas_f32_magnitude_bits(third_weight);
+            const unsigned int correction_mag =
+                mpas_f32_magnitude_bits(correction);
+            const unsigned int base_mag =
+                mpas_f32_magnitude_bits(base_weight);
+            const unsigned int weight_mag =
+                mpas_f32_magnitude_bits(weight);
+            const unsigned int stage_mag =
+                mpas_f32_magnitude_bits(stage_value);
+            const unsigned int contribution_mag =
+                mpas_f32_magnitude_bits(contribution);
+            const unsigned int value_mag =
+                mpas_f32_magnitude_bits(value);
+            const unsigned int next_mag = mpas_f32_magnitude_bits(next);
+            ftz_sensitive = ftz_sensitive
+                || (base_mag != 0u && (base_mag >> 23) == 0u)
+                || (third_mag != 0u && (third_mag >> 23) == 0u)
+                || (stage_mag != 0u && (stage_mag >> 23) == 0u)
+                || (correction_mag == 0u && coefficient_mag != 0u
+                    && third_mag != 0u)
+                || (weight_mag == 0u && base_mag != correction_mag
+                    && base_mag != 0u && correction_mag != 0u)
+                || (contribution_mag == 0u && weight_mag != 0u
+                    && stage_mag != 0u)
+                || (next_mag == 0u && value_mag != contribution_mag
+                    && value_mag != 0u && contribution_mag != 0u);
+#endif
+            value = next;
+        }
+        if (ftz_sensitive) {
+            value = 0.0f;
             for (int slot = 0; slot < n_adv[edge]; ++slot) {
                 const int cell = adv_cells[RADV(edge, slot, width)];
-                const float base_weight = adv[RADV(edge, slot, width)];
-                const float third_weight = adv3[RADV(edge, slot, width)];
-                const float stage_value = stage[RQ3(
-                    tracer, k, cell, nlev, ncells)];
-                const float correction = coefficient * velocity_sign
-                    * third_weight;
-                const float weight = base_weight + correction;
-                const float contribution = weight * stage_value;
-                const float next = value + contribution;
-#if MPAS_FTZ_FALLBACK_ENABLED
-                const unsigned int coefficient_mag =
-                    mpas_f32_magnitude_bits(coefficient);
-                const unsigned int third_mag =
-                    mpas_f32_magnitude_bits(third_weight);
-                const unsigned int correction_mag =
-                    mpas_f32_magnitude_bits(correction);
-                const unsigned int base_mag =
-                    mpas_f32_magnitude_bits(base_weight);
-                const unsigned int weight_mag =
-                    mpas_f32_magnitude_bits(weight);
-                const unsigned int stage_mag =
-                    mpas_f32_magnitude_bits(stage_value);
-                const unsigned int contribution_mag =
-                    mpas_f32_magnitude_bits(contribution);
-                const unsigned int value_mag =
-                    mpas_f32_magnitude_bits(value);
-                const unsigned int next_mag = mpas_f32_magnitude_bits(next);
-                ftz_sensitive = ftz_sensitive
-                    || (base_mag != 0u && (base_mag >> 23) == 0u)
-                    || (third_mag != 0u && (third_mag >> 23) == 0u)
-                    || (stage_mag != 0u && (stage_mag >> 23) == 0u)
-                    || (correction_mag == 0u && coefficient_mag != 0u
-                        && third_mag != 0u)
-                    || (weight_mag == 0u && base_mag != correction_mag
-                        && base_mag != 0u && correction_mag != 0u)
-                    || (contribution_mag == 0u && weight_mag != 0u
-                        && stage_mag != 0u)
-                    || (next_mag == 0u && value_mag != contribution_mag
-                        && value_mag != 0u && contribution_mag != 0u);
-#endif
-                value = next;
+                const float weight = mpas_add(
+                    adv[RADV(edge, slot, width)],
+                    mpas_mul(mpas_mul(coefficient, velocity_sign),
+                        adv3[RADV(edge, slot, width)]));
+                value = mpas_add(value, mpas_mul(weight,
+                    stage[RQ3(tracer, k, cell, nlev, ncells)]));
             }
-            if (ftz_sensitive) {
-                value = 0.0f;
-                for (int slot = 0; slot < n_adv[edge]; ++slot) {
-                    const int cell = adv_cells[RADV(edge, slot, width)];
-                    const float weight = mpas_add(
-                        adv[RADV(edge, slot, width)],
-                        mpas_mul(mpas_mul(coefficient, velocity_sign),
-                            adv3[RADV(edge, slot, width)]));
-                    value = mpas_add(value, mpas_mul(weight,
-                        stage[RQ3(tracer, k, cell, nlev, ncells)]));
-                }
-            }
-            edge_values[RQE3(tracer, k, edge, nlev, nedges)] = value;
         }
+        edge_values[RQE3(tracer, k, edge, nlev, nedges)] = value;
     }
 }
 
@@ -923,36 +927,36 @@ extern "C" __global__ void transport_standard_finish_regional_v841(
     const float *old, const float *rho_old, const float *target_density,
     const float *source, const float *stage, float *output)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int keep = bdy_mask_cell[cell] > REGIONAL_N_RELAX_ZONE;
-    for (int tracer = 0; tracer < ntracers; ++tracer) {
-        for (int k = 0; k < nlev; ++k) {
-            const int index = RQ3(tracer, k, cell, nlev, ncells);
-            if (keep) {
-                output[index] = stage[index];
-                continue;
-            }
-            float horizontal = 0.0f;
-            for (int slot = 0; slot < n_edges_on_cell[cell]; ++slot) {
-                const int edge = edges_on_cell[RCES(cell, slot, max_edges)];
-                const float sign = -acoustic_sign[RCES(cell, slot, max_edges)];
-                horizontal = mpas_add(horizontal, mpas_mul(mpas_mul(
-                    sign, velocity[RE2(k, edge, nedges)]),
-                    edge_values[RQE3(tracer, k, edge, nlev, nedges)]));
-            }
-            const float tendency = mpas_add(
-                mpas_mul(horizontal, inv_area_cell[cell]), source[index]);
-            const float vertical = mpas_mul(rdzw[k], mpas_sub(
-                vertical_flux[RQI3(tracer, k + 1, cell, nlev, ncells)],
-                vertical_flux[RQI3(tracer, k, cell, nlev, ncells)]));
-            const float numerator = mpas_add(
-                mpas_mul(old[index], rho_old[RC2(k, cell, ncells)]),
-                mpas_mul(dt, mpas_sub(tendency, vertical)));
-            const float rho_new_inv = mpas_div(
-                1.0f, target_density[RC2(k, cell, ncells)]);
-            output[index] = mpas_mul(numerator, rho_new_inv);
+    REGIONAL_ELEMENT_LOOP(ntracers * nlev * ncells) {
+        const int cell = element % ncells;
+        const int rest = element / ncells;
+        const int k = rest % nlev;
+        const int tracer = rest / nlev;
+        const int keep = bdy_mask_cell[cell] > REGIONAL_N_RELAX_ZONE;
+        const int index = RQ3(tracer, k, cell, nlev, ncells);
+        if (keep) {
+            output[index] = stage[index];
+            continue;
         }
+        float horizontal = 0.0f;
+        for (int slot = 0; slot < n_edges_on_cell[cell]; ++slot) {
+            const int edge = edges_on_cell[RCES(cell, slot, max_edges)];
+            const float sign = -acoustic_sign[RCES(cell, slot, max_edges)];
+            horizontal = mpas_add(horizontal, mpas_mul(mpas_mul(
+                sign, velocity[RE2(k, edge, nedges)]),
+                edge_values[RQE3(tracer, k, edge, nlev, nedges)]));
+        }
+        const float tendency = mpas_add(
+            mpas_mul(horizontal, inv_area_cell[cell]), source[index]);
+        const float vertical = mpas_mul(rdzw[k], mpas_sub(
+            vertical_flux[RQI3(tracer, k + 1, cell, nlev, ncells)],
+            vertical_flux[RQI3(tracer, k, cell, nlev, ncells)]));
+        const float numerator = mpas_add(
+            mpas_mul(old[index], rho_old[RC2(k, cell, ncells)]),
+            mpas_mul(dt, mpas_sub(tendency, vertical)));
+        const float rho_new_inv = mpas_div(
+            1.0f, target_density[RC2(k, cell, ncells)]);
+        output[index] = mpas_mul(numerator, rho_new_inv);
     }
 }
 """
@@ -1270,7 +1274,7 @@ class DeviceRegionalDrivingState:
         ru = cp.empty(self._edge_shape, dtype=cp.float32)
         self._kernels.launch(
             "regional_lbc_rho_edge_v841",
-            self.nedges,
+            self.nlev * self.nedges,
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
