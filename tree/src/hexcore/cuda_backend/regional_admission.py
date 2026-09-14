@@ -673,6 +673,18 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "speed ladder; the class inherits the graded-parent lane's "
                 "finding that the geometry is not in the key, and pays for "
                 "that inheritance with the cull's own contract deck below.  "
+                "RE-MINTED 2026-09-14 at the kernel set the step's host-path "
+                "change produced (three host sources moved, no CUDA source "
+                "string): on the 43,884-cell 937.5 m point cull of a parent "
+                "generated at 41.95 N 94.79 W, HRRR 15Z init and hourly "
+                "boundaries, 720 steps of 5 s, the hostpath tree ran twice in "
+                "two processes on node-2's RTX 5090 (215.3 s and "
+                "214.3 s of integration) and both history frames agree "
+                "byte for byte -- and agree byte for byte with the untouched "
+                "0.3.0 tree's run of the same hour in the same session, so the "
+                "kernel set moved and the published bytes did not; the cull's "
+                "own contract deck passed at this digest (8 of 8 bitwise, 22 "
+                "of 22 kernels, dual run identical).  "
                 + _DRY_MINT_CAVEAT
             ),
         ),
