@@ -149,7 +149,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/dt_admission.py": (
-            "0a6456699b32f1519654ba9838556f2bf9ebe8e5696b56123e594a26f6311e7f"
+            "914e83b5ffab3cfda246a4674fb2e2bde42594a79395fbd957d9da0eb9575e2a"
         ),
         # New pin (surface/PBL cadence, 2026-08-26): this module decides
         # config_bldt_seconds, a knob the frozen registry keys on; the
@@ -160,7 +160,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/pbl_cadence.py": (
-            "1f7f5b4a41b7004ec1b9fd9ec1091a00997d8d6dbc611f6e6695ae0ca3d2a8ce"
+            "bfe7c8d3113fd0735ac77cf9718901f8e295fed18b5b3d44e4214036e7883ba1"
         ),
         # Re-frozen 2026-08-28 for the 2.5.8 engine repin: 77f831b rewrote
         # this module's own ARWEN_SOURCE_MANIFEST/ARWEN_BUILD_COMMIT and did

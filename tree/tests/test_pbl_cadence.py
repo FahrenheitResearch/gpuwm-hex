@@ -1,36 +1,36 @@
-"""The surface/PBL cadence: welded by default, holdable as an A/B instrument.
+"""The surface/PBL cadence: welded by default, selectable by the second.
 
-Two campaigns landed on 2026-08-26 and between them they define one open
-question.  ``evidence/dt-anchors-20260826/RECEIPT.md`` measured |w| max
-running 1.680 m/s at the proven 120 s, 7.511 at 20 s and 102.670 at 5 s on
-the 120 km global mesh ``x1.40962``, every step finite and the arms
-byte-identical -- a different SOLUTION rather than an unstable one.  It
-named Grell-Freitas' call rate as the candidate and declined the
-attribution.  ``evidence/convection-off-20260826/RECEIPT.md`` then
-eliminated the closure by measurement: with convection off entirely, 5 s
-still reaches |w| max 93.957 and ``theta_m`` max is 887.3353 K with the
-scheme and 887.3353 K without it, to every printed digit.
+``config_bldt_seconds`` is welded to ``config_dt`` by default -- the native
+x4 v8.4.1 reference ran ``bldt = dt`` -- and at the 5 s a sub-kilometre
+mesh declares that is 720 surface/PBL calls an hour against the proven
+configuration's 30.  ``--pbl-cadence SECONDS`` calls the stack once every
+``SECONDS / dt`` steps and holds its tendency on the steps between (the
+engine's own positive-``bldt`` path).  It changes the forecast, so it is
+SELECTABLE and never silently the default -- the project's rule for modes
+that change results -- and the welded default moves only on a measured
+recommendation.
 
-**The call-rate shape of the hypothesis survived; only its subject was
-wrong.**  ``config_bldt_seconds`` is welded to ``config_dt`` exactly as
-``cudt`` is, and nobody had named it: at 5 s the surface/PBL stack runs 720
-times an hour against the proven 30, the identical 24x.  This module is the
-instrument that tests it -- hold the cadence at 120 s while ``dt`` shrinks.
+**The refusal.**  A cadence that is not a whole number of steps is refused
+on the host, naming both numbers, the multiples of ``dt`` on either side and
+the way out, before a mesh is bound or a card is reserved.
 
-**The weld is the default and stays the default.**  There is no fix here, so
-"fixed means default" has nothing to fire on.  ``auto`` is the proven
-configuration and changes no existing run; an explicit cadence records
-itself as an A/B arm and never as a remedy.
-
-**A held cadence is a NEW configuration, not a mutation of the proven one.**
-How often a scheme is CALLED is part of what an anchor's forecasts measured,
-so the registry keys on the cadence and a held-cadence run earns its own row
-rather than borrowing the welded one's evidence.
+**The admission.**  A held cadence at an anchored ``(dt, cumulus)`` is
+admitted through a row DERIVED from the welded anchor: the dycore half is
+the welded row's own (the outer step, its schedule and its byte-identical
+dual run are properties of the timestep), the host half is re-minted for the
+held cadence, and the physics band is stamped NOT MEASURED rather than
+borrowed.  The derived row has its own registry key, so the breakage the key
+fragment prevents -- a held run quoting a band measured at 24x its own call
+rate -- cannot recur; a registered held row still wins the exact lookup; and
+a held cadence at an unanchored timestep is refused as the welded run would
+be.
 
 Everything here runs on a CPU-only box.
 """
 
 from __future__ import annotations
+
+import dataclasses
 
 import pytest
 
@@ -47,38 +47,82 @@ def test_a_bare_decision_is_the_weld_and_needs_no_flag():
     assert decision["held"] is False
     assert decision["surface_pbl_seconds"] == 120.0
     assert decision["steps_between_calls"] == 1
+    assert decision["steps_held_between_calls"] == 0
     assert decision["calls_per_hour"] == 30.0
+    assert decision["default"] == pbl_cadence.WELDED
 
 
-def test_the_weld_follows_dt_down_which_is_the_whole_problem():
+def test_the_weld_follows_dt_down_which_is_the_whole_cost():
     """The proven semantics call the stack 24x more often at 5 s."""
 
     for dt, rate in ((120.0, 30.0), (20.0, 180.0), (5.0, 720.0)):
         decision = pbl_cadence.pbl_cadence_decision(dt_seconds=dt)
         assert decision["surface_pbl_seconds"] == dt
         assert decision["calls_per_hour"] == rate
+        assert decision["calls_in_first_hour"] == rate
         assert decision["steps_between_calls"] == 1
     assert 720.0 / 30.0 == 24.0
 
 
 def test_holding_the_cadence_restores_the_proven_call_rate():
-    """The instrument's whole point: the same 30 calls an hour at any dt."""
-
     for dt, steps in ((20.0, 6), (5.0, 24)):
         decision = pbl_cadence.pbl_cadence_decision(dt_seconds=dt, requested="120")
         assert decision["source"] == "explicit"
         assert decision["held"] is True
         assert decision["surface_pbl_seconds"] == 120.0
         assert decision["steps_between_calls"] == steps
+        assert decision["steps_held_between_calls"] == steps - 1
         assert decision["calls_per_hour"] == 30.0
         assert decision["calls_per_hour_welded"] == 3600.0 / dt
 
 
-def test_an_explicit_arm_says_so_and_is_never_the_remedy():
+def test_the_campaign_cadences_at_five_seconds():
+    """The 2026-09-13 arms: 30, 60 and 120 s at the point mesh's 5 s."""
+
+    for seconds, steps, first_hour in ((30, 6, 121), (60, 12, 61), (120, 24, 31)):
+        decision = pbl_cadence.pbl_cadence_decision(
+            dt_seconds=5.0, requested=str(seconds)
+        )
+        assert decision["steps_between_calls"] == steps
+        assert decision["calls_per_hour"] == 3600.0 / seconds
+        assert decision["calls_in_first_hour"] == first_hour
+
+
+def test_an_explicit_cadence_records_itself_as_a_selection_never_the_default():
     decision = pbl_cadence.pbl_cadence_decision(dt_seconds=5.0, requested="120")
     assert decision["source"] == "explicit"
-    assert "never a remedy" in decision["note"]
-    assert "A/B arm" in decision["note"]
+    assert decision["selectable"] is True
+    assert decision["default"] == "auto"
+    assert "selectable configuration" in decision["note"]
+    assert "the default stays the weld" in decision["note"]
+    assert decision["schema"] == pbl_cadence.SCHEMA
+
+
+def test_the_decision_names_every_physics_call_rate_the_run_uses():
+    """Radiation is on its own fixed cadence and was never welded to dt; the
+    receipt records it beside the surface/PBL one so nothing is left to
+    divide."""
+
+    decision = pbl_cadence.pbl_cadence_decision(dt_seconds=5.0, requested="60")
+    assert decision["radiation_seconds"] == 600.0
+    assert decision["radiation_steps_between_calls"] == 120
+    assert decision["radiation_calls_per_hour"] == 6.0
+    assert "applied unchanged" in decision["hold_semantics"]
+    assert "Radiation keeps its own cadence" in decision["hold_semantics"]
+
+
+def test_the_engine_call_count_is_one_more_than_the_steady_rate_when_held():
+    """``_surface_pbl_step_due`` fires on step 1 AND on every multiple of
+    stepbl, so a held run makes one call more than executed/stepbl."""
+
+    calls = pbl_cadence.calls_in_steps
+    assert calls(steps_between_calls=1, executed_steps=720) == 720
+    assert calls(steps_between_calls=24, executed_steps=720) == 31
+    assert calls(steps_between_calls=24, executed_steps=23) == 1
+    assert calls(steps_between_calls=24, executed_steps=24) == 2
+    assert calls(steps_between_calls=6, executed_steps=0) == 0
+    with pytest.raises(PblCadenceError):
+        calls(steps_between_calls=0, executed_steps=10)
 
 
 def test_the_gate_carries_the_measurement_that_produced_it():
@@ -91,16 +135,28 @@ def test_the_gate_carries_the_measurement_that_produced_it():
 
 
 # ---------------------------------------------------------------------------
-# an incommensurate cadence is refused on the host, naming both numbers
+# an incommensurate cadence is refused on the host, naming both numbers,
+# the multiples on either side and the way out
 # ---------------------------------------------------------------------------
-def test_a_cadence_that_is_not_a_whole_number_of_steps_is_refused():
+def test_a_cadence_that_is_not_a_whole_number_of_steps_is_refused_by_name():
     """THE BREAKAGE: the sealed constructor asks this AFTER the card is
-    reserved, which is the wrong place to learn it."""
+    reserved, which is the wrong place to learn it; and rounding silently
+    would run a cadence the receipt did not name."""
 
     with pytest.raises(PblCadenceError) as caught:
         pbl_cadence.pbl_cadence_decision(dt_seconds=7.0, requested="120")
     message = str(caught.value)
-    assert "120" in message and "7" in message
+    assert "--pbl-cadence 120" in message
+    assert "not a whole number of 7 s steps" in message
+    assert "119 s and 126 s" in message
+    assert "'auto' is the welded default" in message
+    assert "nothing is rounded" in message
+
+
+def test_the_refusal_never_rounds_below_one_step():
+    with pytest.raises(PblCadenceError) as caught:
+        pbl_cadence.pbl_cadence_decision(dt_seconds=5.0, requested="3")
+    assert "5 s and 5 s" in str(caught.value)
 
 
 @pytest.mark.parametrize("bad", ["0", "-5", "nonsense", "", "1e400"])
@@ -113,10 +169,11 @@ def test_a_request_that_is_neither_auto_nor_seconds_is_refused(bad):
 # the registry keys on the configuration, cadence included
 # ---------------------------------------------------------------------------
 def test_every_registered_anchor_is_a_welded_row():
-    """The change moved no existing row: all seven were earned welded."""
+    """No registered row was earned held: every one is welded."""
 
     for key, anchor in dt_admission.ADMITTED_TIMESTEPS.items():
         assert anchor.surface_pbl_seconds == anchor.dt_seconds
+        assert anchor.derived is False
         assert key.endswith("|surface_pbl=dt")
         assert key == dt_admission.dt_key(
             anchor.dt_seconds, anchor.cumulus_scheme, anchor.surface_pbl_seconds
@@ -134,84 +191,135 @@ def test_a_held_cadence_is_a_different_key_from_the_welded_one():
 
 
 def test_spelling_the_weld_explicitly_is_the_same_configuration():
-    """bldt == dt IS the weld, however it was written."""
-
     assert dt_admission.dt_key(5.0, None, 5.0) == dt_admission.dt_key(5.0, None)
     assert dt_admission.surface_pbl_key(5.0, 5.0) == "dt"
     assert dt_admission.surface_pbl_key(5.0, None) == "dt"
 
 
-def test_a_held_cadence_at_an_anchored_timestep_holds_no_anchor():
-    assert dt_admission.admitted_timestep(5.0, None) is not None
-    assert dt_admission.admitted_timestep(5.0, None, 120.0) is None
-
-
-def test_the_roster_names_a_held_row_rather_than_hiding_it():
-    """A roster reading "5 s (convection off)" twice would be a trap."""
-
-    anchor = dt_admission.admitted_timestep(5.0, None)
-    held = dataclasses_replace(anchor, surface_pbl_seconds=120.0)
-    assert "surface/PBL held at 120 s" in dt_admission.anchor_label(held)
-    assert "surface/PBL held" not in dt_admission.anchor_label(anchor)
-
-
-def dataclasses_replace(anchor, **changes):
-    import dataclasses
-
-    return dataclasses.replace(anchor, **changes)
-
-
 # ---------------------------------------------------------------------------
-# the refusals, and the near-miss diagnostic the widening had to keep
+# a held cadence at an anchored timestep is admitted through a DERIVED row
 # ---------------------------------------------------------------------------
-def test_the_refusal_keeps_the_near_miss_sentence():
-    """Widening the key must not turn "wrong cadence" into "unknown dt".
+def test_a_held_cadence_at_an_anchored_timestep_is_admitted_on_the_welded_dycore_evidence():
+    welded = dt_admission.admitted_timestep(5.0, None)
+    assert welded is not None and welded.derived is False
+    held = dt_admission.admitted_timestep(5.0, None, 120.0)
+    assert held is not None
+    assert held.derived is True
+    assert held.derived_from == dt_admission.dt_key(5.0, None)
+    assert held.surface_pbl_seconds == 120.0
+    assert held.dt_seconds == welded.dt_seconds
+    assert held.radiation_seconds == welded.radiation_seconds
+    assert held.cumulus_scheme == welded.cumulus_scheme
+    assert held.meshes == welded.meshes
+    assert held.card == welded.card
+    # The dycore half is the welded row's own and says so.
+    assert welded.integration_anchor in held.integration_anchor
+    assert "properties of the timestep" in held.integration_anchor
+    # The host half is re-minted for the held cadence.
+    assert "stepbl 24" in held.schedule_receipt
+    assert "30 surface/PBL calls an hour" in held.schedule_receipt
+    # The physics band is NOT borrowed.
+    assert held.physics_health.startswith("NOT MEASURED")
+    assert welded.physics_health in held.physics_health
+    assert "DERIVED from the welded row" in held.basis
 
-    A caller who typo'd a cadence wants the row it nearly matched, not a
-    refusal reading as though the timestep itself were unrecognised.
-    """
 
+def test_a_derived_row_is_never_a_registered_one():
+    """The exact lookup a mint and the mesh-row override ask must not see
+    it, or a held cadence would read as already earned and could never be
+    minted."""
+
+    assert dt_admission.registered_anchor(5.0, None, 120.0) is None
+    assert dt_admission.registered_anchor(5.0, None) is not None
+    assert dt_admission.dt_key(5.0, None, 120.0) not in dt_admission.ADMITTED_TIMESTEPS
+
+
+def test_a_held_cadence_at_an_unanchored_timestep_is_refused_as_the_welded_run_would_be():
+    assert dt_admission.admitted_timestep(3.0, None) is None
+    assert dt_admission.derived_held_cadence_anchor(3.0, None, 120.0) is None
+    assert dt_admission.admitted_timestep(3.0, None, 120.0) is None
     with pytest.raises(dt_admission.DtAdmissionError) as caught:
         dt_admission.require_dt_anchor(
-            120.0,
-            radiation_seconds=600.0,
-            surface_pbl_seconds=600.0,
-            cumulus_seconds=120.0,
-        )
-    message = str(caught.value)
-    assert "at physics cadences this run does not use" in message
-    assert "--pbl-cadence 600" in message
-
-
-def test_the_refusal_names_the_remedy_because_the_cadence_is_holdable():
-    with pytest.raises(dt_admission.DtAdmissionError) as caught:
-        dt_admission.require_dt_anchor(
-            5.0,
+            3.0,
             radiation_seconds=600.0,
             surface_pbl_seconds=120.0,
             cumulus_seconds=None,
             cumulus_scheme=None,
         )
-    assert "--pbl-cadence 120" in str(caught.value)
+    message = str(caught.value)
+    assert "holds no timestep anchor" in message
+    assert "derives its row from the WELDED anchor" in message
 
 
-def test_the_unanchored_refusal_names_the_held_cadence():
+def test_a_derived_row_refuses_an_incommensurate_cadence_rather_than_rounding():
+    """A refusal, not an absence: the lookup names both numbers instead of
+    answering "no row" as though the timestep were unknown."""
+
+    with pytest.raises(dt_admission.DtAdmissionError) as caught:
+        dt_admission.derived_held_cadence_anchor(120.0, "gf", 500.0)
+    assert "500 s is not a positive integer multiple of dt=120 s" in str(caught.value)
+    with pytest.raises(dt_admission.DtAdmissionError):
+        dt_admission.admitted_timestep(120.0, "gf", 500.0)
+
+
+def test_require_dt_anchor_admits_the_held_cadence_and_still_refuses_radiation():
+    anchor = dt_admission.require_dt_anchor(
+        5.0,
+        radiation_seconds=600.0,
+        surface_pbl_seconds=120.0,
+        cumulus_seconds=None,
+        cumulus_scheme=None,
+    )
+    assert anchor.derived is True
+    with pytest.raises(dt_admission.DtAdmissionError) as caught:
+        dt_admission.require_dt_anchor(
+            5.0,
+            radiation_seconds=1200.0,
+            surface_pbl_seconds=120.0,
+            cumulus_seconds=None,
+            cumulus_scheme=None,
+        )
+    assert "at physics cadences this run does not use" in str(caught.value)
+
+
+def test_a_registered_held_row_wins_the_exact_lookup(monkeypatch):
+    welded = dt_admission.admitted_timestep(5.0, None)
+    earned = dataclasses.replace(
+        welded, surface_pbl_seconds=120.0, admitted_on="2099-01-01"
+    )
+    key = dt_admission.dt_key(5.0, None, 120.0)
+    monkeypatch.setattr(
+        dt_admission,
+        "ADMITTED_TIMESTEPS",
+        {**dt_admission.ADMITTED_TIMESTEPS, key: earned},
+    )
+    found = dt_admission.admitted_timestep(5.0, None, 120.0)
+    assert found is earned
+    assert found.derived is False
+
+
+def test_the_roster_names_a_held_row_and_says_when_it_is_derived():
+    held = dt_admission.admitted_timestep(5.0, None, 120.0)
+    label = dt_admission.anchor_label(held)
+    assert "surface/PBL held at 120 s" in label
+    assert "derived from the welded row" in label
+    welded = dt_admission.admitted_timestep(5.0, None)
+    assert "surface/PBL held" not in dt_admission.anchor_label(welded)
+    earned = dataclasses.replace(welded, surface_pbl_seconds=120.0)
+    assert "derived" not in dt_admission.anchor_label(earned)
+
+
+def test_the_unanchored_refusal_names_the_held_cadence_and_the_way_out():
     message = dt_admission.unanchored_refusal(3.0, None, 120.0)
     assert "surface/PBL cadence held at 120 s" in message
+    assert "--pbl-cadence 120" in message
 
 
 # ---------------------------------------------------------------------------
-# the candidate mint can earn the held row -- the guard that used to block it
+# the candidate mint can still EARN the held row
 # ---------------------------------------------------------------------------
-def test_a_candidate_mint_admits_a_held_cadence_at_an_anchored_timestep():
-    """5 s convection-off is anchored WELDED; held at 120 s it is not.
-
-    RETIRED GUARD (fix-retires-guards, 2026-08-25): before the key
-    carried the cadence, this mint refused with "already holds an anchor" --
-    the identical failure the convection lane hit at 20 s, one knob over.
-    """
-
-    assert dt_admission.admitted_timestep(5.0, None) is not None
+def test_a_candidate_mint_earns_a_held_row_the_derived_row_does_not_pretend_to_be():
+    assert dt_admission.registered_anchor(5.0, None, 120.0) is None
     with dt_admission.candidate_mint(
         5.0,
         authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
@@ -222,11 +330,13 @@ def test_a_candidate_mint_admits_a_held_cadence_at_an_anchored_timestep():
     ) as candidate:
         assert candidate.surface_pbl_seconds == 120.0
         assert candidate.admitted_on == "CANDIDATE-UNANCHORED"
-        # The held configuration is admitted; the welded row is untouched.
-        assert dt_admission.admitted_timestep(5.0, None, 120.0) is not None
+        registered = dt_admission.registered_anchor(5.0, None, 120.0)
+        assert registered is candidate
+        assert dt_admission.admitted_timestep(5.0, None, 120.0) is candidate
         welded = dt_admission.admitted_timestep(5.0, None)
         assert welded.admitted_on == "2026-08-26"
-    assert dt_admission.admitted_timestep(5.0, None, 120.0) is None
+    assert dt_admission.registered_anchor(5.0, None, 120.0) is None
+    assert dt_admission.admitted_timestep(5.0, None, 120.0).derived is True
 
 
 def test_a_candidate_mint_still_refuses_a_configuration_that_is_anchored():
@@ -241,14 +351,7 @@ def test_a_candidate_mint_still_refuses_a_configuration_that_is_anchored():
     assert "nothing for a candidate mint to earn" in str(caught.value)
 
 
-def test_the_mesh_row_guard_admits_the_held_configuration_too():
-    """The second half of the same chicken and egg.
-
-    RETIRED GUARD: this one read the WELDED default and would have refused
-    every held-cadence mint with "holds a real anchor", which is the exact
-    shape that killed the first convection-off arm on the proving RTX 5070 Ti in 0.1 s.
-    """
-
+def test_the_mesh_row_guard_admits_the_held_configuration_under_a_mint():
     with dt_admission.candidate_mint(
         20.0,
         authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
@@ -268,7 +371,7 @@ def test_the_mesh_row_guard_admits_the_held_configuration_too():
 
 
 # ---------------------------------------------------------------------------
-# the schedule receipt reports the rate, because the rate is the subject
+# the schedule receipt reports the rate and the held steps
 # ---------------------------------------------------------------------------
 def test_the_schedule_receipt_reports_the_surface_pbl_call_rate():
     receipt = dt_admission.schedule_receipt(
@@ -279,6 +382,7 @@ def test_the_schedule_receipt_reports_the_surface_pbl_call_rate():
     assert cadences["surface_pbl_calls_per_hour"] == 30.0
     assert cadences["surface_pbl_calls_per_hour_welded"] == 720.0
     assert cadences["surface_pbl_held"] is True
+    assert cadences["surface_pbl_steps_held_between_calls"] == 23
 
 
 def test_a_welded_receipt_reports_itself_as_welded():
@@ -289,35 +393,34 @@ def test_a_welded_receipt_reports_itself_as_welded():
     assert cadences["stepbl"] == 1
     assert cadences["surface_pbl_calls_per_hour"] == 720.0
     assert cadences["surface_pbl_held"] is False
+    assert cadences["surface_pbl_steps_held_between_calls"] == 0
 
 
 # ---------------------------------------------------------------------------
-# the config carries the cadence, and reads the row that measured it
+# the config carries the cadence and admits it through the derived row
 # ---------------------------------------------------------------------------
-def test_the_frozen_config_admits_a_held_cadence_only_under_its_own_row():
+def test_the_frozen_config_admits_a_held_cadence_without_a_mint():
+    from hexcore.config_v841 import V841MpasColumnPhysicsSmagorinskyGwdoConfig
+
+    V841MpasColumnPhysicsSmagorinskyGwdoConfig(
+        config_dt=5.0,
+        config_bldt_seconds=120.0,
+        config_cudt_seconds=None,
+        config_convection_scheme="off",
+    ).validate()
+
+
+def test_the_frozen_config_refuses_a_held_cadence_at_an_unanchored_timestep():
     from hexcore.config_v841 import V841MpasColumnPhysicsSmagorinskyGwdoConfig
     from hexcore.errors import ConfigurationRefusal
 
-    def build():
-        return V841MpasColumnPhysicsSmagorinskyGwdoConfig(
-            config_dt=5.0,
+    with pytest.raises(ConfigurationRefusal):
+        V841MpasColumnPhysicsSmagorinskyGwdoConfig(
+            config_dt=3.0,
             config_bldt_seconds=120.0,
             config_cudt_seconds=None,
             config_convection_scheme="off",
-        )
-
-    with pytest.raises(ConfigurationRefusal):
-        build().validate()
-
-    with dt_admission.candidate_mint(
-        5.0,
-        authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-        card="test, no card",
-        cumulus_scheme=None,
-        cumulus_seconds=None,
-        surface_pbl_seconds=120.0,
-    ):
-        build().validate()
+        ).validate()
 
 
 def test_the_proven_configuration_still_validates_unchanged():
@@ -330,8 +433,6 @@ def test_the_proven_configuration_still_validates_unchanged():
 # the door's row-alone answer, which must be the run's answer
 # ---------------------------------------------------------------------------
 def test_the_door_answers_the_cadence_question_from_the_row_alone():
-    """No card, no file: preflight and the run must not disagree."""
-
     from hexcore import forecast_door
 
     admitted = forecast_door.admit_timestep(
@@ -340,27 +441,52 @@ def test_the_door_answers_the_cadence_question_from_the_row_alone():
     assert admitted["surface_pbl_seconds"] == 120.0
     assert admitted["pbl_cadence"]["source"] == "welded"
     assert admitted["pbl_cadence"]["held"] is False
+    assert admitted["surface_pbl_anchor_derived_from"] is None
 
 
-def test_the_door_refuses_a_held_cadence_by_name_and_names_the_remedy():
+def test_the_door_admits_a_held_cadence_and_says_the_row_is_derived():
+    from hexcore import forecast_door
+
+    admitted = forecast_door.admit_timestep(
+        "x1.40962", 120.0, nominal_dx_m=120_000.0, pbl_cadence="600"
+    )
+    assert admitted["surface_pbl_seconds"] == 600.0
+    assert admitted["pbl_cadence"]["held"] is True
+    assert admitted["pbl_cadence"]["steps_between_calls"] == 5
+    assert admitted["surface_pbl_anchor_derived_from"] == dt_admission.dt_key(
+        120.0, "gf"
+    )
+    assert admitted["physics_health"].startswith("NOT MEASURED")
+
+
+def test_the_door_refuses_an_incommensurate_cadence_by_name_before_any_card():
     from hexcore import forecast_door
 
     with pytest.raises(forecast_door.ForecastDoorRefusal) as caught:
         forecast_door.admit_timestep(
-            "x1.40962", 120.0, nominal_dx_m=120_000.0, pbl_cadence="600"
+            "x1.40962", 120.0, nominal_dx_m=120_000.0, pbl_cadence="500"
         )
     message = str(caught.value)
-    assert "surface/PBL held at 600 s" in message
-    assert "--pbl-cadence 600" in message
+    assert "--pbl-cadence 500" in message
+    assert "480 s and 600 s" in message
+
+
+def test_the_door_refuses_a_held_cadence_at_an_unanchored_timestep_by_name():
+    from hexcore import forecast_door
+
+    with pytest.raises(forecast_door.ForecastDoorRefusal) as caught:
+        forecast_door.admit_timestep(
+            "nowhere", 3.0, nominal_dx_m=120_000.0, pbl_cadence="120"
+        )
+    message = str(caught.value)
+    assert "surface/PBL held at 120 s" in message
+    assert "holds no timestep anchor" in message
 
 
 # ---------------------------------------------------------------------------
 # one decision, one source -- the shape the 2026-08-26 clock fix set
 # ---------------------------------------------------------------------------
 def test_the_door_threads_one_cadence_decision_into_the_driver():
-    """Two sources of one decision is how config_dt and the seam's dt came
-    to disagree; the cadence takes the same road and the same refusal."""
-
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
@@ -379,11 +505,63 @@ def test_the_door_threads_one_cadence_decision_into_the_driver():
     runner = (root / "tools" / "run_cuda_v841_forecast.py").read_text(
         encoding="utf-8"
     )
-    # The driver REFUSES when its own request disagrees with the bind's.
     assert "One decision, " in runner
     assert 'pbl_decision.get("requested") != pbl_cadence' in runner
-    # The cadence reaches the config from the decision, not from a default.
     assert 'surface_pbl_seconds=pbl_decision["surface_pbl_seconds"],' in runner
+
+
+def test_the_driver_receipt_proves_the_cadence_that_ran():
+    """A/B rule: the receipt carries the seam's own due/held counts against
+    the count the declared cadence predicts, and says whether they agree."""
+
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    tools = Path(__file__).resolve().parents[1] / "tools"
+    if str(tools) not in sys.path:
+        sys.path.insert(0, str(tools))
+    spec = importlib.util.spec_from_file_location(
+        "_test_cadence_forecast_tool", tools / "run_cuda_v841_forecast.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    decision = pbl_cadence.pbl_cadence_decision(dt_seconds=5.0, requested="120")
+
+    def receipt(step: int) -> dict:
+        due = step == 1 or step % 24 == 0
+        return {
+            "step": step,
+            "backend": {
+                "cadence": {
+                    "surface_pbl_ran": due,
+                    "radiation_ran": step == 1 or step % 120 == 1,
+                    "call_counts": {
+                        "ysu": 1 + step // 24,
+                        "radiation": 1 + step // 120,
+                    },
+                }
+            },
+        }
+
+    receipts = [receipt(step) for step in range(1, 721)]
+    proof = module._physics_cadence_proof(decision, receipts, 720)
+    assert proof["surface_pbl_calls_expected"] == 31
+    assert proof["surface_pbl_steps_reported_due"] == 31
+    assert proof["surface_pbl_steps_held"] == 689
+    assert proof["consistent"] is True
+    assert "They agree" in proof["note"]
+
+    # A run that reported every step due while declaring a held cadence
+    # did not hold it, and the receipt says so.
+    for item in receipts:
+        item["backend"]["cadence"]["surface_pbl_ran"] = True
+    proof = module._physics_cadence_proof(decision, receipts, 720)
+    assert proof["consistent"] is False
+    assert "THEY DISAGREE" in proof["note"]
+    assert module._physics_cadence_proof(None, receipts, 720) is None
 
 
 def test_the_campaign_runner_carries_the_cadence_into_every_arm():

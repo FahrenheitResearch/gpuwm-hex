@@ -716,9 +716,12 @@ def main(argv: list[str] | None = None) -> int:
             # the timestep alone.  Reading the welded row here would report
             # "anchored" for a receipt minted at a HELD surface/PBL cadence,
             # which is the wrong-row trap the registry key exists to close.
+            # The EXACT lookup: a held cadence that is admitted through a
+            # row derived from the welded anchor has not been EARNED, and
+            # "anchored today" answers whether there is a registered row.
             minted_bldt = float(receipt["cadences"]["surface_pbl_seconds"])
             anchored = (
-                dt_admission.admitted_timestep(arguments.dt, scheme, minted_bldt)
+                dt_admission.registered_anchor(arguments.dt, scheme, minted_bldt)
                 is not None
             )
             payload["anchored_today"] = anchored

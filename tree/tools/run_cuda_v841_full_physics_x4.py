@@ -469,7 +469,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
     "src/hexcore/dt_admission.py": (
-        "0a6456699b32f1519654ba9838556f2bf9ebe8e5696b56123e594a26f6311e7f"
+        "914e83b5ffab3cfda246a4674fb2e2bde42594a79395fbd957d9da0eb9575e2a"
     ),
     # New pin (surface/PBL cadence, 2026-08-26): this module decides
     # config_bldt_seconds, a knob the frozen timestep registry keys on, so
@@ -497,7 +497,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
     "src/hexcore/pbl_cadence.py": (
-        "1f7f5b4a41b7004ec1b9fd9ec1091a00997d8d6dbc611f6e6695ae0ca3d2a8ce"
+        "bfe7c8d3113fd0735ac77cf9718901f8e295fed18b5b3d44e4214036e7883ba1"
     ),
     # Re-frozen for the seam convergence (#335): the Arwen seam pin moved
     # off the pin-only lineage onto the release line's seam-converge merge,
