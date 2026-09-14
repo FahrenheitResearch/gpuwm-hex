@@ -208,6 +208,11 @@ def translation_units() -> Iterator[tuple[str, str, str]]:
             "_CUDA_SOURCE",
         ),
         ("hexcore.cuda_regional_v841", "cuda_regional_v841", "CUDA_REGIONAL_SOURCE"),
+        (
+            "hexcore.cuda_solve_region_v841",
+            "cuda_solve_region_v841",
+            "SOLVE_REGION_CUDA_SOURCE",
+        ),
     )
     for module_key, module_name, attribute_name in simple:
         yield (
