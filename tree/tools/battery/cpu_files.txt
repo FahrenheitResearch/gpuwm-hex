@@ -154,6 +154,7 @@ tests/test_device_memory_ledger_probes.py
 # checking them meant no push examined the kernel sources at all.
 tests/test_cuda_physics_tier_park_v841.py
 tests/test_cuda_regional_kernels.py
+tests/test_element_parallel_kernels.py
 tests/test_fullstep_projection_probe.py
 tests/test_libm_identity.py
 tests/test_nvrtc_reciprocal_rewrite.py
