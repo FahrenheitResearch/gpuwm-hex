@@ -13,6 +13,7 @@
 # by AST so an unmarked test cannot leak into this tier by omission.
 
 # what the distribution declares, against what the package actually is
+tests/test_hrrr_intermediate.py
 tests/test_packaging_declaration.py
 
 # the engine range and the two surfaces that must name it: the derived
