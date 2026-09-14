@@ -16,6 +16,8 @@ from .runtime import (
     CudaRefusal,
     KernelCache,
     KernelTiming,
+    forget_admissions,
+    launch_checked,
     launch_timed,
     require_cuda,
 )
@@ -50,6 +52,8 @@ __all__ = [
     "TransferStats",
     "canonical_sha256",
     "compile_platform_binding",
+    "forget_admissions",
+    "launch_checked",
     "launch_timed",
     "require_cuda",
     "require_resident_array",

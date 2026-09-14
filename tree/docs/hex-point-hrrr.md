@@ -352,3 +352,37 @@ The reflectivity panels for the every-step arm and the 120 s arm
 (`composite_reflectivity` and `2m_temperature_10m_winds` on the 16Z frame,
 through `gpuwm-hex render`) are in the evidence folder beside this section's
 receipts; they are model results, not evidence about the atmosphere.
+
+## The step's host path, measured 2026-09-14
+
+The same cull, the same init and boundaries, one hour (720 steps of 5 s),
+two arms back to back under one mutex hold on node-2's RTX 5090, the
+untouched 0.3.0 tree first and the hostpath tree second, the card otherwise idle (no other GPU process during any arm; load average 1.05 at the second mutex hold, 1.5 at the first):
+
+- Contract deck on the cull's own rings at the hostpath tree's kernel-set
+  digest (three host sources moved, no CUDA source string; the regional
+  translation unit's source digest in the receipt is the one the 0.3.0
+  deck recorded): 8 of 8 decks bitwise, 22 of 22 kernels, dual run
+  identical, every control with teeth; 430 s.
+- Untouched tree: door 328.0 s, integration 228.7 s,
+  0.3143 s per step after the first, the health gate
+  56.2 s of it, peak 8,914 MiB, utilisation
+  77.7 % mean.
+- Hostpath tree: door 258.7 s, integration 215.3 s,
+  0.2957 s per step after the first (1.06x), the health gate
+  0.2 s, peak 8,914 MiB, utilisation 74.2 % mean.
+  Run a second time in its own process: 214.3 s of integration and
+  the same two frames byte for byte.
+- Both history frames (15Z, 16Z) sha256-identical between the two trees,
+  and the 720 `step_health` envelopes identical entry for entry.
+
+Item by item at this cull's shapes (host milliseconds per step, a
+microbenchmark on the same card in the same session, median of twenty,
+each call closed by a stream synchronize): the admission 47.2 to 0.02;
+the recovery launches 56.3 to 0.07 (and half of their device work gone
+with the second launch); the health gate 78.4 to 0.20, the receipt it
+returns identical; the density validation 0.15 to 0.01; the
+recovered-state validation 1.19 to 0.04; the garbage scrub 15.6 to 5.9.
+The loop as a user waits for it (integration, gate and history) went
+from 0.3973 to 0.3011 s per step, 1.32x. The pictures and every receipt are
+in the hostpath folder of the evidence gallery.

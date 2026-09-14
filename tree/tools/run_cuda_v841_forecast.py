@@ -1376,11 +1376,20 @@ def step_health_gate(
     """Refuse the moment the integration stops being finite and physical.
 
     Deliberately allocation-light.  The frozen Arwen phase-one seam is
-    documented as sensitive to the CuPy device-pool layout, so this gate uses
-    only min/max reductions (scalar results) and never materializes a
-    full-size temporary such as ``isfinite(x)``.  min/max propagate NaN and
-    carry +/-inf, so testing the two scalars is a complete finiteness test for
-    the array.
+    documented as sensitive to the CuPy device-pool layout, so this gate
+    never materializes a full-size temporary such as ``isfinite(x)``.  The
+    envelope of every field -- min, max, a NaN verdict and the argmax of
+    |w| -- comes from one launch pair over the solve region
+    (``hexcore.cuda_solve_region_v841``) and ONE read of a few hundred
+    bytes.  min/max propagate NaN and carry +/-inf, so testing the two
+    scalars is a complete finiteness test for the array, and the values are
+    the ones ``cp.min``/``cp.max`` on the trimmed views returned: the
+    reductions are exact and order-independent.
+
+    Before the fused envelope this gate was 31 CuPy reductions on strided
+    ``[..., :n_solve]`` views, each on one block of 512 threads and each
+    read back with a drain: 78 ms of every 0.38 s step, a fifth of it
+    (``evidence-gallery/hex-perf-profile-2026-09-13``).
     """
 
     atmosphere = stack["driver"].atmosphere
@@ -1404,21 +1413,39 @@ def step_health_gate(
         if value is not None
     }
 
-    def _domain(array: Any) -> Any:
+    def _solve(array: Any) -> int | None:
+        """How many of the last dimension's elements are solved (None: all)."""
+
         if not padded_extents:
-            return array
-        trimmed = padded_extents.get(int(array.shape[-1]))
+            return None
+        return padded_extents.get(int(array.shape[-1]))
+
+    def _domain(array: Any) -> Any:
+        trimmed = _solve(array)
         return array if trimmed is None else array[..., :trimmed]
 
-    envelope: dict[str, list[float]] = {}
-    nonfinite: list[str] = []
+    from hexcore.cuda_solve_region_v841 import SolveRegionKernels
+
+    fields: list[tuple[str, Any, int | None]] = []
     for name, value in groups:
         array = cp.asarray(value)
         if array.dtype.kind != "f":
             continue
-        array = _domain(array)
-        low = float(cp.min(array))
-        high = float(cp.max(array))
+        fields.append((name, array, _solve(array)))
+    scalars_array = cp.asarray(state.scalars)
+    scalars_solve = _solve(scalars_array)
+    # qv and the hydrometeors are two more views of the same block: the
+    # first species, and every species after it, each C-contiguous.
+    fields.append(("scalars[0]", scalars_array[0], scalars_solve))
+    fields.append(("scalars[1:]", scalars_array[1:], scalars_solve))
+    measured = SolveRegionKernels.for_cache(stack["driver"].cache).envelope(fields)
+
+    envelope: dict[str, list[float]] = {}
+    nonfinite: list[str] = []
+    for name, _value in groups:
+        if name not in measured:
+            continue
+        low, high, _has_nan, _argmax = measured[name]
         envelope[name] = [low, high]
         if not (math.isfinite(low) and math.isfinite(high)):
             nonfinite.append(name)
@@ -1444,8 +1471,11 @@ def step_health_gate(
     # readings cost one argmax on a state already resident.
     hot: dict[str, Any] | None = None
     if trace_hot_cell:
+        # The envelope kernel already found the first-index argmax of |w|
+        # over the trimmed view; the flat index is C-order inside that view,
+        # exactly what cupy.argmax(cupy.abs(w[..., :n_solve])) returned.
         w_field = _domain(cp.asarray(saved.vertical_velocity))
-        flat = int(cp.argmax(cp.abs(w_field)))
+        flat = int(measured["vertical_velocity"][3])
         cell = flat % int(w_field.shape[-1])
         hot = {
             "vertical_velocity_max_abs": w_abs_max,
@@ -1466,10 +1496,8 @@ def step_health_gate(
             f"{VERTICAL_VELOCITY_REFUSAL_M_S} m/s divergence refusal"
             + ("" if hot is None else f"; worst column {json.dumps(hot)}")
         )
-    scalars = _domain(cp.asarray(state.scalars))
-    qv_min = float(cp.min(scalars[0]))
-    qv_max = float(cp.max(scalars[0]))
-    hydrometeor_min = float(cp.min(scalars[1:]))
+    qv_min, qv_max, _qv_nan, _qv_arg = measured["scalars[0]"]
+    hydrometeor_min = measured["scalars[1:]"][0]
     if not (
         math.isfinite(qv_min) and math.isfinite(qv_max) and math.isfinite(hydrometeor_min)
     ):

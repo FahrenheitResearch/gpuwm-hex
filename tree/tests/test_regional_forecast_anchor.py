@@ -93,7 +93,7 @@ def test_the_named_forecast_pair_is_masked_digest_identical(receipts):
 SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     "src/hexcore/cuda_driver.py": {
         "recorded": "cb6477ef2fd02ad551e9b6c8af0724c94fc4d90bdc712fff1378d218662f5d04",
-        "current": "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb",
+        "current": "e22e0a991ef7734929a9f72a6b2a748d4fc36ee9d6da0bb815055748e87826fc",
         "why": (
             "convection ruling, 2026-08-26: _v841_physics_cadences reports "
             "convection: None when no cumulus scheme is selected instead of "
@@ -125,7 +125,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_regional_forecast_v841.py": {
         "recorded": "3aa30ec3c3a11c1152a67d1fcbc8b2d470fd8ac2446ec8f7ec34906873421e88",
-        "current": "2b6b0bc0a36d61caab071e957ee634dc80dc244cde80d6e3e4954c2f06185bd3",
+        "current": "f9f752964d8e17c1fce00c072c4a0fc42cdd61725328c0e0921afafbaa48e6de",
         "why": (
             "ANCHOR RE-KEYING, 2026-08-27: open_regional_forecast_v841 now "
             "measures the configuration CLASS off the run it is about to "
@@ -184,7 +184,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_backend/runtime.py": {
         "recorded": "4deab4b3a37467491a531750e8618705c6884c19c0395891bc426fce2ea6ba5a",
-        "current": "2a9e58eae765bdf1f8b292f5df052ca23398b07672322a1021234e76a1c5eb6b",
+        "current": "fee26b81e333be8645b4d1b1ab91f4bfd7d1acae376430c8588d583f4890df32",
         "why": (
             "limited-area physics lane, 2026-08-26: the per-launch observer "
             "now carries the MODULE KEY that launched, as well as the kernel "

@@ -272,6 +272,44 @@ output, which is also the memory-corruption screen on cards without ECC
 same case twice through two configurations that must coincide on a uniform
 mesh and got byte-identical history, on hardware, in one session.
 
+### The step's host path — what runs on the card, what the host reads
+
+Every forecast step is a two-owner transaction (the dycore, then the
+physics seam) followed by a host health gate that refuses the moment the
+state stops being finite and physical. The dycore's kernels are the step's
+cost and are the only part that touches the prognostic arithmetic; the
+checks around them are meant to be free, and on the 43,884-cell point cull
+they were not: a fifth of every 0.38 s step was the health gate reading 31
+scalars one drain at a time, every recovery kernel ran twice under a timed
+launch, the CUDA admission was re-measured 59 times a step, and the
+garbage discipline (7.4) issued 3,328 tiny fills a step.
+
+Since the hostpath change every check runs on the device over the solve
+region and is read back once (`hexcore.cuda_solve_region_v841`): the gate's
+envelope of every field in one launch pair and one read, the density and
+recovered-state validations as device kernels that set the step's flag,
+the discipline's restoration of a launch's padded columns as one launch,
+each recovery kernel launched once and untimed, and the admission measured
+once per process. None of those kernels computes a value that reaches a
+field — they compare, select and store what they are handed — so a run's
+history is byte-identical to the run before the change; that identity was
+measured on the point cull, two arms in one session on the same card, and
+the contract deck on the cull's rings passed at the new kernel-set digest.
+The cost: the composite step 0.3143 s before, 0.2957 s after (1.06x) on
+an RTX 5090; the health gate 56.2 s to 0.2 s an hour; the loop as you wait
+for it (integration, gate and history) 0.3973 to 0.3011 s per step, 1.32x. The receipt still carries the same
+`step_health` entries (the same numbers, from the same exact reductions)
+and the discipline's receipt gains `fused_restoration_launches` beside
+`garbage_columns_restored`.
+
+What the step still pays for on the host, with the reason: one read of
+the dycore's validation flag before publication, the two preparation
+flags (each raises with the offending field), the physics seam's
+transaction snapshot (the engine copies every persisted seam array to
+the host each step so a refused step can roll back; that is engine code
+under the sixteen-file pin and moves with the engine re-pin, not here),
+and the radiation call's host round trip inside the engine's legacy RRTMG.
+
 ## 6.5 Restarting a run — what exists and what does not
 
 **What is proven:** checkpoint/restart with bitwise-identical continuation

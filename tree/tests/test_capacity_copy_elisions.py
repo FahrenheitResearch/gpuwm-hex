@@ -39,7 +39,7 @@ EXPECTED_SOURCE_SHA256 = {
     # which the tests below check by name rather than assert.  Re-derived by
     # tools/repin_source_tables.py, never by hand.
     SRC / "cuda_driver.py": (
-        "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb"
+        "e22e0a991ef7734929a9f72a6b2a748d4fc36ee9d6da0bb815055748e87826fc"
     ),
     SRC / "cuda_horizontal.py": (
         "fd09f38619ef3fe9b4b61e6665bd5dd440804f45af6c2ffebf9e47d05573d910"

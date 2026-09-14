@@ -29,12 +29,56 @@ New:
   stamped NOT MEASURED, and the receipt names the welded row it derives
   from. A registered held row still wins the exact lookup; a held cadence
   at an unanchored timestep is refused as the welded run would be.
+- hexcore.cuda_solve_region_v841: four device kernels that check the solve
+  region of a limited-area array and read back once. The per-step health
+  gate takes the envelope of every field (min, max, a NaN verdict, the
+  first-index argmax of |w|) from one launch pair and one read instead of
+  31 strided CuPy reductions each drained to the host; the regional
+  density and recovered-state validations set the step's flag on the
+  device instead of materialising full-size temporaries and draining per
+  array; the garbage discipline restores every padded argument of a
+  launch in one launch instead of one cupy fill per column. The kernels
+  compare, select and store what they are handed and do no arithmetic on
+  the values, so the dycore's byte identity is untouched by construction;
+  the measuring and audited forms of the discipline keep the per-column
+  fills.
+- launch_checked in hexcore.cuda_backend: one launch, the error state
+  checked, no event and no synchronize. recover_state uses it by default
+  (timing_repeats=0); the timed path stays for the benchmark.
 
 Fixed:
 - --pbl-cadence that is not a whole number of steps is refused by name at
   the door (both numbers, the multiples of dt on either side, and auto),
   on the run route and in --preflight, instead of tracing back after the
   mesh is bound.
+- A forecast step no longer measures the CUDA admission fifty-nine times.
+  require_cuda memoises a granted admission per argument set (a refusal is
+  never memoised, and a stubbed cupy never inherits a real card's answer);
+  the dycore's translation units re-entered it on every launch group at
+  1.05 ms a call on the CUDA 13.3 driver.
+- Every recovery kernel is launched once. The driver's two recover_state
+  calls went through the timed launch path with timing_repeats=1, which
+  launched each kernel twice with two event synchronizes and a stream
+  synchronize: 36 host stalls and 10.7 ms of repeated device work a step.
+- Measured on the 43,884-cell 937.5 m point cull (55 levels, dt 5 s, HRRR
+  15Z, one hour = 720 steps) on an RTX 5090, both arms in one session on
+  the same card: the composite step 0.3143 s before, 0.2957 s after
+  (1.06x; integration 228.7 s to 215.3 s), the health gate 56.2 s to
+  0.2 s an hour, the loop as a user waits for it 0.3973 to 0.3011 s per
+  step (1.32x; door 328 s to 259 s), both history frames
+  sha256-identical between the arms and across two hostpath runs; the
+  contract deck on the cull's own rings passed at the new kernel-set digest
+  (8 of 8 decks bitwise, 22 of 22 kernels, dual-run identical). Evidence:
+  the hostpath folder of the evidence gallery, 2026-09-13.
+- The regional kernel-set digest moved on three host sources
+  (cuda_backend/runtime.py, cuda_driver.py, cuda_regional_forecast_v841.py)
+  and no CUDA source string; the constant is re-derived, the one class row
+  that carried a literal follows the constant, and the note at the constant
+  records what moved and that the point class was re-minted at it.
+- tests/test_hrrr_intermediate.py, test_mesh_point.py, test_mesh_rows.py and
+  test_regional_class_band.py are named by the CPU tier list; they arrived
+  with the point door on no list, which tests/test_tier_membership.py
+  refused.
 
 ## 0.3.0 (2026-09-13)
 
