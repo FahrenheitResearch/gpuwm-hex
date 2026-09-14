@@ -1642,6 +1642,7 @@ def execute_forecast(
     grid_path: Path | None = None,
     park_physics_tier: bool = False,
     required_free_bytes: int | None = None,
+    local_timestep_classing_path: Path | None = None,
 ) -> dict[str, Any]:
     from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
@@ -1675,8 +1676,25 @@ def execute_forecast(
     # config_local_timestep is off, which is the default.
     from hexcore.cuda_driver_lts import attach_local_timestep
 
+    explicit_classing = None
+    if local_timestep_classing_path is not None:
+        # INSTRUMENT, not the shipped classing: per-cell rates from a file,
+        # connectivity and the driven-zone mask from the grid file.  The
+        # receipt records rate_source="explicit" so the arm cannot be
+        # mistaken for the option's own behaviour.
+        from hexcore.lts_v841 import classify_from_grid_file_with_rates
+
+        config = stack["driver"].config
+        explicit_classing = classify_from_grid_file_with_rates(
+            str(grid_path),
+            str(local_timestep_classing_path),
+            rates=tuple(int(v) for v in config.config_local_timestep_rates),
+            buffer_rings=int(config.config_local_timestep_buffer_rings),
+        )
     lts_attachment = attach_local_timestep(
-        stack["driver"], grid_path=str(grid_path) if grid_path else None
+        stack["driver"],
+        grid_path=str(grid_path) if grid_path else None,
+        classing=explicit_classing,
     )
     stack["local_timestep"] = lts_attachment
 
@@ -2184,6 +2202,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="rings of cells demoted to the finer rate around a class boundary",
     )
     parser.add_argument(
+        "--local-timestep-classing",
+        type=Path,
+        default=None,
+        metavar="NPZ",
+        help=(
+            "A/B INSTRUMENT, not a user feature: take the per-cell acoustic "
+            "rates from this .npz (key cell_rate, one rate per cell) instead of "
+            "classing from dcEdge, so a class interface can be placed in the "
+            "interior of a cull whose spacing would class it into one rate. "
+            "The driven boundary zone is still held at rate 1 and an "
+            "interface touching it is refused. Requires --local-timestep; "
+            "tools/lts_forced_classing.py writes the file"
+        ),
+    )
+    parser.add_argument(
         "--park-physics-tier",
         action="store_true",
         help=(
@@ -2286,6 +2319,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         )
     if args.local_timestep_buffer_rings < 1:
         parser.error("--local-timestep-buffer-rings must be >= 1")
+    if args.local_timestep_classing is not None:
+        if not args.local_timestep:
+            parser.error(
+                "--local-timestep-classing is an instrument for the option "
+                "and needs --local-timestep; without the switch the classing "
+                "would be read and silently never used"
+            )
+        if not Path(args.local_timestep_classing).is_file():
+            parser.error(
+                f"--local-timestep-classing {args.local_timestep_classing} "
+                "is not a file"
+            )
     return args
 
 
@@ -2518,6 +2563,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "declared_off_arm": bool(args.local_timestep_declared_off),
             "rates": list(args.local_timestep_rates),
             "buffer_rings": int(args.local_timestep_buffer_rings),
+            "explicit_classing": (
+                None
+                if args.local_timestep_classing is None
+                else {
+                    "path": str(args.local_timestep_classing),
+                    "sha256": proof.sha256_file(Path(args.local_timestep_classing)),
+                    "note": "A/B instrument arm: rates from a file, not from dcEdge",
+                }
+            ),
             "native_equivalent": False,
             "note": (
                 "native MPAS-A v8.4.1 has no local time stepping; with the "
@@ -2586,6 +2640,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         grid_path=paths["grid"],
         park_physics_tier=bool(args.park_physics_tier),
         required_free_bytes=args.required_free_bytes,
+        local_timestep_classing_path=args.local_timestep_classing,
     )
     source_after = proof.require_frozen_execution_sources()
     authority_after = verify_forecast_authorities(paths)
