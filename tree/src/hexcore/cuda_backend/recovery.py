@@ -322,7 +322,6 @@ def recover_state(
         pressure_timing = launch(
             kernels[pressure_name],
             ((mesh.n_cells + block[0] - 1) // block[0],),
-            block,
             (
                 state.rho,
                 state.rho_theta,

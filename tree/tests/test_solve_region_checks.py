@@ -384,3 +384,64 @@ def test_an_untimed_launch_is_exactly_one_launch():
     timing = launch_timed(kernel, (1,), (32,), (counter,), warmup=0, repeats=1)
     assert timing.repeats == 1
     assert int(counter.get()[0]) == 3, "the timed path launches twice for repeats=1"
+
+
+def _synthetic_atmosphere(cp, *, terrain: bool):
+    """A small consistent atmosphere for recover_state: 64 cells, 96 edges,
+    4 levels, every array resident, shapes as the kernels index them."""
+
+    rng = np.random.default_rng(5)
+    cells, edges, nlev, max_edges = 64, 96, 4, 6
+    f32 = lambda shape: cp.asarray(rng.uniform(0.5, 1.5, shape).astype(np.float32))  # noqa: E731
+    cells_on_edge = cp.asarray(rng.integers(0, cells, (edges, 2)).astype(np.int32))
+    edges_on_cell = cp.asarray((np.arange(cells * max_edges) % edges).reshape(cells, max_edges).astype(np.int32))
+    mesh = types.SimpleNamespace(
+        n_cells=cells, n_edges=edges, max_edges=max_edges, dtype=np.float32, index_dtype=np.dtype(np.int32),
+        cells_on_edge=cells_on_edge, edges_on_cell=edges_on_cell,
+        n_edges_on_cell=cp.full((cells,), 2, dtype=cp.int32),
+        edge_sign_on_cell=f32((cells, max_edges)),
+    )
+    vertical = types.SimpleNamespace(
+        n_vert_levels=nlev, dtype=np.float32, zz=f32((nlev, cells)),
+        fzm=f32((nlev,)), fzp=f32((nlev,)), cf1=1.5, cf2=-0.5, cf3=0.0,
+    )
+    reference = types.SimpleNamespace(
+        dtype=np.float32, rho_base=f32((nlev, cells)), rho_theta_base=f32((nlev, cells)), exner_base=f32((nlev, cells)),
+    )
+    state = types.SimpleNamespace(
+        dtype=np.float32, rho=f32((nlev, cells)), rho_theta=f32((nlev, cells)) * 300.0,
+        rho_u=f32((nlev, edges)), rho_w=f32((nlev + 1, cells)),
+    )
+    saved = types.SimpleNamespace(dtype=np.float32)
+    terrain_metrics = (
+        types.SimpleNamespace(zb_cell=f32((nlev, cells, max_edges)), zb3_cell=f32((nlev, cells, max_edges)))
+        if terrain else None
+    )
+    return types.SimpleNamespace(
+        mesh=mesh, vertical=vertical, reference=reference, state=state, saved=saved, terrain=terrain_metrics,
+    )
+
+
+@pytest.mark.parametrize("terrain", (True, False))
+def test_recover_state_launches_once_on_both_routes_and_matches_the_timed_path(terrain):
+    import cupy as cp
+
+    from hexcore.cuda_backend.recovery import recover_state
+
+    cache = _kernel_cache()
+    atmosphere = _synthetic_atmosphere(cp, terrain=terrain)
+    untimed = recover_state(atmosphere, cache=cache)
+    assert set(untimed.timings) == {"pressure", "normal_velocity", "vertical_velocity"}
+    assert all(value is None for value in untimed.timings.values())
+    velocities_only = recover_state(atmosphere, cache=cache, include_pressure=False)
+    assert velocities_only.theta_m is None and velocities_only.pressure is None
+    assert set(velocities_only.timings) == {"normal_velocity", "vertical_velocity"}
+    timed = recover_state(atmosphere, cache=cache, warmup=0, timing_repeats=1)
+    assert all(timing.repeats == 1 for timing in timed.timings.values())
+    for name in ("theta_m", "exner", "pressure", "density_perturbation", "rho_theta_perturbation",
+                 "pressure_perturbation", "normal_velocity", "vertical_velocity"):
+        left = getattr(untimed, name).get().tobytes()
+        assert left == getattr(timed, name).get().tobytes(), name
+        assert np.isfinite(getattr(untimed, name).get()).all(), name
+    for name in ("normal_velocity", "vertical_velocity"):
+        assert getattr(velocities_only, name).get().tobytes() == getattr(untimed, name).get().tobytes(), name

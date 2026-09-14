@@ -333,7 +333,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # freely, so a later edit to the pressure-diagnostic path could change
     # forecast bytes with every proof still reporting frozen sources.
     "src/hexcore/cuda_backend/recovery.py": (
-        "5d43a4c31830c79e092d0fa8fb145c3b4a22ccd48dc178469af81b4dea35a21f"
+        "7b58f8e6be7abe57f83dd974e6e1638fbf95c927573639d3f3a0af1f5ddfbd6f"
     ),
     # Re-frozen for the regional CPU authority lane (#346 L4): the v8.4.1
     # config admits config_apply_lbcs and config_moist_physics behind the
