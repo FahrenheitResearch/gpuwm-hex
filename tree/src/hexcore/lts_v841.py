@@ -145,7 +145,12 @@ class LocalTimestepClassing:
     h_cell: FloatArray
     #: Rate each cell earned from its own spacing alone, before the driven-zone
     #: hold and the buffer demotion.  Equal to ``cell_rate`` on a global mesh
-    #: with no buffer demotions.
+    #: with no buffer demotions.  For an explicit classing
+    #: (``rate_source == "explicit"``) this holds the rate the instrument
+    #: REQUESTED per cell, not anything the spacing said, and the summary
+    #: reports it under ``cells_requested`` rather than
+    #: ``cells_qualified_by_spacing`` so a receipt cannot present an
+    #: instrument's request as a property of the mesh.
     spacing_rate: IntArray | None = None
     #: Indices of the cells held at rate 1 because they sit in the driven
     #: boundary zone, and the ``bdyMaskCell`` ring of each; both empty on a
@@ -249,11 +254,13 @@ class LocalTimestepClassing:
             "rate_source": self.rate_source,
             "cells_qualified_by_spacing": (
                 None
-                if self.spacing_rate is None
-                else {
-                    int(rate): int((self.spacing_rate == rate).sum())
-                    for rate in sorted({int(v) for v in np.unique(self.spacing_rate)})
-                }
+                if self.spacing_rate is None or self.rate_source != "spacing"
+                else self._count_per_rate(self.spacing_rate)
+            ),
+            "cells_requested": (
+                None
+                if self.spacing_rate is None or self.rate_source != "explicit"
+                else self._count_per_rate(self.spacing_rate)
             ),
             "driven_zone_source": self.driven_zone_source,
             "cells_held_in_driven_zone": (
@@ -272,6 +279,13 @@ class LocalTimestepClassing:
                 if self.spacing_rate is None
                 else int(((self.cell_rate < self.spacing_rate) & ~self.driven_mask()).sum())
             ),
+        }
+
+    @staticmethod
+    def _count_per_rate(rate: IntArray) -> dict[int, int]:
+        return {
+            int(value): int((rate == value).sum())
+            for value in sorted({int(v) for v in np.unique(rate)})
         }
 
     def driven_mask(self) -> NDArray[np.bool_]:

@@ -327,6 +327,16 @@ were verified on hardware:
   `(1,3,6)` schedule caps the feature at 1.16x even in the
   every-column-coarse limit [`evidence/local-timestep/speed-qv-*.json`].
 
+- On a **limited-area cull** the option is inert: every driven boundary
+  cell is held at rate 1 and on the culls `mesh-plan` and `cull` make that
+  is the whole coarse class, so the run is byte-identical to the default
+  (point cull, RTX 5090, 2026-09-14: 0.992x the step, both history frames
+  SHA-256-identical). An interface forced into the interior with
+  `--local-timestep-classing` (an instrument, not a feature) is 1.07x
+  slower, because on a 44,000-cell mesh every kernel runs in one wave and a
+  coarse-class launch is a further wave rather than a saving
+  [`docs/local-timestep-lam.md`](../local-timestep-lam.md).
+
 Conservation shape: class boundaries are refluxed (Berger–Colella on the
 acoustic mass flux), so mass and passive vapour are conservative in the
 flux and approximate at binary32 rounding — measured drifts 2.6e-11 (dry

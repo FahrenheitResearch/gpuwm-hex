@@ -702,6 +702,24 @@ What would move it: a mesh with a much steeper resolution gradient (the
 generated 15 km-in-136 km box mesh classes to a 49.7% acoustic saving, a 1.13x
 ceiling), and an acoustic schedule whose sub-step counts admit a rate above 3.
 
+#### On a limited-area cull, measured 2026-09-14
+
+On the culls the doors make the option is inert by construction: `mesh-plan`
+cuts at 1.35 times the fine radius and the cull door cuts a cap, so the cells
+whose spacing reaches three times the finest edge all sit in the seven driven
+boundary rings, every driven cell is held at rate 1, and the one-cell buffer
+demotes the rest. Measured on the RTX 5090 (point cull, 43,884 cells x 55
+levels, HRRR-driven, 1 h): `--local-timestep` executes one class and both
+history frames are byte-identical to the default run, at 0.992x the step
+(inside run-to-run noise). Forcing an interface into the interior with the
+`tools/lts_forced_classing.py` instrument (6,206 cells at rate 3, 1,456
+interface edges, an 8.5 % arithmetic acoustic saving) makes the step 1.071x
+SLOWER: every dycore kernel on a mesh this size runs in one wave on the card,
+so the fine class costs what the whole mesh costs and each coarse-class
+launch is a further wave. The corridor cull (40,520 cells, GFS-driven) gives
+the same numbers (0.989x, 1.068x). What the forced interface does to the
+fields is in [`docs/local-timestep-lam.md`](docs/local-timestep-lam.md).
+
 #### The full-step form, measured to a no-go
 
 The stronger form of this feature — every dycore kernel launched per rate

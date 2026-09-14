@@ -521,6 +521,7 @@ def test_every_driven_zone_cell_is_held_at_rate_one_and_the_hold_is_recorded():
     assert summary["driven_zone_source"] == "bdyMaskCell"
     # Cells 0 and 1 share the 10 m edge, so both earn rate 1 from spacing.
     assert summary["cells_qualified_by_spacing"] == {1: 2, 3: 7}
+    assert summary["cells_requested"] is None
     assert summary["cells_held_in_driven_zone"] == 4
     assert summary["cells_held_in_driven_zone_by_ring"] == {1: 1, 2: 1, 3: 1, 4: 1}
     # The interior cell adjacent to ring 1 is demoted by the buffer, and the
@@ -568,7 +569,18 @@ def test_explicit_rates_class_the_interior_where_spacing_would_not():
     assert classing.cell_rate[4] == 1  # buffer next to the fine half
     assert classing.cell_rate.tolist() == [1, 1, 1, 1, 1, 3, 3, 1, 1]
     assert classing.interface_edges.size == 2
-    assert classing.summary()["rate_source"] == "explicit"
+    summary = classing.summary()
+    assert summary["rate_source"] == "explicit"
+    # The receipt must not present the instrument's request as something the
+    # spacing said: the requested rates go out under their own key and the
+    # spacing key is empty for an explicit classing.
+    assert summary["cells_qualified_by_spacing"] is None
+    assert summary["cells_requested"] == {1: 4, 3: 5}
+    # Two cells were demoted from the request by the buffer (cell 4 beside the
+    # fine half, cell 7 beside the held driven cell); the driven cell itself is
+    # charged to the hold, not to the buffer.
+    assert summary["cells_demoted_by_buffer"] == 2
+    assert summary["cells_held_in_driven_zone"] == 1
 
 
 def test_explicit_rates_off_the_ladder_are_refused():
