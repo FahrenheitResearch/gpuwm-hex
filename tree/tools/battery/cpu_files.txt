@@ -14,6 +14,8 @@
 
 # what the distribution declares, against what the package actually is
 tests/test_hrrr_intermediate.py
+tests/test_mesh_point.py
+tests/test_mesh_rows.py
 tests/test_packaging_declaration.py
 
 # the engine range and the two surfaces that must name it: the derived
@@ -32,6 +34,7 @@ tests/test_checkout_reproducibility.py
 # the three front doors: argument surfaces, executable resolution ladders,
 # product coverage, and every named refusal
 tests/test_init_door.py
+tests/test_regional_class_band.py
 tests/test_render_door.py
 
 # the forecast door: argument grammar, the refusal inventory, and the device
