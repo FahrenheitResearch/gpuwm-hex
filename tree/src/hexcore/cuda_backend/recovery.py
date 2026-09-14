@@ -41,16 +41,23 @@ __device__ __forceinline__ void pressure_point(
       exner * rtheta_p + rtheta_base * (exner - exner_base));
 }
 
+/* Every kernel here walks a flat (level, owner) element index, owner
+   fastest, in a grid-stride loop; each element runs the former per-owner
+   loop body for its level unchanged (the terrain w column keeps its
+   ascending edge-slot accumulation per level), so the launch geometry is
+   not in the arithmetic.  recover_state launches one thread per element. */
+#define RECOVERY_ELEMENT_LOOP(total) \
+    for (int element = blockDim.x * blockIdx.x + threadIdx.x; \
+         element < (total); element += gridDim.x * blockDim.x)
+
 #define DECLARE_PRESSURE_KERNEL(NAME, T) \
 extern "C" __global__ void NAME( \
     const T* rho, const T* rtheta, const T* rho_base, const T* rtheta_base, \
     const T* exner_base, const T* zz, T* theta, T* exner, T* pressure, \
     T* rho_p, T* rtheta_p, T* pressure_p, T rgas, T cp, T p0, \
     int nlev, int ncells) { \
-  const int cell = blockDim.x * blockIdx.x + threadIdx.x; \
-  if (cell >= ncells) return; \
-  for (int level = 0; level < nlev; ++level) { \
-    const int index = level * ncells + cell; \
+  RECOVERY_ELEMENT_LOOP(nlev * ncells) { \
+    const int index = element; \
     pressure_point<T>( \
         rho[index], rtheta[index], rho_base[index], rtheta_base[index], \
         exner_base[index], zz[index], rgas, cp, p0, theta[index], exner[index], \
@@ -65,9 +72,9 @@ DECLARE_PRESSURE_KERNEL(recover_pressure_f64, double)
 extern "C" __global__ void NAME( \
     const T* rho, const T* ru, const int* cells_on_edge, T* u, \
     int nlev, int ncells, int nedges) { \
-  const int edge = blockDim.x * blockIdx.x + threadIdx.x; \
-  if (edge >= nedges) return; \
-  for (int level = 0; level < nlev; ++level) { \
+  RECOVERY_ELEMENT_LOOP(nlev * nedges) { \
+    const int edge = element % nedges; \
+    const int level = element / nedges; \
     const int index = level * nedges + edge; \
     const int cell0 = cells_on_edge[2 * edge]; \
     const int cell1 = cells_on_edge[2 * edge + 1]; \
@@ -84,9 +91,9 @@ DECLARE_EDGE_KERNEL(recover_edge_velocity_f64, double)
 extern "C" __global__ void NAME( \
     const T* rho, const T* rw, const T* zz, const T* fzm, const T* fzp, \
     T* w, int nlev, int ncells) { \
-  const int cell = blockDim.x * blockIdx.x + threadIdx.x; \
-  if (cell >= ncells) return; \
-  for (int level = 0; level <= nlev; ++level) { \
+  RECOVERY_ELEMENT_LOOP((nlev + 1) * ncells) { \
+    const int cell = element % ncells; \
+    const int level = element / ncells; \
     const int index = level * ncells + cell; \
     if (level == 0 || level == nlev) { \
       w[index] = T(0); \
@@ -106,55 +113,63 @@ DECLARE_FLAT_W_KERNEL(recover_flat_w_f32, float)
 DECLARE_FLAT_W_KERNEL(recover_flat_w_f64, double)
 
 template <typename T>
-__device__ __forceinline__ void terrain_w_column(
-    const int cell, const T* rho, const T* ru, const T* rw, const T* zz,
-    const T* fzm, const T* fzp, const int* edges_on_cell,
+__device__ __forceinline__ void terrain_w_element(
+    const int cell, const int level, const T* rho, const T* ru, const T* rw,
+    const T* zz, const T* fzm, const T* fzp, const int* edges_on_cell,
     const int* n_edges_on_cell, const T* edge_sign_on_cell,
     const T* zb_cell, const T* zb3_cell, T* w, int nlev, int ncells,
     int nedges, int max_edges, T cf1, T cf2, T cf3) {
-  w[cell] = T(0);
-  w[nlev * ncells + cell] = T(0);
-  for (int level = 1; level < nlev; ++level) {
-    const T metric = mp_add<T>(
-        mp_mul<T>(fzm[level], zz[level * ncells + cell]),
-        mp_mul<T>(fzp[level], zz[(level - 1) * ncells + cell]));
-    w[level * ncells + cell] = mp_div<T>(
-        rw[level * ncells + cell], metric);
+  /* The per-cell column, one level at a time: the value at (level, cell)
+     starts where the column loop started it, takes the edge-slot
+     contributions in the same ascending slot order, and is divided by the
+     same interpolated density last, so each level's bits are the column
+     loop's bits for that level. */
+  const int index = level * ncells + cell;
+  if (level == nlev) {
+    w[index] = T(0);
+    return;
   }
   const int slots = n_edges_on_cell[cell];
+  if (level == 0) {
+    T value = T(0);
+    for (int slot = 0; slot < slots; ++slot) {
+      const int edge = edges_on_cell[cell * max_edges + slot];
+      const T cell_sign = edge_sign_on_cell[cell * max_edges + slot];
+      const T flux = mp_add<T>(mp_add<T>(
+          mp_mul<T>(cf1, ru[edge]), mp_mul<T>(cf2, ru[nedges + edge])),
+          mp_mul<T>(cf3, ru[2 * nedges + edge]));
+      const int metric_index = cell * max_edges + slot;
+      value = mp_add<T>(value, mp_mul<T>(mp_mul<T>(cell_sign,
+          mp_add<T>(zb_cell[metric_index],
+              mp_mul<T>(mp_sign<T>(flux), zb3_cell[metric_index]))), flux));
+    }
+    const T bottom_density = mp_add<T>(mp_add<T>(
+        mp_mul<T>(cf1, rho[cell]), mp_mul<T>(cf2, rho[ncells + cell])),
+        mp_mul<T>(cf3, rho[2 * ncells + cell]));
+    w[index] = mp_div<T>(value, bottom_density);
+    return;
+  }
+  const T metric = mp_add<T>(
+      mp_mul<T>(fzm[level], zz[level * ncells + cell]),
+      mp_mul<T>(fzp[level], zz[(level - 1) * ncells + cell]));
+  T value = mp_div<T>(rw[index], metric);
   for (int slot = 0; slot < slots; ++slot) {
     const int edge = edges_on_cell[cell * max_edges + slot];
     const T cell_sign = edge_sign_on_cell[cell * max_edges + slot];
-    T flux = mp_add<T>(mp_add<T>(
-        mp_mul<T>(cf1, ru[edge]), mp_mul<T>(cf2, ru[nedges + edge])),
-        mp_mul<T>(cf3, ru[2 * nedges + edge]));
-    int metric_index = cell * max_edges + slot;
-    w[cell] = mp_add<T>(w[cell], mp_mul<T>(mp_mul<T>(cell_sign,
-        mp_add<T>(zb_cell[metric_index],
-            mp_mul<T>(mp_sign<T>(flux), zb3_cell[metric_index]))), flux));
-    for (int level = 1; level < nlev; ++level) {
-      flux = mp_add<T>(
-          mp_mul<T>(fzm[level], ru[level * nedges + edge]),
-          mp_mul<T>(fzp[level], ru[(level - 1) * nedges + edge]));
-      metric_index = (level * ncells + cell) * max_edges + slot;
-      w[level * ncells + cell] = mp_add<T>(w[level * ncells + cell],
-          mp_mul<T>(mp_mul<T>(cell_sign,
-              mp_add<T>(zb_cell[metric_index],
-                  mp_mul<T>(mp_sign<T>(flux), zb3_cell[metric_index]))),
-              flux));
-    }
+    const T flux = mp_add<T>(
+        mp_mul<T>(fzm[level], ru[level * nedges + edge]),
+        mp_mul<T>(fzp[level], ru[(level - 1) * nedges + edge]));
+    const int metric_index = (level * ncells + cell) * max_edges + slot;
+    value = mp_add<T>(value,
+        mp_mul<T>(mp_mul<T>(cell_sign,
+            mp_add<T>(zb_cell[metric_index],
+                mp_mul<T>(mp_sign<T>(flux), zb3_cell[metric_index]))),
+            flux));
   }
-  const T bottom_density = mp_add<T>(mp_add<T>(
-      mp_mul<T>(cf1, rho[cell]), mp_mul<T>(cf2, rho[ncells + cell])),
-      mp_mul<T>(cf3, rho[2 * ncells + cell]));
-  w[cell] = mp_div<T>(w[cell], bottom_density);
-  for (int level = 1; level < nlev; ++level) {
-    const T density = mp_add<T>(
-        mp_mul<T>(fzm[level], rho[level * ncells + cell]),
-        mp_mul<T>(fzp[level], rho[(level - 1) * ncells + cell]));
-    w[level * ncells + cell] = mp_div<T>(
-        w[level * ncells + cell], density);
-  }
+  const T density = mp_add<T>(
+      mp_mul<T>(fzm[level], rho[level * ncells + cell]),
+      mp_mul<T>(fzp[level], rho[(level - 1) * ncells + cell]));
+  w[index] = mp_div<T>(value, density);
 }
 
 #define DECLARE_TERRAIN_W_KERNEL(NAME, T) \
@@ -163,11 +178,12 @@ extern "C" __global__ void NAME( \
     const T* fzp, const int* edges_on_cell, const int* n_edges_on_cell, \
     const T* edge_sign_on_cell, const T* zb_cell, const T* zb3_cell, T* w, \
     int nlev, int ncells, int nedges, int max_edges, T cf1, T cf2, T cf3) { \
-  const int cell = blockDim.x * blockIdx.x + threadIdx.x; \
-  if (cell < ncells) terrain_w_column<T>( \
-      cell, rho, ru, rw, zz, fzm, fzp, edges_on_cell, n_edges_on_cell, \
-      edge_sign_on_cell, zb_cell, zb3_cell, w, nlev, ncells, nedges, \
-      max_edges, cf1, cf2, cf3); \
+  RECOVERY_ELEMENT_LOOP((nlev + 1) * ncells) { \
+    terrain_w_element<T>( \
+        element % ncells, element / ncells, rho, ru, rw, zz, fzm, fzp, \
+        edges_on_cell, n_edges_on_cell, edge_sign_on_cell, zb_cell, \
+        zb3_cell, w, nlev, ncells, nedges, max_edges, cf1, cf2, cf3); \
+  } \
 }
 
 DECLARE_TERRAIN_W_KERNEL(recover_terrain_w_f32, float)
@@ -299,7 +315,8 @@ def recover_state(
     if include_pressure:
         pressure_timing = launch_timed(
             kernels[pressure_name],
-            ((mesh.n_cells + block[0] - 1) // block[0],),
+            ((int(vertical.n_vert_levels) * mesh.n_cells + block[0] - 1)
+             // block[0],),
             block,
             (
                 state.rho,
@@ -325,7 +342,8 @@ def recover_state(
         )
     edge_timing = launch_timed(
         kernels[edge_name],
-        ((mesh.n_edges + block[0] - 1) // block[0],),
+        ((int(vertical.n_vert_levels) * mesh.n_edges + block[0] - 1)
+         // block[0],),
         block,
         (
             state.rho,
@@ -350,7 +368,7 @@ def recover_state(
             np.int32(vertical.n_vert_levels),
             np.int32(mesh.n_cells),
         )
-        vertical_count = mesh.n_cells
+        vertical_count = (int(vertical.n_vert_levels) + 1) * mesh.n_cells
     else:
         terrain = atmosphere.terrain
         vertical_args = (
@@ -374,7 +392,7 @@ def recover_state(
             scalar(vertical.cf2),
             scalar(vertical.cf3),
         )
-        vertical_count = mesh.n_cells
+        vertical_count = (int(vertical.n_vert_levels) + 1) * mesh.n_cells
     vertical_timing = launch_timed(
         kernels[vertical_name],
         ((vertical_count + block[0] - 1) // block[0],),

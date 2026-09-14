@@ -72,6 +72,13 @@ class CudaDryMixingTendencies:
 
 _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
 
+/* Level-independent kernels walk a flat (level, owner) element index, owner
+   fastest, in a grid-stride loop; each element runs the former per-owner
+   loop body for its level unchanged, so the launch geometry is not in the
+   arithmetic.  The forecast launches one thread per element. */
+#define HORIZONTAL_ELEMENT_LOOP(total) \
+    for (int element = blockDim.x * blockIdx.x + threadIdx.x; \
+         element < (total); element += gridDim.x * blockDim.x)
 __device__ __forceinline__ int lidx(const int k, const int i, const int n) {
     return k * n + i;
 }
@@ -168,10 +175,10 @@ extern "C" __global__ void tangential_velocity_f32(
     const int max_edges2,
     float* tangential_velocity
 ) {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    const int count = n_edges_on_edge[edge];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
+        const int count = n_edges_on_edge[edge];
         float value = 0.0f;
         for (int slot = 0; slot < count; ++slot) {
             const int offset = edge * max_edges2 + slot;
@@ -602,10 +609,10 @@ extern "C" __global__ void laplacian_divergence_f32(
     const int max_edges,
     float* delsq_divergence
 ) {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
         float value = 0.0f;
         for (int slot = 0; slot < count; ++slot) {
             const int edge = edges_on_cell[cell * max_edges + slot];
@@ -703,10 +710,10 @@ extern "C" __global__ void theta_filter_lap2_f32(
     float* delsq_theta,
     float* tendency
 ) {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
         float lap = 0.0f;
         float tend = 0.0f;
         for (int slot = 0; slot < count; ++slot) {
@@ -747,10 +754,10 @@ extern "C" __global__ void theta_filter_lap4_f32(
     const int max_edges,
     float* tendency
 ) {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
         const int tid = lidx(k, cell, ncells);
         float tend = tendency[tid];
         for (int slot = 0; slot < count; ++slot) {
@@ -786,10 +793,10 @@ extern "C" __global__ void w_filter_lap2_f32(
     float* delsq_w,
     float* tendency
 ) {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
         const int tid = lidx(k, cell, ncells);
         if (k == 0) {
             delsq_w[tid] = 0.0f;
@@ -840,10 +847,11 @@ extern "C" __global__ void w_filter_lap4_f32(
     const int max_edges,
     float* tendency
 ) {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int k = 1; k < nlev; ++k) {
+    /* Rows 1..nlev-1 only, as the per-cell loop ran them. */
+    HORIZONTAL_ELEMENT_LOOP((nlev - 1) * ncells) {
+        const int cell = element % ncells;
+        const int k = 1 + element / ncells;
+        const int count = n_edges_on_cell[cell];
         const int tid = lidx(k, cell, ncells);
         float tend = tendency[tid];
         for (int slot = 0; slot < count; ++slot) {
@@ -1101,7 +1109,7 @@ class CudaHorizontal:
             tangential = cp.empty_like(normal)
             self._launch(
                 "tangential_velocity_f32",
-                self.nedges,
+                self.nlev * self.nedges,
                 (
                     normal,
                     self.mesh.edges_on_edge,
@@ -1403,7 +1411,7 @@ class CudaHorizontal:
         if h4 > np.float32(0.0):
             self._launch(
                 "laplacian_divergence_f32",
-                self.ncells,
+                self.nlev * self.ncells,
                 (
                     delsq_u,
                     self.mesh.edges_on_cell,
@@ -1460,7 +1468,7 @@ class CudaHorizontal:
         tend_theta = cp.empty_like(theta)
         self._launch(
             "theta_filter_lap2_f32",
-            self.ncells,
+            self.nlev * self.ncells,
             (
                 theta,
                 edge_rho,
@@ -1483,7 +1491,7 @@ class CudaHorizontal:
         if h4 > np.float32(0.0):
             self._launch(
                 "theta_filter_lap4_f32",
-                self.ncells,
+                self.nlev * self.ncells,
                 (
                     delsq_theta,
                     del4,
@@ -1505,7 +1513,7 @@ class CudaHorizontal:
         tend_w = cp.zeros((self.nlev + 1, self.ncells), dtype=cp.float32)
         self._launch(
             "w_filter_lap2_f32",
-            self.ncells,
+            self.nlev * self.ncells,
             (
                 vertical,
                 edge_rho,
@@ -1528,7 +1536,7 @@ class CudaHorizontal:
         if h4 > np.float32(0.0):
             self._launch(
                 "w_filter_lap4_f32",
-                self.ncells,
+                (self.nlev - 1) * self.ncells,
                 (
                     delsq_w,
                     del4,

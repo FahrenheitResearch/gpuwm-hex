@@ -103,10 +103,10 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/cuda_driver.py": (
-            "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb"
+            "c9ab488c5409b697b9fe776fbb90818be694cbba535dfda3a949f52f7c4791ff"
         ),
         "src/hexcore/cuda_backend/recovery.py": (
-            "ea5dd7837f411233210f8bb47086e2264a83e2d4334e5ab41dae2bd87ebc5147"
+            "2bd21c4900bc91fb54ffe6de0ac5ac1ad915cad0bba052c2215ba96bd3de11cd"
         ),
         # Re-frozen for the regional CPU authority lane (#346 L4), again
         # for timestep admission (#358), and again 2026-08-26 for the
@@ -182,16 +182,16 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
             "c5007fa65ddcf67759a7b89e24f2bef615c6a3201d0e8dd2affabd43138e7865"
         ),
         "src/hexcore/cuda_horizontal.py": (
-            "fd09f38619ef3fe9b4b61e6665bd5dd440804f45af6c2ffebf9e47d05573d910"
+            "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5"
         ),
         "src/hexcore/cuda_horizontal_v841.py": (
-            "037f094c55417bef3c3c9a9131d46195bed464122523e7de4f1e9fa286b75412"
+            "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455"
         ),
         "src/hexcore/cuda_transport_v841.py": (
             "6ac4eece4ed080e7f76a2239b11dc59c984501ee52db900e35e5d74762f78252"
         ),
         "src/hexcore/cuda_transport.py": (
-            "e2d3e173e39891e51b578805fc29787a893ed57d7475dc64f8cc49ac8ad36f92"
+            "0cf68d55d00a094590d23ec0c7af6bae8595b2b954c2cdc8efc3e9eff49c112a"
         ),
         "src/hexcore/cuda_fp32.py": (
             "ba6b962cac42454846b96d87bba73ef3ceedbf69cdf8ae6a7f880b31f25cc28e"

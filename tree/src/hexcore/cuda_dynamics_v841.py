@@ -15,6 +15,32 @@ _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
 #define C2(k,c,nc) ((k)*(nc) + (c))
 #define E2(k,e,ne) ((k)*(ne) + (e))
 #define CES(c,s,me) ((c)*(me) + (s))
+/* Level-independent kernels walk a flat (level, owner) element index, owner
+   fastest, in a grid-stride loop; each element runs the former per-owner
+   loop body for its level unchanged, so the launch geometry is not in the
+   arithmetic.  The forecast launches one thread per element. */
+#define DYNAMICS_ELEMENT_LOOP(total) \
+    for (int element = blockDim.x * blockIdx.x + threadIdx.x; \
+         element < (total); element += gridDim.x * blockDim.x)
+
+extern "C" __global__ void reference_wind_edge_v841_f32(
+    const int nlev, const int nedges, const float *angle_edge,
+    const float *u_init, const float *v_init, float *reference_u)
+{
+    /* The perturbation-Coriolis reference wind at every (level, edge):
+       u_init(k)*cos(angleEdge) - v_init(k)*sin(angleEdge), the expression
+       vector_momentum_v841_f32 evaluated for every neighbour of every edge
+       at every level and every RK stage, now evaluated once per run in this
+       translation unit -- the same cosf/sinf, the same operands, the same
+       operation order -- and gathered by the momentum kernel. */
+    DYNAMICS_ELEMENT_LOOP(nlev * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
+        reference_u[E2(k, edge, nedges)] = mpas_sub(
+            mpas_mul(u_init[k], cosf(angle_edge[edge])),
+            mpas_mul(v_init[k], sinf(angle_edge[edge])));
+    }
+}
 
 extern "C" __global__ void vector_momentum_v841_f32(
     const int nlev, const int ncells, const int nedges, const int max_edges2,
@@ -22,14 +48,14 @@ extern "C" __global__ void vector_momentum_v841_f32(
     const float *kinetic, const float *mass_divergence,
     const int *cells_on_edge, const int *edges_on_edge,
     const int *n_edges_on_edge, const float *weights_on_edge,
-    const float *inv_dc_edge, const float *angle_edge, const float *f_edge,
-    const float *u_init, const float *v_init, float *result)
+    const float *inv_dc_edge, const float *reference_u, const float *f_edge,
+    float *result)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    const int c0 = cells_on_edge[2 * edge];
-    const int c1 = cells_on_edge[2 * edge + 1];
-    for (int k = 0; k < nlev; ++k) {
+    DYNAMICS_ELEMENT_LOOP(nlev * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
+        const int c0 = cells_on_edge[2 * edge];
+        const int c1 = cells_on_edge[2 * edge + 1];
         const int index = E2(k, edge, nedges);
         float q = 0.0f;
         for (int slot = 0; slot < n_edges_on_edge[edge]; ++slot) {
@@ -43,11 +69,9 @@ extern "C" __global__ void vector_momentum_v841_f32(
         for (int slot = 0; slot < n_edges_on_edge[edge]; ++slot) {
             const int offset = edge * max_edges2 + slot;
             const int neighbor = edges_on_edge[offset];
-            const float reference_u = mpas_sub(
-                mpas_mul(u_init[k], cosf(angle_edge[neighbor])),
-                mpas_mul(v_init[k], sinf(angle_edge[neighbor])));
             q = mpas_sub(q, mpas_mul(mpas_mul(
-                weights_on_edge[offset], reference_u), f_edge[edge]));
+                weights_on_edge[offset], reference_u[E2(k, neighbor, nedges)]),
+                f_edge[edge]));
         }
         const float gradient = mpas_mul(mpas_sub(
             kinetic[C2(k, c1, ncells)], kinetic[C2(k, c0, ncells)]),
@@ -65,9 +89,9 @@ extern "C" __global__ void theta_finish_v841_f32(
     const float *acoustic_sign, const float *inv_area_cell, const float *rdzw,
     const float *edge_flux, const float *vertical_flux, float *result)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    for (int k = 0; k < nlev; ++k) {
+    DYNAMICS_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
         const int index = C2(k, cell, ncells);
         float value = 0.0f;
         for (int slot = 0; slot < n_edges_on_cell[cell]; ++slot) {
@@ -89,9 +113,9 @@ extern "C" __global__ void w_finish_v841_f32(
     const float *acoustic_sign, const float *inv_area_cell, const float *rdzu,
     const float *edge_flux, const float *vertical_flux, float *result)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    for (int k = 0; k <= nlev; ++k) {
+    DYNAMICS_ELEMENT_LOOP((nlev + 1) * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
         const int index = C2(k, cell, ncells);
         if (k == 0 || k == nlev) {
             result[index] = 0.0f;
@@ -178,22 +202,16 @@ extern "C" __global__ void validate_finite_array_v841_f32(
 extern "C" __global__ void split_flux_first_v841_f32(
     const int nlevels, const int nowners, const float *current, float *accumulator)
 {
-    const int owner = blockDim.x * blockIdx.x + threadIdx.x;
-    if (owner >= nowners) return;
-    for (int k = 0; k < nlevels; ++k) {
-        const int index = k * nowners + owner;
-        accumulator[index] = current[index];
+    DYNAMICS_ELEMENT_LOOP(nlevels * nowners) {
+        accumulator[element] = current[element];
     }
 }
 
 extern "C" __global__ void split_flux_add_v841_f32(
     const int nlevels, const int nowners, const float *current, float *accumulator)
 {
-    const int owner = blockDim.x * blockIdx.x + threadIdx.x;
-    if (owner >= nowners) return;
-    for (int k = 0; k < nlevels; ++k) {
-        const int index = k * nowners + owner;
-        accumulator[index] = mpas_add(current[index], accumulator[index]);
+    DYNAMICS_ELEMENT_LOOP(nlevels * nowners) {
+        accumulator[element] = mpas_add(current[element], accumulator[element]);
     }
 }
 
@@ -201,11 +219,8 @@ extern "C" __global__ void split_flux_finish_v841_f32(
     const int nlevels, const int nowners, const float reciprocal,
     const float *accumulator, float *average)
 {
-    const int owner = blockDim.x * blockIdx.x + threadIdx.x;
-    if (owner >= nowners) return;
-    for (int k = 0; k < nlevels; ++k) {
-        const int index = k * nowners + owner;
-        average[index] = mpas_mul(accumulator[index], reciprocal);
+    DYNAMICS_ELEMENT_LOOP(nlevels * nowners) {
+        average[element] = mpas_mul(accumulator[element], reciprocal);
     }
 }
 """
@@ -291,20 +306,78 @@ def vector_momentum_tendency_cuda_v841(
     ):
         require_resident_array(name, value, dtype=np.float32, shape=shape)
     out = cp.empty_like(normal_velocity)
+    reference_u = reference_wind_edge_cuda_v841(
+        mesh, context, n_vert_levels=nlev, kernel_cache=kernel_cache
+    )
     _launch(
         "vector_momentum_v841_f32",
-        nedges,
+        nlev * nedges,
         (
             np.int32(nlev), np.int32(ncells), np.int32(nedges),
             np.int32(mesh.max_edges2), normal_velocity, rho_edge, pv_edge,
             kinetic_energy, horizontal_divergence, mesh.cells_on_edge,
             mesh.edges_on_edge, mesh.n_edges_on_edge, mesh.weights_on_edge,
-            context.inv_dc_edge, mesh.angle_edge, mesh.f_edge,
-            context.u_init, context.v_init, out,
+            context.inv_dc_edge, reference_u, mesh.f_edge, out,
         ),
         kernel_cache,
     )
     return out
+
+
+_REFERENCE_WIND: dict[tuple[Any, ...], tuple[Any, ...]] = {}
+
+
+def reference_wind_edge_cuda_v841(
+    mesh: Any,
+    context: CudaV841Context,
+    *,
+    n_vert_levels: int,
+    kernel_cache: Any | None = None,
+) -> Any:
+    """The (level, edge) perturbation-Coriolis reference wind, once per run.
+
+    ``u_init(k)*cos(angleEdge(e)) - v_init(k)*sin(angleEdge(e))`` depends on
+    nothing that moves during a forecast, and the momentum kernel evaluated
+    it for every neighbour of every edge at every level on every RK stage:
+    ten full-precision ``cosf``/``sinf`` pairs per element per stage.  It is
+    computed once here by a kernel of the same translation unit -- the same
+    ``cosf``/``sinf`` implementation, the same float32 operands, the same
+    operation order -- so the gathered value is the value the kernel used to
+    compute in place, bit for bit.
+
+    The cache is keyed by the identity of the three device arrays and holds
+    a reference to each, so an entry can only ever be served for the exact
+    arrays it was computed from: a freed array's address cannot be reused
+    under a live key.
+    """
+
+    cp = _cupy()
+    nlev = int(n_vert_levels)
+    nedges = int(mesh.n_edges)
+    angle_edge = mesh.angle_edge
+    key = (
+        int(angle_edge.data.ptr), int(context.u_init.data.ptr),
+        int(context.v_init.data.ptr), nlev, nedges, id(kernel_cache),
+    )
+    hit = _REFERENCE_WIND.get(key)
+    if hit is not None and hit[0] is angle_edge and hit[1] is context.u_init \
+            and hit[2] is context.v_init:
+        return hit[3]
+    require_resident_array("angle_edge", angle_edge, dtype=np.float32, shape=(nedges,))
+    require_resident_array("u_init", context.u_init, dtype=np.float32, shape=(nlev,))
+    require_resident_array("v_init", context.v_init, dtype=np.float32, shape=(nlev,))
+    reference_u = cp.empty((nlev, nedges), dtype=cp.float32)
+    _launch(
+        "reference_wind_edge_v841_f32",
+        nlev * nedges,
+        (
+            np.int32(nlev), np.int32(nedges), angle_edge,
+            context.u_init, context.v_init, reference_u,
+        ),
+        kernel_cache,
+    )
+    _REFERENCE_WIND[key] = (angle_edge, context.u_init, context.v_init, reference_u)
+    return reference_u
 
 
 def theta_finish_cuda_v841(
@@ -339,7 +412,7 @@ def theta_finish_cuda_v841(
     out = cp.empty((nlev, ncells), dtype=cp.float32)
     _launch(
         "theta_finish_v841_f32",
-        ncells,
+        nlev * ncells,
         (
             np.int32(nlev), np.int32(ncells),
             np.int32(nedges), np.int32(mesh.max_edges),
@@ -383,7 +456,7 @@ def w_finish_cuda_v841(
     out = cp.empty((nlev + 1, ncells), dtype=cp.float32)
     _launch(
         "w_finish_v841_f32",
-        ncells,
+        (nlev + 1) * ncells,
         (
             np.int32(nlev), np.int32(ncells),
             np.int32(nedges), np.int32(mesh.max_edges),
@@ -536,7 +609,7 @@ def accumulate_split_flux_cuda_v841(
         kernel = "split_flux_add_v841_f32"
     _launch(
         kernel,
-        nowners,
+        nlevels * nowners,
         (np.int32(nlevels), np.int32(nowners), current, result),
         kernel_cache,
     )
@@ -559,7 +632,7 @@ def finish_split_flux_cuda_v841(
     reciprocal = np.float32(1.0) / np.float32(split_count)
     _launch(
         "split_flux_finish_v841_f32",
-        nowners,
+        nlevels * nowners,
         (
             np.int32(nlevels), np.int32(nowners), reciprocal,
             accumulator, result,
