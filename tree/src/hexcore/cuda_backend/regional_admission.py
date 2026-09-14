@@ -488,8 +488,29 @@ class RegionalContract:
 #: re-mint: their kernels now launch re-mapped text, and the evidence that
 #: the re-mapped text computes the minted bits is the deck and the per-kernel
 #: replay above, not a re-run of their own mints.
+#:
+#: RE-DERIVED 2026-09-14 for the landing of the two moves above together
+#: (the hex performance campaign's kernels-land lane).  The host-path move
+#: and the element-parallel re-map were taken on separate branches from the
+#: same base and each re-derived this constant on its own; merged, the
+#: fourteen sources carry both: ``cuda_driver.py``,
+#: ``cuda_backend/recovery.py`` and ``cuda_regional_forecast_v841.py`` hold
+#: a lane each in different lines (the CUDA source strings are the re-map's,
+#: the host path's once-per-kernel launch helper around them), and the other
+#: eleven are one lane's or neither's.  One line moved beyond the union:
+#: ``cuda_regional_forecast_v841.py`` gained a public reading of the garbage
+#: discipline's unit-pool registry (``bound_to_unit_pool``), so the
+#: per-kernel replay can reproduce a launch's scrub after the run; it reads
+#: a dictionary and launches nothing.  What was RE-MINTED at this digest:
+#: the point class ``graded-869m-dt5-z7`` on the 43,884-cell point cull (its
+#: row says what was measured).  The other four classes carry this digest
+#: through the constant and record the lapse here rather than pretend a
+#: re-mint, on the reasoning of the two notes above: the cull's contract
+#: deck at the merged text and the per-kernel replay against the integrated
+#: tree's translation units are the evidence that the merged text computes
+#: the minted bits.
 MINTED_KERNEL_SET_SHA256 = (
-    "4723097abdc04be06d28f50d21ac5a993c08dc4e2a0c80b949d9f9733668c76e"
+    "8a716f28862a3a89006b017397ad004cb05699a539ac74c9d9b283ba86657818"
 )
 
 _DRY_MINT_CAVEAT = (

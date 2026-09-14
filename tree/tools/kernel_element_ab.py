@@ -45,6 +45,44 @@ The door's ``--out`` and ``--scratch`` must be absent, as for any forecast,
 and the run's ``--hours`` / ``--history-every-minutes`` must pass the door's
 schedule (a whole number of steps, the cadence dividing the run); the
 capture stops the run after its first few steps regardless of the length.
+
+WHAT THE FIRST RUN OF THIS INSTRUMENT GOT WRONG, 2026-09-14, on the point
+cull, 49 kernels compared, five reported as differing and none of them
+was the arithmetic:
+
+* ``recover_pressure_f32``, ``recover_edge_velocity_f32``,
+  ``recover_terrain_w_f32`` and ``transport_standard_finish_regional_v841``
+  differed in exactly 55 values each, all of them the garbage column
+  (column ``n_cells_solve`` of a padded cell array) of an INPUT the kernel
+  never writes: the RK stage's ``rho`` for the three recovery kernels and
+  ``rho_zz_old`` for the transport finish.  This tree's own replay did not
+  reproduce its own recorded output either.  The cause is the replay
+  environment, not the kernel.  Every dycore launch resolves through the
+  one ``KernelCache`` the regional runtime arms with
+  ``RegionalGarbageDiscipline.scrub`` as ``post_launch``; the scrub
+  rewrites the garbage column of every padded float32 argument after every
+  launch (the four physics units and the solve-region unit manage their
+  own and are skipped), writing 1.0 into an array bound to the unit pool
+  for the step and 0.0 into any other.  The replay runs after the forecast
+  has finished, when ``release_unit_pool`` has dropped every step-bound
+  image, so the same scrub wrote 0.0 where the live step wrote 1.0.  The
+  recorder now asks the discipline, at the launch, which arguments are
+  bound (``bound_to_unit_pool``) and the replay re-binds them before every
+  launch of either translation unit and releases after, so the replayed
+  scrub writes what the live scrub wrote and every byte is compared.  The
+  receipt also classifies each remaining difference by whether it lies in
+  a garbage column, since a kernel's own value there is dead by
+  construction -- the scrub overwrites it before any consumer launches --
+  but the verdict of record stays the whole-array comparison.
+* ``acoustic_ru_regional_v841`` differed in 7.2 million values because its
+  baseline was launched at one owner: the owner count of a kernel with no
+  entry in ``OWNER_COUNT_ARG`` is the trailing dimension of its LAST device
+  argument, and that kernel's last device argument is the (1,) acoustic
+  invalid flag.  The control launch of the baseline at the element
+  geometry was byte-identical, which is the arithmetic's verdict; the
+  rule now names the edge count, and ``tests/test_kernel_element_ab.py``
+  parses every target's signature so a flag or index array can never be
+  the owner axis again.
 """
 
 from __future__ import annotations
@@ -160,6 +198,9 @@ OWNER_COUNT_ARG: dict[str, Any] = {
     "regional_bdy_adjust_scalars_compute_v841": (5, 6),
     "regional_bdy_adjust_scalars_copyback_v841": 3,
     "regional_bdy_set_scalars_v841": 3,
+    # Its last device argument is the (1,) acoustic invalid flag, not an
+    # edge array: the owner axis is the second scalar, ``nedges``.
+    "acoustic_ru_regional_v841": 1,
 }
 
 #: The step counter: one launch of this kernel per forecast step.
@@ -191,8 +232,10 @@ def _cupy() -> Any:
 
 
 def _is_device_array(value: Any) -> bool:
-    import cupy as cp
-
+    try:
+        import cupy as cp
+    except ImportError:
+        return False
     return isinstance(value, cp.ndarray)
 
 
@@ -217,34 +260,112 @@ def _digest(cp: Any, args: list[Any]) -> tuple[str, int]:
     return digest.hexdigest(), total
 
 
-def _mismatch(cp: Any, mine: list[Any], other: list[Any]) -> list[dict[str, Any]]:
+def _compare_host(
+    position: int, ha: np.ndarray, hb: np.ndarray, extents: dict[int, int] | None = None
+) -> dict[str, Any] | None:
+    """One argument's difference report, or None when the bytes agree.
+
+    ``extents`` maps a padded trailing dimension to its solve count (the
+    discipline's own table); an array whose trailing dimension is padded
+    has its differing values split into the garbage column and the rest.
+    """
+
+    if ha.tobytes() == hb.tobytes():
+        return None
+    if ha.dtype == np.float32:
+        differs = ha.view(np.uint32) != hb.view(np.uint32)
+    else:
+        differs = ha != hb
+    report: dict[str, Any] = {
+        "argument": position,
+        "shape": list(ha.shape),
+        "differing_values": int(np.count_nonzero(differs)),
+    }
+    if ha.dtype.kind == "f":
+        delta = np.abs(ha.astype(np.float64) - hb.astype(np.float64))
+        where = int(np.nanargmax(delta))
+        report.update({
+            "max_abs_difference": float(np.nanmax(delta)),
+            "at_flat_index": where,
+            "mine": float(ha.flat[where]),
+            "baseline": float(hb.flat[where]),
+        })
+    solve = (extents or {}).get(int(ha.shape[-1])) if ha.ndim else None
+    if solve is not None:
+        garbage = differs[..., solve]
+        report["garbage_column"] = solve
+        report["differing_values_in_garbage_column"] = int(np.count_nonzero(garbage))
+        report["differing_values_outside_garbage_column"] = (
+            report["differing_values"] - report["differing_values_in_garbage_column"]
+        )
+    return report
+
+
+def _mismatch(
+    cp: Any, mine: list[Any], other: list[Any], extents: dict[int, int] | None = None
+) -> list[dict[str, Any]]:
     report = []
     for position, (a, b) in enumerate(zip(mine, other)):
         if not _is_device_array(a):
             continue
-        ha = cp.asnumpy(a)
-        hb = cp.asnumpy(b)
-        if ha.tobytes() == hb.tobytes():
-            continue
-        if ha.dtype.kind == "f":
-            delta = np.abs(ha.astype(np.float64) - hb.astype(np.float64))
-            where = int(np.nanargmax(delta))
-            report.append({
-                "argument": position,
-                "shape": list(ha.shape),
-                "differing_values": int(np.count_nonzero(ha.view(np.uint32) != hb.view(np.uint32))) if ha.dtype == np.float32 else int(np.count_nonzero(ha != hb)),
-                "max_abs_difference": float(np.nanmax(delta)),
-                "at_flat_index": where,
-                "mine": float(ha.flat[where]),
-                "baseline": float(hb.flat[where]),
-            })
-        else:
-            report.append({
-                "argument": position,
-                "shape": list(ha.shape),
-                "differing_values": int(np.count_nonzero(ha != hb)),
-            })
+        entry = _compare_host(position, cp.asnumpy(a), cp.asnumpy(b), extents)
+        if entry is not None:
+            report.append(entry)
     return report
+
+
+def _outside_garbage_columns(mismatches: list[dict[str, Any]]) -> int:
+    """Differing values that are not in a garbage column, over a report."""
+
+    return sum(
+        int(m.get("differing_values_outside_garbage_column", m["differing_values"]))
+        for m in mismatches
+    )
+
+
+def _disciplines(caches: list[Any]) -> list[Any]:
+    """The garbage disciplines armed on the recorded caches, if any."""
+
+    found = []
+    for cache in caches:
+        owner = getattr(getattr(cache, "post_launch", None), "__self__", None)
+        if owner is not None and hasattr(owner, "bound_to_unit_pool") and owner not in found:
+            found.append(owner)
+    return found
+
+
+def _unit_pool_positions(
+    args: tuple[Any, ...], disciplines: list[Any], is_device: Any = _is_device_array
+) -> list[int]:
+    """Argument positions the disciplines hold in the unit pool right now."""
+
+    return [
+        position
+        for position, value in enumerate(args)
+        if is_device(value) and any(d.bound_to_unit_pool(value) for d in disciplines)
+    ]
+
+
+def _extents(disciplines: list[Any]) -> dict[int, int]:
+    table: dict[int, int] = {}
+    for d in disciplines:
+        for solve in (d.n_cells_solve, d.n_edges_solve, d.n_vertices_solve):
+            table[int(solve) + 1] = int(solve)
+    return table
+
+
+def _rebind(disciplines: list[Any], positions: list[int], live: list[Any]) -> None:
+    """Put the disciplines in the state the recorded launch saw."""
+
+    for d in disciplines:
+        d.release_unit_pool()
+        for position in positions:
+            d.bind_unit_pool(live[position])
+
+
+def _release(disciplines: list[Any]) -> None:
+    for d in disciplines:
+        d.release_unit_pool()
 
 
 class Recorder:
@@ -275,6 +396,10 @@ class Recorder:
         cp = _cupy()
         cp.cuda.get_current_stream().synchronize()
         before = _copy_args(cp, tuple(args))
+        # Which arguments the discipline will scrub to the unit pool for
+        # THIS launch: asked now, because the registrations are released at
+        # the step boundary and the replay runs after the run.
+        unit_pool = _unit_pool_positions(tuple(args), _disciplines(session.caches))
         result = self._kernel(grid, block, args, **kwargs)
         cp.cuda.get_current_stream().synchronize()
         after = _copy_args(cp, tuple(args))
@@ -286,6 +411,7 @@ class Recorder:
             "after": after,
             "live": list(args),
             "kernel": self._kernel,
+            "unit_pool_args": unit_pool,
         }
         print(f"[capture] {self._module_key}:{self._name} grid={grid} block={block} "
               f"({len(session.records)}/{len(session.targets)})", flush=True)
@@ -398,6 +524,8 @@ def replay(session: Session, baseline_sources: dict[str, str], repeats: int) -> 
     cp = _cupy()
     modules: dict[str, Any] = {}
     results: list[dict[str, Any]] = []
+    disciplines = _disciplines(session.caches)
+    extents = _extents(disciplines)
     for (module_key, name), record in sorted(session.records.items()):
         if name not in TARGETS.get(module_key, (0, ()))[1]:
             continue
@@ -405,16 +533,23 @@ def replay(session: Session, baseline_sources: dict[str, str], repeats: int) -> 
         grid, block = record["grid"], record["block"]
         kernel = record["kernel"]
         kwargs = record["kwargs"]
+        unit_pool = list(record.get("unit_pool_args", ()))
+
+        def restore() -> None:
+            # The inputs, then the discipline as the live launch had it, so
+            # the post-launch scrub writes the live launch's pool values.
+            _restore(cp, live, before)
+            _rebind(disciplines, unit_pool, live)
 
         # 1. this tree, replayed at the recorded geometry
-        _restore(cp, live, before)
+        restore()
         kernel(grid, block, tuple(live), **kwargs)
         cp.cuda.get_current_stream().synchronize()
-        replay_ok = not _mismatch(cp, live, after)
+        replay_mismatch = _mismatch(cp, live, after, extents)
         mine_time = _time_launch(
             cp,
             lambda: kernel(grid, block, tuple(live), **kwargs),
-            lambda: _restore(cp, live, before),
+            restore,
             repeats,
         )
 
@@ -424,11 +559,14 @@ def replay(session: Session, baseline_sources: dict[str, str], repeats: int) -> 
             "kernel": name,
             "element_grid": list(grid),
             "element_block": list(block),
-            "replay_reproduces_recorded_output": replay_ok,
+            "unit_pool_arguments": unit_pool,
+            "replay_reproduces_recorded_output": not replay_mismatch,
+            "replay_mismatches": replay_mismatch,
             "mine": mine_time,
         }
         source = baseline_sources.get(module_key)
         if source is None:
+            _release(disciplines)
             entry["baseline"] = "no baseline source for this module key"
             results.append(entry)
             continue
@@ -439,6 +577,7 @@ def replay(session: Session, baseline_sources: dict[str, str], repeats: int) -> 
         try:
             base_kernel = module.get_function(name)
         except Exception as error:  # pragma: no cover - a renamed kernel
+            _release(disciplines)
             entry["baseline"] = f"baseline has no kernel {name}: {error}"
             results.append(entry)
             continue
@@ -453,18 +592,17 @@ def replay(session: Session, baseline_sources: dict[str, str], repeats: int) -> 
             for hook in hooks:
                 hook(name, base_args, module_key=module_key)
 
-        _restore(cp, live, before)
+        restore()
         launch_baseline()
         cp.cuda.get_current_stream().synchronize()
-        mismatch = _mismatch(cp, live, after)
-        base_time = _time_launch(
-            cp, launch_baseline, lambda: _restore(cp, live, before), repeats
-        )
+        mismatch = _mismatch(cp, live, after, extents)
+        base_time = _time_launch(cp, launch_baseline, restore, repeats)
         # 3. the baseline kernel at the element geometry, as a control
-        _restore(cp, live, before)
+        restore()
         launch_baseline(grid, block)
         cp.cuda.get_current_stream().synchronize()
-        control_mismatch = _mismatch(cp, live, after)
+        control_mismatch = _mismatch(cp, live, after, extents)
+        _release(disciplines)
         digest, nbytes = _digest(cp, after)
         entry.update({
             "baseline_grid": list(base_grid),
@@ -472,6 +610,7 @@ def replay(session: Session, baseline_sources: dict[str, str], repeats: int) -> 
             "baseline_owner_count": owners,
             "baseline": base_time,
             "bitwise_identical": not mismatch,
+            "bitwise_identical_outside_garbage_columns": _outside_garbage_columns(mismatch) == 0,
             "mismatches": mismatch,
             "baseline_at_element_geometry_identical": not control_mismatch,
             "output_sha256": digest,
@@ -536,6 +675,13 @@ def main() -> int:
         "repeats": int(args.repeats),
         "targets_not_launched_by_this_run": missing,
         "all_bitwise": all(k.get("bitwise_identical") is True for k in report["kernels"] if "baseline_grid" in k),
+        "all_bitwise_outside_garbage_columns": all(
+            k.get("bitwise_identical_outside_garbage_columns") is True
+            for k in report["kernels"] if "baseline_grid" in k
+        ),
+        "all_replays_reproduce_recorded_output": all(
+            k.get("replay_reproduces_recorded_output") is True for k in report["kernels"]
+        ),
         "kernels_compared": sum(1 for k in report["kernels"] if "baseline_grid" in k),
     })
     args.out.parent.mkdir(parents=True, exist_ok=True)

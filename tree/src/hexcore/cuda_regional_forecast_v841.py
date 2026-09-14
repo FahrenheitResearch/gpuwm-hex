@@ -858,6 +858,21 @@ class RegionalGarbageDiscipline:
         )
         return array
 
+    def bound_to_unit_pool(self, array: Any) -> bool:
+        """Whether a scrub of ``array`` would write the 1.0 pool right now.
+
+        The one public reading of the registry.  A launch's scrub depends
+        on the registrations live AT THAT LAUNCH, and they are released at
+        every step boundary, so anything that replays a recorded launch
+        after the run (``tools/kernel_element_ab.py``) has to ask this
+        while the launch is live and re-bind before it replays; asked
+        after the run it answers 0.0 for every step-bound image, which is
+        what the replay of 2026-09-14 wrote into four kernels' input
+        garbage columns and reported as a difference.
+        """
+
+        return int(array.data.ptr) in self._unit_pool
+
     def release_unit_pool(self) -> None:
         """Drop every per-step ``rho_zz`` registration at a step boundary.
 

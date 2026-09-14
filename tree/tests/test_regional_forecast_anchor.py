@@ -125,7 +125,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_regional_forecast_v841.py": {
         "recorded": "3aa30ec3c3a11c1152a67d1fcbc8b2d470fd8ac2446ec8f7ec34906873421e88",
-        "current": "4863e7600b4e1615e7d0e7729d8ab4aae70f155e5f66f9d2393206134b9557c5",
+        "current": "7d35d73c08464f50f6dd984d81f7479702d85f14b1d6bed67c178ede0ac2a533",
         "why": (
             "ANCHOR RE-KEYING, 2026-08-27: open_regional_forecast_v841 now "
             "measures the configuration CLASS off the run it is about to "
