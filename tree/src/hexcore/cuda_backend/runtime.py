@@ -94,6 +94,20 @@ class CudaCapability:
         }
 
 
+#: Admissions already granted in this process, keyed by the exact arguments
+#: they were granted for.  Each entry keeps the cupy module it was measured
+#: against, so a stubbed cupy in a test can never be answered from a real
+#: card's admission (or the other way round), and an address recycled for a
+#: fresh module object cannot alias a stale entry.
+_ADMISSIONS: dict[tuple[Any, ...], tuple[Any, CudaCapability]] = {}
+
+
+def forget_admissions() -> None:
+    """Drop every memoised admission; the next ``require_cuda`` re-measures."""
+
+    _ADMISSIONS.clear()
+
+
 def require_cuda(
     *,
     device_id: int = 0,
@@ -102,9 +116,31 @@ def require_cuda(
     min_runtime_version: int = 13_000,
     cache_dir: str | Path | None = None,
 ) -> CudaCapability:
-    """Select a real CUDA device or refuse with the failing capability name."""
+    """Select a real CUDA device or refuse with the failing capability name.
+
+    An admission is measured once per process for each distinct argument
+    set and answered from memory after that.  The dycore's translation
+    units re-enter through their ``_cupy()`` helpers on every launch group,
+    59 times a forecast step on the 43,884-cell point mesh, and
+    ``cudaGetDeviceProperties`` costs 1.05 ms a call on the CUDA 13.3
+    driver: 62-82 ms of host time per 0.38 s step, measured in
+    ``evidence-gallery/hex-perf-profile-2026-09-13``, spent re-deciding a
+    question whose answer cannot change while the process lives.  A
+    refusal is never memoised, so a refused configuration is re-measured
+    every time it is asked.
+    """
 
     cp = _cupy()
+    key = (
+        int(device_id),
+        tuple(int(v) for v in min_compute),
+        None if required_compute is None else tuple(int(v) for v in required_compute),
+        int(min_runtime_version),
+        None if cache_dir is None else str(cache_dir),
+    )
+    remembered = _ADMISSIONS.get(key)
+    if remembered is not None and remembered[0] is cp:
+        return remembered[1]
     try:
         count = int(cp.cuda.runtime.getDeviceCount())
     except Exception as error:
@@ -148,7 +184,7 @@ def require_cuda(
     name = properties["name"]
     if isinstance(name, bytes):
         name = name.decode("utf-8", errors="replace")
-    return CudaCapability(
+    admitted = CudaCapability(
         device_id=device_id,
         name=str(name),
         compute_major=compute[0],
@@ -161,6 +197,8 @@ def require_cuda(
         cupy_version=str(cp.__version__),
         cache_directory=str(cache),
     )
+    _ADMISSIONS[key] = (cp, admitted)
+    return admitted
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,6 +489,34 @@ def _one_launch(
     return float(cp.cuda.get_elapsed_time(start, end)), (time.perf_counter() - wall) * 1_000.0
 
 
+def launch_checked(
+    kernel: Any,
+    grid: tuple[int, ...],
+    block: tuple[int, ...],
+    args: tuple[Any, ...],
+    *,
+    stream: Any | None = None,
+) -> None:
+    """Launch exactly once on the stream and check the launch error state.
+
+    No event is recorded and nothing is synchronized: the launch is queued
+    and the host moves on.  This is the step path's launch; ``launch_timed``
+    below is the benchmark's, and the difference is what the profile
+    measured (``evidence-gallery/hex-perf-profile-2026-09-13``): every
+    recovery kernel that went through ``launch_timed`` with
+    ``timing_repeats=1`` was launched twice, event-synchronized twice and
+    stream-synchronized once, 36 host stalls and 10.7 ms of repeated device
+    work per forecast step.
+    """
+
+    cp = _cupy()
+    if stream is None:
+        kernel(tuple(grid), tuple(block), tuple(args))
+    else:
+        kernel(tuple(grid), tuple(block), tuple(args), stream=stream)
+    _check_launch_error(cp)
+
+
 def launch_timed(
     kernel: Any,
     grid: tuple[int, ...],
@@ -494,6 +560,8 @@ __all__ = [
     "CudaRefusal",
     "KernelCache",
     "KernelTiming",
+    "forget_admissions",
+    "launch_checked",
     "launch_timed",
     "require_cuda",
 ]

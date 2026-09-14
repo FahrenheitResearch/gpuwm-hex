@@ -2632,11 +2632,14 @@ class CudaDryDycoreDriver:
         """Recover a resident sidecar without publishing the candidate state."""
 
         selected = self.atmosphere if atmosphere is None else atmosphere
+        # Untimed: one launch per kernel, no event and no synchronize.  The
+        # timed path launched every recovery kernel twice with two event
+        # syncs, on the commit's rebuild as on every RK stage.
         recovered = recover_state(
             selected,
             cache=self.cache,
             warmup=0,
-            timing_repeats=1,
+            timing_repeats=0,
         )
         result = DeviceSavedDiagnostics(
             theta_m=recovered.theta_m,
@@ -3394,7 +3397,7 @@ class CudaDryDycoreDriver:
             temporary,
             cache=self.cache,
             warmup=0,
-            timing_repeats=1,
+            timing_repeats=0,
             include_pressure=False,
         )
         if self.regional_v841 is not None:

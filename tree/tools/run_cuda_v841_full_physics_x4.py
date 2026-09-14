@@ -323,7 +323,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
     "src/hexcore/cuda_driver.py": (
-        "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb"
+        "e22e0a991ef7734929a9f72a6b2a748d4fc36ee9d6da0bb815055748e87826fc"
     ),
     # THE BREAKAGE THIS PREVENTS: the same lane that re-froze cuda_driver.py
     # also changed ``recover_state`` -- it gained ``include_pressure`` and
@@ -333,7 +333,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # freely, so a later edit to the pressure-diagnostic path could change
     # forecast bytes with every proof still reporting frozen sources.
     "src/hexcore/cuda_backend/recovery.py": (
-        "ea5dd7837f411233210f8bb47086e2264a83e2d4334e5ab41dae2bd87ebc5147"
+        "5d43a4c31830c79e092d0fa8fb145c3b4a22ccd48dc178469af81b4dea35a21f"
     ),
     # Re-frozen for the regional CPU authority lane (#346 L4): the v8.4.1
     # config admits config_apply_lbcs and config_moist_physics behind the

@@ -9,7 +9,7 @@ import numpy as np
 
 from ..cuda_fp32 import CUDA_FTZ_HELPERS
 from .containers import DeviceAtmosphere
-from .runtime import KernelCache, KernelTiming, launch_timed
+from .runtime import KernelCache, KernelTiming, launch_checked, launch_timed
 
 
 RECOVERY_CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
@@ -185,7 +185,9 @@ class DeviceRecoveredState:
     pressure_perturbation: Any
     normal_velocity: Any
     vertical_velocity: Any
-    timings: dict[str, KernelTiming]
+    #: ``None`` per kernel on the step path (``timing_repeats=0``); a
+    #: :class:`KernelTiming` per kernel when a caller asked to be timed.
+    timings: dict[str, KernelTiming | None]
 
     def to_host(self) -> dict[str, np.ndarray]:
         import cupy as cp
@@ -229,10 +231,21 @@ def recover_state(
     cp: float = 1004.5,
     reference_pressure: float = 100_000.0,
     warmup: int = 0,
-    timing_repeats: int = 1,
+    timing_repeats: int = 0,
     include_pressure: bool = True,
 ) -> DeviceRecoveredState:
     """Recover pressure diagnostics and physical u/w without leaving device.
+
+    ``timing_repeats=0`` (the default, and the step path) launches each
+    kernel exactly once through :func:`launch_checked`: no event, no
+    synchronize, ``timings`` holds ``None`` per kernel.  A positive count is
+    the benchmark's timed path through :func:`launch_timed`, which launches
+    each kernel ``1 + warmup + timing_repeats`` times and closes the first
+    and the last ``timing_repeats`` with an event synchronize.  The second
+    launch recomputes the same outputs from the same inputs, so the two
+    paths publish the same bytes; what differed was 36 host stalls and
+    10.7 ms of repeated device work per forecast step
+    (``evidence-gallery/hex-perf-profile-2026-09-13``).
 
     ``include_pressure=False`` computes only ``normal_velocity`` and
     ``vertical_velocity`` and leaves the six cell-centred pressure diagnostics
@@ -296,8 +309,17 @@ def recover_state(
     vertical_velocity = cupy.empty_like(state.rho_w)
     block = (256,)
     scalar = np.float32 if dtype == np.dtype(np.float32) else np.float64
+    if timing_repeats < 0:
+        raise ValueError("timing_repeats must be zero (untimed) or positive")
+
+    def launch(kernel: Any, grid: tuple[int, ...], args: tuple[Any, ...]) -> KernelTiming | None:
+        if timing_repeats == 0:
+            launch_checked(kernel, grid, block, args)
+            return None
+        return launch_timed(kernel, grid, block, args, warmup=warmup, repeats=timing_repeats)
+
     if include_pressure:
-        pressure_timing = launch_timed(
+        pressure_timing = launch(
             kernels[pressure_name],
             ((mesh.n_cells + block[0] - 1) // block[0],),
             block,
@@ -320,13 +342,10 @@ def recover_state(
                 np.int32(vertical.n_vert_levels),
                 np.int32(mesh.n_cells),
             ),
-            warmup=warmup,
-            repeats=timing_repeats,
         )
-    edge_timing = launch_timed(
+    edge_timing = launch(
         kernels[edge_name],
         ((mesh.n_edges + block[0] - 1) // block[0],),
-        block,
         (
             state.rho,
             state.rho_u,
@@ -336,8 +355,6 @@ def recover_state(
             np.int32(mesh.n_cells),
             np.int32(mesh.n_edges),
         ),
-        warmup=warmup,
-        repeats=timing_repeats,
     )
     if atmosphere.terrain is None:
         vertical_args = (
@@ -375,13 +392,10 @@ def recover_state(
             scalar(vertical.cf3),
         )
         vertical_count = mesh.n_cells
-    vertical_timing = launch_timed(
+    vertical_timing = launch(
         kernels[vertical_name],
         ((vertical_count + block[0] - 1) // block[0],),
-        block,
         vertical_args,
-        warmup=warmup,
-        repeats=timing_repeats,
     )
     return DeviceRecoveredState(
         theta_m=theta,
