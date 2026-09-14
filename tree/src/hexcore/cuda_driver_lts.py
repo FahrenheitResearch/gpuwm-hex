@@ -521,9 +521,11 @@ class LocalTimestepAttachment:
             if int(edges.size) == 0:
                 continue
             self._active_edge_lists.append((edges, int(edges.size), effective))
+            # One thread per (level, active edge) element: the ancestor
+            # walks elements, and the gathered form keeps that.
             ltsk.launch(
                 "acoustic_ru_regional_lts",
-                int(edges.size),
+                nlev * int(edges.size),
                 (
                     np.int32(nlev), np.int32(nedges), np.int32(ncells),
                     np.int32(small_step), np.float32(dts * effective),
@@ -587,7 +589,7 @@ class LocalTimestepAttachment:
             )
             ltsk.launch(
                 "acoustic_rs_ts_regional_lts",
-                int(cells.size),
+                nlev * int(cells.size),
                 (
                     np.int32(nlev), np.int32(ncells), np.int32(nedges),
                     np.int32(max_edges), step_dts, mesh.n_edges_on_cell,
