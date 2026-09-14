@@ -6,6 +6,33 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
+## Unreleased
+
+New:
+- The surface/PBL cadence is a selectable knob. gpuwm-hex forecast
+  --pbl-cadence SECONDS calls the surface layer, the land-surface model and
+  the PBL once every SECONDS/dt steps and holds the tendency between calls
+  (the engine's own positive-bldt path); radiation keeps its own 600 s
+  cadence. The default stays the weld (bldt = dt, the native x4 reference's
+  semantics) because a held cadence changes the forecast; the run receipt
+  records the decision (calls per hour, held steps, source) and the driver
+  receipt carries the seam's own due/held count against the declared
+  cadence (physics.cadence). Measured on the point mesh in
+  docs/hex-point-hrrr.md.
+- A held cadence at an anchored timestep and cumulus selection is admitted
+  through a row derived from the welded anchor (hexcore.dt_admission.
+  derived_held_cadence_anchor): the dycore half is the welded row's own,
+  the host half is re-minted for the held cadence, the physics band is
+  stamped NOT MEASURED, and the receipt names the welded row it derives
+  from. A registered held row still wins the exact lookup; a held cadence
+  at an unanchored timestep is refused as the welded run would be.
+
+Fixed:
+- --pbl-cadence that is not a whole number of steps is refused by name at
+  the door (both numbers, the multiples of dt on either side, and auto),
+  on the run route and in --preflight, instead of tracing back after the
+  mesh is bound.
+
 ## 0.3.0 (2026-09-13)
 
 New:
