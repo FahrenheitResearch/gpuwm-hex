@@ -56,6 +56,21 @@ A convection-off run reading a Grell-Freitas row would be quoting
 measurements of a forcing it does not apply.  See
 :mod:`hexcore.convection_admission` for the ruling and the threshold.
 
+The surface/PBL cadence is the third fragment of the key, and it is the one
+a run may SELECT (``--pbl-cadence``, :mod:`hexcore.pbl_cadence`).  A held
+cadence at an anchored ``(dt, cumulus)`` is admitted through a DERIVED row
+(:func:`derived_held_cadence_anchor`, 2026-09-13): the dycore half of the
+anchor -- the outer step, its RK schedule, its clock closure and its
+byte-identical dual run -- is a property of the timestep and is unchanged
+by how often the seam calls the surface/PBL stack, so it is the welded
+row's own; the host half is re-minted for the held cadence at admission;
+the physics band is stamped NOT MEASURED at the held cadence rather than
+borrowed from the welded row.  The derived row occupies its own key, so the
+breakage the key fragment prevents (a held run quoting the welded band)
+cannot recur, and an EARNED held row -- minted and registered -- still wins
+the exact lookup.  A held cadence at a timestep whose welded configuration
+holds no anchor is refused exactly as the welded run would be.
+
 Adding a row is TABLE WORK once the evidence exists -- and it is not an
 agent's call.  Moving the frozen lane off 120 s is a ruling; this module is
 the mechanism that ruling would use, not the ruling.
@@ -116,6 +131,12 @@ class DtAnchor:
     #: same thing about all four.  Determinism and physical plausibility are
     #: different questions and this field is the second one.
     physics_health: str
+    #: The registry key of the WELDED row this row was derived from, when
+    #: it admits a held surface/PBL cadence at that row's timestep
+    #: (:func:`derived_held_cadence_anchor`); ``None`` for an earned row.
+    #: Carried so a receipt reading a derived row can never mistake it for
+    #: a registered one.
+    derived_from: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -132,7 +153,14 @@ class DtAnchor:
             "native_reference": self.native_reference,
             "basis": self.basis,
             "physics_health": self.physics_health,
+            "derived_from": self.derived_from,
         }
+
+    @property
+    def derived(self) -> bool:
+        """Whether this row admits a held cadence on the welded row's dycore evidence."""
+
+        return self.derived_from is not None
 
     @property
     def physics_health_verdict(self) -> str:
@@ -655,6 +683,39 @@ def admitted_timestep(
     is a different configuration from Grell-Freitas at the same timestep,
     and holding the surface/PBL cadence while dt shrinks is a third.  Each
     holds its own row.
+
+    A held cadence with no registered row of its own is answered from the
+    welded row at the same ``(dt, cumulus)`` through
+    :func:`derived_held_cadence_anchor`; a held cadence that is not a whole
+    number of steps RAISES :class:`DtAdmissionError` naming both numbers --
+    a refusal, not an absence -- rather than answering ``None`` as though
+    the timestep itself were unknown.
+    """
+
+    registered = registered_anchor(dt_seconds, cumulus_scheme, surface_pbl_seconds)
+    if registered is not None:
+        return registered
+    try:
+        held = surface_pbl_key(dt_seconds, surface_pbl_seconds) != "dt"
+    except DtAdmissionError:
+        return None
+    if not held:
+        return None
+    return derived_held_cadence_anchor(dt_seconds, cumulus_scheme, surface_pbl_seconds)
+
+
+def registered_anchor(
+    dt_seconds: float,
+    cumulus_scheme: str | None = "gf",
+    surface_pbl_seconds: float | None = None,
+) -> DtAnchor | None:
+    """The REGISTERED row for this exact configuration, or ``None``.
+
+    The exact lookup alone: no derivation.  This is the question a mint asks
+    ("is there anything left to earn?") and the question the mesh-row
+    override asks ("does this configuration hold a REAL anchor?"), and both
+    would be answered wrongly by a derived row -- a held cadence would read
+    as already earned and could never be minted.
     """
 
     try:
@@ -664,6 +725,100 @@ def admitted_timestep(
     return ADMITTED_TIMESTEPS.get(key)
 
 
+def derived_held_cadence_anchor(
+    dt_seconds: float,
+    cumulus_scheme: str | None,
+    surface_pbl_seconds: float,
+) -> DtAnchor | None:
+    """The row admitting a HELD surface/PBL cadence at an anchored timestep.
+
+    ``None`` when the welded configuration at ``(dt, cumulus)`` holds no
+    anchor: a held cadence inherits nothing from a timestep nobody earned.
+    Raises :class:`DtAdmissionError` naming both numbers when the cadence is
+    not a whole number of steps -- that is a refusal, not an absence.
+
+    WHAT IS INHERITED AND WHY IT MAY BE.  An anchor's integration half is
+    two byte-identical forecasts at this dt on named hardware, finite at
+    every step; its schedule half is the RK stage timesteps, the acoustic
+    sub-step, the WSM6 minor loop and the clock closure this dt produces.
+    Every one of those is a property of the OUTER STEP.  Holding the
+    surface/PBL cadence changes how often the seam's phase-one call runs
+    the surface layer, the land-surface model and the PBL, and on the
+    steps between it applies the tendency the last call produced -- the
+    engine's own positive-``bldt`` path.  The dycore integrates the same
+    step, the same schedule and the same clock either way, so the welded
+    row's dycore evidence covers the held configuration.
+
+    WHAT IS NOT INHERITED, AND SAYS SO.  The physics band
+    (:attr:`DtAnchor.physics_health`) was measured with the stack called
+    every step; at a held cadence it is a different forecast, so the
+    derived row leads with NOT MEASURED and carries the welded band after
+    it for reference.  The host half is not inherited either: it is
+    re-minted here for the held cadence (:func:`schedule_receipt`), so a
+    cadence that cannot close its own step count is refused before a card
+    is touched.
+    """
+
+    welded = registered_anchor(dt_seconds, cumulus_scheme, None)
+    if welded is None:
+        return None
+    seconds = float(surface_pbl_seconds)
+    schedule = schedule_receipt(
+        dt_seconds,
+        radiation_seconds=welded.radiation_seconds,
+        surface_pbl_seconds=seconds,
+        cumulus_seconds=welded.cumulus_seconds,
+        cumulus_scheme=cumulus_scheme,
+    )
+    cadences = schedule["cadences"]
+    welded_key = dt_key(dt_seconds, cumulus_scheme, None)
+    return DtAnchor(
+        dt_seconds=welded.dt_seconds,
+        radiation_seconds=welded.radiation_seconds,
+        surface_pbl_seconds=seconds,
+        cumulus_seconds=welded.cumulus_seconds,
+        cumulus_scheme=welded.cumulus_scheme,
+        meshes=welded.meshes,
+        card=welded.card,
+        admitted_on=welded.admitted_on,
+        schedule_receipt=(
+            f"re-minted on the host for the held cadence at admission "
+            f"(hexcore.dt_admission.schedule_receipt: stepbl "
+            f"{cadences['stepbl']}, {cadences['surface_pbl_calls_per_hour']:g} "
+            f"surface/PBL calls an hour against the welded "
+            f"{cadences['surface_pbl_calls_per_hour_welded']:g}); the welded "
+            f"row's is {welded.schedule_receipt}"
+        ),
+        integration_anchor=(
+            f"the welded row's ({welded.integration_anchor}): the outer step, "
+            f"its RK schedule, its clock and its byte-identical dual run are "
+            f"properties of the timestep and are unchanged by how often the "
+            f"seam calls the surface/PBL stack"
+        ),
+        native_reference=None,
+        basis=(
+            f"DERIVED from the welded row {welded_key!r} for the surface/PBL "
+            f"cadence held at {seconds:g} s (hexcore.pbl_cadence, "
+            f"2026-09-13): the stack is called once every "
+            f"{cadences['stepbl']} steps and its tendency is held on the "
+            f"steps between (the engine's positive-bldt path).  This row is "
+            f"not registered; it exists for the duration of the lookup and "
+            f"an earned held row registered at the same key replaces it.  "
+            f"The welded row's basis: {welded.basis}"
+        ),
+        physics_health=(
+            f"NOT MEASURED at a surface/PBL cadence of {seconds:g} s on this "
+            f"row's meshes: the band below was measured with the stack "
+            f"called every step ({cadences['surface_pbl_calls_per_hour_welded']:g} "
+            f"an hour), and a held cadence is a different forecast.  The "
+            f"measurement of record for held cadences on a mesh whose "
+            f"natural step is its own is docs/hex-point-hrrr.md (2026-09-13).  "
+            f"The welded row's band: {welded.physics_health}"
+        ),
+        derived_from=welded_key,
+    )
+
+
 def anchor_label(anchor: DtAnchor) -> str:
     """One roster entry: the timestep and the configuration it certifies."""
 
@@ -671,7 +826,10 @@ def anchor_label(anchor: DtAnchor) -> str:
     held = (
         ""
         if float(anchor.surface_pbl_seconds) == float(anchor.dt_seconds)
-        else f", surface/PBL held at {anchor.surface_pbl_seconds:g} s"
+        else (
+            f", surface/PBL held at {anchor.surface_pbl_seconds:g} s"
+            + (", derived from the welded row" if anchor.derived else "")
+        )
     )
     return (
         f"{anchor.dt_seconds:g} s "
@@ -881,16 +1039,17 @@ def schedule_receipt(
             "stepcu": stepcu,
             "radiation_calls_per_hour": 3600.0 / float(radiation_seconds),
             # Reported for the same reason the cumulus rate is: it is the
-            # thing that scales with dt, and it is the subject of the
-            # 2026-08-26 pbl-cadence campaign.  "welded" is the proven
-            # semantics (bldt = dt) and "held" is an A/B arm; a receipt that
-            # printed only the seconds would leave a reader to divide.
+            # thing that scales with dt.  "welded" is the proven semantics
+            # (bldt = dt) and "held" is the selectable configuration that
+            # keeps the last tendency on the steps between calls; a receipt
+            # that printed only the seconds would leave a reader to divide.
             "surface_pbl_calls_per_hour": 3600.0 / bldt,
             "surface_pbl_calls_per_hour_welded": 3600.0 / dt,
             "surface_pbl_calls_per_hour_at_proven_dt": (
                 3600.0 / PROVEN_DT_SECONDS
             ),
             "surface_pbl_held": bldt != dt,
+            "surface_pbl_steps_held_between_calls": stepbl - 1,
             "cumulus_calls_per_hour": (
                 None if cudt is None else 3600.0 / cudt
             ),
@@ -1056,12 +1215,14 @@ def unanchored_refusal(
             ""
             if surface_pbl_key(dt_seconds, surface_pbl_seconds) == "dt"
             else (
-                f".  The surface/PBL cadence is holdable ON PURPOSE, as an "
-                f"A/B instrument: `--pbl-cadence "
-                f"{float(surface_pbl_seconds):g}` runs it under a candidate "
-                f"mint, which is how this configuration's row gets earned.  "
-                f"The default is the weld (bldt = dt), which is the proven "
-                f"configuration.  See hexcore.pbl_cadence"
+                f".  A held surface/PBL cadence derives its row from the "
+                f"WELDED anchor at the same timestep and cumulus selection "
+                f"(hexcore.dt_admission.derived_held_cadence_anchor), and "
+                f"this timestep holds none to derive from: anchoring the "
+                f"welded configuration admits `--pbl-cadence "
+                f"{float(surface_pbl_seconds):g}` with it.  The default is "
+                f"the weld (bldt = dt), which is the proven configuration.  "
+                f"See hexcore.pbl_cadence"
             )
         )
     )
@@ -1092,10 +1253,11 @@ def cadence_mismatch_refusal(
             ""
             if float(surface_pbl_seconds) == float(anchor.surface_pbl_seconds)
             else (
-                f".  REMEDY: the surface/PBL cadence is holdable on purpose "
-                f"-- `--pbl-cadence {float(surface_pbl_seconds):g}` runs it "
-                f"as an A/B arm under a candidate mint, which is how its row "
-                f"gets earned.  See hexcore.pbl_cadence"
+                f".  REMEDY: the surface/PBL cadence is selectable -- "
+                f"`--pbl-cadence {float(surface_pbl_seconds):g}` admits it "
+                f"through a row derived from this timestep's welded anchor "
+                f"(hexcore.dt_admission.derived_held_cadence_anchor).  See "
+                f"hexcore.pbl_cadence"
             )
         )
     )
@@ -1221,8 +1383,10 @@ class _CandidateTimestep:
                 "it feeds records hardware, and evidence with no hardware on "
                 "it is not evidence"
             )
+        # The EXACT lookup: a held cadence admitted through a derived row
+        # has earned nothing yet, and a mint is how it earns its own row.
         if (
-            admitted_timestep(dt_seconds, cumulus_scheme, surface_pbl_seconds)
+            registered_anchor(dt_seconds, cumulus_scheme, surface_pbl_seconds)
             is not None
         ):
             held = surface_pbl_key(dt_seconds, surface_pbl_seconds)

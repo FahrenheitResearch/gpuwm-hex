@@ -601,9 +601,20 @@ def admit_timestep(
     # The surface/PBL cadence is part of the same configuration, answerable
     # from the row alone for the same reason: the row declares the timestep
     # and the cadence is either welded to it or held at a stated number.
-    pbl_decision = pbl_cadence_module.pbl_cadence_decision(
-        dt_seconds=dt_seconds, requested=pbl_cadence
-    )
+    # A cadence that is not a whole number of the row's steps, or is not a
+    # number at all, is the door's refusal: it names both numbers, the
+    # multiples of dt on either side and the way out, and it is raised HERE
+    # so preflight collects it beside the other blockers instead of the
+    # driver tracing back after the mesh is bound.
+    try:
+        pbl_decision = pbl_cadence_module.pbl_cadence_decision(
+            dt_seconds=dt_seconds, requested=pbl_cadence
+        )
+    except pbl_cadence_module.PblCadenceError as error:
+        raise _refuse(
+            f"--mesh {mesh} declares dt={float(dt_seconds):g} s and "
+            f"{error}"
+        ) from error
     surface_pbl_seconds = float(pbl_decision["surface_pbl_seconds"])
 
     anchor = dt_admission.admitted_timestep(
@@ -628,6 +639,11 @@ def admit_timestep(
         "cumulus_scheme": anchor.cumulus_scheme,
         "surface_pbl_seconds": anchor.surface_pbl_seconds,
         "physics_health": anchor.physics_health,
+        # ``None`` for a registered row; the welded row's key when the held
+        # cadence is admitted on that row's dycore evidence (hexcore.
+        # dt_admission.derived_held_cadence_anchor), so a receipt never
+        # reads a derived row as a registered one.
+        "surface_pbl_anchor_derived_from": anchor.derived_from,
         "convection": decision,
         "pbl_cadence": pbl_decision,
     }
@@ -1549,6 +1565,18 @@ def build_receipt(
                 None if request.source_table is None
                 else str(request.source_table)
             ),
+            # The run's own surface/PBL call count against the cadence it
+            # declared (tools/run_cuda_v841_forecast._physics_cadence_proof):
+            # a held cadence that reproduced the welded arm exactly would be
+            # first evidence the hold never happened, and this is where a
+            # reader checks.  ``None`` until the driver has run.
+            "cadence": (
+                None
+                if driver_receipt is None
+                else dict(driver_receipt).get("forecast", {}).get(
+                    "physics_cadence"
+                )
+            ),
         },
         "schedule": {
             "hours": request.hours,
@@ -2025,14 +2053,18 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "explicit (default: auto)")
     parser.add_argument(
         "--pbl-cadence", default="auto", metavar="{auto,SECONDS}",
-        help="surface/PBL cadence (config_bldt_seconds). The default 'auto' "
-             "is the PROVEN CONFIGURATION: welded to config_dt, so the "
-             "surface layer, the land-surface model and the PBL run every "
-             "model step, as the native x4 v8.4.1 reference ran. An explicit "
-             "number of seconds HOLDS the cadence while config_dt moves -- "
-             "an A/B instrument for whether a forcing scales with call count "
-             "rather than elapsed time. It records itself as explicit and "
-             "earns its own timestep anchor (default: auto)")
+        help="surface/PBL cadence in seconds (config_bldt_seconds). The "
+             "default 'auto' is the PROVEN CONFIGURATION: welded to "
+             "config_dt, so the surface layer, the land-surface model and "
+             "the PBL run every model step, as the native x4 v8.4.1 "
+             "reference ran. A number of seconds calls the stack once every "
+             "SECONDS/dt steps and holds its tendency on the steps between "
+             "(the engine's own positive-bldt path); it must be a whole "
+             "number of steps or it is refused by name, it changes the "
+             "forecast, and it records itself as an explicit selection with "
+             "its calls per hour in the receipt. Radiation keeps its own "
+             "600 s cadence either way. Measured on the point mesh in "
+             "docs/hex-point-hrrr.md (default: auto)")
     parser.add_argument(
         "--local-timestep", action="store_true",
         help="OPT-IN, default off: advance coarse columns on fewer, longer "

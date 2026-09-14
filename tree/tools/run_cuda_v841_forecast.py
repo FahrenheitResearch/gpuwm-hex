@@ -1582,6 +1582,72 @@ def build_schedule(
 # --------------------------------------------------------------------------
 # the forecast
 # --------------------------------------------------------------------------
+def _physics_cadence_proof(
+    decision: Mapping[str, Any] | None,
+    step_receipts: Sequence[Mapping[str, Any]],
+    executed_steps: int,
+) -> dict[str, Any] | None:
+    """Positive evidence the declared surface/PBL cadence is the one that ran.
+
+    A/B rule: a held-cadence arm that reproduces the welded arm exactly is
+    first evidence the hold never happened, and a receipt that only repeats
+    the request cannot tell the two apart.  So the receipt carries the
+    seam's own counters -- how many steps the phase-one call reported
+    ``surface_pbl_ran``, the engine's ``ysu`` call count at the last step --
+    against the count the declared cadence predicts
+    (:func:`hexcore.pbl_cadence.calls_in_steps`), and says whether they
+    agree.  Radiation's count rides beside it because the receipt names
+    every physics call rate the run used.
+    """
+
+    if decision is None or executed_steps <= 0:
+        return None
+    from hexcore import pbl_cadence
+
+    due = 0
+    radiation_due = 0
+    counts: Mapping[str, Any] = {}
+    for receipt in step_receipts:
+        cadence = receipt.get("backend", {}).get("cadence", {})
+        if cadence.get("surface_pbl_ran"):
+            due += 1
+        if cadence.get("radiation_ran"):
+            radiation_due += 1
+        counts = cadence.get("call_counts", counts)
+    stepbl = int(decision["steps_between_calls"])
+    expected = pbl_cadence.calls_in_steps(
+        steps_between_calls=stepbl, executed_steps=int(executed_steps)
+    )
+    engine_calls = None if "ysu" not in counts else int(counts["ysu"])
+    consistent = due == expected and (engine_calls in (None, expected))
+    return {
+        "schema": "gpuwm-hex.physics-cadence-proof/v1",
+        "surface_pbl_seconds": float(decision["surface_pbl_seconds"]),
+        "steps_between_calls": stepbl,
+        "held": bool(decision["held"]),
+        "source": decision["source"],
+        "executed_steps": int(executed_steps),
+        "surface_pbl_calls_expected": expected,
+        "surface_pbl_steps_reported_due": due,
+        "surface_pbl_steps_held": int(executed_steps) - due,
+        "engine_call_counts_at_last_step": dict(counts),
+        "radiation_steps_reported_due": radiation_due,
+        "radiation_seconds": float(decision["radiation_seconds"]),
+        "consistent": bool(consistent),
+        "note": (
+            f"the seam reported the surface/PBL stack due on {due} of "
+            f"{int(executed_steps)} steps and held on the other "
+            f"{int(executed_steps) - due}; the declared cadence "
+            f"({decision['label']}) predicts {expected} calls"
+            + (
+                "" if engine_calls is None
+                else f"; the engine's own ysu counter reads {engine_calls}"
+            )
+            + (".  They agree" if consistent else ".  THEY DISAGREE")
+        ),
+    }
+
+
 def _mixing_treatment_proof(driver: Any, executed_steps: int) -> dict[str, Any]:
     """Positive evidence the mixing treatment ran (or provably did not).
 
@@ -2038,6 +2104,9 @@ def execute_forecast(
         "physical_gates": physical_gates,
         "step_health": health,
         "step_receipt_count": len(step_receipts),
+        "physics_cadence": _physics_cadence_proof(
+            host.get("pbl_cadence"), step_receipts, executed_steps
+        ),
         "snapshot_receipts": snapshot_receipts,
         "snapshot_files": snapshot_files,
         "refusal": refusal,
@@ -2133,15 +2202,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="auto",
         metavar="{auto,SECONDS}",
         help=(
-            "surface/PBL cadence (config_bldt_seconds).  The default 'auto' "
-            "is the PROVEN CONFIGURATION: the cadence is welded to config_dt, "
-            "so the surface layer, the land-surface model and the PBL run on "
-            "every model step, exactly as the native x4 v8.4.1 reference "
-            "ran.  An explicit number of seconds HOLDS the cadence there "
-            "while config_dt moves -- an A/B instrument for measuring "
-            "whether a forcing scales with call count rather than with "
-            "elapsed time.  It records itself as explicit in the receipt and "
-            "earns its own timestep anchor; it is never a remedy.  See "
+            "surface/PBL cadence in seconds (config_bldt_seconds).  The "
+            "default 'auto' is the PROVEN CONFIGURATION: the cadence is "
+            "welded to config_dt, so the surface layer, the land-surface "
+            "model and the PBL run on every model step, exactly as the "
+            "native x4 v8.4.1 reference ran.  A number of seconds calls the "
+            "stack once every SECONDS/dt steps and holds its tendency on "
+            "the steps between (the engine's own positive-bldt path); a "
+            "value that is not a whole number of steps is refused by name.  "
+            "It changes the forecast and records itself as an explicit "
+            "selection, with its calls per hour, in the receipt.  See "
             "hexcore.pbl_cadence"
         ),
     )

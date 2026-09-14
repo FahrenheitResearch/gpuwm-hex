@@ -745,6 +745,54 @@ sits above the occupancy knee, or overlapping different classes' independent
 work in concurrent streams — neither is measured here, and the probe is the
 instrument to re-run when either becomes real.
 
+### The surface/PBL cadence, selectable
+
+`config_bldt_seconds` is welded to `config_dt` by default: the surface layer,
+the land-surface model and the PBL are called on every model step, as the
+native x4 v8.4.1 reference ran them. At the 120 s that reference used that is
+30 calls an hour; at the 5 s a sub-kilometre mesh declares it is 720, and the
+per-step profile of 2026-09-13 (RTX 5090, the 43,884-cell point mesh) put the
+seam's surface/PBL phase at a fifth of every step.
+
+`--pbl-cadence SECONDS` calls the stack once every `SECONDS / dt` steps and
+holds the tendency it produced on the steps between -- the engine's own
+positive-`bldt` path, ARW's `stepbl`: the held rate is applied unchanged on
+every non-due step, and the surface layer and land-surface model integrate
+their own state with the cadence as their step. Radiation keeps its own
+600 s cadence either way; it was never welded to `dt`.
+
+```bash
+gpuwm-hex forecast --mesh <row> ... --pbl-cadence 60
+```
+
+**It changes the forecast, so it is selectable and never silently the
+default.** `auto` is the weld and changes no run. An explicit cadence records
+itself as `source: "explicit"` in the run receipt with its calls per hour and
+the steps held between calls, and the driver receipt carries the seam's own
+count of due and held steps against the count the declared cadence predicts
+(`physics.cadence` in `forecast-receipt.json`), so a held arm that reproduced
+the welded arm exactly would be caught by its own receipt.
+
+Three refusals, each by name and before any card is touched: a cadence that
+is not a whole number of steps (the message names both numbers, the multiples
+of `dt` on either side and `auto`; nothing is rounded), a request that is not
+a number of seconds, and a held cadence at a timestep whose welded
+configuration holds no anchor. A held cadence at an anchored `(dt, cumulus)`
+is admitted through a row *derived* from the welded anchor: the outer step,
+its RK schedule, its clock and its byte-identical dual run are properties of
+the timestep and are the welded row's own; the physics band is stamped NOT
+MEASURED at the held cadence rather than borrowed, and the receipt says which
+welded row the admission came from (`surface_pbl_anchor_derived_from`).
+
+The measurement of record is in `docs/hex-point-hrrr.md`: the every-step
+arm against 30, 60 and 120 s on the point mesh (43,884 cells, dt 5 s, HRRR
+15Z, RTX 5090, one session). Every held cadence buys the same five per cent
+per step (median composite step 0.2994 s to 0.2842 to 0.2845 s) and every
+one changes the one-hour forecast well past the 2.6.5 to 2.7.3 seam
+movement (theta up to 1.25 K at 30 s, 2.95 K at 120 s, against 0.139 K), so
+none qualified as the default and the weld stays. This tree at `auto` wrote
+history byte-identical to the untouched tree's.
+
 ---
 
 ## Limitations

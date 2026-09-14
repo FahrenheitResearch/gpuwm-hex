@@ -260,3 +260,95 @@ columns (924 m, mean nearest-neighbour 0.51 km) in 0.81 s and `rw_wrfbatch`
 drew both panels; 5 s in all. `theta_e_2m_10m_winds` is in the renderer's
 catalog but not realised by the wrfout import lane for this history, and the
 door refuses it by name before drawing anything.
+
+
+## The surface/PBL cadence, measured 2026-09-13
+
+Same point mesh, same HRRR 15Z init and boundary files (one `intermediate`,
+`init` and `lbc` pass, digests in the evidence folder), node-2's RTX 5090
+with no other process on the card during any arm (a co-tenant job had
+finished before the first arm; load average 1.0 to 1.3 throughout), one
+session, one hour (720 steps of 5 s), history every 60 minutes. Five arms
+back to back under one mutex hold: the untouched `lane/hex-point-hrrr` tree
+in the shared venv at the welded default, then this tree at 120, 60 and
+30 s, then this tree at the welded default. Card time 1,656 s (688 s for
+the first two arms, 968 s for the last three; a fresh-scratch refusal split
+the chain once). Receipts, step receipts, logs and the nvidia-smi trace are
+under `C:\Users\drew\Downloads\evidence-gallery\hex-perf-cadence-2026-09-13\`.
+
+**The default is unchanged, byte for byte.** This tree at `auto` wrote both
+history frames byte-identical to the untouched tree's (15Z
+`85cb8196...`, 16Z `4ed8001f...`, the same two digests the 2026-09-13 profile
+lane recorded), at 0.3156 s per step after the first against the untouched
+tree's 0.3148 (median composite step 0.2994 s in both).
+
+**The hold is real, and the receipt proves it.** At 120 s the seam
+reported the surface/PBL stack due on steps 1, 24, 48, ... -- 31 of 720,
+689 held -- with the engine's own `sfclay`, `noah` and `ysu` counters all
+reading 31 at the last step and radiation due 6 times, exactly the count
+the declared cadence predicts (`physics.cadence` in the receipt:
+`consistent: true`). 60 s: 61 due, 659 held. 30 s: 121 due, 599 held.
+
+**What it buys: about five per cent per step, the same at every cadence.**
+
+| arm | s/step after the first | median composite step | ratio (median) | due / held | peak card memory |
+|---|---|---|---|---|---|
+| every step, untouched tree | 0.3148 | 0.2994 | 1.000 | 720 / 0 | 8,914 MiB |
+| every step, this tree | 0.3156 | 0.2994 | 1.000 | 720 / 0 | 8,914 MiB |
+| 30 s (6 steps) | 0.3022 | 0.2845 | 0.950 | 121 / 599 | 8,914 MiB |
+| 60 s (12 steps) | 0.3005 | 0.2842 | 0.949 | 61 / 659 | 8,914 MiB |
+| 120 s (24 steps) | 0.3013 | 0.2844 | 0.950 | 31 / 689 | 9,421 MiB |
+
+The saving is 14.9 to 15.2 ms per step and does not grow past 30 s: what a
+held step skips is the surface layer, Noah-MP and YSU (the profile's 16 to
+19 ms of Noah-MP host time is most of it), and what it keeps -- the
+phase-one prep, the 447 MB rollback snapshot, GWDO, WSM6, the commit, the
+host health gate and the dycore -- is 95 per cent of the step. The 120 s
+arm's larger peak memory and its 356.5 s door wall (against 318 to 330 s
+for the others) are its first step: 34.3 s of cold NVRTC compilation into a
+fresh kernel cache, which the other arms of this tree then hit; the
+per-step numbers above exclude the first step.
+
+**What it costs: a different forecast, everywhere.** Differences at 16Z
+against the every-step arm (same init, same card, same session; the
+every-step arm's own dual-run noise floor is zero):
+
+| field | 30 s max / RMS | 60 s max / RMS | 120 s max / RMS | 2.6.5 to 2.7.3 seam move (max) |
+|---|---|---|---|---|
+| theta, K | 1.245 / 0.0235 | 1.839 / 0.0340 | 2.949 / 0.0540 | 0.139 |
+| qv, kg/kg | 1.04e-3 / 1.3e-5 | 1.20e-3 / 2.0e-5 | 1.80e-3 / 3.2e-5 | 3.7e-4 |
+| u, m/s | 1.469 / 0.0262 | 2.487 / 0.0469 | 5.038 / 0.0859 | |
+| v, m/s | 1.074 / 0.0238 | 1.820 / 0.0412 | 3.040 / 0.0737 | |
+| w, m/s | 1.563 / 0.0204 | 3.001 / 0.0382 | 4.692 / 0.0705 | |
+| T2, K | 0.456 / 0.0771 | 0.507 / 0.0929 | 0.657 / 0.1074 | |
+| Q2, kg/kg | 1.66e-4 / 1.4e-5 | 1.85e-4 / 1.9e-5 | 2.97e-4 / 2.8e-5 | |
+| U10, m/s | 0.384 / 0.0382 | 0.439 / 0.0558 | 0.530 / 0.0855 | |
+| rain, mm | 0.045 / 0.0029 | 0.100 / 0.0056 | 0.220 / 0.0110 | |
+| sensible heat flux, W m-2 | 58.5 / 7.3 | 62.4 / 10.1 | 95.4 / 13.0 | |
+| PBL height, m | 420 / 19 | 480 / 26 | 417 / 32 | |
+
+Every surface cell differs (43,884 of 43,884 for T2, Q2, U10 and the
+fluxes) and 98 per cent of the theta and qv column points do; the maxima sit
+in the convective cells (level 19 to 29, where the reference w reaches
+23 m/s) and the surface fields move because the surface layer and Noah-MP
+integrate with the cadence as their step. The yardstick the campaign named
+is the 2.6.5 to 2.7.3 engine seam movement recorded in
+`declared-divergences.md` -- a column-seam number, eight columns over forty
+minutes, theta up to 0.139 K and qv up to 3.7e-4 kg/kg -- and the smallest
+cadence exceeds it nine times over in theta and three times in qv at the
+maximum; the card's own contribution, the other yardstick, is zero.
+
+**The decision.** No cadence qualifies: none keeps its one-hour differences
+below either yardstick, and the speed it buys is the same five per cent at
+30 s as at 120 s. The knob ships selectable with the every-step default,
+which is what this tree does. If a held cadence is ever graded against
+observations (MRMS, ASOS; the referee `docs/obs-referee.md` names), 30 s is
+the arm to grade: the same saving as 120 s with the smallest differences.
+The time in a step is elsewhere -- the host health gate (a fifth of it),
+the per-step rollback snapshot and the double-launched recovery kernels
+the profile named -- and that is where the next lanes should look.
+
+The reflectivity panels for the every-step arm and the 120 s arm
+(`composite_reflectivity` and `2m_temperature_10m_winds` on the 16Z frame,
+through `gpuwm-hex render`) are in the evidence folder beside this section's
+receipts; they are model results, not evidence about the atmosphere.

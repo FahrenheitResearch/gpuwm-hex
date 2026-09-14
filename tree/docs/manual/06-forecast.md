@@ -431,3 +431,52 @@ inside an ice cloud starts without it: hour-0 reflectivity does not
 correlate with the baseline at all. One hour later WSM6 has re-formed the
 ice and r = 0.863; theta agrees to five decimals throughout. If your first
 frame matters, that is the frame to distrust.
+
+
+## 6.10 The surface/PBL cadence — selectable, welded by default
+
+The surface layer, the land-surface model and the PBL are called on every
+model step by default (`config_bldt_seconds = config_dt`, the native x4
+v8.4.1 reference's own semantics). At 120 s that is 30 calls an hour; at
+the 5 s a sub-kilometre mesh declares it is 720, and the 2026-09-13 per-step
+profile on the point mesh put that phase at a fifth of every step.
+
+`--pbl-cadence SECONDS` calls the stack once every `SECONDS / dt` steps and
+holds its tendency on the steps between — the engine's positive-`bldt`
+path, ARW's `stepbl`. Radiation keeps its own 600 s cadence either way.
+
+```sh
+gpuwm-hex forecast --mesh <row> --grid ... --static ... --init ...   --start-time ... --hours 1 --out <dir> --pbl-cadence 60
+```
+
+**Selectable, never silently the default.** It changes the forecast, so
+`auto` (the weld) stays the default until a measured recommendation moves
+it, and an explicit cadence records itself as `source: "explicit"` with
+its calls per hour and held steps in the run receipt. The driver receipt
+adds the seam's own count of due and held steps against the count the
+declared cadence predicts (`physics.cadence` in `forecast-receipt.json`),
+so the receipt itself is the evidence that the hold happened.
+
+**Refused by name, before any card is touched:**
+
+- a cadence that is not a whole number of the row's steps — the refusal
+  names both numbers, the multiples of `dt` on either side, and `auto`;
+  nothing is rounded for you;
+- a request that is not `auto` or a positive number of seconds;
+- a held cadence at a timestep whose welded configuration holds no anchor
+  (anchoring the welded configuration admits the held cadence with it).
+
+**Admitted through a derived row.** A held cadence at an anchored
+`(dt, cumulus)` is admitted on the welded anchor's dycore evidence: the
+outer step, its RK schedule, its clock and its byte-identical dual run are
+properties of the timestep. The physics band is stamped NOT MEASURED at
+the held cadence rather than borrowed, and `surface_pbl_anchor_derived_from`
+in the receipt names the welded row the admission came from. `--preflight`
+answers the same question from the row alone.
+
+The measurement of record — the every-step arm against 30, 60 and 120 s on
+the point mesh, per-step cost and 1 h field differences — is in
+[`docs/hex-point-hrrr.md`](../hex-point-hrrr.md): every held cadence buys
+the same five per cent per step and every one moves the one-hour forecast
+well past the 2.6.5 to 2.7.3 seam movement, so none qualified as the
+default and the weld stays.
