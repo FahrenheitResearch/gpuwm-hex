@@ -9,6 +9,18 @@ contained. From 0.2.0 forward the file is cut at the release.*
 ## 0.3.0 (2026-09-13)
 
 New:
+- A fine hex core at any point, from HRRR. gpuwm-hex mesh-plan --point
+  LAT,LON writes the registered 937.5 m ladder spec centred on the point,
+  prices parent and cull for a named card, and with --generate builds,
+  admits, registers (a runtime row file beside the mesh, hexcore.mesh_rows,
+  read by tools/mpas_mesh_binding.py through $GPUWM_HEX_MESH_ROWS) and
+  culls it, minting the parent's vertical and culling that too. gpuwm-hex
+  intermediate --source hrrr writes regular lat-lon WPS intermediates from
+  the projected HRRR product through the engine's own decoder, operator and
+  soil layering; gpuwm-hex lbc drives rw_mpas_lbc over the hourly
+  intermediates. rw_mpas_static joins the engine ladder. The two
+  sub-kilometre regional classes admit a same-ladder finest-edge band of
+  five per cent. docs/hex-point-hrrr.md.
 - The engine-verdict instrument ships in the tree. tools/measure_engine_verdicts.py
   downloads every wheel of every published gpuwm from 2.5.0 up, hashes the
   sixteen pinned seam files inside each, reads the build road off the
@@ -58,6 +70,22 @@ Fixed:
   tree's bytes are and gates on that row's digests; a tree matching no
   row is still measured against the public pin and refused naming the
   pin's digest, as before. Three tests in tests/test_proof_guard_pins.py.
+- gpuwm-hex init stamps the run declarations the engine's capsule copy
+  left absent (config_start_time, the first-guess level counts, the
+  moisture, sea-ice, extrapolation and land-use switches) onto the init on
+  the compatibility-capsule route, and records in the receipt which were
+  stamped and which the capsule already carried. A capsule minted at mesh
+  time, which is what mesh-plan --point culls, carries no clock, and the
+  forecast driver refused the first 937.5 m point cull with "init carries
+  no config_start_time" after the contract deck had spent seven minutes on
+  the card. Attributes a native capsule carries are left byte for byte.
+- rw_mpas_lbc resolves through the engine ladder. The boundary producer was
+  read from $RW_MPAS_LBC and PATH alone, so a box where gpuwm fetch-bridges
+  had staged it beside rw_mpas_init refused the lbc leg of the very chain
+  whose init leg had just resolved from that directory. hexcore.engines
+  carries an LBC row ($GPUWM_HEX_RW_MPAS_LBC, $RW_MPAS_LBC kept as the
+  legacy spelling, $GPUWM_RW_MPAS_LBC, the bridge directories, PATH), the
+  cycle chain and gpuwm-hex lbc resolve through it, and doctor reports it.
 - Requires gpuwm 2.7.3 and refuses every earlier engine, 2.6.4 and 2.6.5
   included. Eleven of the sixteen pinned seam files moved between the
   published 2.6.5 wheel 0.2.3 pinned and the published 2.7.3 wheel: the

@@ -605,6 +605,20 @@ on a 10 GiB card. The outermost seven rings are boundary data driven from the
 parent every step rather than the model's own answer, and products drawn over
 the whole domain include them.
 
+### A fine core at any point, from HRRR
+
+`gpuwm-hex mesh-plan --point LAT,LON --fine-dx-m 937.5 --radius-km 100 --card 32gb`
+writes the registered 937.5 m ladder spec centred on the point, prices the
+global parent through the generator and the limited-area cull on the
+admission surface's own row for the card, and with `--generate` builds the
+pair, admits it, registers it as a RUNTIME ROW in `mesh-rows.json` beside the
+mesh (never a checkout edit), cuts the cull and mints its vertical.
+`gpuwm-hex intermediate --source hrrr` resamples HRRR onto the regular
+lat-lon WPS intermediate the init and boundary engines read, through the
+engine's own decoder and interpolation operator; `gpuwm-hex lbc` builds the
+boundary series from the hourly intermediates. The whole chain, with what it
+measured, is [`docs/hex-point-hrrr.md`](docs/hex-point-hrrr.md).
+
 ### Placement and cycling
 
 `gpuwm-hex swath` decides where a fine grid should go — detection on
