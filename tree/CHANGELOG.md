@@ -18,7 +18,10 @@ New:
   records the decision (calls per hour, held steps, source) and the driver
   receipt carries the seam's own due/held count against the declared
   cadence (physics.cadence). Measured on the point mesh in
-  docs/hex-point-hrrr.md.
+  docs/hex-point-hrrr.md: 30, 60 and 120 s each buy the same five per cent
+  per step and each moves the one-hour forecast well past the 2.6.5 to
+  2.7.3 seam movement, so none qualified as the default; the tree at auto
+  is byte-identical to the tree before this change.
 - A held cadence at an anchored timestep and cumulus selection is admitted
   through a row derived from the welded anchor (hexcore.dt_admission.
   derived_held_cadence_anchor): the dycore half is the welded row's own,

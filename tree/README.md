@@ -785,8 +785,13 @@ MEASURED at the held cadence rather than borrowed, and the receipt says which
 welded row the admission came from (`surface_pbl_anchor_derived_from`).
 
 The measurement of record is in `docs/hex-point-hrrr.md`: the every-step
-arm against 30, 60 and 120 s on the point mesh, same init, same card, same
-session, with the per-step cost and the 1 h field differences of each.
+arm against 30, 60 and 120 s on the point mesh (43,884 cells, dt 5 s, HRRR
+15Z, RTX 5090, one session). Every held cadence buys the same five per cent
+per step (median composite step 0.2994 s to 0.2842 to 0.2845 s) and every
+one changes the one-hour forecast well past the 2.6.5 to 2.7.3 seam
+movement (theta up to 1.25 K at 30 s, 2.95 K at 120 s, against 0.139 K), so
+none qualified as the default and the weld stays. This tree at `auto` wrote
+history byte-identical to the untouched tree's.
 
 ---
 

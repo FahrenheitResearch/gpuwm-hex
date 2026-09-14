@@ -476,4 +476,7 @@ answers the same question from the row alone.
 
 The measurement of record — the every-step arm against 30, 60 and 120 s on
 the point mesh, per-step cost and 1 h field differences — is in
-[`docs/hex-point-hrrr.md`](../hex-point-hrrr.md).
+[`docs/hex-point-hrrr.md`](../hex-point-hrrr.md): every held cadence buys
+the same five per cent per step and every one moves the one-hour forecast
+well past the 2.6.5 to 2.7.3 seam movement, so none qualified as the
+default and the weld stays.
