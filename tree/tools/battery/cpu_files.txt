@@ -154,6 +154,8 @@ tests/test_device_memory_ledger_probes.py
 # checking them meant no push examined the kernel sources at all.
 tests/test_cuda_physics_tier_park_v841.py
 tests/test_cuda_regional_kernels.py
+tests/test_element_parallel_kernels.py
+tests/test_kernel_element_ab.py
 tests/test_fullstep_projection_probe.py
 # The step's host path: the admission memo, the untimed recovery launch, the
 # solve-region check unit and the three call sites that read once.  The

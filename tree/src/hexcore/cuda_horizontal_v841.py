@@ -17,6 +17,13 @@ from .cuda_v841 import CudaV841Context
 
 
 _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
+/* Level-independent kernels walk a flat (level, owner) element index, owner
+   fastest, in a grid-stride loop; each element runs the former per-owner
+   loop body for its level unchanged, so the launch geometry is not in the
+   arithmetic.  The forecast launches one thread per element. */
+#define HORIZONTAL_ELEMENT_LOOP(total) \
+    for (int element = blockDim.x * blockIdx.x + threadIdx.x; \
+         element < (total); element += gridDim.x * blockDim.x)
 __device__ __forceinline__ int lidx_v841(int level, int entity, int count) {
     return level * count + entity;
 }
@@ -47,9 +54,9 @@ extern "C" __global__ void vertex_diagnostics_v841_f32(
     const int nvertices, const int vertex_degree,
     float *vorticity, float *ke_vertex, float *pv_vertex)
 {
-    const int vertex = blockDim.x * blockIdx.x + threadIdx.x;
-    if (vertex >= nvertices) return;
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * nvertices) {
+        const int vertex = element % nvertices;
+        const int k = element / nvertices;
         float vort = 0.0f;
         float ke = 0.0f;
         for (int slot = 0; slot < vertex_degree; ++slot) {
@@ -80,12 +87,12 @@ extern "C" __global__ void cell_diagnostics_v841_f32(
     const int nedges, const int nvertices, const int max_edges,
     const int vertex_degree, float *divergence, float *kinetic_energy)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    const float inv_area = inv_area_cell[cell];
-    const float ke_fact = 0.625f;
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
+        const float inv_area = inv_area_cell[cell];
+        const float ke_fact = 0.625f;
         float div = 0.0f;
         float ke = 0.0f;
         for (int slot = 0; slot < count; ++slot) {
@@ -131,10 +138,10 @@ extern "C" __global__ void smagorinsky_v841_f32(
     // weights, D11 = 2 du/dx, D22 = 2 dv/dy, D12 = du/dy + dv/dx,
     // kdiff = (c_s*len)**2 * sqrt(0.25*(D11-D22)**2 + D12**2) capped at
     // (0.01*len**2)*invDt.
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
         float dudx = 0.0f;
         float dudy = 0.0f;
         float dvdx = 0.0f;
@@ -175,10 +182,10 @@ extern "C" __global__ void pv_cell_v841_f32(
     const int nlev, const int ncells, const int nvertices,
     const int max_edges, const int vertex_degree, float *pv_cell)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
         float value = 0.0f;
         for (int slot = 0; slot < count; ++slot) {
             const int vertex = vertices_on_cell[cell * max_edges + slot];
@@ -204,13 +211,13 @@ extern "C" __global__ void pv_apvm_v841_f32(
     const int nlev, const int ncells, const int nedges, const int nvertices,
     float *pv_edge, float *grad_pv_normal, float *grad_pv_tangential)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    const int vertex0 = vertices_on_edge[2 * edge];
-    const int vertex1 = vertices_on_edge[2 * edge + 1];
-    const int cell0 = cells_on_edge[2 * edge];
-    const int cell1 = cells_on_edge[2 * edge + 1];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
+        const int vertex0 = vertices_on_edge[2 * edge];
+        const int vertex1 = vertices_on_edge[2 * edge + 1];
+        const int cell0 = cells_on_edge[2 * edge];
+        const int cell1 = cells_on_edge[2 * edge + 1];
         const int index = lidx_v841(k, edge, nedges);
         const float grad_t = mpas_mul(mpas_sub(
             pv_vertex[lidx_v841(k, vertex1, nvertices)],
@@ -233,10 +240,10 @@ extern "C" __global__ void mass_flux_divergence_v841_f32(
     const int nlev, const int ncells, const int nedges,
     const int max_edges, float *mass_divergence)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int k = 0; k < nlev; ++k) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
         float value = 0.0f;
         for (int slot = 0; slot < count; ++slot) {
             const int edge = edges_on_cell[cell * max_edges + slot];
@@ -325,7 +332,7 @@ class CudaHorizontalV841(CudaHorizontal):
         out = self.cp.empty((self.nlev, self.ncells), dtype=self.cp.float32)
         self._launch_v841(
             "mass_flux_divergence_v841_f32",
-            self.ncells,
+            self.nlev * self.ncells,
             (
                 rho_u,
                 self.mesh.edges_on_cell,
@@ -393,7 +400,7 @@ class CudaHorizontalV841(CudaHorizontal):
         pv_vertex = cp.empty_like(vorticity)
         self._launch_v841(
             "vertex_diagnostics_v841_f32",
-            self.nvertices,
+            self.nlev * self.nvertices,
             (
                 normal,
                 ke_edge,
@@ -415,7 +422,7 @@ class CudaHorizontalV841(CudaHorizontal):
         kinetic_energy = cp.empty_like(divergence)
         self._launch_v841(
             "cell_diagnostics_v841_f32",
-            self.ncells,
+            self.nlev * self.ncells,
             (
                 normal,
                 ke_edge,
@@ -457,7 +464,7 @@ class CudaHorizontalV841(CudaHorizontal):
         if apvm_upwinding > 0.0:
             self._launch_v841(
                 "pv_cell_v841_f32",
-                self.ncells,
+                self.nlev * self.ncells,
                 (
                     pv_vertex,
                     self.mesh.vertices_on_cell,
@@ -476,7 +483,7 @@ class CudaHorizontalV841(CudaHorizontal):
             scale = np.float32(apvm_upwinding) * np.float32(dt)
             self._launch_v841(
                 "pv_apvm_v841_f32",
-                self.nedges,
+                self.nlev * self.nedges,
                 (
                     normal,
                     tangential,
@@ -636,7 +643,7 @@ class CudaHorizontalV841(CudaHorizontal):
         kdiff = cp.empty((self.nlev, self.ncells), dtype=cp.float32)
         self._launch_v841(
             "smagorinsky_v841_f32",
-            self.ncells,
+            self.nlev * self.ncells,
             (
                 normal,
                 tangential,

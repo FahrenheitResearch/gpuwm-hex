@@ -461,8 +461,56 @@ class RegionalContract:
 #: other four classes carry this digest through the constant and record the
 #: lapse here rather than pretend a re-mint; their kernels launch the same
 #: compiled text they were minted on.
+#:
+#: RE-DERIVED 2026-09-14 for the element-parallel launch geometry of the
+#: level-independent dycore kernels (the hex performance campaign's kernels
+#: lane).  Six of the fourteen sources moved, and this time the CUDA source
+#: strings themselves moved: ``cuda_driver.py``, ``cuda_dynamics_v841.py``,
+#: ``cuda_horizontal.py``, ``cuda_horizontal_v841.py``,
+#: ``cuda_regional_v841.py`` and ``cuda_transport.py`` re-map every kernel
+#: whose levels are independent from one thread per owner looping over
+#: levels to one thread per ``(tracer, level, owner)`` element in a
+#: grid-stride loop, and ``cuda_regional_forecast_v841.py`` launches them
+#: per element; the momentum kernel gathers a once-per-run reference wind
+#: instead of evaluating cosf/sinf per neighbour per stage.  What did NOT
+#: move is the per-element arithmetic: each element runs the former loop
+#: body for its level with the same operands in the same order, the
+#: vertically implicit column solve keeps its per-column form, and the claim
+#: is measured rather than argued -- the cull's own contract deck at this
+#: digest (8 of 8 decks bitwise against the v8.4.1 CPU authority, 22 of 22
+#: kernels, dual run identical) and a per-kernel capture-and-replay of every
+#: re-mapped kernel against the previous translation units on the point
+#: cull's live state (``tools/kernel_element_ab.py``).  What was RE-MINTED
+#: at this digest: the point class ``graded-869m-dt5-z7``, on the 43,884-cell
+#: point cull, in the same session as a forecast of the untouched tree (its
+#: row says what was measured).  The other four classes carry this digest
+#: through the constant and record the lapse here rather than pretend a
+#: re-mint: their kernels now launch re-mapped text, and the evidence that
+#: the re-mapped text computes the minted bits is the deck and the per-kernel
+#: replay above, not a re-run of their own mints.
+#:
+#: RE-DERIVED 2026-09-14 for the landing of the two moves above together
+#: (the hex performance campaign's kernels-land lane).  The host-path move
+#: and the element-parallel re-map were taken on separate branches from the
+#: same base and each re-derived this constant on its own; merged, the
+#: fourteen sources carry both: ``cuda_driver.py``,
+#: ``cuda_backend/recovery.py`` and ``cuda_regional_forecast_v841.py`` hold
+#: a lane each in different lines (the CUDA source strings are the re-map's,
+#: the host path's once-per-kernel launch helper around them), and the other
+#: eleven are one lane's or neither's.  One line moved beyond the union:
+#: ``cuda_regional_forecast_v841.py`` gained a public reading of the garbage
+#: discipline's unit-pool registry (``bound_to_unit_pool``), so the
+#: per-kernel replay can reproduce a launch's scrub after the run; it reads
+#: a dictionary and launches nothing.  What was RE-MINTED at this digest:
+#: the point class ``graded-869m-dt5-z7`` on the 43,884-cell point cull (its
+#: row says what was measured).  The other four classes carry this digest
+#: through the constant and record the lapse here rather than pretend a
+#: re-mint, on the reasoning of the two notes above: the cull's contract
+#: deck at the merged text and the per-kernel replay against the integrated
+#: tree's translation units are the evidence that the merged text computes
+#: the minted bits.
 MINTED_KERNEL_SET_SHA256 = (
-    "191af5f935bce84fa2b0becf3c6b04cfb9a821ba171a7be1c5468171909b062e"
+    "8a716f28862a3a89006b017397ad004cb05699a539ac74c9d9b283ba86657818"
 )
 
 _DRY_MINT_CAVEAT = (
@@ -490,10 +538,11 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 dt_ms=20_000,
                 # Minted at the kernel set of the species-row generalization
                 # (the door lane's chain landed 2026-09-01), ce63c3dd...,
-                # measured at the mint; the host-path move of 2026-09-14
-                # carried it onto the tree's constant like every other row,
-                # and the constant's own note says what moved and what was
-                # re-minted.
+                # measured at the mint; the host-path move and the
+                # element-parallel re-map of 2026-09-14 each carried it onto
+                # the tree's constant like every other row, and the
+                # constant's own note says what moved, what was measured
+                # and what was re-minted.
                 kernel_set_sha256=MINTED_KERNEL_SET_SHA256,
             ),
             parent="generated graded parent: 3.75 km cap of 480 km radius at "
@@ -685,6 +734,19 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "kernel set moved and the published bytes did not; the cull's "
                 "own contract deck passed at this digest (8 of 8 bitwise, 22 "
                 "of 22 kernels, dual run identical).  "
+                "RE-MINTED 2026-09-14 at the kernel set the element-parallel "
+                "launch geometry produced, landed together with the host-path "
+                "move (six CUDA-bearing sources moved, the per-element "
+                "arithmetic did not): on the same 43,884-cell point cull, "
+                "HRRR 15Z init and hourly boundaries, 2,160 steps of 5 s on "
+                "node-2's RTX 5090 in one process (567.7 s of integration), "
+                "all four history frames agree byte for byte with the "
+                "untouched 0.3.0 tree's run of the same three hours and with "
+                "the integrated tree's; the cull's own contract deck passed at "
+                "this digest (8 of 8 bitwise, 22 of 22 kernels, dual run "
+                "identical) and a per-kernel capture-and-replay of the 49 "
+                "re-mapped kernels the run launches was bitwise against the "
+                "integrated tree's translation units on the run's own state.  "
                 + _DRY_MINT_CAVEAT
             ),
         ),

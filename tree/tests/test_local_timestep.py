@@ -638,19 +638,25 @@ def test_the_derived_regional_kernels_are_their_ancestors_plus_the_gather():
 
     source = cuda_regional_v841._CUDA_SOURCE
     assert len(lts.REGIONAL_GATHERED) == 3
+    forms = {}
     for name, index, bound in lts.REGIONAL_GATHERED:
         original = lts._extract_kernel(source, name)
         derived = lts._gather(
             original, name=name, index=index, bound=bound,
             new_name=name.replace("_v841", "_lts"),
         )
-        restored = derived.replace(
-            "const int lts_slot = blockDim.x * blockIdx.x + threadIdx.x;\n"
-            "    if (lts_slot >= lts_n_active) return;\n"
-            f"    const int {index} = lts_active[lts_slot];",
-            f"const int {index} = blockDim.x * blockIdx.x + threadIdx.x;\n"
-            f"    if ({index} >= {bound}) return;",
-        )
+        # Undo exactly the declared edits, in whichever preamble form the
+        # ancestor has, and require the ancestor back.
+        if lts._gathered_element_preamble(index) in derived:
+            forms[name] = "element"
+            restored = derived.replace(
+                lts._gathered_element_preamble(index), lts._element_preamble(index, bound)
+            )
+        else:
+            forms[name] = "owner"
+            restored = derived.replace(
+                lts._gathered_owner_preamble(index), lts._owner_preamble(index, bound)
+            )
         restored = restored.replace(
             ",\n    const int *lts_active, const int lts_n_active", ""
         )
@@ -658,6 +664,39 @@ def test_the_derived_regional_kernels_are_their_ancestors_plus_the_gather():
         assert restored == original, name
         # The specified-zone masking survives the gather byte for byte.
         assert "spec_zone_mask" in derived
+    # The two level-independent entrypoints walk elements; the column solve
+    # keeps its per-column form.
+    assert forms == {
+        "acoustic_ru_regional_v841": "element",
+        "acoustic_rs_ts_regional_v841": "element",
+        "acoustic_column_solve_regional_v841": "owner",
+    }
+
+
+def test_the_derived_unit_carries_the_regional_element_loop_verbatim():
+    from hexcore import cuda_acoustic_lts as lts
+    from hexcore import cuda_regional_v841
+
+    macro = lts._extract_macro(cuda_regional_v841._CUDA_SOURCE, "REGIONAL_ELEMENT_LOOP")
+    assert macro.startswith("#define REGIONAL_ELEMENT_LOOP(total)")
+    assert "element += gridDim.x * blockDim.x" in macro
+    source = lts.local_timestep_cuda_source()
+    assert source.count(macro) == 1
+    assert source.count("REGIONAL_ELEMENT_LOOP(nlev * lts_n_active)") == 2
+
+
+def test_a_kernel_with_both_preamble_forms_is_refused():
+    from hexcore import cuda_acoustic_lts as lts
+
+    both = (
+        'extern "C" __global__ void twice(const int nlev, const int ncells)\n{\n    '
+        + lts._owner_preamble("cell", "ncells")
+        + "\n    "
+        + lts._element_preamble("cell", "ncells")
+        + "\n    }\n}"
+    )
+    with pytest.raises(lts.LocalTimestepSourceDrift):
+        lts._gather(both, name="twice", index="cell", bound="ncells", new_name="twice_lts")
 
 
 def test_the_derived_translation_unit_declares_the_regional_kernels_once():
