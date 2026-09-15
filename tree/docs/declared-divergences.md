@@ -56,12 +56,13 @@ is no receipt directory, no card and no run commit for them anywhere in the
 tree -- which is the opposite of how the obs-referee numbers below are
 recorded, and the gap is worth naming rather than papering over. What can be
 established is a ceiling: the commit that introduced them pinned engine
-`629ddb6f0`, so the run happened at or before that pin. Eight engine pin moves
+`629ddb6f0`, so the run happened at or before that pin. Nine engine pin moves
 have landed since -- `0d04db712` (2026-08-24), `26daaab7e` (2026-08-25),
 `659962929` (2026-08-28, gpuwm 2.5.8), `7e34a48` (2026-08-31, gpuwm
 2.6.0), `df5f34c5c` (2026-09-01, gpuwm 2.6.1), `636ab1b4b`
-(2026-09-02, gpuwm 2.6.3), `d60b883e7` (2026-09-02, gpuwm 2.6.4) and
-`a7785421e` (2026-09-13, gpuwm 2.7.3).
+(2026-09-02, gpuwm 2.6.3), `d60b883e7` (2026-09-02, gpuwm 2.6.4),
+`a7785421e` (2026-09-13, gpuwm 2.7.3) and `ed957997f` (2026-09-15, gpuwm
+2.7.4).
 
 The 2.5.8 move crosses the executed seam and **has been measured**, in
 the strongest form available short of a re-run: a four-arm byte A/B on one
@@ -165,6 +166,46 @@ is byte-identical to 2.7.3 on all 500 arrays of that profile
 (`../verification/engine-verdicts/seam-ab-capped-2.6.5-with-2.7.3-ysu-vs-2.7.3.json`).
 That the manifest does not reach the boundary-layer kernel is a named
 follow-up; it is not a claim this page makes.
+
+The 2026-09-15 move to gpuwm 2.7.4 is the narrowest since 2.6.5: two of
+the sixteen pinned files moved between the published 2.7.3 and 2.7.4
+wheels, measured wheel against wheel
+(`../verification/engine-verdicts/repin-274-20260915.json`) --
+`gpuwm/config.py` gained one function, `radiation_scheme_ids_from_settings`,
+a settings-map reader of the radiation rule that the port never calls,
+and `gpuwm/core/microphysics.py` passes two keyword arguments
+(`condensation_marker`, `source_density`) on the classic Thompson path's
+cloud adjustment and rain evaporation, a scheme the port's WSM6 backend
+never runs -- and the other fourteen, the composed Noah-MP glacier unit
+included, are byte-identical.  Outside the sixteen, the engine's 2.7.4
+work on the physics path is in the Morrison, Thompson, WDM6 and MYNN
+kernels and drivers, none of which the port's fixed-step WSM6, YSU,
+Noah-MP, legacy-RRTMG and Grell-Freitas seam executes; `ysu.cu`,
+`sfclay.cu` and the RRTMG sources did not move.  The move is measured
+byte-neutral through the seam at three scopes, each stated with what it
+covers.  The seam-level A/B (`../tools/measure_engine_seam_ab.py`; receipts
+`../verification/engine-verdicts/seam-ab-{convective,capped}-2.7.3-vs-2.7.4.json`,
+eight columns, forty levels, twenty 120 s steps, WSM6, YSU, Noah-MP and
+legacy RRTMG, Grell-Freitas on one arm and off on the other) is 500 of
+500 arrays byte-identical on both profiles and both arms under the two
+published engines, on node-1's RTX 5070 Ti and again on node-2's RTX 5090.
+The one-hour point-cull forecast (`q0.9375.120.43884.n41.95w94.79`,
+43,884 cells, 55 levels, 720 steps of 5 s, HRRR 2026-09-13 15Z init and
+hourly boundaries, node-2's RTX 5090 with no other process on the card)
+under gpuwm 2.7.4 wrote both history frames byte-identical to the frames
+of record under 2.7.3 (15Z `85cb8196...`, 16Z `4ed8001f...`), at
+0.2617 s per step after the first (median typical step 0.2453 s,
+peak 8,914 MiB), the same figures the same tree measured under 2.7.3 over
+three hours in an earlier session on the same card.  The cull's own
+contract deck under the 2.7.4 install is 8 of 8 decks bitwise against the
+v8.4.1 CPU authority, 22 of 22 regional kernels covered, dual run
+identical, at the same regional kernel-set digest `8a716f28...` -- a
+re-pin touches no CUDA source, and the deck says so rather than assumes
+it.  The x4 F001 byte chain is not re-run at this pin, as at 2.7.3; the
+scopes above are one seam instrument, one mesh, one case and one hour,
+and whether any of the three divergences below moved is what they do not
+measure.  Nothing is declared for this move, because nothing moved
+through the seam.
 
 The 2026-09-01 move crosses the executed seam a third time, and at its
 centre: `gpuwm/core/mpas_column_batch.py`, the seam's own batch driver,

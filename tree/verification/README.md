@@ -30,7 +30,10 @@
   base.  Beside them, `seam-ab-*.json` are the outputs
   of `tools/measure_engine_seam_ab.py`: the engine's column-batch seam driven
   on fixed columns under two engines and compared field by field, which is
-  how a re-pin says which physics number moved and by how much.  Their
+  how a re-pin says which physics number moved and by how much (the
+  `2.6.5-vs-2.7.3` files are the 2.7.3 re-pin's, taken on an RTX 5070 Ti;
+  the `2.7.3-vs-2.7.4` files are the 2.7.4 re-pin's, taken on an RTX 5090,
+  500 of 500 arrays identical on both profiles).  Their
   ``.npz`` inputs are not carried; the JSON records the SHA-256 of the columns
   that produced them and of the engine sources on each side.
 

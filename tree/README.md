@@ -978,6 +978,16 @@ the seam without alteration; the port's physics is judged against
 observations, not against the previous engine, and a pinned-file manifest
 that does not reach the boundary-layer kernel is a named follow-up rather
 than a claim this page makes.
+The **2.7.4** move (2026-09-15) is the narrowest since 2.6.5 — two of the
+sixteen pinned files moved between the published 2.7.3 and 2.7.4 wheels,
+one added settings-map reader in the config loader and two keyword
+arguments on the classic Thompson path, neither on the port's executed
+path — and it is measured byte-neutral through the seam: the seam-level
+A/B is 500 of 500 arrays identical on both profiles and both arms on two
+cards, and the one-hour point-cull forecast under 2.7.4 wrote both history
+frames byte-identical to the 2.7.3 frames of record on node-2's RTX 5090,
+with the cull's contract deck 8 of 8 bitwise at the unchanged kernel-set
+digest (`docs/declared-divergences.md`). Nothing is declared for it.
 The two earliest moves have no such arm, and none of the three magnitudes
 has been re-measured over 24 h since. Whether any of them moved is **NOT MEASURED**.
 Read them as the numbers from the pre-2026-08-20 engine, not as today's.
