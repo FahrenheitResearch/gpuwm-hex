@@ -176,19 +176,37 @@ def test_an_unanchored_timestep_is_refused_and_an_anchored_one_is_admitted(
     assert admitted.dt_seconds == probe
 
 
-def test_an_anchored_timestep_at_a_different_cadence_is_still_refused():
+def test_an_anchored_timestep_at_a_radiation_cadence_it_never_measured_is_refused():
     """How often a scheme is CALLED is part of what the anchor measured."""
 
     with pytest.raises(DtAdmissionError) as caught:
         dt_admission.require_dt_anchor(
             120.0,
-            radiation_seconds=600.0,
-            surface_pbl_seconds=600.0,  # YSU every five steps instead of every step
+            radiation_seconds=1200.0,  # radiation every ten steps instead of five
+            surface_pbl_seconds=120.0,
             cumulus_seconds=120.0,
         )
     message = str(caught.value)
     assert "at physics cadences this run does not use" in message
     assert "earns its own" in message
+
+
+def test_a_held_surface_pbl_cadence_at_an_anchored_timestep_is_admitted_derived():
+    """The one cadence a run may SELECT is admitted on the welded row's
+    dycore evidence, with its physics band stamped NOT MEASURED rather than
+    borrowed (hexcore.dt_admission.derived_held_cadence_anchor)."""
+
+    anchor = dt_admission.require_dt_anchor(
+        120.0,
+        radiation_seconds=600.0,
+        surface_pbl_seconds=600.0,  # YSU every five steps instead of every step
+        cumulus_seconds=120.0,
+    )
+    assert anchor.derived is True
+    assert anchor.derived_from == dt_admission.dt_key(120.0, "gf")
+    assert anchor.surface_pbl_seconds == 600.0
+    assert anchor.physics_health.startswith("NOT MEASURED")
+    assert dt_admission.registered_anchor(120.0, "gf", 600.0) is None
 
 
 def test_dt_key_separates_timesteps_that_differ_in_the_last_bit():
@@ -269,11 +287,12 @@ def test_the_frozen_config_admits_exactly_the_earned_set_and_nothing_else():
 
 
 def test_an_anchored_timestep_is_still_refused_at_a_cadence_it_never_measured():
-    """Earning 20 s did not earn 20 s with radiation held at 120 s.
+    """Earning 20 s did not earn 20 s with radiation at 1200 s.
 
     How often a scheme is CALLED is part of what an anchor certifies, so an
-    anchored dt run at cadences its anchor did not measure is a different
-    configuration and is refused.
+    anchored dt run at a cadence its anchor did not measure is a different
+    configuration and is refused -- except the surface/PBL cadence, which
+    is selectable and admitted through a derived row (the test after this).
     """
 
     from hexcore.config_v841 import V841MpasColumnPhysicsSmagorinskyGwdoConfig
@@ -282,12 +301,34 @@ def test_an_anchored_timestep_is_still_refused_at_a_cadence_it_never_measured():
     with pytest.raises(ConfigurationRefusal) as caught:
         V841MpasColumnPhysicsSmagorinskyGwdoConfig(
             config_dt=anchor.dt_seconds,
-            config_bldt_seconds=dt_admission.PROVEN_DT_SECONDS,
+            config_radt_seconds=1200.0,
+            config_bldt_seconds=anchor.dt_seconds,
             config_cudt_seconds=anchor.cumulus_seconds,
+            config_convection_scheme=(
+                "off" if anchor.cumulus_scheme is None else "cu_grell_freitas"
+            ),
         ).validate()
     assert "is anchored, but at physics cadences this run does not use" in str(
         caught.value
     )
+
+
+def test_the_config_admits_a_held_surface_pbl_cadence_through_the_derived_row():
+    """The selectable cadence needs no mint: the welded row's dycore
+    evidence covers the outer step, and the derived row says what it did
+    not measure."""
+
+    from hexcore.config_v841 import V841MpasColumnPhysicsSmagorinskyGwdoConfig
+
+    anchor = min(ADMITTED_TIMESTEPS.values(), key=lambda a: a.dt_seconds)
+    V841MpasColumnPhysicsSmagorinskyGwdoConfig(
+        config_dt=anchor.dt_seconds,
+        config_bldt_seconds=dt_admission.PROVEN_DT_SECONDS,
+        config_cudt_seconds=anchor.cumulus_seconds,
+        config_convection_scheme=(
+            "off" if anchor.cumulus_scheme is None else "cu_grell_freitas"
+        ),
+    ).validate()
 
 
 def test_the_config_and_the_mesh_registry_admit_from_the_same_surface():

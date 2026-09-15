@@ -27,6 +27,13 @@ _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
 #define QE3(q,k,e,nl,ne) ((((q)*(nl) + (k))*(ne)) + (e))
 #define QI3(q,k,c,nl,nc) ((((q)*((nl)+1) + (k))*(nc)) + (c))
 #define CES(c,s,me) ((c)*(me) + (s))
+/* Level-independent kernels walk a flat (tracer, level, owner) element
+   index, owner fastest, in a grid-stride loop; each element runs the former
+   per-owner loop body for its level unchanged, so the launch geometry is
+   not in the arithmetic.  The forecast launches one thread per element. */
+#define TRANSPORT_ELEMENT_LOOP(total) \
+    for (int element = blockDim.x * blockIdx.x + threadIdx.x; \
+         element < (total); element += gridDim.x * blockDim.x)
 #define ADV(e,s,width) ((e)*(width) + (s))
 
 // The third- and fourth-order stencil denominator of
@@ -123,42 +130,42 @@ extern "C" __global__ void transport_vertical_flux(
     const float coefficient, const float *stage, const float *velocity,
     const float *fzm, const float *fzp, float *vertical_flux)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    for (int tracer = 0; tracer < ntracers; ++tracer) {
-        for (int interface = 0; interface <= nlev; ++interface) {
-            float result = 0.0f;
-            if (interface > 0 && interface < nlev) {
-                const float vel = velocity[C2(interface, cell, ncells)];
-                if (interface == 1 || interface == nlev - 1) {
-                    result = mpas_mul(vel, mpas_add(
-                        mpas_mul(fzm[interface], stage[Q3(
-                            tracer, interface, cell, nlev, ncells)]),
-                        mpas_mul(fzp[interface], stage[Q3(
-                            tracer, interface - 1, cell, nlev, ncells)])));
-                } else {
-                    const float qim2 = stage[Q3(
-                        tracer, interface - 2, cell, nlev, ncells)];
-                    const float qim1 = stage[Q3(
-                        tracer, interface - 1, cell, nlev, ncells)];
-                    const float qi = stage[Q3(
-                        tracer, interface, cell, nlev, ncells)];
-                    const float qip1 = stage[Q3(
-                        tracer, interface + 1, cell, nlev, ncells)];
-                    const float base = mpas_div(mpas_mul(vel, mpas_sub(
-                        mpas_mul(7.0f, mpas_add(qi, qim1)),
-                        mpas_add(qip1, qim2))),
-                        mpas_third_order_denominator);
-                    const float correction = mpas_div(mpas_mul(
-                        mpas_mul(coefficient, mpas_abs(vel)),
-                        mpas_sub(mpas_sub(qip1, qim2),
-                            mpas_mul(3.0f, mpas_sub(qi, qim1)))),
-                        mpas_third_order_denominator);
-                    result = mpas_add(base, correction);
-                }
+    TRANSPORT_ELEMENT_LOOP(ntracers * (nlev + 1) * ncells) {
+        const int cell = element % ncells;
+        const int rest = element / ncells;
+        const int interface = rest % (nlev + 1);
+        const int tracer = rest / (nlev + 1);
+        float result = 0.0f;
+        if (interface > 0 && interface < nlev) {
+            const float vel = velocity[C2(interface, cell, ncells)];
+            if (interface == 1 || interface == nlev - 1) {
+                result = mpas_mul(vel, mpas_add(
+                    mpas_mul(fzm[interface], stage[Q3(
+                        tracer, interface, cell, nlev, ncells)]),
+                    mpas_mul(fzp[interface], stage[Q3(
+                        tracer, interface - 1, cell, nlev, ncells)])));
+            } else {
+                const float qim2 = stage[Q3(
+                    tracer, interface - 2, cell, nlev, ncells)];
+                const float qim1 = stage[Q3(
+                    tracer, interface - 1, cell, nlev, ncells)];
+                const float qi = stage[Q3(
+                    tracer, interface, cell, nlev, ncells)];
+                const float qip1 = stage[Q3(
+                    tracer, interface + 1, cell, nlev, ncells)];
+                const float base = mpas_div(mpas_mul(vel, mpas_sub(
+                    mpas_mul(7.0f, mpas_add(qi, qim1)),
+                    mpas_add(qip1, qim2))),
+                    mpas_third_order_denominator);
+                const float correction = mpas_div(mpas_mul(
+                    mpas_mul(coefficient, mpas_abs(vel)),
+                    mpas_sub(mpas_sub(qip1, qim2),
+                        mpas_mul(3.0f, mpas_sub(qi, qim1)))),
+                    mpas_third_order_denominator);
+                result = mpas_add(base, correction);
             }
-            vertical_flux[QI3(tracer, interface, cell, nlev, ncells)] = result;
         }
+        vertical_flux[QI3(tracer, interface, cell, nlev, ncells)] = result;
     }
 }
 
@@ -805,7 +812,7 @@ def _high_fluxes(
     )
     _launch(
         "transport_vertical_flux",
-        ncells,
+        ntracers * (nlev + 1) * ncells,
         (
             np.int32(ntracers),
             np.int32(nlev),

@@ -25,6 +25,17 @@ What the edits are
    cells, and the ``__global__`` body is byte-comparable to its ancestor once
    the preamble is substituted back.
 
+   A kernel whose ancestor walks one thread per ``(level, owner)`` element in
+   the regional unit's grid-stride loop (``REGIONAL_ELEMENT_LOOP(nlev * n)``
+   with ``i = element % n; k = element / n``) takes the same gather in that
+   form: the loop runs over ``nlev * n_active`` elements, the slot is
+   ``element % n_active``, the level ``element / n_active``, and the owner is
+   ``active[slot]``.  Each element still runs the ancestor's body for its
+   level and owner; only which owners exist changes.  The derived unit
+   carries the regional unit's loop macro, byte for byte, so the body
+   compiles unchanged.  ``_gather`` refuses a kernel that matches neither
+   form, or both.
+
 2. ``recover_edges``/``recover_interfaces`` take the sub-step count as an array
    instead of a scalar, because under LTS each edge and each column executes a
    different number of acoustic sub-steps and the ``ru_avg``/``ww_avg`` time
@@ -32,6 +43,17 @@ What the edits are
 
 3. Two kernels are new and have no ancestor: ``lts_reflux_accumulate`` and
    ``lts_reflux_settle``.  They are the conservation mechanism (see below).
+
+4. The three limited-area entrypoints of ``cuda_regional_v841`` --
+   ``acoustic_ru_regional_v841``, ``acoustic_rs_ts_regional_v841`` and
+   ``acoustic_column_solve_regional_v841`` -- receive the same gather (edit 1)
+   and nothing else, as ``*_regional_lts``.  A regional driver runs those
+   three in place of the global trio (``cuda_driver.py`` selects them when
+   ``regional_v841`` is set), so a regional attachment that rebound only the
+   global sub-step would leave every column on the global ``dts`` while the
+   vertical coefficients and the time-average recovery had been built for the
+   class rates: wrong arithmetic that no refusal named.  The derived regional
+   kernels keep the specified-zone masking byte for byte.
 
 Conservation at a class interface
 ---------------------------------
@@ -127,8 +149,66 @@ def _extract_kernel(source: str, name: str) -> str:
     raise LocalTimestepSourceDrift(f"kernel {name!r} has unbalanced braces")
 
 
+def _owner_preamble(index: str, bound: str) -> str:
+    """One thread per owner: the ancestor's preamble."""
+
+    return (
+        f"const int {index} = blockDim.x * blockIdx.x + threadIdx.x;\n"
+        f"    if ({index} >= {bound}) return;"
+    )
+
+
+def _gathered_owner_preamble(index: str) -> str:
+    return (
+        "const int lts_slot = blockDim.x * blockIdx.x + threadIdx.x;\n"
+        "    if (lts_slot >= lts_n_active) return;\n"
+        f"    const int {index} = lts_active[lts_slot];"
+    )
+
+
+def _element_preamble(index: str, bound: str) -> str:
+    """One thread per (level, owner) element: the regional unit's preamble."""
+
+    return (
+        f"REGIONAL_ELEMENT_LOOP(nlev * {bound}) {{\n"
+        f"        const int {index} = element % {bound};\n"
+        f"        const int k = element / {bound};"
+    )
+
+
+def _gathered_element_preamble(index: str) -> str:
+    return (
+        "REGIONAL_ELEMENT_LOOP(nlev * lts_n_active) {\n"
+        "        const int lts_slot = element % lts_n_active;\n"
+        "        const int k = element / lts_n_active;\n"
+        f"        const int {index} = lts_active[lts_slot];"
+    )
+
+
+def _extract_macro(source: str, name: str) -> str:
+    """Return one ``#define NAME(...)`` with its continuation lines."""
+
+    marker = f"#define {name}("
+    start = source.find(marker)
+    if start < 0:
+        raise LocalTimestepSourceDrift(f"macro {name!r} is absent from its source module")
+    if source.find(marker, start + 1) >= 0:
+        raise LocalTimestepSourceDrift(f"macro {name!r} is defined more than once")
+    lines = source[start:].splitlines()
+    kept = []
+    for line in lines:
+        kept.append(line)
+        if not line.rstrip().endswith("\\"):
+            break
+    return "\n".join(kept)
+
+
 def _gather(kernel: str, *, name: str, index: str, bound: str, new_name: str) -> str:
-    """Rename a kernel and turn its thread preamble into an index gather."""
+    """Rename a kernel and turn its thread preamble into an index gather.
+
+    The preamble is the per-owner form or the per-element form (module
+    docstring, edit 1); a kernel carrying neither, or both, is refused.
+    """
 
     open_paren = kernel.find("(")
     depth = 0
@@ -154,16 +234,28 @@ def _gather(kernel: str, *, name: str, index: str, bound: str, new_name: str) ->
         f'extern "C" __global__ void {new_name}(',
         what=f"{name} declaration",
     )
-    kernel = _replace_once(
+    owner_form = kernel.count(_owner_preamble(index, bound))
+    element_form = kernel.count(_element_preamble(index, bound))
+    if owner_form + element_form != 1:
+        raise LocalTimestepSourceDrift(
+            f"local-timestep derivation anchor for {name!r} thread preamble matched "
+            f"{owner_form} per-owner and {element_form} per-element forms, expected "
+            "exactly one of either; the pinned kernel text changed and the derived "
+            "kernel would no longer be the same arithmetic"
+        )
+    if owner_form:
+        return _replace_once(
+            kernel,
+            _owner_preamble(index, bound),
+            _gathered_owner_preamble(index),
+            what=f"{name} thread preamble",
+        )
+    return _replace_once(
         kernel,
-        f"const int {index} = blockDim.x * blockIdx.x + threadIdx.x;\n"
-        f"    if ({index} >= {bound}) return;",
-        "const int lts_slot = blockDim.x * blockIdx.x + threadIdx.x;\n"
-        "    if (lts_slot >= lts_n_active) return;\n"
-        f"    const int {index} = lts_active[lts_slot];",
-        what=f"{name} thread preamble",
+        _element_preamble(index, bound),
+        _gathered_element_preamble(index),
+        what=f"{name} element preamble",
     )
-    return kernel
 
 
 _REFLUX_SOURCE = r"""
@@ -325,8 +417,41 @@ def _build_source() -> str:
             new_name="divergence_damping_lts",
         )
     )
+    # The limited-area trio, from the regional translation unit, with that
+    # unit's own index macros so the bodies compile unchanged.
+    from . import cuda_regional_v841
+
+    regional = cuda_regional_v841._CUDA_SOURCE
+    pieces.append(
+        "#define RC2(k,c,nc) ((k)*(nc) + (c))\n"
+        "#define RE2(k,e,ne) ((k)*(ne) + (e))\n"
+        "#define RCES(c,s,me) ((c)*(me) + (s))\n"
+    )
+    # The element loop the re-mapped regional kernels walk, the regional
+    # unit's own text so the gathered bodies compile unchanged.
+    pieces.append(_extract_macro(regional, "REGIONAL_ELEMENT_LOOP"))
+    for name, index, bound in REGIONAL_GATHERED:
+        kernel = _extract_kernel(regional, name)
+        pieces.append(
+            _gather(
+                kernel,
+                name=name,
+                index=index,
+                bound=bound,
+                new_name=name.replace("_v841", "_lts"),
+            )
+        )
     pieces.append(_REFLUX_SOURCE)
     return "\n\n".join(pieces)
+
+
+#: The regional acoustic entrypoints that receive the gather, with the thread
+#: index name and bound each one's preamble uses.
+REGIONAL_GATHERED: tuple[tuple[str, str, str], ...] = (
+    ("acoustic_ru_regional_v841", "edge", "nedges"),
+    ("acoustic_rs_ts_regional_v841", "cell", "ncells"),
+    ("acoustic_column_solve_regional_v841", "cell", "ncells"),
+)
 
 
 _SOURCE: str | None = None
@@ -423,16 +548,34 @@ def build_device_classing(
     *,
     n_vert_levels: int,
     cp: Any,
+    padded_cells: int = 0,
+    padded_edges: int = 0,
 ) -> DeviceRateClassing:
-    """Move a :class:`~hexcore.lts_v841.LocalTimestepClassing` to the device."""
+    """Move a :class:`~hexcore.lts_v841.LocalTimestepClassing` to the device.
+
+    ``padded_cells`` / ``padded_edges`` are the regional memory model's
+    garbage elements (one of each, appended after the solve extent).  They
+    are appended to the rate-1 class so every launch list still covers the
+    padded extent the pinned kernels run over, and the garbage element keeps
+    executing the same arithmetic it executes on the option-off path.  They
+    are never interfaces.
+    """
 
     cells_on_edge = np.asarray(cp.asnumpy(_int32(_mesh_value(mesh, "cells_on_edge"), "cells_on_edge")))
     edges_on_cell = np.asarray(cp.asnumpy(_int32(_mesh_value(mesh, "edges_on_cell"), "edges_on_cell")))
     signs = np.asarray(cp.asnumpy(_float32(_mesh_value(mesh, "edge_sign_on_cell"), "edge_sign_on_cell")))
     counts = np.asarray(cp.asnumpy(_int32(_mesh_value(mesh, "n_edges_on_cell"), "n_edges_on_cell")))
 
-    cell_rate = np.asarray(classing.cell_rate, dtype=np.int32)
-    edge_rate = np.asarray(classing.edge_rate, dtype=np.int32)
+    pad_c = int(padded_cells)
+    pad_e = int(padded_edges)
+    if pad_c < 0 or pad_e < 0:
+        raise ValueError("padding counts must be non-negative")
+    cell_rate = np.concatenate(
+        [np.asarray(classing.cell_rate, dtype=np.int32), np.ones(pad_c, dtype=np.int32)]
+    )
+    edge_rate = np.concatenate(
+        [np.asarray(classing.edge_rate, dtype=np.int32), np.ones(pad_e, dtype=np.int32)]
+    )
     n_cells = int(cell_rate.size)
     n_edges = int(edge_rate.size)
     if cells_on_edge.shape != (n_edges, 2):
@@ -484,10 +627,24 @@ def build_device_classing(
     def to_device_int(value: np.ndarray) -> Any:
         return cp.asarray(np.ascontiguousarray(value, dtype=np.int32))
 
+    # Launch lists are rebuilt from the (possibly padded) rate arrays rather
+    # than copied from the classing, so the padding lands in class 0 and the
+    # union of the lists is exactly the padded extent.
+    rates = tuple(int(value) for value in classing.rates)
+    cell_lists_host = tuple(
+        np.flatnonzero(cell_rate == rate).astype(np.int32) for rate in rates
+    )
+    edge_lists_host = tuple(
+        np.flatnonzero(edge_rate == rate).astype(np.int32) for rate in rates
+    )
+    if sum(int(v.size) for v in cell_lists_host) != n_cells:
+        raise ValueError("the cell launch lists do not partition the padded extent")
+    if sum(int(v.size) for v in edge_lists_host) != n_edges:
+        raise ValueError("the edge launch lists do not partition the padded extent")
     return DeviceRateClassing(
-        rates=tuple(int(value) for value in classing.rates),
-        cell_lists=tuple(to_device_int(value) for value in classing.cell_lists),
-        edge_lists=tuple(to_device_int(value) for value in classing.edge_lists),
+        rates=rates,
+        cell_lists=tuple(to_device_int(value) for value in cell_lists_host),
+        edge_lists=tuple(to_device_int(value) for value in edge_lists_host),
         all_cells=to_device_int(np.arange(n_cells, dtype=np.int32)),
         all_edges=to_device_int(np.arange(n_edges, dtype=np.int32)),
         iface_edges=to_device_int(iface),
@@ -562,6 +719,7 @@ def refuse_unsupported_ladder(rates: tuple[int, ...], stage_acoustic_steps: tupl
 __all__ = [
     "DeviceRateClassing",
     "LocalTimestepSourceDrift",
+    "REGIONAL_GATHERED",
     "build_device_classing",
     "entity_step_counts",
     "kernel",

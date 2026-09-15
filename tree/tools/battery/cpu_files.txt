@@ -154,7 +154,13 @@ tests/test_device_memory_ledger_probes.py
 # checking them meant no push examined the kernel sources at all.
 tests/test_cuda_physics_tier_park_v841.py
 tests/test_cuda_regional_kernels.py
+tests/test_element_parallel_kernels.py
+tests/test_kernel_element_ab.py
 tests/test_fullstep_projection_probe.py
+# The step's host path: the admission memo, the untimed recovery launch, the
+# solve-region check unit and the three call sites that read once.  The
+# device halves import cupy inside the test and are marked gpu by conftest.
+tests/test_solve_region_checks.py
 tests/test_libm_identity.py
 tests/test_nvrtc_reciprocal_rewrite.py
 tests/test_vertical_artifact_met_state.py
@@ -173,6 +179,14 @@ tests/test_regional_forecast_anchor.py
 tests/test_regional_mesh_binding.py
 tests/test_regional_physics_seam.py
 tests/test_regional_runtime.py
+# The point-mesh door (0.3.0): the HRRR intermediate writer, the point plan
+# and its cull, the runtime mesh-row file and the finest-edge class band.
+# They arrived with the door and were named by no tier list, which is the
+# forty-first file tests/test_tier_membership.py exists to catch.
+tests/test_hrrr_intermediate.py
+tests/test_mesh_point.py
+tests/test_mesh_rows.py
+tests/test_regional_class_band.py
 
 # Time stepping and physics cadence: the local timestep and the PBL call
 # interval.  A cadence that drifts changes every forecast this port produces

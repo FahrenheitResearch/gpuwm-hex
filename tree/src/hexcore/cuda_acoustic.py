@@ -26,6 +26,13 @@ _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
 #define E2(k,e,ne) ((k)*(ne) + (e))
 #define CES(c,s,me) ((c)*(me) + (s))
 #define ZBS(k,c,s,nc,me) ((((k)*(nc) + (c))*(me)) + (s))
+/* Level-independent kernels walk a flat (level, owner) element index, owner
+   fastest, in a grid-stride loop; each element runs the former per-owner
+   loop body for its level unchanged, so the launch geometry is not in the
+   arithmetic.  The forecast launches one thread per element. */
+#define ACOUSTIC_ELEMENT_LOOP(total) \
+    for (int element = blockDim.x * blockIdx.x + threadIdx.x; \
+         element < (total); element += gridDim.x * blockDim.x)
 
 extern "C" __global__ void acoustic_coefficients(
     const int nlev, const int ncells,
@@ -114,29 +121,30 @@ extern "C" __global__ void tendency_w_to_omega(
     const float *zz, const float *zb, const float *zb3,
     float *omega_tendency)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    const int count = n_edges_on_cell[cell];
-    for (int slot = 0; slot < count; ++slot) {
-        const int edge = edges_on_cell[CES(cell, slot, max_edges)];
-        if (edge < 0 || edge >= nedges) continue;
-        const float sign = edge_sign_on_cell[CES(cell, slot, max_edges)];
-        for (int k = 1; k < nlev; ++k) {
+    /* One element per (interior level, cell): the edge-slot accumulation
+       into omega_tendency runs in the same ascending slot order the
+       per-cell loop ran it for that level, then the metric multiply. */
+    ACOUSTIC_ELEMENT_LOOP((nlev - 1) * ncells) {
+        const int cell = element % ncells;
+        const int k = 1 + element / ncells;
+        const int count = n_edges_on_cell[cell];
+        const int index = C2(k, cell, ncells);
+        float omega = omega_tendency[index];
+        for (int slot = 0; slot < count; ++slot) {
+            const int edge = edges_on_cell[CES(cell, slot, max_edges)];
+            if (edge < 0 || edge >= nedges) continue;
+            const float sign = edge_sign_on_cell[CES(cell, slot, max_edges)];
             const float ut = u_tendency[E2(k, edge, nedges)];
             const float flux = mpas_mul(sign, mpas_add(
                 mpas_mul(fzm[k], ut),
                 mpas_mul(fzp[k],
                     u_tendency[E2(k - 1, edge, nedges)])));
             const int metric = ZBS(k, cell, slot, ncells, max_edges);
-            omega_tendency[C2(k, cell, ncells)] = mpas_sub(
-                omega_tendency[C2(k, cell, ncells)],
+            omega = mpas_sub(omega,
                 mpas_mul(mpas_add(zb[metric], mpas_mul(
                     mpas_copysign(1.0f, ut), zb3[metric])), flux));
         }
-    }
-    for (int k = 1; k < nlev; ++k) {
-        const int index = C2(k, cell, ncells);
-        omega_tendency[index] = mpas_mul(omega_tendency[index], mpas_add(
+        omega_tendency[index] = mpas_mul(omega, mpas_add(
             mpas_mul(fzm[k], zz[index]),
             mpas_mul(fzp[k], zz[C2(k - 1, cell, ncells)])));
     }
@@ -620,7 +628,7 @@ def convert_w_tendency_to_omega_cuda(
         raise ValueError(f"terrain metrics must have shape {expected_metric}")
     _launch_1d(
         _kernel("tendency_w_to_omega", kernel_cache),
-        ncells,
+        (nlev - 1) * ncells,
         (
             np.int32(nlev),
             np.int32(ncells),

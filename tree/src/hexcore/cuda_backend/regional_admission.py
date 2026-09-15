@@ -439,8 +439,78 @@ class RegionalContract:
 #: question: every cull's contract deck still measures device bits against the
 #: v8.4.1 CPU authority on its own zone geometry, and a spelling cannot touch
 #: that.
+#:
+#: RE-DERIVED 2026-09-14 for the host path of the forecast step (the hex
+#: performance campaign's hostpath lane).  Three of the fourteen sources
+#: moved, all of them HOST Python and none of them a CUDA source string:
+#: ``cuda_backend/runtime.py`` (the admission is measured once per process
+#: and answered from memory; ``launch_checked`` launches once with no event
+#: and no synchronize), ``cuda_driver.py`` (its two ``recover_state`` calls
+#: pass ``timing_repeats=0``, so each recovery kernel is launched once instead
+#: of twice), and ``cuda_regional_forecast_v841.py`` (the garbage discipline
+#: restores every padded argument of a launch in one launch, and the density
+#: and recovered-state validations set the step's flag on the device instead
+#: of draining the stream per array).  Every regional kernel's source is
+#: byte-unchanged -- ``cuda_regional_v841.py`` is not among the three, and the
+#: contract deck re-run on the point cull at this digest records the same
+#: ``translation_unit.source_sha256`` as the receipt taken at the previous
+#: digest -- and the shared translation units' compile keys are the same in
+#: both arms' receipts.  What was RE-MINTED at this digest: the point class
+#: ``graded-869m-dt5-z7``, on the 43,884-cell point cull, in the same session
+#: as a forecast of the untouched tree (its row says what was measured).  The
+#: other four classes carry this digest through the constant and record the
+#: lapse here rather than pretend a re-mint; their kernels launch the same
+#: compiled text they were minted on.
+#:
+#: RE-DERIVED 2026-09-14 for the element-parallel launch geometry of the
+#: level-independent dycore kernels (the hex performance campaign's kernels
+#: lane).  Six of the fourteen sources moved, and this time the CUDA source
+#: strings themselves moved: ``cuda_driver.py``, ``cuda_dynamics_v841.py``,
+#: ``cuda_horizontal.py``, ``cuda_horizontal_v841.py``,
+#: ``cuda_regional_v841.py`` and ``cuda_transport.py`` re-map every kernel
+#: whose levels are independent from one thread per owner looping over
+#: levels to one thread per ``(tracer, level, owner)`` element in a
+#: grid-stride loop, and ``cuda_regional_forecast_v841.py`` launches them
+#: per element; the momentum kernel gathers a once-per-run reference wind
+#: instead of evaluating cosf/sinf per neighbour per stage.  What did NOT
+#: move is the per-element arithmetic: each element runs the former loop
+#: body for its level with the same operands in the same order, the
+#: vertically implicit column solve keeps its per-column form, and the claim
+#: is measured rather than argued -- the cull's own contract deck at this
+#: digest (8 of 8 decks bitwise against the v8.4.1 CPU authority, 22 of 22
+#: kernels, dual run identical) and a per-kernel capture-and-replay of every
+#: re-mapped kernel against the previous translation units on the point
+#: cull's live state (``tools/kernel_element_ab.py``).  What was RE-MINTED
+#: at this digest: the point class ``graded-869m-dt5-z7``, on the 43,884-cell
+#: point cull, in the same session as a forecast of the untouched tree (its
+#: row says what was measured).  The other four classes carry this digest
+#: through the constant and record the lapse here rather than pretend a
+#: re-mint: their kernels now launch re-mapped text, and the evidence that
+#: the re-mapped text computes the minted bits is the deck and the per-kernel
+#: replay above, not a re-run of their own mints.
+#:
+#: RE-DERIVED 2026-09-14 for the landing of the two moves above together
+#: (the hex performance campaign's kernels-land lane).  The host-path move
+#: and the element-parallel re-map were taken on separate branches from the
+#: same base and each re-derived this constant on its own; merged, the
+#: fourteen sources carry both: ``cuda_driver.py``,
+#: ``cuda_backend/recovery.py`` and ``cuda_regional_forecast_v841.py`` hold
+#: a lane each in different lines (the CUDA source strings are the re-map's,
+#: the host path's once-per-kernel launch helper around them), and the other
+#: eleven are one lane's or neither's.  One line moved beyond the union:
+#: ``cuda_regional_forecast_v841.py`` gained a public reading of the garbage
+#: discipline's unit-pool registry (``bound_to_unit_pool``), so the
+#: per-kernel replay can reproduce a launch's scrub after the run; it reads
+#: a dictionary and launches nothing.  What was RE-MINTED at this digest:
+#: the point class ``graded-869m-dt5-z7`` on the 43,884-cell point cull (its
+#: row says what was measured).  The other four classes carry this digest
+#: through the constant and record the lapse here rather than pretend a
+#: re-mint, on the reasoning of the two notes above: the cull's contract
+#: deck at the merged text and the per-kernel replay against the integrated
+#: tree's translation units are the evidence that the merged text computes
+#: the minted bits.
 MINTED_KERNEL_SET_SHA256 = (
-    "ce63c3ddf9c653ef500a178dba0cee2d43bf96f9701ef142fa58677358a17bfc"
+    "8a716f28862a3a89006b017397ad004cb05699a539ac74c9d9b283ba86657818"
 )
 
 _DRY_MINT_CAVEAT = (
@@ -466,13 +536,14 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 n_vert_levels=55,
                 finest_edge_mm=3_314_810,
                 dt_ms=20_000,
-                # The kernel set of the species-row generalization (the
-                # door lane's chain landed 2026-09-01), measured at the
-                # mint; the older classes above and below were minted at
-                # the pre-generalization set and record their own lapse.
-                kernel_set_sha256=(
-                    "ce63c3ddf9c653ef500a178dba0cee2d43bf96f9701ef142fa58677358a17bfc"
-                ),
+                # Minted at the kernel set of the species-row generalization
+                # (the door lane's chain landed 2026-09-01), ce63c3dd...,
+                # measured at the mint; the host-path move and the
+                # element-parallel re-map of 2026-09-14 each carried it onto
+                # the tree's constant like every other row, and the
+                # constant's own note says what moved, what was measured
+                # and what was re-minted.
+                kernel_set_sha256=MINTED_KERNEL_SET_SHA256,
             ),
             parent="generated graded parent: 3.75 km cap of 480 km radius at "
             "42.0 N 86.0 W on a 120 km background, 120,941 cells",
@@ -651,6 +722,31 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "speed ladder; the class inherits the graded-parent lane's "
                 "finding that the geometry is not in the key, and pays for "
                 "that inheritance with the cull's own contract deck below.  "
+                "RE-MINTED 2026-09-14 at the kernel set the step's host-path "
+                "change produced (three host sources moved, no CUDA source "
+                "string): on the 43,884-cell 937.5 m point cull of a parent "
+                "generated at 41.95 N 94.79 W, HRRR 15Z init and hourly "
+                "boundaries, 720 steps of 5 s, the hostpath tree ran twice in "
+                "two processes on node-2's RTX 5090 (215.3 s and "
+                "214.3 s of integration) and both history frames agree "
+                "byte for byte -- and agree byte for byte with the untouched "
+                "0.3.0 tree's run of the same hour in the same session, so the "
+                "kernel set moved and the published bytes did not; the cull's "
+                "own contract deck passed at this digest (8 of 8 bitwise, 22 "
+                "of 22 kernels, dual run identical).  "
+                "RE-MINTED 2026-09-14 at the kernel set the element-parallel "
+                "launch geometry produced, landed together with the host-path "
+                "move (six CUDA-bearing sources moved, the per-element "
+                "arithmetic did not): on the same 43,884-cell point cull, "
+                "HRRR 15Z init and hourly boundaries, 2,160 steps of 5 s on "
+                "node-2's RTX 5090 in one process (567.7 s of integration), "
+                "all four history frames agree byte for byte with the "
+                "untouched 0.3.0 tree's run of the same three hours and with "
+                "the integrated tree's; the cull's own contract deck passed at "
+                "this digest (8 of 8 bitwise, 22 of 22 kernels, dual run "
+                "identical) and a per-kernel capture-and-replay of the 49 "
+                "re-mapped kernels the run launches was bitwise against the "
+                "integrated tree's translation units on the run's own state.  "
                 + _DRY_MINT_CAVEAT
             ),
         ),

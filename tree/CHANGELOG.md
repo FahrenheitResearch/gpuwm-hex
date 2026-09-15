@@ -6,6 +6,163 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
+## Unreleased
+
+New:
+- The surface/PBL cadence is a selectable knob. gpuwm-hex forecast
+  --pbl-cadence SECONDS calls the surface layer, the land-surface model and
+  the PBL once every SECONDS/dt steps and holds the tendency between calls
+  (the engine's own positive-bldt path); radiation keeps its own 600 s
+  cadence. The default stays the weld (bldt = dt, the native x4 reference's
+  semantics) because a held cadence changes the forecast; the run receipt
+  records the decision (calls per hour, held steps, source) and the driver
+  receipt carries the seam's own due/held count against the declared
+  cadence (physics.cadence). Measured on the point mesh in
+  docs/hex-point-hrrr.md: 30, 60 and 120 s each buy the same five per cent
+  per step and each moves the one-hour forecast well past the 2.6.5 to
+  2.7.3 seam movement, so none qualified as the default; the tree at auto
+  is byte-identical to the tree before this change.
+- A held cadence at an anchored timestep and cumulus selection is admitted
+  through a row derived from the welded anchor (hexcore.dt_admission.
+  derived_held_cadence_anchor): the dycore half is the welded row's own,
+  the host half is re-minted for the held cadence, the physics band is
+  stamped NOT MEASURED, and the receipt names the welded row it derives
+  from. A registered held row still wins the exact lookup; a held cadence
+  at an unanchored timestep is refused as the welded run would be.
+- hexcore.cuda_solve_region_v841: four device kernels that check the solve
+  region of a limited-area array and read back once. The per-step health
+  gate takes the envelope of every field (min, max, a NaN verdict, the
+  first-index argmax of |w|) from one launch pair and one read instead of
+  31 strided CuPy reductions each drained to the host; the regional
+  density and recovered-state validations set the step's flag on the
+  device instead of materialising full-size temporaries and draining per
+  array; the garbage discipline restores every padded argument of a
+  launch in one launch instead of one cupy fill per column. The kernels
+  compare, select and store what they are handed and do no arithmetic on
+  the values, so the dycore's byte identity is untouched by construction;
+  the measuring and audited forms of the discipline keep the per-column
+  fills.
+- launch_checked in hexcore.cuda_backend: one launch, the error state
+  checked, no event and no synchronize. recover_state uses it by default
+  (timing_repeats=0); the timed path stays for the benchmark.
+- tools/lts_forced_classing.py and --local-timestep-classing FILE on the
+  forecast door and the driver tool: an A/B instrument that places a rate
+  class where the spacing would not, recorded in receipts as
+  rate_source: explicit.
+
+Fixed:
+- --pbl-cadence that is not a whole number of steps is refused by name at
+  the door (both numbers, the multiples of dt on either side, and auto),
+  on the run route and in --preflight, instead of tracing back after the
+  mesh is bound.
+- A forecast step no longer measures the CUDA admission fifty-nine times.
+  require_cuda memoises a granted admission per argument set (a refusal is
+  never memoised, and a stubbed cupy never inherits a real card's answer);
+  the dycore's translation units re-entered it on every launch group at
+  1.05 ms a call on the CUDA 13.3 driver.
+- Every recovery kernel is launched once. The driver's two recover_state
+  calls went through the timed launch path with timing_repeats=1, which
+  launched each kernel twice with two event synchronizes and a stream
+  synchronize: 36 host stalls and 10.7 ms of repeated device work a step.
+- Measured on the 43,884-cell 937.5 m point cull (55 levels, dt 5 s, HRRR
+  15Z, one hour = 720 steps) on an RTX 5090, both arms in one session on
+  the same card: the composite step 0.3143 s before, 0.2957 s after
+  (1.06x; integration 228.7 s to 215.3 s), the health gate 56.2 s to
+  0.2 s an hour, the loop as a user waits for it 0.3973 to 0.3011 s per
+  step (1.32x; door 328 s to 259 s), both history frames
+  sha256-identical between the arms and across two hostpath runs; the
+  contract deck on the cull's own rings passed at the new kernel-set digest
+  (8 of 8 decks bitwise, 22 of 22 kernels, dual-run identical). Evidence:
+  the hostpath folder of the evidence gallery, 2026-09-13.
+- The regional kernel-set digest moved on three host sources
+  (cuda_backend/runtime.py, cuda_driver.py, cuda_regional_forecast_v841.py)
+  and no CUDA source string; the constant is re-derived, the one class row
+  that carried a literal follows the constant, and the note at the constant
+  records what moved and that the point class was re-minted at it.
+- The campaign's lanes measured together: the tree with the cadence, hostpath
+  and lts lanes merged runs the 3 h point-cull forecast (2,160 steps, HRRR
+  15Z, RTX 5090, both arms in one session) at 0.2978 s per step against the
+  untouched 0.3.0 tree's 0.3193 (1.07x; the loop as a user waits for it
+  679.6 s against 864.7 s, 1.27x; door 728 s against 907 s), with all four
+  history frames byte-identical, the contract deck at the merged kernel set
+  8 of 8 decks bitwise and dual-run identical, and the peak card memory
+  unchanged at 9,485 MiB. The merged tree's kernel-set digest is the
+  hostpath re-mint's. docs/hex-point-hrrr.md, the integrated section.
+- Every level-independent dycore kernel launches one thread per
+  (tracer, level, owner) element. Eight translation units
+  (cuda_regional_v841, cuda_dynamics_v841, cuda_driver, cuda_acoustic,
+  cuda_horizontal, cuda_horizontal_v841, cuda_transport,
+  cuda_backend/recovery) walk a flat element index in a grid-stride loop
+  instead of one thread per owner looping over the levels, and the
+  forecast launches them per element; each element runs the former loop
+  body for its level with the same operands in the same order, the
+  vertically implicit column solve keeps its per-column form, and the
+  momentum kernel gathers a once-per-run reference wind instead of
+  evaluating cosf/sinf per neighbour per stage. The local-timestep unit
+  gathers the two regional acoustic kernels it derives in their element
+  form. Measured on the 43,884-cell point cull (RTX 5090): the lane's own
+  one-hour pair in one session 0.3146 to 0.2836 s per step (1.11x) with
+  both frames byte-identical; the landed tree's 3 h arm (2,160 steps)
+  0.2617 s per step after the first against the integrated tree's 0.2978
+  (1.14x) and the untouched tree's 0.3193 (1.22x), the loop as a user waits
+  for it 572 s against 680 s and 865 s, all four history frames equal to
+  the digests both earlier arms recorded, peak card memory 8,914 MiB; the
+  contract deck on the cull's own rings at the merged kernel set 8 of 8
+  decks bitwise, 22 of 22 kernels, dual-run identical; a per-kernel
+  capture-and-replay of all 49 re-mapped kernels launched by the run
+  bitwise against the previous translation units. The boundary-zone
+  kernels gain 5x to 17x per launch, the level-heavy cell kernels 1.3x to
+  2.6x; a dozen small kernels are slower per launch in element form
+  (named with their numbers in docs/hex-point-hrrr.md, the kernels
+  section) and stay as follow-ups because they are bitwise and the
+  composite step is what moved.
+- tools/kernel_element_ab.py: a per-kernel capture-and-replay instrument
+  that runs the forecast door in-process, captures the first launch of
+  every re-mapped kernel after the warm-up steps with a device copy of
+  every argument before and after, and replays this tree's kernel and the
+  untouched tree's translation unit from the same inputs on the same card,
+  byte for byte and event-timed. Its first run reported five kernels as
+  differing whose arithmetic was byte-identical: four in the 55 values of
+  an input's garbage column, rewritten by the post-launch scrub with the
+  step's unit pool released, and one whose untouched form was launched at
+  one owner because its last device argument is the (1,) invalid flag.
+  The recorder now asks the garbage discipline which arguments are bound
+  at the launch (bound_to_unit_pool) and re-binds them for every replayed
+  launch, the owner-count rule names the edge count, every difference is
+  also classified by garbage column, and tests/test_kernel_element_ab.py
+  parses every target's signature so a flag or index array can never be
+  the owner axis. tools/nvrtc_compile_check.py resolves every kernel of
+  the eight units before card time is spent.
+- The regional kernel-set digest moved again, this time on the CUDA source
+  strings themselves (six of the fourteen sources), and once more on the
+  landing that carries the host-path move and the re-map together; the
+  constant is re-derived at the landed tree, the note at the constant
+  records each move and that the four non-point classes carry the constant
+  without a re-mint of their own, and the point class row records the
+  re-mint the landing measured.
+- The NVRTC reciprocal-rewrite census names hexcore.cuda_solve_region_v841,
+  which the census's own control (every CUDA-bearing module under src must
+  be a listed translation unit) found unregistered on the GPU tier's first
+  pass over the merged tree.
+- The four point-door test files are named once on the CPU tier list; two
+  lanes had each added them and the tier census refuses a file named twice.
+- tests/test_hrrr_intermediate.py, test_mesh_point.py, test_mesh_rows.py and
+  test_regional_class_band.py are named by the CPU tier list; they arrived
+  with the point door on no list, which tests/test_tier_membership.py
+  refused.
+- --local-timestep runs on a limited-area cull. The classing admits a
+  ring-7 edge's missing cell, the attachment counts the regional memory
+  model's padded cell and edge, the regional acoustic sub-step is rebound
+  per rate class (its three kernels derived from the regional translation
+  unit by the same asserted gather), every driven boundary cell is held at
+  rate 1 and a class interface touching the driven zone is refused by
+  name. On the culls the doors make this leaves one class and the run is
+  byte-identical to the default; measured on the RTX 5090, with an
+  interface forced into the interior it is 1.07x slower, so the option
+  stays off by default on every mesh class. docs/local-timestep-lam.md.
+- An explicit local-timestep classing's receipt reports the instrument's
+  request as cells_requested instead of cells_qualified_by_spacing.
+
 ## 0.3.0 (2026-09-13)
 
 New:

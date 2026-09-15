@@ -601,9 +601,20 @@ def admit_timestep(
     # The surface/PBL cadence is part of the same configuration, answerable
     # from the row alone for the same reason: the row declares the timestep
     # and the cadence is either welded to it or held at a stated number.
-    pbl_decision = pbl_cadence_module.pbl_cadence_decision(
-        dt_seconds=dt_seconds, requested=pbl_cadence
-    )
+    # A cadence that is not a whole number of the row's steps, or is not a
+    # number at all, is the door's refusal: it names both numbers, the
+    # multiples of dt on either side and the way out, and it is raised HERE
+    # so preflight collects it beside the other blockers instead of the
+    # driver tracing back after the mesh is bound.
+    try:
+        pbl_decision = pbl_cadence_module.pbl_cadence_decision(
+            dt_seconds=dt_seconds, requested=pbl_cadence
+        )
+    except pbl_cadence_module.PblCadenceError as error:
+        raise _refuse(
+            f"--mesh {mesh} declares dt={float(dt_seconds):g} s and "
+            f"{error}"
+        ) from error
     surface_pbl_seconds = float(pbl_decision["surface_pbl_seconds"])
 
     anchor = dt_admission.admitted_timestep(
@@ -628,6 +639,11 @@ def admit_timestep(
         "cumulus_scheme": anchor.cumulus_scheme,
         "surface_pbl_seconds": anchor.surface_pbl_seconds,
         "physics_health": anchor.physics_health,
+        # ``None`` for a registered row; the welded row's key when the held
+        # cadence is admitted on that row's dycore evidence (hexcore.
+        # dt_admission.derived_held_cadence_anchor), so a receipt never
+        # reads a derived row as a registered one.
+        "surface_pbl_anchor_derived_from": anchor.derived_from,
         "convection": decision,
         "pbl_cadence": pbl_decision,
     }
@@ -689,6 +705,9 @@ class ForecastRequest:
     local_timestep: bool
     local_timestep_rates: tuple[int, ...]
     local_timestep_buffer_rings: int
+    #: A/B instrument: an explicit per-cell rate file, ``None`` for the
+    #: option's own classing from dcEdge.
+    local_timestep_classing: Path | None
     #: ``None`` means "the model's own margin" -- the default.
     headroom_bytes: int | None
     #: ``None`` means "read the card and select its row at decision time",
@@ -1238,6 +1257,22 @@ def resolve_request(
             "ring a class boundary has no cells demoted to the finer rate and "
             "the coarse class reads values one sub-step stale."
         )
+    classing_raw = getattr(arguments, "local_timestep_classing", None)
+    local_timestep_classing = (
+        None if classing_raw is None else Path(classing_raw).expanduser().absolute()
+    )
+    if local_timestep_classing is not None:
+        if not local_timestep:
+            raise _refuse(
+                "--local-timestep-classing is an A/B instrument for the option "
+                "and needs --local-timestep; without the switch the file would "
+                "be read and never used, and the arm would measure nothing."
+            )
+        if not local_timestep_classing.is_file():
+            raise _refuse(
+                f"--local-timestep-classing {local_timestep_classing} is not a "
+                "file. tools/lts_forced_classing.py writes one from a grid file."
+            )
 
     # None means "the model's own margin", which is now the DEFAULT: the
     # margin is two named, measured terms priced from the card, not a flat
@@ -1413,6 +1448,7 @@ def resolve_request(
         local_timestep=local_timestep,
         local_timestep_rates=rates,
         local_timestep_buffer_rings=rings,
+        local_timestep_classing=local_timestep_classing,
         headroom_bytes=headroom_bytes,
         model=model,
         stop_on_refusal=bool(getattr(arguments, "stop_on_refusal", False)),
@@ -1471,6 +1507,8 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
             "--local-timestep-buffer-rings",
             str(request.local_timestep_buffer_rings),
         ]
+        if request.local_timestep_classing is not None:
+            argv += ["--local-timestep-classing", str(request.local_timestep_classing)]
     if request.stop_on_refusal:
         argv.append("--stop-on-refusal")
     if request.preflight:
@@ -1549,6 +1587,18 @@ def build_receipt(
                 None if request.source_table is None
                 else str(request.source_table)
             ),
+            # The run's own surface/PBL call count against the cadence it
+            # declared (tools/run_cuda_v841_forecast._physics_cadence_proof):
+            # a held cadence that reproduced the welded arm exactly would be
+            # first evidence the hold never happened, and this is where a
+            # reader checks.  ``None`` until the driver has run.
+            "cadence": (
+                None
+                if driver_receipt is None
+                else dict(driver_receipt).get("forecast", {}).get(
+                    "physics_cadence"
+                )
+            ),
         },
         "schedule": {
             "hours": request.hours,
@@ -1564,6 +1614,11 @@ def build_receipt(
             "local_timestep": request.local_timestep,
             "local_timestep_rates": list(request.local_timestep_rates),
             "local_timestep_buffer_rings": request.local_timestep_buffer_rings,
+            "local_timestep_classing": (
+                None
+                if request.local_timestep_classing is None
+                else str(request.local_timestep_classing)
+            ),
             "stop_on_refusal": request.stop_on_refusal,
         },
         "admission": admission.as_dict() if admission is not None else None,
@@ -2025,20 +2080,27 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "explicit (default: auto)")
     parser.add_argument(
         "--pbl-cadence", default="auto", metavar="{auto,SECONDS}",
-        help="surface/PBL cadence (config_bldt_seconds). The default 'auto' "
-             "is the PROVEN CONFIGURATION: welded to config_dt, so the "
-             "surface layer, the land-surface model and the PBL run every "
-             "model step, as the native x4 v8.4.1 reference ran. An explicit "
-             "number of seconds HOLDS the cadence while config_dt moves -- "
-             "an A/B instrument for whether a forcing scales with call count "
-             "rather than elapsed time. It records itself as explicit and "
-             "earns its own timestep anchor (default: auto)")
+        help="surface/PBL cadence in seconds (config_bldt_seconds). The "
+             "default 'auto' is the PROVEN CONFIGURATION: welded to "
+             "config_dt, so the surface layer, the land-surface model and "
+             "the PBL run every model step, as the native x4 v8.4.1 "
+             "reference ran. A number of seconds calls the stack once every "
+             "SECONDS/dt steps and holds its tendency on the steps between "
+             "(the engine's own positive-bldt path); it must be a whole "
+             "number of steps or it is refused by name, it changes the "
+             "forecast, and it records itself as an explicit selection with "
+             "its calls per hour in the receipt. Radiation keeps its own "
+             "600 s cadence either way. Measured on the point mesh in "
+             "docs/hex-point-hrrr.md (default: auto)")
     parser.add_argument(
         "--local-timestep", action="store_true",
         help="OPT-IN, default off: advance coarse columns on fewer, longer "
              "acoustic sub-steps. Native v8.4.1 has none, so this is a "
              "declared divergence and does not pay on the published "
-             "variable-resolution mesh (0.988x measured)")
+             "variable-resolution mesh (0.988x measured). On a limited-area "
+             "cull every driven boundary cell is held at rate 1, and on the "
+             "culls mesh-plan makes that leaves one class: the run is then "
+             "bit-identical to the default (measured 2026-09-14)")
     parser.add_argument(
         "--local-timestep-rates", default="1,3", metavar="LADDER",
         help="acoustic rate ladder; strictly increasing, starts at 1 "
@@ -2046,6 +2108,12 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--local-timestep-buffer-rings", type=int, default=1, metavar="N",
         help="rings demoted to the finer rate at a class boundary (default: 1)")
+    parser.add_argument(
+        "--local-timestep-classing", default=None, metavar="NPZ",
+        help="A/B INSTRUMENT, not a feature: per-cell acoustic rates from a "
+             ".npz (key cell_rate) instead of the grid file's dcEdge, so a "
+             "class interface can be placed in a cull's interior and measured. "
+             "Needs --local-timestep. tools/lts_forced_classing.py writes it")
     parser.add_argument(
         "--headroom-mib", type=float, default=None, metavar="MIB",
         help="override the margin the admission decision holds back from the "

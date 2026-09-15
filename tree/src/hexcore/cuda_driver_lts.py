@@ -32,6 +32,22 @@ The three rebindings, and what each is for:
 warns when the driver is not the shape this was proved against, because a
 silent fallback to the whole-domain launch is an A/B arm that reports a delta
 of exactly zero.
+
+Limited-area drivers
+--------------------
+A regional driver (``driver.regional_v841`` set) does not call the global
+sub-step at all: ``cuda_driver.py`` selects
+``cuda_regional_forecast_v841.advance_acoustic_step_regional_cuda_v841`` for
+it, and its arrays are PADDED by one garbage cell and one garbage edge
+(``PaddedRegionalHostMesh``).  Before 2026-09-14 the attachment neither knew
+nor refused: the classing died on a ring-7 edge's missing cell, and had it
+not, the padded counts would have failed the mesh check, and had THAT not,
+the three rebound targets would have run at class rates around a sub-step
+still running every column at the global rate.  Now the regional sub-step is
+a fourth rebinding, the classing is padded into the rate-1 class, and every
+driven-zone cell is held at rate 1 (``lts_v841``), so a class interface can
+only sit in the interior.  An explicit classing that puts one in the driven
+zone is refused by name.
 """
 
 from __future__ import annotations
@@ -43,6 +59,7 @@ import numpy as np
 
 from . import cuda_acoustic_lts as ltsk
 from . import cuda_driver as _driver_module
+from . import cuda_regional_forecast_v841 as _regional_module
 from .cuda_acoustic import CudaVerticalImplicitCoefficients, _float32, _int32, _mesh_value
 from .cuda_backend.containers import require_resident_array
 from .config_lts import local_timestep_enabled
@@ -108,8 +125,16 @@ class LocalTimestepAttachment:
         self.classing = classing
         self.stage_acoustic_steps = tuple(int(value) for value in stage_acoustic_steps)
         self.cp = driver.cp
+        self.regional = getattr(driver, "regional_v841", None)
+        padded_cells = int(driver.ncells) - int(classing.n_cells)
+        padded_edges = int(driver.nedges) - int(classing.n_edges)
         self.device = ltsk.build_device_classing(
-            classing, driver.atmosphere.mesh, n_vert_levels=driver.nlev, cp=self.cp
+            classing,
+            driver.atmosphere.mesh,
+            n_vert_levels=driver.nlev,
+            cp=self.cp,
+            padded_cells=padded_cells,
+            padded_edges=padded_edges,
         )
         self.tracker = _StageTracker(expected=self.stage_acoustic_steps)
         self._active_edge_lists: list[tuple[Any, int, int]] = []
@@ -440,6 +465,162 @@ class LocalTimestepAttachment:
         del stage_index
         return out
 
+    def advance_acoustic_step_regional(
+        self,
+        runtime: Any,
+        mesh: Any,
+        state: Any,
+        forcing: Any,
+        coefficients: Any,
+        *,
+        context: Any,
+        dts: float,
+        small_step: int,
+        fzm: Any,
+        fzp: Any,
+        rdzw: Any,
+        gravity: float = 9.80616,
+        rgas: float = 287.0,
+        cp_dry: float = 1004.5,
+    ) -> Any:
+        """The limited-area sub-step, per rate class.
+
+        Kernel for kernel this is
+        ``cuda_regional_forecast_v841.advance_acoustic_step_regional_cuda_v841``
+        with each launch replaced by one launch per ACTIVE class over that
+        class's index list at that class's ``dts`` -- the same substitution
+        :meth:`advance_acoustic_step` makes for the global trio.  The shared
+        ``acoustic_prepare`` uses the already-derived global gather; the three
+        regional entrypoints use their own derivations, so the specified-zone
+        masking they carry is byte-unchanged.  The reflux bookkeeping is the
+        same code path as the global one because the driven-zone hold keeps
+        every interface edge in the interior, where the regional kernels are
+        the global arithmetic.
+        """
+
+        driver = self.driver
+        xp = self.cp
+        out = state
+        nlev, nedges = map(int, out.ru_p.shape)
+        ncells = int(out.rho_pp.shape[1])
+        max_edges = int(mesh.max_edges)
+        self.tracker.note(int(small_step))
+        stage_steps = self.tracker.stage_steps()
+        dv_edge = _float32(_mesh_value(mesh, "dv_edge"), "dv_edge")
+
+        if int(small_step) == 1 and self.device.resid is not None:
+            self.device.resid.fill(0.0)
+
+        active = self._active_classes(stage_steps, int(small_step))
+        if not active:
+            raise RuntimeError("no rate class is active at an acoustic sub-step")
+
+        self._active_edge_lists = []
+        for index, effective in active:
+            edges = self.device.edge_lists[index]
+            if int(edges.size) == 0:
+                continue
+            self._active_edge_lists.append((edges, int(edges.size), effective))
+            # One thread per (level, active edge) element: the ancestor
+            # walks elements, and the gathered form keeps that.
+            ltsk.launch(
+                "acoustic_ru_regional_lts",
+                nlev * int(edges.size),
+                (
+                    np.int32(nlev), np.int32(nedges), np.int32(ncells),
+                    np.int32(small_step), np.float32(dts * effective),
+                    np.float32(gravity), np.float32(rgas), np.float32(cp_dry),
+                    runtime.cells_on_edge_sentinel, context.inv_dc_edge,
+                    mesh.spec_zone_mask_edge, forcing.zz, forcing.exner,
+                    forcing.cqu, forcing.zxu, forcing.tend_ru, out.rho_pp,
+                    out.rtheta_pp, out.ru_p, out.ru_avg, runtime.acoustic_invalid,
+                    edges, np.int32(edges.size),
+                ),
+                kernel_cache=driver.cache,
+            )
+            self.launch_counts["acoustic_substep_class_launches"] += 1
+
+        if self.device.resid is not None:
+            for rate, edges, size in self._iface_by_edge_rate:
+                effective = self._effective_rate(rate, stage_steps)
+                if (int(small_step) - 1) % effective:
+                    continue
+                ltsk.launch(
+                    "lts_reflux_accumulate",
+                    size,
+                    (
+                        np.int32(nlev), np.int32(nedges), np.int32(size),
+                        np.float32(dts * effective), np.float32(1.0),
+                        edges, dv_edge, out.ru_p, self.device.resid,
+                    ),
+                    kernel_cache=driver.cache,
+                )
+            for rate, edges, size in self._iface_by_coarse_rate:
+                effective = self._effective_rate(rate, stage_steps)
+                if (int(small_step) - 1) % effective:
+                    continue
+                ltsk.launch(
+                    "lts_reflux_accumulate",
+                    size,
+                    (
+                        np.int32(nlev), np.int32(nedges), np.int32(size),
+                        np.float32(dts * effective), np.float32(-1.0),
+                        edges, dv_edge, out.ru_p, self.device.resid,
+                    ),
+                    kernel_cache=driver.cache,
+                )
+
+        rs = xp.zeros((nlev, ncells), dtype=xp.float32)
+        ts = xp.zeros_like(rs)
+        for index, effective in active:
+            cells = self.device.cell_lists[index]
+            if int(cells.size) == 0:
+                continue
+            step_dts = np.float32(dts * effective)
+            ltsk.launch(
+                "acoustic_prepare_lts",
+                int(cells.size),
+                (
+                    np.int32(nlev), np.int32(ncells), np.int32(small_step),
+                    out.rw_p, out.rtheta_pp, out.rtheta_pp_old, out.rho_pp,
+                    out.ww_avg, cells, np.int32(cells.size),
+                ),
+                kernel_cache=driver.cache,
+            )
+            ltsk.launch(
+                "acoustic_rs_ts_regional_lts",
+                nlev * int(cells.size),
+                (
+                    np.int32(nlev), np.int32(ncells), np.int32(nedges),
+                    np.int32(max_edges), step_dts, mesh.n_edges_on_cell,
+                    mesh.edges_on_cell, mesh.cells_on_edge, mesh.edge_sign_on_cell,
+                    mesh.dv_edge, context.inv_area_cell, runtime.spec_zone_mask_cell,
+                    forcing.theta_m, rdzw, coefficients.cofrz, coefficients.coftz,
+                    context.ewm, out.ru_p, out.rw_p, out.rho_pp, out.rtheta_pp,
+                    forcing.tend_rho, forcing.tend_rt, rs, ts,
+                    cells, np.int32(cells.size),
+                ),
+                kernel_cache=driver.cache,
+            )
+            ltsk.launch(
+                "acoustic_column_solve_regional_lts",
+                int(cells.size),
+                (
+                    np.int32(nlev), np.int32(ncells), step_dts, forcing.zz,
+                    forcing.rho_zz, fzm, fzp, rdzw, forcing.dss, forcing.w,
+                    forcing.rw, forcing.rw_save, forcing.tend_rw, forcing.tend_rho,
+                    forcing.tend_rt, rs, ts, runtime.spec_zone_mask_cell,
+                    coefficients.cofwr, coefficients.cofwz, coefficients.coftz,
+                    coefficients.cofwt, coefficients.cofrz, coefficients.a_tri,
+                    coefficients.alpha_tri, coefficients.gamma_tri, context.etp,
+                    context.etm, context.ewp, context.ewm, out.rw_p, out.rho_pp,
+                    out.rtheta_pp, out.ww_avg,
+                    cells, np.int32(cells.size),
+                ),
+                kernel_cache=driver.cache,
+            )
+        return out
+
     # -- divergence damping -------------------------------------------------
     def divergence_damping_3d(
         self,
@@ -562,9 +743,17 @@ class LocalTimestepAttachment:
     def attach(self) -> None:
         driver = self.driver
         self._saved["module_advance"] = _driver_module.advance_acoustic_step_cuda_v841
+        self._saved["regional_advance"] = (
+            _regional_module.advance_acoustic_step_regional_cuda_v841
+        )
         self._saved["damping"] = driver.horizontal.divergence_damping_3d
         self._stock_recover = driver._recover_candidate
         _driver_module.advance_acoustic_step_cuda_v841 = self.advance_acoustic_step
+        # The pinned loop imports this name from the regional module at every
+        # sub-step, so the module attribute is the binding point.
+        _regional_module.advance_acoustic_step_regional_cuda_v841 = (
+            self.advance_acoustic_step_regional
+        )
         driver.horizontal.divergence_damping_3d = self.divergence_damping_3d
         driver._vertical_coefficients = self.vertical_coefficients
         driver._recover_candidate = self.recover_candidate
@@ -573,6 +762,9 @@ class LocalTimestepAttachment:
     def detach(self) -> None:
         driver = self.driver
         _driver_module.advance_acoustic_step_cuda_v841 = self._saved["module_advance"]
+        _regional_module.advance_acoustic_step_regional_cuda_v841 = self._saved[
+            "regional_advance"
+        ]
         driver.horizontal.divergence_damping_3d = self._saved["damping"]
         for name in ("_vertical_coefficients", "_recover_candidate"):
             if name in driver.__dict__:
@@ -592,9 +784,72 @@ class LocalTimestepAttachment:
                 "conservation": "approximate: flux-matched, binary32 rounding",
                 "settle_coarse_cells": int(self.device.n_settle),
                 "settle_is_order_defined": True,
+                "regional": self.regional is not None,
+                "padded_cells": int(self.driver.ncells) - int(self.classing.n_cells),
+                "padded_edges": int(self.driver.nedges) - int(self.classing.n_edges),
+                "executed_path": (
+                    "single class: every launch list is the identity "
+                    "permutation and the arithmetic is the option-off path"
+                    if self.classing.identity_permutation
+                    else "rate classes launched over index lists"
+                ),
             }
         )
         return summary
+
+
+def refuse_interface_in_driven_zone(classing: Any, bdy_mask_cell: Any) -> None:
+    """Refuse a classing whose rate jump touches a driven boundary cell.
+
+    The classing built from a grid file holds every driven cell at rate 1
+    (``lts_v841``), so this can only fire for an explicit classing.  It is
+    checked here, on the driver, rather than trusted, because the breakage
+    it prevents is silent: a specified-zone cell is advanced by the boundary
+    tendency inside the acoustic loop, not solved, and the relaxation zone is
+    relaxed on a schedule built for one global rate, so a reflux residual
+    settled into either is a mass source nothing accounts for.
+    """
+
+    interface = np.asarray(classing.interface_edges, dtype=np.int64)
+    if interface.size == 0:
+        return
+    mask = np.asarray(bdy_mask_cell).astype(np.int64, copy=False)
+    n_cells = int(classing.n_cells)
+    if mask.shape[0] < n_cells:
+        raise ValueError("bdyMaskCell must cover every cell of the classing")
+    mask = mask[:n_cells]
+    driven = np.flatnonzero(mask > 0)
+    if driven.size == 0:
+        return
+    cell_rate = np.asarray(classing.cell_rate)
+    # A driven cell may not be in a class above 1, and no interface may have a
+    # driven cell on either side.  The first condition is what the grid-file
+    # route guarantees; the second is the one an explicit classing can break
+    # even with every driven cell at rate 1 (an interior coarse cell next to
+    # a ring-1 fine cell puts the rate jump on a relaxed cell).
+    coarse_driven = int((cell_rate[driven] > 1).sum())
+    if coarse_driven:
+        _refuse(
+            "config_local_timestep",
+            coarse_driven,
+            "a driven boundary cell is in a coarse rate class; the boundary "
+            "rings are advanced by the lateral-boundary tendency and relaxed "
+            "on a schedule built for one acoustic rate",
+            "every cell with bdyMaskCell > 0 at rate 1",
+        )
+    cells = getattr(classing, "interface_cells", None)
+    if cells is None:
+        raise ValueError("the classing carries no interface cells to check")
+    cells = np.asarray(cells, dtype=np.int64).reshape(-1, 2)
+    touching = int((mask[cells] > 0).any(axis=1).sum())
+    if touching:
+        _refuse(
+            "config_local_timestep",
+            touching,
+            "a class interface edge touches a driven boundary cell (the "
+            "count is the number of such edges)",
+            "every interface edge with both cells at bdyMaskCell == 0",
+        )
 
 
 def attach_local_timestep(
@@ -677,12 +932,23 @@ def attach_local_timestep(
             buffer_rings=int(config.config_local_timestep_buffer_rings),
             safety_factor=float(config.config_local_timestep_safety_factor),
         )
-    if classing.n_cells != driver.ncells or classing.n_edges != driver.nedges:
+    regional = getattr(driver, "regional_v841", None)
+    # The regional memory model appends one garbage cell and one garbage edge
+    # after the solve extent (PaddedRegionalHostMesh); a global driver has no
+    # padding.  Either way the classing must be exactly the solve extent.
+    expected_cells = int(driver.ncells) - (1 if regional is not None else 0)
+    expected_edges = int(driver.nedges) - (1 if regional is not None else 0)
+    if classing.n_cells != expected_cells or classing.n_edges != expected_edges:
         _refuse(
             "config_local_timestep",
             (classing.n_cells, classing.n_edges),
             "the classed grid file is not the mesh the driver was built on",
-            f"a grid file with {driver.ncells} cells and {driver.nedges} edges",
+            f"a grid file with {expected_cells} cells and {expected_edges} edges"
+            + (" (the driver's counts carry one padded garbage element each)" if regional is not None else ""),
+        )
+    if regional is not None:
+        refuse_interface_in_driven_zone(
+            classing, np.asarray(regional.masks_host.bdy_mask_cell)
         )
     attachment = LocalTimestepAttachment(
         driver, classing, stage_acoustic_steps=SUPPORTED_STAGE_ACOUSTIC_STEPS
@@ -695,4 +961,5 @@ __all__ = [
     "LocalTimestepAttachment",
     "SUPPORTED_STAGE_ACOUSTIC_STEPS",
     "attach_local_timestep",
+    "refuse_interface_in_driven_zone",
 ]

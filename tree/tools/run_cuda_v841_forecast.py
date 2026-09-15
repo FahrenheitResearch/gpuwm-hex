@@ -1376,11 +1376,20 @@ def step_health_gate(
     """Refuse the moment the integration stops being finite and physical.
 
     Deliberately allocation-light.  The frozen Arwen phase-one seam is
-    documented as sensitive to the CuPy device-pool layout, so this gate uses
-    only min/max reductions (scalar results) and never materializes a
-    full-size temporary such as ``isfinite(x)``.  min/max propagate NaN and
-    carry +/-inf, so testing the two scalars is a complete finiteness test for
-    the array.
+    documented as sensitive to the CuPy device-pool layout, so this gate
+    never materializes a full-size temporary such as ``isfinite(x)``.  The
+    envelope of every field -- min, max, a NaN verdict and the argmax of
+    |w| -- comes from one launch pair over the solve region
+    (``hexcore.cuda_solve_region_v841``) and ONE read of a few hundred
+    bytes.  min/max propagate NaN and carry +/-inf, so testing the two
+    scalars is a complete finiteness test for the array, and the values are
+    the ones ``cp.min``/``cp.max`` on the trimmed views returned: the
+    reductions are exact and order-independent.
+
+    Before the fused envelope this gate was 31 CuPy reductions on strided
+    ``[..., :n_solve]`` views, each on one block of 512 threads and each
+    read back with a drain: 78 ms of every 0.38 s step, a fifth of it
+    (``evidence-gallery/hex-perf-profile-2026-09-13``).
     """
 
     atmosphere = stack["driver"].atmosphere
@@ -1404,21 +1413,39 @@ def step_health_gate(
         if value is not None
     }
 
-    def _domain(array: Any) -> Any:
+    def _solve(array: Any) -> int | None:
+        """How many of the last dimension's elements are solved (None: all)."""
+
         if not padded_extents:
-            return array
-        trimmed = padded_extents.get(int(array.shape[-1]))
+            return None
+        return padded_extents.get(int(array.shape[-1]))
+
+    def _domain(array: Any) -> Any:
+        trimmed = _solve(array)
         return array if trimmed is None else array[..., :trimmed]
 
-    envelope: dict[str, list[float]] = {}
-    nonfinite: list[str] = []
+    from hexcore.cuda_solve_region_v841 import SolveRegionKernels
+
+    fields: list[tuple[str, Any, int | None]] = []
     for name, value in groups:
         array = cp.asarray(value)
         if array.dtype.kind != "f":
             continue
-        array = _domain(array)
-        low = float(cp.min(array))
-        high = float(cp.max(array))
+        fields.append((name, array, _solve(array)))
+    scalars_array = cp.asarray(state.scalars)
+    scalars_solve = _solve(scalars_array)
+    # qv and the hydrometeors are two more views of the same block: the
+    # first species, and every species after it, each C-contiguous.
+    fields.append(("scalars[0]", scalars_array[0], scalars_solve))
+    fields.append(("scalars[1:]", scalars_array[1:], scalars_solve))
+    measured = SolveRegionKernels.for_cache(stack["driver"].cache).envelope(fields)
+
+    envelope: dict[str, list[float]] = {}
+    nonfinite: list[str] = []
+    for name, _value in groups:
+        if name not in measured:
+            continue
+        low, high, _has_nan, _argmax = measured[name]
         envelope[name] = [low, high]
         if not (math.isfinite(low) and math.isfinite(high)):
             nonfinite.append(name)
@@ -1444,8 +1471,11 @@ def step_health_gate(
     # readings cost one argmax on a state already resident.
     hot: dict[str, Any] | None = None
     if trace_hot_cell:
+        # The envelope kernel already found the first-index argmax of |w|
+        # over the trimmed view; the flat index is C-order inside that view,
+        # exactly what cupy.argmax(cupy.abs(w[..., :n_solve])) returned.
         w_field = _domain(cp.asarray(saved.vertical_velocity))
-        flat = int(cp.argmax(cp.abs(w_field)))
+        flat = int(measured["vertical_velocity"][3])
         cell = flat % int(w_field.shape[-1])
         hot = {
             "vertical_velocity_max_abs": w_abs_max,
@@ -1466,10 +1496,8 @@ def step_health_gate(
             f"{VERTICAL_VELOCITY_REFUSAL_M_S} m/s divergence refusal"
             + ("" if hot is None else f"; worst column {json.dumps(hot)}")
         )
-    scalars = _domain(cp.asarray(state.scalars))
-    qv_min = float(cp.min(scalars[0]))
-    qv_max = float(cp.max(scalars[0]))
-    hydrometeor_min = float(cp.min(scalars[1:]))
+    qv_min, qv_max, _qv_nan, _qv_arg = measured["scalars[0]"]
+    hydrometeor_min = measured["scalars[1:]"][0]
     if not (
         math.isfinite(qv_min) and math.isfinite(qv_max) and math.isfinite(hydrometeor_min)
     ):
@@ -1582,6 +1610,72 @@ def build_schedule(
 # --------------------------------------------------------------------------
 # the forecast
 # --------------------------------------------------------------------------
+def _physics_cadence_proof(
+    decision: Mapping[str, Any] | None,
+    step_receipts: Sequence[Mapping[str, Any]],
+    executed_steps: int,
+) -> dict[str, Any] | None:
+    """Positive evidence the declared surface/PBL cadence is the one that ran.
+
+    A/B rule: a held-cadence arm that reproduces the welded arm exactly is
+    first evidence the hold never happened, and a receipt that only repeats
+    the request cannot tell the two apart.  So the receipt carries the
+    seam's own counters -- how many steps the phase-one call reported
+    ``surface_pbl_ran``, the engine's ``ysu`` call count at the last step --
+    against the count the declared cadence predicts
+    (:func:`hexcore.pbl_cadence.calls_in_steps`), and says whether they
+    agree.  Radiation's count rides beside it because the receipt names
+    every physics call rate the run used.
+    """
+
+    if decision is None or executed_steps <= 0:
+        return None
+    from hexcore import pbl_cadence
+
+    due = 0
+    radiation_due = 0
+    counts: Mapping[str, Any] = {}
+    for receipt in step_receipts:
+        cadence = receipt.get("backend", {}).get("cadence", {})
+        if cadence.get("surface_pbl_ran"):
+            due += 1
+        if cadence.get("radiation_ran"):
+            radiation_due += 1
+        counts = cadence.get("call_counts", counts)
+    stepbl = int(decision["steps_between_calls"])
+    expected = pbl_cadence.calls_in_steps(
+        steps_between_calls=stepbl, executed_steps=int(executed_steps)
+    )
+    engine_calls = None if "ysu" not in counts else int(counts["ysu"])
+    consistent = due == expected and (engine_calls in (None, expected))
+    return {
+        "schema": "gpuwm-hex.physics-cadence-proof/v1",
+        "surface_pbl_seconds": float(decision["surface_pbl_seconds"]),
+        "steps_between_calls": stepbl,
+        "held": bool(decision["held"]),
+        "source": decision["source"],
+        "executed_steps": int(executed_steps),
+        "surface_pbl_calls_expected": expected,
+        "surface_pbl_steps_reported_due": due,
+        "surface_pbl_steps_held": int(executed_steps) - due,
+        "engine_call_counts_at_last_step": dict(counts),
+        "radiation_steps_reported_due": radiation_due,
+        "radiation_seconds": float(decision["radiation_seconds"]),
+        "consistent": bool(consistent),
+        "note": (
+            f"the seam reported the surface/PBL stack due on {due} of "
+            f"{int(executed_steps)} steps and held on the other "
+            f"{int(executed_steps) - due}; the declared cadence "
+            f"({decision['label']}) predicts {expected} calls"
+            + (
+                "" if engine_calls is None
+                else f"; the engine's own ysu counter reads {engine_calls}"
+            )
+            + (".  They agree" if consistent else ".  THEY DISAGREE")
+        ),
+    }
+
+
 def _mixing_treatment_proof(driver: Any, executed_steps: int) -> dict[str, Any]:
     """Positive evidence the mixing treatment ran (or provably did not).
 
@@ -1642,6 +1736,7 @@ def execute_forecast(
     grid_path: Path | None = None,
     park_physics_tier: bool = False,
     required_free_bytes: int | None = None,
+    local_timestep_classing_path: Path | None = None,
 ) -> dict[str, Any]:
     from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
@@ -1675,8 +1770,25 @@ def execute_forecast(
     # config_local_timestep is off, which is the default.
     from hexcore.cuda_driver_lts import attach_local_timestep
 
+    explicit_classing = None
+    if local_timestep_classing_path is not None:
+        # INSTRUMENT, not the shipped classing: per-cell rates from a file,
+        # connectivity and the driven-zone mask from the grid file.  The
+        # receipt records rate_source="explicit" so the arm cannot be
+        # mistaken for the option's own behaviour.
+        from hexcore.lts_v841 import classify_from_grid_file_with_rates
+
+        config = stack["driver"].config
+        explicit_classing = classify_from_grid_file_with_rates(
+            str(grid_path),
+            str(local_timestep_classing_path),
+            rates=tuple(int(v) for v in config.config_local_timestep_rates),
+            buffer_rings=int(config.config_local_timestep_buffer_rings),
+        )
     lts_attachment = attach_local_timestep(
-        stack["driver"], grid_path=str(grid_path) if grid_path else None
+        stack["driver"],
+        grid_path=str(grid_path) if grid_path else None,
+        classing=explicit_classing,
     )
     stack["local_timestep"] = lts_attachment
 
@@ -2038,6 +2150,9 @@ def execute_forecast(
         "physical_gates": physical_gates,
         "step_health": health,
         "step_receipt_count": len(step_receipts),
+        "physics_cadence": _physics_cadence_proof(
+            host.get("pbl_cadence"), step_receipts, executed_steps
+        ),
         "snapshot_receipts": snapshot_receipts,
         "snapshot_files": snapshot_files,
         "refusal": refusal,
@@ -2133,15 +2248,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="auto",
         metavar="{auto,SECONDS}",
         help=(
-            "surface/PBL cadence (config_bldt_seconds).  The default 'auto' "
-            "is the PROVEN CONFIGURATION: the cadence is welded to config_dt, "
-            "so the surface layer, the land-surface model and the PBL run on "
-            "every model step, exactly as the native x4 v8.4.1 reference "
-            "ran.  An explicit number of seconds HOLDS the cadence there "
-            "while config_dt moves -- an A/B instrument for measuring "
-            "whether a forcing scales with call count rather than with "
-            "elapsed time.  It records itself as explicit in the receipt and "
-            "earns its own timestep anchor; it is never a remedy.  See "
+            "surface/PBL cadence in seconds (config_bldt_seconds).  The "
+            "default 'auto' is the PROVEN CONFIGURATION: the cadence is "
+            "welded to config_dt, so the surface layer, the land-surface "
+            "model and the PBL run on every model step, exactly as the "
+            "native x4 v8.4.1 reference ran.  A number of seconds calls the "
+            "stack once every SECONDS/dt steps and holds its tendency on "
+            "the steps between (the engine's own positive-bldt path); a "
+            "value that is not a whole number of steps is refused by name.  "
+            "It changes the forecast and records itself as an explicit "
+            "selection, with its calls per hour, in the receipt.  See "
             "hexcore.pbl_cadence"
         ),
     )
@@ -2182,6 +2298,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1,
         help="rings of cells demoted to the finer rate around a class boundary",
+    )
+    parser.add_argument(
+        "--local-timestep-classing",
+        type=Path,
+        default=None,
+        metavar="NPZ",
+        help=(
+            "A/B INSTRUMENT, not a user feature: take the per-cell acoustic "
+            "rates from this .npz (key cell_rate, one rate per cell) instead of "
+            "classing from dcEdge, so a class interface can be placed in the "
+            "interior of a cull whose spacing would class it into one rate. "
+            "The driven boundary zone is still held at rate 1 and an "
+            "interface touching it is refused. Requires --local-timestep; "
+            "tools/lts_forced_classing.py writes the file"
+        ),
     )
     parser.add_argument(
         "--park-physics-tier",
@@ -2286,6 +2417,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         )
     if args.local_timestep_buffer_rings < 1:
         parser.error("--local-timestep-buffer-rings must be >= 1")
+    if args.local_timestep_classing is not None:
+        if not args.local_timestep:
+            parser.error(
+                "--local-timestep-classing is an instrument for the option "
+                "and needs --local-timestep; without the switch the classing "
+                "would be read and silently never used"
+            )
+        if not Path(args.local_timestep_classing).is_file():
+            parser.error(
+                f"--local-timestep-classing {args.local_timestep_classing} "
+                "is not a file"
+            )
     return args
 
 
@@ -2518,6 +2661,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "declared_off_arm": bool(args.local_timestep_declared_off),
             "rates": list(args.local_timestep_rates),
             "buffer_rings": int(args.local_timestep_buffer_rings),
+            "explicit_classing": (
+                None
+                if args.local_timestep_classing is None
+                else {
+                    "path": str(args.local_timestep_classing),
+                    "sha256": proof.sha256_file(Path(args.local_timestep_classing)),
+                    "note": "A/B instrument arm: rates from a file, not from dcEdge",
+                }
+            ),
             "native_equivalent": False,
             "note": (
                 "native MPAS-A v8.4.1 has no local time stepping; with the "
@@ -2586,6 +2738,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         grid_path=paths["grid"],
         park_physics_tier=bool(args.park_physics_tier),
         required_free_bytes=args.required_free_bytes,
+        local_timestep_classing_path=args.local_timestep_classing,
     )
     source_after = proof.require_frozen_execution_sources()
     authority_after = verify_forecast_authorities(paths)

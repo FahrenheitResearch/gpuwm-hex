@@ -885,6 +885,13 @@ _CUDA_SOURCE = (
 #define C2(k,c,nc) ((k)*(nc) + (c))
 #define E2(k,e,ne) ((k)*(ne) + (e))
 #define CES(c,s,me) ((c)*(me) + (s))
+/* Level-independent kernels walk a flat (level, owner) element index, owner
+   fastest, in a grid-stride loop; each element runs the former per-owner
+   loop body for its level unchanged, so the launch geometry is not in the
+   arithmetic.  The forecast launches one thread per element. */
+#define DRIVER_ELEMENT_LOOP(total) \
+    for (int element = blockDim.x * blockIdx.x + threadIdx.x; \
+         element < (total); element += gridDim.x * blockDim.x)
 #define ADV(e,s,w) ((e)*(w) + (s))
 
 // The flux3/flux4 statement-function denominator of
@@ -901,9 +908,9 @@ extern "C" __global__ void euler_w_f32(
     const float *dpdz, const float *rdzu, const float *fzm,
     const float *fzp, float *result)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    for (int k = 0; k <= nlev; ++k) {
+    DRIVER_ELEMENT_LOOP((nlev + 1) * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
         const int index = C2(k, cell, ncells);
         if (k == 0 || k == nlev) {
             result[index] = 0.0f;
@@ -923,11 +930,11 @@ extern "C" __global__ void vertical_u_flux_f32(
     const float *u, const float *rw, const int *cells_on_edge,
     const float *fzm, const float *fzp, float *flux)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    const int c0 = cells_on_edge[2 * edge];
-    const int c1 = cells_on_edge[2 * edge + 1];
-    for (int k = 0; k <= nlev; ++k) {
+    DRIVER_ELEMENT_LOOP((nlev + 1) * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
+        const int c0 = cells_on_edge[2 * edge];
+        const int c1 = cells_on_edge[2 * edge + 1];
         const int index = E2(k, edge, nedges);
         float value = 0.0f;
         if (k > 0 && k < nlev) {
@@ -959,9 +966,9 @@ extern "C" __global__ void vertical_u_finish_f32(
     const int nlev, const int nedges, const float *rdzw,
     const float *flux, float *result)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    for (int k = 0; k < nlev; ++k) {
+    DRIVER_ELEMENT_LOOP(nlev * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
         const int index = E2(k, edge, nedges);
         result[index] = mpas_mul(mpas_sub(0.0f, rdzw[k]), mpas_sub(
             flux[E2(k + 1, edge, nedges)], flux[index]));
@@ -1008,11 +1015,11 @@ extern "C" __global__ void theta_edge_flux_f32(
     const int *cells_on_edge, const float *adv, const float *adv3,
     const int *n_adv, const int *adv_cells, float *flux)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    const int c0 = cells_on_edge[2 * edge];
-    const int c1 = cells_on_edge[2 * edge + 1];
-    for (int k = 0; k < nlev; ++k) {
+    DRIVER_ELEMENT_LOOP(nlev * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
+        const int c0 = cells_on_edge[2 * edge];
+        const int c1 = cells_on_edge[2 * edge + 1];
         const int index = E2(k, edge, nedges);
         float edge_theta = 0.0f;
         const float sign = mpas_copysign(1.0f, ru[index]);
@@ -1041,9 +1048,9 @@ extern "C" __global__ void theta_vertical_flux_f32(
     const float *rw, const float *rw_saved,
     const float *fzm, const float *fzp, float *flux)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    for (int k = 0; k <= nlev; ++k) {
+    DRIVER_ELEMENT_LOOP((nlev + 1) * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
         const int index = C2(k, cell, ncells);
         float value = 0.0f;
         if (k > 0 && k < nlev) {
@@ -1115,9 +1122,9 @@ extern "C" __global__ void w_edge_flux_f32(
     const float *fzm, const float *fzp, const float *adv, const float *adv3,
     const int *n_adv, const int *adv_cells, float *flux)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    for (int k = 0; k <= nlev; ++k) {
+    DRIVER_ELEMENT_LOOP((nlev + 1) * nedges) {
+        const int edge = element % nedges;
+        const int k = element / nedges;
         const int index = E2(k, edge, nedges);
         float value = 0.0f;
         if (k > 0 && k < nlev) {
@@ -1144,9 +1151,9 @@ extern "C" __global__ void w_vertical_flux_f32(
     const int nlev, const int ncells, const float *w,
     const float *rw, float *flux)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    for (int k = 0; k <= nlev; ++k) {
+    DRIVER_ELEMENT_LOOP((nlev + 1) * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
         const int index = C2(k, cell, ncells);
         float value = 0.0f;
         if (k > 0 && k < nlev) {
@@ -1206,11 +1213,8 @@ extern "C" __global__ void add_inplace_f32(
     const int nlevels, const int nowners,
     const float *increment, float *target)
 {
-    const int owner = blockDim.x * blockIdx.x + threadIdx.x;
-    if (owner >= nowners) return;
-    for (int k = 0; k < nlevels; ++k) {
-        const int index = k * nowners + owner;
-        target[index] = mpas_add(target[index], increment[index]);
+    DRIVER_ELEMENT_LOOP(nlevels * nowners) {
+        target[element] = mpas_add(target[element], increment[element]);
     }
 }
 
@@ -1218,11 +1222,8 @@ extern "C" __global__ void scale_f32(
     const int nlevels, const int nowners, const float scale,
     const float *source, float *target)
 {
-    const int owner = blockDim.x * blockIdx.x + threadIdx.x;
-    if (owner >= nowners) return;
-    for (int k = 0; k < nlevels; ++k) {
-        const int index = k * nowners + owner;
-        target[index] = mpas_mul(scale, source[index]);
+    DRIVER_ELEMENT_LOOP(nlevels * nowners) {
+        target[element] = mpas_mul(scale, source[element]);
     }
 }
 
@@ -1237,10 +1238,8 @@ extern "C" __global__ void recover_cells_f32(
     float *rho, float *rtheta, float *rho_p, float *rtheta_p,
     float *theta, float *exner, float *pressure_p)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    for (int k = 0; k < nlev; ++k) {
-        const int index = C2(k, cell, ncells);
+    DRIVER_ELEMENT_LOOP(nlev * ncells) {
+        const int index = element;
         const float density_p = mpas_add(
             rho_p_saved[index], rho_pp[index]);
         const float theta_p = mpas_add(
@@ -1273,10 +1272,8 @@ extern "C" __global__ void recover_edges_f32(
     const float *ru_saved, const float *ru_p, const float *ru_avg_p,
     float *ru, float *flux_u)
 {
-    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
-    if (edge >= nedges) return;
-    for (int k = 0; k < nlev; ++k) {
-        const int index = E2(k, edge, nedges);
+    DRIVER_ELEMENT_LOOP(nlev * nedges) {
+        const int index = element;
         ru[index] = mpas_add(ru_saved[index], ru_p[index]);
         flux_u[index] = mpas_add(ru_saved[index],
             mpas_div(ru_avg_p[index], (float)acoustic_steps));
@@ -1288,10 +1285,9 @@ extern "C" __global__ void recover_interfaces_f32(
     const float *rw_saved, const float *rw_p, const float *ww_avg_p,
     float *rw, float *flux_w)
 {
-    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
-    if (cell >= ncells) return;
-    for (int k = 0; k <= nlev; ++k) {
-        const int index = C2(k, cell, ncells);
+    DRIVER_ELEMENT_LOOP((nlev + 1) * ncells) {
+        const int k = element / ncells;
+        const int index = element;
         if (k == 0 || k == nlev) {
             rw[index] = 0.0f;
         } else {
@@ -2632,11 +2628,14 @@ class CudaDryDycoreDriver:
         """Recover a resident sidecar without publishing the candidate state."""
 
         selected = self.atmosphere if atmosphere is None else atmosphere
+        # Untimed: one launch per kernel, no event and no synchronize.  The
+        # timed path launched every recovery kernel twice with two event
+        # syncs, on the commit's rebuild as on every RK stage.
         recovered = recover_state(
             selected,
             cache=self.cache,
             warmup=0,
-            timing_repeats=1,
+            timing_repeats=0,
         )
         result = DeviceSavedDiagnostics(
             theta_m=recovered.theta_m,
@@ -2949,7 +2948,7 @@ class CudaDryDycoreDriver:
             raise ValueError("increment shape differs from target")
         self._launch(
             "add_inplace_f32",
-            nowners,
+            nlevels * nowners,
             (np.int32(nlevels), np.int32(nowners), increment, target),
         )
 
@@ -2958,7 +2957,7 @@ class CudaDryDycoreDriver:
         result = self.cp.empty_like(source)
         self._launch(
             "scale_f32",
-            nowners,
+            nlevels * nowners,
             (np.int32(nlevels), np.int32(nowners), np.float32(scale), source, result),
         )
         return result
@@ -3024,7 +3023,7 @@ class CudaDryDycoreDriver:
         result = cp.empty((self.nlev, self.nedges), dtype=cp.float32)
         self._launch(
             "vertical_u_flux_f32",
-            self.nedges,
+            self.nedges * (self.nlev + 1),
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
@@ -3039,7 +3038,7 @@ class CudaDryDycoreDriver:
         )
         self._launch(
             "vertical_u_finish_f32",
-            self.nedges,
+            self.nedges * self.nlev,
             (
                 np.int32(self.nlev),
                 np.int32(self.nedges),
@@ -3110,7 +3109,7 @@ class CudaDryDycoreDriver:
         result = cp.empty_like(state.rho)
         self._launch(
             "theta_edge_flux_f32",
-            self.nedges,
+            self.nedges * self.nlev,
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
@@ -3133,7 +3132,7 @@ class CudaDryDycoreDriver:
         )
         self._launch(
             "theta_vertical_flux_f32",
-            self.ncells,
+            self.ncells * (self.nlev + 1),
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
@@ -3186,7 +3185,7 @@ class CudaDryDycoreDriver:
         result = cp.empty_like(state.rho_w)
         self._launch(
             "w_edge_flux_f32",
-            self.nedges,
+            self.nedges * (self.nlev + 1),
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
@@ -3206,7 +3205,7 @@ class CudaDryDycoreDriver:
         )
         self._launch(
             "w_vertical_flux_f32",
-            self.ncells,
+            self.ncells * (self.nlev + 1),
             (np.int32(self.nlev), np.int32(self.ncells), w, state.rho_w, vertical_flux),
         )
         if self.v841_context is not None:
@@ -3294,7 +3293,7 @@ class CudaDryDycoreDriver:
         pressure_p = cp.empty_like(saved_diag.pressure_perturbation)
         self._launch(
             "recover_cells_f32",
-            self.ncells,
+            self.ncells * self.nlev,
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
@@ -3325,7 +3324,7 @@ class CudaDryDycoreDriver:
         flux_u = cp.empty_like(saved_state.rho_u)
         self._launch(
             "recover_edges_f32",
-            self.nedges,
+            self.nedges * self.nlev,
             (
                 np.int32(self.nlev),
                 np.int32(self.nedges),
@@ -3341,7 +3340,7 @@ class CudaDryDycoreDriver:
         flux_w = cp.empty_like(saved_state.rho_w)
         self._launch(
             "recover_interfaces_f32",
-            self.ncells,
+            self.ncells * (self.nlev + 1),
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
@@ -3394,7 +3393,7 @@ class CudaDryDycoreDriver:
             temporary,
             cache=self.cache,
             warmup=0,
-            timing_repeats=1,
+            timing_repeats=0,
             include_pressure=False,
         )
         if self.regional_v841 is not None:
@@ -3559,7 +3558,7 @@ class CudaDryDycoreDriver:
             saved_euler_rw = cp.empty_like(saved_state.rho_w)
             self._launch(
                 "euler_w_f32",
-                self.ncells,
+                self.ncells * (self.nlev + 1),
                 (
                     np.int32(self.nlev),
                     np.int32(self.ncells),
@@ -4645,7 +4644,7 @@ class CudaDryDycoreDriver:
         euler_rw = cp.empty_like(saved_state.rho_w)
         self._launch(
             "euler_w_f32",
-            self.ncells,
+            self.ncells * (self.nlev + 1),
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
