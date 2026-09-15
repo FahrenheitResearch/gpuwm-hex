@@ -390,11 +390,12 @@ in the hostpath folder of the evidence gallery.
 ## The integrated performance tree, measured 2026-09-14
 
 `lane/hex-perf` is `lane/hex-point-hrrr` with the cadence, hostpath and lts
-lanes merged in that order (the kernels lane is not merged: its per-kernel
-capture-and-replay instrument reported 49 kernels compared and one,
-`transport_standard_finish_regional_v841`, not bitwise, so it stays on its
-own branch until that is bitwise). The merged tree's regional kernel-set
-digest is the one the hostpath lane re-minted (`191af5f9...`), computed on the
+lanes merged in that order (the kernels lane was not merged at this
+measurement: its per-kernel capture-and-replay instrument reported 49 kernels
+compared and one, `transport_standard_finish_regional_v841`, not bitwise; the
+section after this one is that lane's landing, once the replay was bitwise
+for all 49). At this measurement the merged tree's regional kernel-set
+digest was the one the hostpath lane re-minted (`191af5f9...`), computed on the
 merged sources and equal to `MINTED_KERNEL_SET_SHA256`; the four frozen-source
 digests the two lanes moved (`dt_admission.py`, `pbl_cadence.py` from cadence;
 `cuda_driver.py`, `cuda_backend/recovery.py` from hostpath) were each moved by
@@ -451,7 +452,171 @@ number is from a receipt under
   `work/v841-full-physics-gf-gwdo-native-authority-20260820a/` under any
   checkout there), and the tool refuses by name without them.
 
-What ships as the default from this campaign is the hostpath lane's host path,
-which changes no bytes; the cadence knob and local time stepping ship
-selectable and off, each with the measurement that kept it off in its own
-section above and in `docs/local-timestep-lam.md`.
+What ships as the default from this campaign is the hostpath lane's host path
+and, from the section below, the element-parallel launch geometry of the
+level-independent dycore kernels, neither of which changes a byte; the cadence
+knob and local time stepping ship selectable and off, each with the
+measurement that kept it off in its own section above and in
+`docs/local-timestep-lam.md`.
+
+## The element-parallel kernels, measured 2026-09-14
+
+What moved. Every dycore kernel whose levels are independent used to launch
+one thread per owner (cell, edge or vertex) and loop over the levels inside
+the thread, so a 43,884-cell cull put 343 blocks of 128 threads on a card with
+170 streaming multiprocessors and the boundary-zone kernels, whose owners are
+the 601 to 3,581 cells and edges of the relaxation rings, ran on five to
+twenty-eight blocks. Eight translation units (`cuda_regional_v841`,
+`cuda_dynamics_v841`, `cuda_driver`, `cuda_acoustic`, `cuda_horizontal`,
+`cuda_horizontal_v841`, `cuda_transport`, `cuda_backend/recovery`) now walk a
+flat `(tracer, level, owner)` element index in a grid-stride loop
+(`REGIONAL_ELEMENT_LOOP` and its siblings, the same text in every unit, held
+by `tests/test_element_parallel_kernels.py`), and the forecast launches one
+thread per element. Each element runs the former loop body for its level with
+the same operands in the same order; the vertically implicit column solve
+keeps its per-column form; the momentum kernel gathers a once-per-run
+reference wind instead of evaluating `cosf`/`sinf` per neighbour per stage. The
+regional kernel-set digest moved (the CUDA source strings themselves moved
+this time) and is re-derived at `8a716f28...` on the landed tree, with the
+note at the constant saying what moved and that the four non-point classes
+carry it through the constant without a re-mint of their own; the point class
+row carries the re-mint sentence. The two acoustic kernels the local-timestep
+unit derives from the regional unit are gathered in their element form
+(`cuda_acoustic_lts.py`), because the derivation anchored on the two
+per-owner preambles the re-map removed and refused to build.
+
+The replay verdict and its resolution. The lane's own node-2 chain
+(2026-09-14 16:14 to 16:39Z, RTX 5090, load average 0.08, no other GPU
+process at any step; its receipts are `kernels-lane-chainC-receipts-2026-09-14.tgz`
+in the integrate folder of the evidence gallery) passed the NVRTC compile of
+all eight units, the contract deck at the lane's kernel set (`82a0b9ae...`; 8
+of 8 decks bitwise, 22 of 22 kernels, dual run identical, 420 s), and three
+one-hour arms: the untouched tree 0.3146 s per step after the first (door
+328.5 s, loop as a user waits for it 286.5 s), the lane tree 0.2836 s (1.109x;
+door 305.6 s, loop 264.1 s, 1.085x) and 0.2860 s in a second process, both
+frames (15Z `85cb8196...`, 16Z `4ed8001f...`) byte-identical across all
+three. Its per-kernel capture-and-replay (`tools/kernel_element_ab.py`, which
+runs the forecast door in-process, captures the first launch of every
+re-mapped kernel after the warm-up steps with a device copy of every argument
+before and after, then replays this tree's kernel and the untouched tree's
+translation unit from the same inputs on the same card) compared 49 kernels
+and reported five as differing. None of the five was the arithmetic, and the
+receipt says so in its own numbers: `recover_pressure_f32`,
+`recover_edge_velocity_f32`, `recover_terrain_w_f32` and
+`transport_standard_finish_regional_v841` each differed in exactly 55 values,
+every one at flat index 43,884 of a `(55, 43,885)` array, which is the garbage
+column (column `n_cells_solve`, every level) of an INPUT the kernel never
+writes (the RK stage's `rho` for the three recovery kernels, `rho_zz_old` for
+the transport finish), 0.0 in the replay against 1.0 recorded, and this tree's
+own kernel did not reproduce its own recorded output either
+(`replay_reproduces_recorded_output: false`). The cause was the replay
+environment: every dycore launch resolves through the kernel cache the
+regional runtime arms with the garbage discipline's scrub as its post-launch
+hook, which rewrites the garbage column of every padded float32 argument after
+every launch, 1.0 into an array bound to the step's unit pool and 0.0 into any
+other, and the replay ran after the forecast had released its pool. The fifth,
+`acoustic_ru_regional_v841`, differed in 7,218,551 values because the
+untouched kernel was launched at one owner: the owner count of a kernel with
+no entry in the instrument's table was the trailing dimension of its last
+device argument, and that kernel's last device argument is the `(1,)` acoustic
+invalid flag; the instrument's own control launch of the untouched kernel at
+the element geometry was byte-identical, which is the arithmetic's verdict.
+The instrument was corrected rather than the kernels (`4e469d3`): the recorder
+asks the discipline at the launch which arguments are bound
+(`bound_to_unit_pool`, a reading of a dictionary that launches nothing) and
+the replay re-binds them before every launch of either translation unit; the
+owner-count rule names the edge count; `tests/test_kernel_element_ab.py`
+parses every target's signature so a flag or index array can never be the
+owner axis, and holds the re-bind and the garbage-column split. Each
+difference is also classified by whether it lies in a garbage column, but the
+verdict of record stays the whole-array comparison. So neither of the two
+resolutions a differing kernel would have needed (restoring an evaluation
+order, or proving the differing slots have no consumer) was taken, because
+no kernel's output differed; what differed was an input slot neither kernel
+wrote, written by the instrument itself. `tools/nvrtc_compile_check.py`
+resolves every kernel of the eight units before any card time is spent.
+
+The landing, measured. `lane/kernels-land` is `lane/hex-perf` with
+`lane/kernels` merged (`04c4c69`: the recovery launches keep the host path's
+once-per-kernel untimed helper and take the re-map's element grids), the
+instrument fix and the local-timestep gather above. On node-2's RTX 5090
+(32,607 MiB), one mutex hold 2026-09-14 22:22:20Z to 22:41:43Z (1,163 s of
+card time against the 35 min budget), no other GPU process at any step (the
+hold waited 120 s for another project's process to finish and took the card
+empty), load average 0.83 at the hold and 1.02 to 1.03 at every step after,
+gpuwm 2.7.3 from PyPI, the lane venv cloned from the integrated tree's and
+editable to a copy of this tree that hashes file for file to `0648789`:
+
+- NVRTC compile check of the eight units, 104 kernels resolved, 7 s.
+- Contract deck on the cull's own rings at the merged kernel set
+  (`run_cuda_regional_contract.py --class-id graded-869m-dt5-z7`, kernel set
+  `8a716f28...`): 8 of 8 decks bitwise, 22 of 22 regional kernels covered,
+  dual run identical, every control with teeth; 422 s, peak 1,026 MiB.
+- Per-kernel replay through the door against the integrated tree's
+  translation units (dumped by that tree's own venv): 49 kernels compared,
+  `all_bitwise: true` on the whole-array comparison, every replay reproducing
+  its recorded output, every control launch of the untouched kernel at the
+  element geometry identical; capture 85.4 s (36 steps), replay 13.0 s, peak
+  19,354 MiB (the fifty records' before-and-after argument images).
+- One 3 h arm with the integrate's exact invocation (`forecast --hours 3
+  --history-every-minutes 60`, 2,160 steps of 5 s, the same mesh, init and
+  boundary files) compared with the integrate's two arms, which ran in an
+  earlier session the same day (16:46 to 17:18Z) and not beside this one, so
+  the ratios below are across sessions on the same card and mesh, not the
+  same-session pair the campaign's method asks for; the same-session pair for
+  this re-map is the lane's own one-hour chain above (1.109x):
+
+| arm | door wall | driver execution | integration | s/step after the first | median typical step | health gate | loop incl. I/O | peak card memory | utilisation, mean |
+|---|---|---|---|---|---|---|---|---|---|
+| `lane/hex-point-hrrr` (integrate's baseline arm) | 906.8 s | 875.5 s | 692.1 s | 0.3193 s | 0.3007 s | 168.6 s | 864.7 s | 9,485 MiB | 85.1 % |
+| `lane/hex-perf` (integrate's arm) | 728.1 s | 696.6 s | 675.0 s | 0.2978 s | 0.2797 s | 0.6 s | 679.6 s | 9,485 MiB | 79.8 % |
+| `lane/kernels-land` (this arm) | 614.5 s | 583.0 s | 567.7 s | 0.2617 s | 0.2442 s | 0.6 s | 572.1 s | 8,914 MiB | 80.9 % |
+| ratio, hex-perf / kernels-land | 1.185 | 1.195 | 1.189 | 1.138 | 1.145 | 1.0 | 1.188 | 1.064 | |
+| ratio, baseline / kernels-land | 1.476 | 1.502 | 1.219 | 1.220 | 1.231 | 281 | 1.511 | 1.064 | |
+
+  This arm's first step was 2.64 s (its venv's kernel cache was warm from the
+  deck and the replay in the same hold), so no cold-compilation correction is
+  owed here; the integrate's hex-perf arm carried 32.0 s of it, which is why
+  its door and integration ratios above read higher than its per-step ratio.
+- Identity: all four history frames (15Z `85cb8196...`, 16Z `4ed8001f...`,
+  17Z `8943dcf9...`, 18Z `9f332aa8...`) sha256-equal to the digests both
+  integrate arms recorded, and to the untouched tree's own; the receipt's
+  `physics.cadence` reads consistent (2,160 surface-layer, Noah-MP and YSU
+  calls, 18 radiation calls, nothing held).
+- The tree's GPU tier (`-m "gpu and not bigcard and not assets"`) in the same
+  hold: 47 passed, 1 skipped, 19 s. The CPU battery on node-1 (no card,
+  `GPUWM_NO_LOCAL_GPU=1`, load average 0.55 to 0.97): 1,346 passed, 70
+  skipped, 16 deselected, 65 s.
+
+Per kernel, from the landed tree's replay (device microseconds, median of
+twenty launches, the captured launch's own inputs; one launch each, so the
+sum is not weighted by how often a step launches each kernel): the 49
+captured launches sum to 26,840 us on the untouched translation units and
+21,594 us on this tree's, 1.24x. The boundary-zone kernels gain most, 5x to
+17x (`regional_bdy_adjust_scalars_compute` 1,560 to 93 us,
+`regional_relaxzone_filter_cell` 746 to 44, `regional_relaxzone_filter_edge`
+836 to 105, `regional_bdy_set_scalars` 67 to 12), because their owner sets
+had filled a handful of blocks; the level-heavy cell kernels next
+(`recover_terrain_w` 945 to 388, `tendency_w_to_omega` 884 to 378,
+`w_vertical_flux` 69 to 27, `transport_standard_finish_regional` 1,960 to
+1,465, `theta_vertical_flux` 77 to 48); the two edge-flux kernels and the
+momentum kernel, which were already wide, gain 3 to 8 per cent. Slower in
+element form on the captured launch: the eight small elementwise kernels
+(`add_inplace`, `vertical_u_finish`, the three `split_flux_*`, 21 to 23 us
+before, 31 to 32 after, the grid-stride loop's overhead on 7.3 million
+elements), `theta_finish` and `w_finish` (139 to 185 us),
+`mass_flux_divergence` (228 to 286), `pv_cell` (393 to 470),
+`cell_diagnostics` (764 to 819), `transport_vertical_flux` (370 to 401), and
+`acoustic_ru_regional_v841`, 53 to 355 us: the captured launch was a stage's
+first acoustic sub-step, whose body is two loads and two stores per element,
+and the element form pays the edge's connectivity and mask loads and the
+`rgas / (cp - rgas)` division per element where the per-owner form paid them
+once per edge; three launches a step take that path (the first sub-step of
+each Runge-Kutta stage), about 0.9 ms of a 244 ms step. All of these are
+bitwise; each is a named follow-up for a later lane (a per-owner text for the
+first sub-step, or hoisting the per-edge loads out of the level axis), and
+none of them holds the landing, because the composite step, which is what a
+user waits for, went from 0.2978 to 0.2617 s with the frames unchanged.
+
+Every number above is from a receipt under
+`C:\Users\drew\Downloads\evidence-gallery\hex-perf-kernels-2026-09-13\raw\`.

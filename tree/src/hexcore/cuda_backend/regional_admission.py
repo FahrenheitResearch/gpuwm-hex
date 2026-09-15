@@ -734,6 +734,19 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "kernel set moved and the published bytes did not; the cull's "
                 "own contract deck passed at this digest (8 of 8 bitwise, 22 "
                 "of 22 kernels, dual run identical).  "
+                "RE-MINTED 2026-09-14 at the kernel set the element-parallel "
+                "launch geometry produced, landed together with the host-path "
+                "move (six CUDA-bearing sources moved, the per-element "
+                "arithmetic did not): on the same 43,884-cell point cull, "
+                "HRRR 15Z init and hourly boundaries, 2,160 steps of 5 s on "
+                "node-2's RTX 5090 in one process (567.7 s of integration), "
+                "all four history frames agree byte for byte with the "
+                "untouched 0.3.0 tree's run of the same three hours and with "
+                "the integrated tree's; the cull's own contract deck passed at "
+                "this digest (8 of 8 bitwise, 22 of 22 kernels, dual run "
+                "identical) and a per-kernel capture-and-replay of the 49 "
+                "re-mapped kernels the run launches was bitwise against the "
+                "integrated tree's translation units on the run's own state.  "
                 + _DRY_MINT_CAVEAT
             ),
         ),

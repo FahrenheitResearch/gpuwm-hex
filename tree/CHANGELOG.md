@@ -88,6 +88,58 @@ Fixed:
   8 of 8 decks bitwise and dual-run identical, and the peak card memory
   unchanged at 9,485 MiB. The merged tree's kernel-set digest is the
   hostpath re-mint's. docs/hex-point-hrrr.md, the integrated section.
+- Every level-independent dycore kernel launches one thread per
+  (tracer, level, owner) element. Eight translation units
+  (cuda_regional_v841, cuda_dynamics_v841, cuda_driver, cuda_acoustic,
+  cuda_horizontal, cuda_horizontal_v841, cuda_transport,
+  cuda_backend/recovery) walk a flat element index in a grid-stride loop
+  instead of one thread per owner looping over the levels, and the
+  forecast launches them per element; each element runs the former loop
+  body for its level with the same operands in the same order, the
+  vertically implicit column solve keeps its per-column form, and the
+  momentum kernel gathers a once-per-run reference wind instead of
+  evaluating cosf/sinf per neighbour per stage. The local-timestep unit
+  gathers the two regional acoustic kernels it derives in their element
+  form. Measured on the 43,884-cell point cull (RTX 5090): the lane's own
+  one-hour pair in one session 0.3146 to 0.2836 s per step (1.11x) with
+  both frames byte-identical; the landed tree's 3 h arm (2,160 steps)
+  0.2617 s per step after the first against the integrated tree's 0.2978
+  (1.14x) and the untouched tree's 0.3193 (1.22x), the loop as a user waits
+  for it 572 s against 680 s and 865 s, all four history frames equal to
+  the digests both earlier arms recorded, peak card memory 8,914 MiB; the
+  contract deck on the cull's own rings at the merged kernel set 8 of 8
+  decks bitwise, 22 of 22 kernels, dual-run identical; a per-kernel
+  capture-and-replay of all 49 re-mapped kernels launched by the run
+  bitwise against the previous translation units. The boundary-zone
+  kernels gain 5x to 17x per launch, the level-heavy cell kernels 1.3x to
+  2.6x; a dozen small kernels are slower per launch in element form
+  (named with their numbers in docs/hex-point-hrrr.md, the kernels
+  section) and stay as follow-ups because they are bitwise and the
+  composite step is what moved.
+- tools/kernel_element_ab.py: a per-kernel capture-and-replay instrument
+  that runs the forecast door in-process, captures the first launch of
+  every re-mapped kernel after the warm-up steps with a device copy of
+  every argument before and after, and replays this tree's kernel and the
+  untouched tree's translation unit from the same inputs on the same card,
+  byte for byte and event-timed. Its first run reported five kernels as
+  differing whose arithmetic was byte-identical: four in the 55 values of
+  an input's garbage column, rewritten by the post-launch scrub with the
+  step's unit pool released, and one whose untouched form was launched at
+  one owner because its last device argument is the (1,) invalid flag.
+  The recorder now asks the garbage discipline which arguments are bound
+  at the launch (bound_to_unit_pool) and re-binds them for every replayed
+  launch, the owner-count rule names the edge count, every difference is
+  also classified by garbage column, and tests/test_kernel_element_ab.py
+  parses every target's signature so a flag or index array can never be
+  the owner axis. tools/nvrtc_compile_check.py resolves every kernel of
+  the eight units before card time is spent.
+- The regional kernel-set digest moved again, this time on the CUDA source
+  strings themselves (six of the fourteen sources), and once more on the
+  landing that carries the host-path move and the re-map together; the
+  constant is re-derived at the landed tree, the note at the constant
+  records each move and that the four non-point classes carry the constant
+  without a re-mint of their own, and the point class row records the
+  re-mint the landing measured.
 - The NVRTC reciprocal-rewrite census names hexcore.cuda_solve_region_v841,
   which the census's own control (every CUDA-bearing module under src must
   be a listed translation unit) found unregistered on the GPU tier's first
