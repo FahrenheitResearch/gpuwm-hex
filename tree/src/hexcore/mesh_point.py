@@ -973,7 +973,7 @@ def generate_point(
             f"GPUWM_HEX_MESH_ROWS={rows_path} gpuwm-hex forecast --mesh {cull_row.name} "
             f"--grid {cull_grid} --static {cull_static} --init {out_dir / (stem + '-cull.init.nc')} "
             f"--lbc-dir {lbc_dir} --hours 3 --start-time ... --out <RUN> "
-            "--gpuwm-checkout <gpuwm v2.7.3 checkout> --repo <this tree>",
+            "--gpuwm-checkout <gpuwm v2.7.4 checkout> --repo <this tree>",
         ],
     }
     receipt_path = out_dir / f"{stem}.point-generate.json"

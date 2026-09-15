@@ -169,7 +169,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # when the checkout guard learned to resolve an admitted engine's
         # identity.  The rationale lives beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "e99d2c4b1e4fbe538ad41633b85ee1edea56993372c601b5261d817803f4d68c"
+            "46f012b0914d7092d541d8ee8c8e16e1a3b25b2438487194523cc0eaf15d5310"
         ),
         # Re-frozen for the regional CPU authority lane (#346 L4); the
         # rationale lives beside the runner's pin.

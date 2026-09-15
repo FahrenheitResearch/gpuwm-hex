@@ -186,7 +186,7 @@ STATIC = EngineSpec(
 #: used to be resolved by ``hexcore.cycle.chain`` alone, through one
 #: environment variable and PATH, which is exactly the shape that made
 #: the init door refuse on a box where ``gpuwm fetch-bridges`` had already
-#: staged the file: the 2.7.3 bundle carries ``rw_mpas_lbc`` beside the
+#: staged the file: the 2.7.3 and 2.7.4 bundles carry ``rw_mpas_lbc`` beside the
 #: other four, and the ladder reads it from there.
 LBC = EngineSpec(
     name="rw_mpas_lbc",

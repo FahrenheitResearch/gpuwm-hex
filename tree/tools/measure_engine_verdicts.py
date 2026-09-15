@@ -77,7 +77,7 @@ Usage::
 
     python tools/measure_engine_verdicts.py --engine-git <arwen clone> \\
         --wheel-cache <dir> --json verification/engine-verdicts/<name>.json \\
-        [--pin-to 2.7.3 [--write-manifest]] [--splice src/hexcore/engine_pin.py] \\
+        [--pin-to 2.7.4 [--write-manifest]] [--splice src/hexcore/engine_pin.py] \\
         [--table]
 
     python tools/measure_engine_verdicts.py --admit <wheel>... <tree> \\

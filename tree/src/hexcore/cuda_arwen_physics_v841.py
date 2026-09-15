@@ -69,7 +69,7 @@ from .cuda_physics_v841 import (
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "a7785421e1ba5a5ae71a95035b3ee0488d9ffb89"
+ARWEN_BUILD_COMMIT = "ed957997fc1a11d3b6350badc69fccfc55c363b0"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
@@ -92,7 +92,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "898b694bcbad9d0bd981c4e3e958138dd99d084a12a9550b3431a2cc43ae57ce"
         ),
         "gpuwm/core/microphysics.py": (
-            "ea51ce3767f15de7c949cf7964f512e6d9d4f32d0b91a1604d49c772f7a2d329"
+            "b0d457a48bdc141d6703c7b5aa39faa32a83de1a007c7daae8c9cf9f67676559"
         ),
         "gpuwm/core/gf.py": (
             "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f"
@@ -125,7 +125,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"
         ),
         "gpuwm/config.py": (
-            "1079f1563d5e4063c67b42689001ab71467a3f2e0a3e2a8235a541a9b3b66cca"
+            "c3384bb578ca92aad8c846aec18c4f14855f358927a4a96563df97a5ae5260c6"
         ),
         "gpuwm/io/restart.py": (
             "1990efeee7e314799359d555310f7db304abf9b89d6bd575c77a2da4f988c30e"

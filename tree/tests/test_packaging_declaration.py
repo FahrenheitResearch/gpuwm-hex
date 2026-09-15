@@ -37,11 +37,11 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.3.0", (
-        "0.3.0 is the declared cut: the release forced by gpuwm 2.7.3 (its "
-        "pin window excludes every earlier engine, 2.6.4 and 2.6.5 included), "
-        "carrying the in-tree engine-verdict instrument and the seam-level "
-        "engine A/B; moving it is a release decision, not an edit"
+    assert declared == "0.3.1", (
+        "0.3.1 is the declared cut: the release forced by gpuwm 2.7.4 (its "
+        "pin window excludes every earlier engine, 2.7.3 included), carrying "
+        "the performance campaign on the point cull; moving it is a release "
+        "decision, not an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")

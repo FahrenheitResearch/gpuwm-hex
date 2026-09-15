@@ -525,7 +525,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # commit and digests.  On the public engine every value it writes is
     # unchanged; the frozen row's own execution path did not move.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "e99d2c4b1e4fbe538ad41633b85ee1edea56993372c601b5261d817803f4d68c"
+        "46f012b0914d7092d541d8ee8c8e16e1a3b25b2438487194523cc0eaf15d5310"
     ),
     # The v8.4.1 horizontal-mixing execution boundary (2-D Smagorinsky):
     # CPU authorities and the CUDA operator modules the RK1 saved-Euler
@@ -647,7 +647,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "af9044f687dc9d50d66b035eba84373643218c55fb1872e0aeb7c523321c2365"
         ),
         "adapter_contract_sha256": (
-            "6aaaccdd99785c0080fffbb2008eb72bc46f196e68107fe180c6b0b62bf3965f"
+            "4b5823f7437c9d7abade1a0b1bd7c8e6051f7f7384b24ec72d8b8b96e03b5db7"
         ),
         "arwen_contract_surface_sha256": ARWEN_CONTRACT_SURFACE_SHA256,
         "arwen_glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,

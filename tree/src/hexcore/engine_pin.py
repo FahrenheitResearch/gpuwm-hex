@@ -42,10 +42,35 @@ this.**  An engine nobody has measured against the manifest is never
 resolved onto by default; admitting one is a deliberate act that re-runs the
 instrument and moves this table.
 
-WHERE THIS STANDS NOW, re-measured 2026-09-13
-(``verification/engine-verdicts/repin-273-20260913.json``, after the
-pre-move measurement ``premeasure-273-20260913.json`` the same day).  The
-engine published 2.7.0, 2.7.1, 2.7.2 and then 2.7.3 (2026-09-12); measured
+WHERE THIS STANDS NOW, re-measured 2026-09-15
+(``verification/engine-verdicts/repin-274-20260915.json``, after the
+pre-move measurement ``premeasure-274-20260915.json`` the same day).  The
+engine published 2.7.4 (2026-09-13); measured against the manifest the
+0.3.0 candidate carried, it fails by two paths -- ``gpuwm/config.py`` (one
+added reader, ``radiation_scheme_ids_from_settings``, a settings-map form
+of the radiation rule that the port never calls) and
+``gpuwm/core/microphysics.py`` (two keyword arguments on the classic
+Thompson path's cloud adjustment and rain evaporation, a scheme the port's
+WSM6 backend never runs) -- and the other fourteen are byte-identical
+between the two published wheels, the composed Noah-MP glacier unit
+included, so ``ARWEN_GLACIER_COMPOSED_TU_SHA256`` did not move.  The
+manifest was re-pinned to the published 2.7.4 wheel's bytes (tag
+``ed957997``, whose tree agrees with all three platform wheels on every
+pinned path) and the instrument re-run over every published engine.  The
+derivation now returns ``gpuwm>=2.7.4,<2.7.5``: 2.7.4 is the one engine
+measured usable, 2.7.3 fails the re-pinned manifest by those two paths,
+and every earlier engine fails it by the same counts it failed the 2.7.3
+manifest by, because the two paths that moved were already in every one
+of their ``moved`` lists.  Neither moved path reaches a number the port's
+fixed-step WSM6, YSU, Noah-MP, legacy-RRTMG and Grell-Freitas seam
+computes; the seam-level A/B (``tools/measure_engine_seam_ab.py``) and the
+one-hour point-cull arm that measured that are cited from
+``docs/declared-divergences.md``.
+
+THE PREVIOUS MOVE, re-measured 2026-09-13
+(``repin-273-20260913.json``, after ``premeasure-273-20260913.json`` the
+same day), kept here because it is the one that moved the whole ``moved``
+column.  The engine published 2.7.0, 2.7.1, 2.7.2 and then 2.7.3 (2026-09-12); measured
 against the manifest 0.2.3 shipped, every one of the four fails it -- the
 three earlier 2.7 wheels by seven paths and 2.7.3 by eleven -- so the
 ``<2.6.6`` ceiling did exactly what it exists to do for ten days: a user who
@@ -53,8 +78,8 @@ installed gpuwm-hex 0.2.3 after 2.7.0 was published got 2.6.5, not the
 newest engine, and no run died on a digest.  This port then re-pinned its
 manifest to the published 2.7.3 wheel's bytes and the instrument was re-run
 over every published engine plus the two tags that have no release.  The
-derivation now returns ``gpuwm>=2.7.3,<2.7.4``: 2.7.3 is the one engine
-measured usable.  Letting it in cost what it is meant to cost: re-run the
+derivation then returned ``gpuwm>=2.7.3,<2.7.4``: 2.7.3 was the one
+engine measured usable.  Letting it in cost what it is meant to cost: re-run the
 instrument, move the table, let the literal follow.  The 2026-09-02 re-pins
 to 2.6.4 and 2.6.5, the same day's re-pin to 2.6.3, the 2026-09-01 re-pin
 to 2.6.1, the 2026-08-31 re-pin to 2.6.0 and the 2026-08-28 re-pin to 2.5.8
@@ -62,7 +87,9 @@ paid the same toll the same way (their receipts are under the private
 tree's ``evidence/repin-*``; this tree carries the current measurement).
 
 **EXACTLY ONE PUBLISHED ENGINE IS USABLE, and that is a measured finding
-rather than a cautious choice.**  Re-pinning the manifest to 2.7.3 moved the
+rather than a cautious choice.**  It is 2.7.4 now; at the previous re-pin
+it was 2.7.3, and that move is the one to read for what a re-pin does to
+this table.  Re-pinning the manifest to 2.7.3 moved the
 whole ``moved`` column, because that column is relative to the manifest:
 every engine below 2.7.3 fails it, INCLUDING the 2.6.4 and 2.6.5 that were
 the whole admitted range the day before.  Eleven manifest paths moved
@@ -109,9 +136,9 @@ that one file.  Both are stated with their magnitudes in
 follow-up.  If the one admitted engine were yanked from PyPI, the correct
 answer is :class:`EnginePinError`, not a loosened bound.
 
-ADMITTED ENGINES, added 2026-09-13.  A build that is not on PyPI -- a
-private engine carrying a PEP 440 local version label on a published base,
-``2.7.3+x.1`` -- has no row in the published table, because that table is a
+ADMITTED ENGINES, added 2026-09-13, re-taken 2026-09-15 at the 2.7.4 pin.
+A build that is not on PyPI -- a private engine carrying a PEP 440 local
+version label on a published base, ``2.7.4+x.1`` -- has no row in the published table, because that table is a
 measurement of what PyPI serves, and it satisfies the derived specifier
 anyway, because PEP 440 orders a local version immediately after its base.
 So the specifier is not the gate for it and was never meant to be; the
@@ -126,8 +153,12 @@ public pin is not matched, matches it only in full, and refuses the row's
 bytes under any other version string.  An engine with no row -- a private
 build nobody measured, a re-versioned copy -- is refused exactly as an
 unmeasured public engine is.  The one row shipped moves five of the
-sixteen paths from the public 2.7.3 bytes and leaves the composed glacier
-unit identical; what the row is for is not this module's business.
+sixteen paths from the public 2.7.4 bytes and leaves the composed glacier
+unit identical; what the row is for is not this module's business.  The
+row on the 2.7.3 base that the 0.3.0 candidate carried was dropped when
+the range moved: pip no longer resolves ``2.7.3+x.1`` inside
+``gpuwm>=2.7.4,<2.7.5``, and a row whose base the specifier refuses
+admits nothing (``tests/test_engine_pin.py`` refuses such a row by name).
 
 Two facts the 2026-08-27 measurement turned up that no document in the tree
 carried.  Both are still true, and both are now moot for the FLOOR, because
@@ -191,13 +222,13 @@ class PublishedEngine:
         return self.on_pypi and self.satisfies_manifest and self.offline_build_road
 
 
-#: THE OUTPUT OF AN INSTRUMENT, NOT A TRANSCRIPTION.  Re-measured 2026-09-13
+#: THE OUTPUT OF AN INSTRUMENT, NOT A TRANSCRIPTION.  Re-measured 2026-09-15
 #: against the published bytes of every 2.5.x, 2.6.x and 2.7.x gpuwm, plus
 #: the v2.5.5 and v2.6.2 tags that have no PyPI release.  The instrument is
 #: ``tools/measure_engine_verdicts.py`` (network: it downloads every
 #: published wheel of every version and refuses a version whose platform
 #: wheels disagree); the JSON behind THIS table is
-#: ``verification/engine-verdicts/repin-273-20260913.json``, and the block
+#: ``verification/engine-verdicts/repin-274-20260915.json``, and the block
 #: below is that JSON rendered by the same instrument's ``--splice``.
 #:
 #: DO NOT HAND-PATCH A ROW.  ``moved`` is measured against THIS port's
@@ -553,6 +584,15 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
     PublishedEngine(
         version="2.7.3",
         on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/microphysics.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.7.4",
+        on_pypi=True,
         moved=(),
         offline_build_road=True,
     ),
@@ -565,12 +605,12 @@ class AdmittedEngine:
     """One engine admitted by a measured row of its own.
 
     An engine that is not on PyPI -- a private build carrying a PEP 440
-    local version label such as ``2.7.3+x.1`` -- cannot appear in
+    local version label such as ``2.7.4+x.1`` -- cannot appear in
     :data:`PUBLISHED_ENGINES`, because that table is a measurement of what
     PyPI serves.  It can still be the engine a user has installed, and the
     dependency specifier already lets it through: PEP 440 orders a local
-    version immediately after its public base, so ``gpuwm>=2.7.3,<2.7.4``
-    resolves ``2.7.3+x.1``.  What decides whether this port RUNS on it is
+    version immediately after its public base, so ``gpuwm>=2.7.4,<2.7.5``
+    resolves ``2.7.4+x.1``.  What decides whether this port RUNS on it is
     the same thing that decides for a published engine -- its sixteen seam
     bytes -- so an admitted engine is a row of the same kind: measured by
     the instrument from the engine's own artifacts, keyed by its exact
@@ -618,18 +658,18 @@ class AdmittedEngine:
 # --- BEGIN GENERATED: ADMITTED_ENGINES ---
 ADMITTED_ENGINES: tuple[AdmittedEngine, ...] = (
     AdmittedEngine(
-        version="2.7.3+soma.1",
-        base="2.7.3",
-        build_commit="9c0d5f81c26903d2e5d69e79c02ca2cb1f8b5871",
+        version="2.7.4+soma.1",
+        base="2.7.4",
+        build_commit="caed7fe860eb78f115e5d95cec1907927675b098",
         digests=(
             ("docs/mpas-seam.md", "5cd6934ef8b4f3dabfb7fa2e621ceab309836875a6669319323451ea717f9035"),
-            ("gpuwm/config.py", "475269810bcba69490d81a3dcdeba69991e52cad962cce7731b191839b07c658"),
+            ("gpuwm/config.py", "af4cfe03af6de94527e07b8ca9a2d3213eff0a482c909a41c3b5db9182144078"),
             ("gpuwm/core/gf.py", "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f"),
             ("gpuwm/core/kernels/__init__.py", "5d8a0f17cf477d5a3ee67ae1010baca064572b8dd1e3f0708d72574bdadc9d69"),
             ("gpuwm/core/kernels/gf.cu", "334c55ab764732be73d94504d54cb60ad7ca8bf12dbca879d7b3fc3f869d4386"),
             ("gpuwm/core/kernels/noahmp_glacier.cu", "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"),
             ("gpuwm/core/kernels/noahmp_leaves.cu", "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497"),
-            ("gpuwm/core/microphysics.py", "982194be9cf7893e871b211457b52bbea8abddc00ee565a323acf703f96e81b0"),
+            ("gpuwm/core/microphysics.py", "5c169d6309e7a77f32119f195c212eaf1bc6162ba745e24d6a9adc3185c7bc4c"),
             ("gpuwm/core/mpas_column_batch.py", "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45"),
             ("gpuwm/core/noahmp_glacier.py", "1bb607569b5007c5d2817e879eb82112db7ed01f11931efe1802d35b3fb7b23b"),
             ("gpuwm/core/noahmp_glacier_gpu.py", "86d3dbf5dcac3c084bca9a4d819f698122da434d9e994243fd09ea1332337d0a"),
@@ -648,9 +688,9 @@ ADMITTED_ENGINES: tuple[AdmittedEngine, ...] = (
             "gpuwm/io/restart.py",
         ),
         artifacts=(
-            ("gpuwm-2.7.3+soma.1-py3-none-manylinux_2_28_x86_64.whl", "acd90adffa4cbf8cf0937f329d60baefd27d6642b85fd83092d045d04215814e"),
-            ("gpuwm-2.7.3+soma.1-py3-none-any.whl", "b01610a7ca2bb9939301ae2b67ac78265291e8a2707b6f33829b55653b480000"),
-            ("gpuwm-2.7.3+soma.1-py3-none-win_amd64.whl", "17e3aad7a3bd8eed895b9dd09d0a5f4bd1b587164dc75451d0db91c679cd7f77"),
+            ("gpuwm-2.7.4+soma.1-py3-none-manylinux_2_28_x86_64.whl", "960ce1dc5c7992b447b5923981a08e91c0253c7a70567afa487a413e546a6b29"),
+            ("gpuwm-2.7.4+soma.1-py3-none-any.whl", "ffaa5b304a716b4846862034d2f752ae2dfb846b1214a196e0f4afc6251f0b5c"),
+            ("gpuwm-2.7.4+soma.1-py3-none-win_amd64.whl", "1ff8791eaa7402475223d2b358f528d30c0bdd5b304e061f3a9e3e942437e311"),
             ("engine (source tree)", None),
         ),
     ),
