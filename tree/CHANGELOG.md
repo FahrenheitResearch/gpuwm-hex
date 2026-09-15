@@ -6,9 +6,38 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
-## Unreleased
+## 0.3.1 (2026-09-15)
 
 New:
+- The physics seam re-pins to gpuwm 2.7.4. The sixteen-file manifest
+  carries the published 2.7.4 wheel's bytes (tag ed957997, whose tree
+  agrees with all three platform wheels on every pinned path) and the
+  derived range is gpuwm>=2.7.4,<2.7.5. Two of the sixteen paths moved
+  between the published 2.7.3 and 2.7.4 wheels, measured wheel against
+  wheel (verification/engine-verdicts/repin-274-20260915.json): the config
+  loader gained one settings-map reader of the radiation rule that the
+  port never calls, and the microphysics driver passes two keyword
+  arguments on the classic Thompson path, a scheme the port's WSM6 backend
+  never runs; the other fourteen, the composed Noah-MP glacier unit
+  included, are byte-identical. Measured the other way first, against the
+  manifest 0.3.0 carried (premeasure-274-20260915.json), 2.7.4 fails by
+  those two paths, which is the <2.7.4 ceiling holding installs on 2.7.3
+  for the two days between the 2.7.4 publish and this re-pin. Under the
+  re-pinned manifest 2.7.3 fails by the same two and every earlier engine
+  by exactly the count it failed the 2.7.3 manifest by. What moved through
+  the seam is measured and recorded in docs/declared-divergences.md: the
+  seam-level A/B under both engines on both fixed-column profiles and the
+  one-hour point-cull forecast under 2.7.4 against the 2.7.3 frames of
+  record.
+- The admitted private row is re-taken on the 2.7.4 base, 2.7.4+soma.1,
+  from its three platform wheels and its source tree (which agree with
+  each other and with the tree's HEAD): the same five of sixteen paths
+  differ from the public bytes as before and the composed glacier unit is
+  the pin's. The row on the 2.7.3 base is dropped with the range, because
+  pip no longer resolves 2.7.3+x.1 inside gpuwm>=2.7.4,<2.7.5 and a row
+  whose base the specifier refuses admits nothing; tests/test_engine_pin.py
+  refuses such a row by name. The forecast driver's checkout guard is
+  unchanged and follows the admitted row as before.
 - The surface/PBL cadence is a selectable knob. gpuwm-hex forecast
   --pbl-cadence SECONDS calls the surface layer, the land-surface model and
   the PBL once every SECONDS/dt steps and holds the tendency between calls

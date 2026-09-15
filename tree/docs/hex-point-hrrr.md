@@ -148,8 +148,8 @@ freezes the boundary there without saying so.
 The binary resolves through the engine ladder (`hexcore.engines.LBC`):
 `--lbc-exe`, `$GPUWM_HEX_RW_MPAS_LBC`, `$RW_MPAS_LBC`, `$GPUWM_RW_MPAS_LBC`,
 gpuwm's bridge directories (`libexec/bridges` beside the installed package and
-`~/.gpuwm/bridges`, where `gpuwm fetch-bridges` stages the 2.7.3 bundle that
-carries it), then `PATH`. `gpuwm-hex doctor` reports it beside the other
+`~/.gpuwm/bridges`, where `gpuwm fetch-bridges` stages the pinned engine's
+bundle, which carries it), then `PATH`. `gpuwm-hex doctor` reports it beside the other
 engines.
 
 ## The init carries its own clock

@@ -144,7 +144,7 @@ verdict for each divergence is in
 | Python | 3.11 or newer |
 | GPU | A CUDA device. Memory is set by mesh size *and* by the card, and not by a line through the two: the footprint is a per-card core, plus the Grell-Freitas and YSU column workspaces charged at `min(cells, tile)`, plus a per-cell term, all in `hexcore.device_admission`. Measured 2026-08-26 on an RTX 5090 at the merged tip: the published 40,962-cell global mesh (x1.40962, about 120 km) peaked at **8,874 MiB — inside a 12 GiB card's budget**; the 163,842-cell mesh (x4.163842, about 24 km) peaked at **20,446 MiB**, and every free-memory gate admits at the measured floor — the prediction plus that card's own margin, **about 21.7 GiB free at x4** — so x4 remains in practice a 32 GiB-card configuration. The core is a property of the card, not the mesh, and the door reads the card's multiprocessor count at the decision rather than assuming a 5090: the 16 GiB and 10 GiB parts each carry their own measured row, and a card nobody has measured gets a derived row that is labelled derived. A card with its own #264 ledger can still supply it with `--device-fixed-mib` / `--device-bytes-per-cell`. Receipts: `evidence/memory-row-refit-20260826/node2/`, `evidence/l6-capacity-20260825/` and `evidence/memory-shape-20260827/`. |
 | CUDA | CuPy matching your driver's CUDA major — there is no way for pip to detect it, so you choose (below). |
-| Engine | The `gpuwm` distribution, `>=2.7.3,<2.7.4` — a bounded range, and pip resolves it for you: the physics seam, and the bundle that carries the MPAS bridge binaries the doors drive. **Plus a `gpuwm` source checkout at `v2.7.3` for the forecast lane** — see *The engine pin*. |
+| Engine | The `gpuwm` distribution, `>=2.7.4,<2.7.5` — a bounded range, and pip resolves it for you: the physics seam, and the bundle that carries the MPAS bridge binaries the doors drive. **Plus a `gpuwm` source checkout at `v2.7.4` for the forecast lane** — see *The engine pin*. |
 | Assets | A mesh grid file, a matching static file, and (for the init door) a vertical-grid declaration — normally a `--vertical-spec` JSON; a native-minted init file as a capsule is the compatibility mode. **gpuwm-hex ships none of these and has no fetch path for them.** See *Assets you must supply*. |
 | Rust binaries | `rw_mpas_init` for the init door; `rw_mpas_convert` and `rw_wrfbatch` for the render door. They are built from the `gpuwm` source tree — see *Building the Rust engines*. |
 
@@ -204,14 +204,14 @@ unchanged.
 
 ### The engine pin
 
-gpuwm-hex depends on `gpuwm>=2.7.3,<2.7.4` — a **bounded range**, and the
+gpuwm-hex depends on `gpuwm>=2.7.4,<2.7.5` — a **bounded range**, and the
 bound is the point. The port pins the engine's physics seam by the SHA-256 of
 **sixteen individual gpuwm source files**, and the gap between a published
-stamp and the pinned bytes has recurred at every cut. Re-measured 2026-09-13
+stamp and the pinned bytes has recurred at every cut. Re-measured 2026-09-15
 against the real published bytes of every 2.5.x, 2.6.x and 2.7.x release
 (every wheel of each, all three platform wheels of the 2.7 line included),
 plus the `v2.5.5` and `v2.6.2` tags that have no release at all — JSON at
-`verification/engine-verdicts/repin-273-20260913.json`, instrument at
+`verification/engine-verdicts/repin-274-20260915.json`, instrument at
 `tools/measure_engine_verdicts.py`, both shipped in this tree:
 
 | gpuwm | on PyPI | seam pin | `--offline` build road |
@@ -234,32 +234,39 @@ plus the `v2.5.5` and `v2.6.2` tags that have no release at all — JSON at
 | 2.7.0 | yes | 8 of 16 moved | complete |
 | 2.7.1 | yes | 8 of 16 moved | complete |
 | 2.7.2 | yes | 8 of 16 moved | complete |
-| **2.7.3** | yes | **matches** | complete |
+| 2.7.3 | yes | 2 of 16 moved | complete |
+| **2.7.4** | yes | **matches** | complete |
 
-**2.7.3 is the only published engine whose bytes match the pin**, so it is
-the floor and the exclusive ceiling sits one patch above it at 2.7.4. 2.6.4
-and 2.6.5, the whole range the previous release admitted, fail it by 11
-files; 2.7.0, 2.7.1 and 2.7.2 carry the same sixteen bytes as each other and
-fail it by 8; 2.6.2 fails by 11 and its publish job died besides, so nothing
-of it reached PyPI — a floor pip cannot install is not a floor, the same
-finding 2.5.5 forced.
+**2.7.4 is the only published engine whose bytes match the pin**, so it is
+the floor and the exclusive ceiling sits one patch above it at 2.7.5. 2.7.3,
+the whole range the previous candidate admitted, fails it by 2 files —
+`gpuwm/config.py` and `gpuwm/core/microphysics.py`, the only two of the
+sixteen that moved between the published 2.7.3 and 2.7.4 wheels; 2.6.4 and
+2.6.5 fail it by 11; 2.7.0, 2.7.1 and 2.7.2 carry the same sixteen bytes as
+each other and fail it by 8; 2.6.2 fails by 11 and its publish job died
+besides, so nothing of it reached PyPI — a floor pip cannot install is not a
+floor, the same finding 2.5.5 forced.
 
 That is the same narrow claim this page has carried since 2026-08-28, and the
 reason is not that an engine regressed. The `moved` column is measured against
 **this port's** seam manifest, so re-pinning that manifest moves every row at
-once, including rows for engines cut long before it: 2.6.5 read `matches`
-under the previous manifest and reads `11 of 16 moved` under this one, and
-2.6.1, which read `8 of 16 moved` under the previous manifest, reads
-`13 of 16 moved` now. A row
-from the old table is not comparable with a row from this one, and neither is
-a row anyone patches by hand.
+once, including rows for engines cut long before it: 2.7.3 read `matches`
+under the previous manifest and reads `2 of 16 moved` under this one, while
+every earlier row kept its count, because the two files that moved at 2.7.4
+were already in every one of their lists (at the 2.7.3 re-pin the same
+mechanism moved 2.6.5 from `matches` to `11 of 16 moved` and 2.6.1 from `8
+of 16 moved` to `13 of 16 moved`). A row from the old table is not comparable
+with a row from this one, and neither is a row anyone patches by hand.
 
-The ceiling has now been watched doing its job rather than merely described.
-The engine published 2.7.0 ten days before this release; measured against the
-manifest the previous release shipped
-(`verification/engine-verdicts/premeasure-273-20260913.json`), 2.7.0, 2.7.1
-and 2.7.2 fail it by 7 files and 2.7.3 by 11 — so an install of that release
-kept resolving 2.6.5 for those ten days, and no forecast died on a digest.
+The ceiling has now been watched doing its job twice rather than merely
+described. The engine published 2.7.4 two days before this candidate;
+measured against the manifest the previous candidate carried
+(`verification/engine-verdicts/premeasure-274-20260915.json`), 2.7.4 fails
+it by the same 2 files — so an install of 0.3.0 kept resolving 2.7.3 for
+those two days, and no forecast died on a digest. The first time was 2.7.0,
+published ten days before 0.3.0 (`premeasure-273-20260913.json`: 2.7.0,
+2.7.1 and 2.7.2 fail the 0.2.3 manifest by 7 files and 2.7.3 by 11), when
+an install of 0.2.3 kept resolving 2.6.5.
 
 The consequence is worth stating rather than discovering: **the one admitted
 engine is the whole fallback.** If it were withdrawn, the answer would be
@@ -283,7 +290,7 @@ stops there with `failed to open file .../cc/src/target/generated.rs`.
 > reported the estate healthy and exited 0. A green install and a dead run.
 >
 > The ceiling is exclusive and sits at the first engine that is not measured
-> usable, so a future 2.7.4 is excluded exactly as 2.7.2 is today. Admitting a
+> usable, so a future 2.7.5 is excluded exactly as 2.7.3 is today. Admitting a
 > new engine is a deliberate act: re-run
 > `tools/measure_engine_verdicts.py` (with `--pin-to <version>
 > --write-manifest` when the pin itself moves), let its `--splice` render the
@@ -299,7 +306,7 @@ stops there with `failed to open file .../cc/src/target/generated.rs`.
 >
 > **An engine that is not on PyPI can be admitted, by measurement only.**
 > A private build carrying a PEP 440 local version label on the pinned
-> base (`2.7.3+x.1`) already resolves inside `gpuwm>=2.7.3,<2.7.4`; the
+> base (`2.7.4+x.1`) already resolves inside `gpuwm>=2.7.4,<2.7.5`; the
 > byte verdict is the only gate. `tools/measure_engine_verdicts.py --admit`
 > hashes the sixteen files inside the engine's own wheels and source tree,
 > refuses if they disagree with each other or with the git tree's HEAD,
@@ -310,8 +317,10 @@ stops there with `failed to open file .../cc/src/target/generated.rs`.
 > and its receipts name the row's build commit rather than the public
 > pin's. The same bytes under another version, that version over other
 > bytes, and a build nobody measured are refused by name. One row ships:
-> `2.7.3+soma.1`, five of sixteen paths moved from the published 2.7.3
-> bytes, composed glacier unit identical.
+> `2.7.4+soma.1`, five of sixteen paths moved from the published 2.7.4
+> bytes, composed glacier unit identical (re-taken 2026-09-15 on the 2.7.4
+> base; the row on the 2.7.3 base went with the range, because a row whose
+> base the specifier refuses admits nothing).
 
 The range also keeps a **second and independent** refusal where pip can make
 it. The MPAS bridge binaries — `rw_mpas_init`, `rw_mpas_convert`,
@@ -327,7 +336,7 @@ verified against the packaged pin** — the four above, plus `rw_wrfbatch` and
 the `rw_mpas_lbc` the limited-area lane needs.
 
 *(The gpuwm source tree publishes too: `github.com/FahrenheitResearch/arwen`
-carries tags `v2.5.0` through `v2.7.3` with the full tree, `docs/mpas-seam.md`
+carries tags `v2.5.0` through `v2.7.4` with the full tree, `docs/mpas-seam.md`
 and `gpuwm/core/mpas_column_batch.py` included. The table above was taken by
 hashing the pinned files inside every published wheel, and the instrument
 also hashes them at every one of those tags and records where a tag and its
@@ -338,7 +347,7 @@ subject to the 2.5.5 vendor gap noted above.)*
 **Installing `gpuwm` is necessary but not sufficient for the forecast lane.**
 The `forecast` door refuses without `--gpuwm-checkout`: a gpuwm **git
 checkout** at the pinned commit (`--arwen-checkout` on the driver beneath it),
-in addition to the installed distribution. Clone `v2.7.3` (the floor, the
+in addition to the installed distribution. Clone `v2.7.4` (the floor, the
 only admitted engine, and the tag whose tree carries the sixteen pinned files
 byte for byte with the published wheel — the instrument checks that too).
 The checkout is what the forecast lane's proof harness reads a git state out
@@ -482,7 +491,7 @@ bundle carries `rw_wrfbatch` and **not** `rw_mpas_init` or `rw_mpas_convert`.
 On that engine `gpuwm fetch-bridges` gives you the renderer and nothing that
 opens either MPAS door. That measurement is why the dependency floor cleared
 2.5.3 and never fell back: 2.5.3 is where the four MPAS bridge binaries
-enter the bundle, and the current `gpuwm>=2.7.3,<2.7.4` range keeps that
+enter the bundle, and the current `gpuwm>=2.7.4,<2.7.5` range keeps that
 guarantee, so pip cannot resolve you onto an engine that strands both doors. A
 conforming install therefore never sees the 2.5.2 shortfall; it is recorded
 here because it is the reason the floor first moved.
@@ -887,12 +896,13 @@ Measured over 24 h, two independent weather cases, two mixing regimes,
 They entered this repository already finished on 2026-08-20, and there is no
 receipt directory, no card and no run commit for them anywhere in the tree.
 What can be established is a ceiling: the commit that introduced them pinned
-engine `629ddb6f0`, so they were measured at or before that pin. Eight engine
+engine `629ddb6f0`, so they were measured at or before that pin. Nine engine
 pin moves have landed since — `0d04db712` (2026-08-24), `26daaab7e`
 (2026-08-25), `659962929` (2026-08-28), `7e34a48` (2026-08-31, gpuwm
 `2.6.0`), `df5f34c5c` (2026-09-01, gpuwm 2.6.1), `636ab1b4b`
 (2026-09-02, gpuwm 2.6.3), `d60b883e7` (2026-09-02, gpuwm 2.6.4) and
-`a7785421e` (2026-09-13, gpuwm 2.7.3). The **2.5.8** move is measured to change nothing: a four-arm byte A/B
+`a7785421e` (2026-09-13, gpuwm 2.7.3) and `ed957997f` (2026-09-15, gpuwm
+2.7.4). The **2.5.8** move is measured to change nothing: a four-arm byte A/B
 on one card found the old and new pins identical on the atmosphere half of
 the per-step fingerprint at all 31 steps and on 0 of 138 history variables
 (`evidence/seam-258-ab-20260828/`) — one mesh, one case, one hour. The

@@ -147,13 +147,13 @@ by omission.
 - Distribution and command: `gpuwm-hex`. Import namespace: `hexcore`,
   renamed from `mpas_port` at 0.2.0 and settled there (README, *The import
   namespace*). There is no alias shim.
-- Engine range: `gpuwm>=2.7.3,<2.7.4` is what pip enforces — a bounded
+- Engine range: `gpuwm>=2.7.4,<2.7.5` is what pip enforces — a bounded
   range, derived from a measured table in `hexcore.engine_pin` rather than
   typed. The floor is where it is for one reason and it is the strictest
-  one: 2.7.3 is the only published engine whose bytes match the
-  sixteen-file Arwen seam manifest, re-measured 2026-09-13 against every
+  one: 2.7.4 is the only published engine whose bytes match the
+  sixteen-file Arwen seam manifest, re-measured 2026-09-15 against every
   published 2.5.x, 2.6.x and 2.7.x release
-  (`verification/engine-verdicts/repin-273-20260913.json`, written by
+  (`verification/engine-verdicts/repin-274-20260915.json`, written by
   `tools/measure_engine_verdicts.py`). It clears, incidentally, the bundle rows that put the MPAS bridge
   binaries (`rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`,
   `rw_mpas_static`, `rw_mpas_lbc`) within reach of `gpuwm fetch-bridges`;
@@ -161,7 +161,7 @@ by omission.
   drives one. The CEILING is exclusive and sits at the first engine not
   measured usable, so an engine that has not been compared against the
   manifest is never resolved onto — including ones not published yet. An
-  engine that is NOT on PyPI (a local version such as `2.7.3+x.1`, which
+  engine that is NOT on PyPI (a local version such as `2.7.4+x.1`, which
   the range already resolves) is admitted only by a measured row of its
   own in `hexcore.engine_pin.ADMITTED_ENGINES`, written by the same
   instrument's `--admit` from the engine's wheels and source tree and

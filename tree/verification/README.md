@@ -22,7 +22,12 @@
   rather than a copy of it.  `premeasure-273-20260913.json` is the 2.7 line
   measured against the manifest 0.2.3 shipped (every 2.7 engine fails it);
   `repin-273-20260913.json` is every engine measured against the 2.7.3
-  bytes (2.7.3 alone passes).  Beside them, `seam-ab-*.json` are the outputs
+  bytes (2.7.3 alone passes); `premeasure-274-20260915.json` is every
+  engine measured against the 2.7.3 bytes after 2.7.4 published (2.7.4
+  fails by two files); `repin-274-20260915.json` is every engine measured
+  against the 2.7.4 bytes (2.7.4 alone passes, the table of record).
+  `admitted-engines.json` is the one private row, re-taken on the 2.7.4
+  base.  Beside them, `seam-ab-*.json` are the outputs
   of `tools/measure_engine_seam_ab.py`: the engine's column-batch seam driven
   on fixed columns under two engines and compared field by field, which is
   how a re-pin says which physics number moved and by how much.  Their
