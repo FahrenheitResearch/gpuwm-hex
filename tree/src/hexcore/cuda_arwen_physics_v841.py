@@ -11,7 +11,11 @@ containing every real surface, soil, land-use, solar, and cadence input; no
 Arwen constructor default is admitted.  The imported Arwen tree is accepted
 only when all production source bytes match
 :data:`ARWEN_BUILD_COMMIT` below, which is the ONE place that commit is
-spelled -- this sentence deliberately names no digest of its own.  A prose
+spelled -- this sentence deliberately names no digest of its own -- or when
+they are, in full and under its own version string, the measured row of an
+engine :mod:`hexcore.engine_pin` admits (``ADMITTED_ENGINES``); a run on
+such an engine is provenanced by THAT row's commit and digests, and the
+constants below stay the public pin's.  A prose
 copy of the pin is how this module came to contradict itself: it carried the
 0.1.x seam-converge merge commit as present-tense fact for the whole of the
 2.5.8 re-pin, while the constant below already named the 2.5.8 cut, so the
@@ -37,6 +41,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from . import engine_pin
 from .cuda_backend.containers import require_resident_array
 from .cuda_backend.runtime import KernelCache
 from .cuda_gwdo_v841 import (
@@ -64,7 +69,7 @@ from .cuda_physics_v841 import (
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "d60b883e79a01b70b4f3e333b96b36f892889539"
+ARWEN_BUILD_COMMIT = "ed957997fc1a11d3b6350badc69fccfc55c363b0"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
@@ -72,7 +77,7 @@ MPAS_SEAM_CONTRACT_SURFACE_SHA256 = (
     "45de852c6f8a8951d7e3f65b2b1e64462cf213d50707db4e52cb7eba17491ff2"
 )
 ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
-    "edafcac585d4786c0cdfddf07f8e767b64d0d40b6db0e4da3dc3b2fa8c21fb59"
+    "cde4bfccb40efd54be56700251849e8d18bcd7ae69d85f5737a2cabc32719d84"
 )
 
 # Every byte below participates in the phase-one/phase-two execution path.
@@ -84,19 +89,19 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45"
         ),
         "gpuwm/core/physics.py": (
-            "2049a8656e68f7854cf311950ea92f64f474768b02c87e99be904fb6fb0d60bf"
+            "898b694bcbad9d0bd981c4e3e958138dd99d084a12a9550b3431a2cc43ae57ce"
         ),
         "gpuwm/core/microphysics.py": (
-            "4df5b7a3e46c348a98920c2c4b8cac46632dee955d7c8eea19136c183c8f8670"
+            "b0d457a48bdc141d6703c7b5aa39faa32a83de1a007c7daae8c9cf9f67676559"
         ),
         "gpuwm/core/gf.py": (
-            "0fefb214381595ee1fd6a2cc0754e2676642846d01294bcdcad37d550b2550e9"
+            "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f"
         ),
         "gpuwm/core/kernels/gf.cu": (
-            "2e6a0b59b669e3c35fc0138be14d7ce2a8d7781b2c02f46ea41a23efe0764142"
+            "334c55ab764732be73d94504d54cb60ad7ca8bf12dbca879d7b3fc3f869d4386"
         ),
         "gpuwm/core/rrtmg_legacy.py": (
-            "39af610f0df41f9a3eaef601cd55b8ba27928c7e477a1d4739048094a510214d"
+            "8951ce770e10f823d964a4f4564cc9f8989035a7fb9d3fc1448b73f6816bc928"
         ),
         "gpuwm/core/noahmp_runtime.py": (
             "990780ab87764481c463b1fa2f8c988cd9538e0833dc390203d2a0396fee66bc"
@@ -105,25 +110,25 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "1bb607569b5007c5d2817e879eb82112db7ed01f11931efe1802d35b3fb7b23b"
         ),
         "gpuwm/core/noahmp_glacier_gpu.py": (
-            "c8409f8d0644550198b54006ab084d9bb67018037367639e60a5d8af479710fa"
+            "86d3dbf5dcac3c084bca9a4d819f698122da434d9e994243fd09ea1332337d0a"
         ),
         "gpuwm/core/noahmp_kernel_sources.py": (
-            "4b2fab2ac92e93669491cbe526f81d23bc94e075859ae849f2b8c84827057538"
+            "fcdc097d20f9d0453086bae5ba1007f015d4eca2ac21b39db10a59f15cff26c5"
         ),
         "gpuwm/core/kernels/__init__.py": (
-            "38712db4161ea9f9ee03932f508cd1a377b661169b2bf84ca89781346cfa48f2"
+            "5c738347bc273d8e961618138a1bdd1ae296ec7cc75f3d557b43b13bc21e8937"
         ),
         "gpuwm/core/kernels/noahmp_leaves.cu": (
-            "0ce9461705395dccbfebed3d9d27e87eebaeaca79896ae369eaa02ec1e77307f"
+            "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497"
         ),
         "gpuwm/core/kernels/noahmp_glacier.cu": (
             "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"
         ),
         "gpuwm/config.py": (
-            "54af6c0bc8ba0456fbbb4a80318d2e959a7056eb31de53cbaaa5bb8386f7a287"
+            "c3384bb578ca92aad8c846aec18c4f14855f358927a4a96563df97a5ae5260c6"
         ),
         "gpuwm/io/restart.py": (
-            "026540622fe87f019ed137b4ea8e424df18f17a9e234532a25df636c3846f62a"
+            "1990efeee7e314799359d555310f7db304abf9b89d6bd575c77a2da4f988c30e"
         ),
         "docs/mpas-seam.md": (
             "5cd6934ef8b4f3dabfb7fa2e621ceab309836875a6669319323451ea717f9035"
@@ -624,18 +629,40 @@ _ADAPTER_AUTHORITY = {
 CUDA_ARWEN_PHYSICS_V841_CONTRACT_SHA256 = _json_digest(_ADAPTER_AUTHORITY)
 
 
-def _verify_checkout_root(root: Path) -> None:
-    for relative, expected in ARWEN_SOURCE_MANIFEST.items():
-        path = root / relative
-        if not path.is_file():
-            raise FileNotFoundError(f"pinned Arwen source is missing: {path}")
-        actual = _digest_file(path)
-        if actual != expected:
-            raise ValueError(
-                f"pinned Arwen source hash mismatch for {relative}: "
-                f"{actual} != {expected}"
-            )
+def _verify_checkout_root(root: Path) -> engine_pin.EngineIdentity:
+    """Admit ``root`` iff its sixteen seam bytes are the pin's or an admitted
+    row's, and say which.
 
+    The comparison is :func:`engine_pin.inspect_seam`, the same one the
+    forecast door and ``doctor`` run, so the three surfaces cannot disagree
+    about a tree.  The refusals keep their historical spelling: the moved
+    path is named with the byte found and the byte the PUBLIC pin wants,
+    because a tree that matches no row is measured against the pin this
+    port actually carries, whatever the tree calls itself.
+    """
+
+    inspection = engine_pin.inspect_seam(root)
+    if inspection.absent:
+        raise FileNotFoundError(
+            f"pinned Arwen source is missing: {root / inspection.absent[0]}"
+        )
+    if inspection.moved:
+        relative = inspection.moved[0]
+        actual = dict(inspection.digests)[relative]
+        raise ValueError(
+            f"pinned Arwen source hash mismatch for {relative}: "
+            f"{actual} != {engine_pin.seam_manifest()[relative]}"
+        )
+    if inspection.misdeclared:
+        raise ValueError(
+            f"the Arwen tree at {root} carries the measured bytes of the "
+            f"admitted engine gpuwm {inspection.engine} and declares itself "
+            f"gpuwm {inspection.declared}; an admitted engine is keyed by its "
+            "version string and its bytes together, so this tree is neither "
+            "that engine nor the pin"
+        )
+    assert inspection.engine is not None
+    identity = engine_pin.identity_for(inspection.engine)
 
     surface = sha256()
     for relative in ("gpuwm/core/mpas_column_batch.py", "docs/mpas-seam.md"):
@@ -646,11 +673,12 @@ def _verify_checkout_root(root: Path) -> None:
             "pinned Arwen contract surface hash mismatch: "
             f"{actual_surface} != {MPAS_SEAM_CONTRACT_SURFACE_SHA256}"
         )
+    return identity
 
 
 def _load_pinned_arwen_factory(
     checkout: str | Path | None,
-) -> tuple[Callable[..., Any], Path]:
+) -> tuple[Callable[..., Any], Path, engine_pin.EngineIdentity]:
     if checkout is not None:
         requested = Path(checkout).resolve()
         _verify_checkout_root(requested)
@@ -671,7 +699,7 @@ def _load_pinned_arwen_factory(
     import gpuwm.core.physics as physics
 
     root = Path(inspect.getfile(column_batch)).resolve().parents[2]
-    _verify_checkout_root(root)
+    identity = _verify_checkout_root(root)
     factory = physics.run_mpas_column_batch
     if factory is not column_batch.run_mpas_column_batch:
         raise ValueError("Arwen published factory is not the pinned column-batch object")
@@ -681,25 +709,33 @@ def _load_pinned_arwen_factory(
         raise ValueError("Arwen phase two is no longer microphysics.apply")
     composed = noahmp_kernel_sources.translation_unit_source("noahmp_glacier")
     composed_sha256 = sha256(composed.encode("ascii")).hexdigest()
-    if composed_sha256 != ARWEN_GLACIER_COMPOSED_TU_SHA256:
+    if composed_sha256 != identity.glacier_composed_tu_sha256:
         raise ValueError(
             "Arwen composed glacier translation unit changed: "
-            f"{composed_sha256} != {ARWEN_GLACIER_COMPOSED_TU_SHA256}"
+            f"{composed_sha256} != {identity.glacier_composed_tu_sha256}"
         )
-    return factory, root
+    return factory, root, identity
 
 
 def pin_arwen_physics_v841(checkout: str | Path) -> Mapping[str, Any]:
-    """Pin exact Arwen v2 before KernelCache imports any other gpuwm tree."""
+    """Pin exact Arwen v2 before KernelCache imports any other gpuwm tree.
 
-    factory, root = _load_pinned_arwen_factory(checkout)
+    The mapping names the engine the tree WAS MEASURED TO BE: the public
+    pin's commit, manifest and glacier digest when the bytes are the pin's,
+    an admitted row's when they are that row's.  ``engine_version`` and
+    ``admitted`` say which, so a receipt can be read without re-deriving it.
+    """
+
+    factory, root, identity = _load_pinned_arwen_factory(checkout)
     return MappingProxyType(
         {
-            "arwen_commit": ARWEN_BUILD_COMMIT,
+            "arwen_commit": identity.build_commit,
             "root": str(root),
-            "source_manifest": dict(ARWEN_SOURCE_MANIFEST),
+            "source_manifest": dict(identity.manifest),
             "contract_surface_sha256": MPAS_SEAM_CONTRACT_SURFACE_SHA256,
-            "glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
+            "glacier_composed_tu_sha256": identity.glacier_composed_tu_sha256,
+            "engine_version": identity.version,
+            "admitted": identity.admitted,
             "factory_module": factory.__module__,
             "factory_name": factory.__name__,
             "must_precede": "MPAS KernelCache construction",
@@ -771,8 +807,9 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 raise ValueError("GWDO activity requires gwdo_kernel_cache")
         elif gwdo_kernel_cache is not None:
             raise ValueError("gwdo_kernel_cache requires gwdo_static")
-        factory, root = _load_pinned_arwen_factory(arwen_checkout)
+        factory, root, identity = _load_pinned_arwen_factory(arwen_checkout)
         self._constructor = constructor
+        self._engine = identity
         self._prep_geometry = prep_geometry
         self._kernel_cache = kernel_cache
         self._gwdo_static = gwdo_static
@@ -891,9 +928,11 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             "coupling_contract_sha256": CUDA_PHYSICS_V841_CONTRACT_SHA256,
             "contract_document_sha256": MPAS_SEAM_CONTRACT_SHA256,
             "contract_surface_sha256": MPAS_SEAM_CONTRACT_SURFACE_SHA256,
-            "glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
-            "arwen_commit": ARWEN_BUILD_COMMIT,
-            "arwen_source_manifest": dict(ARWEN_SOURCE_MANIFEST),
+            "glacier_composed_tu_sha256": self._engine.glacier_composed_tu_sha256,
+            "arwen_commit": self._engine.build_commit,
+            "arwen_source_manifest": dict(self._engine.manifest),
+            "arwen_engine_version": self._engine.version,
+            "arwen_engine_admitted": self._engine.admitted,
             "dependencies": {
                 "prep_contract_sha256": CUDA_PHYSICS_PREP_V841_CONTRACT_SHA256,
                 "prep_kernel_sha256": CUDA_PHYSICS_PREP_V841_KERNEL_SHA256,
@@ -1679,10 +1718,10 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
     def _restart_identity(self) -> Mapping[str, Any]:
         return {
             "adapter_contract_sha256": CUDA_ARWEN_PHYSICS_V841_CONTRACT_SHA256,
-            "arwen_commit": ARWEN_BUILD_COMMIT,
-            "arwen_source_manifest": dict(ARWEN_SOURCE_MANIFEST),
+            "arwen_commit": self._engine.build_commit,
+            "arwen_source_manifest": dict(self._engine.manifest),
             "contract_surface_sha256": MPAS_SEAM_CONTRACT_SURFACE_SHA256,
-            "glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
+            "glacier_composed_tu_sha256": self._engine.glacier_composed_tu_sha256,
             "constructor_identity_sha256": self._constructor.identity_sha256,
             "prep_contract_sha256": CUDA_PHYSICS_PREP_V841_CONTRACT_SHA256,
             "gwdo_contract_sha256": (

@@ -56,11 +56,13 @@ is no receipt directory, no card and no run commit for them anywhere in the
 tree -- which is the opposite of how the obs-referee numbers below are
 recorded, and the gap is worth naming rather than papering over. What can be
 established is a ceiling: the commit that introduced them pinned engine
-`629ddb6f0`, so the run happened at or before that pin. Seven engine pin moves
+`629ddb6f0`, so the run happened at or before that pin. Nine engine pin moves
 have landed since -- `0d04db712` (2026-08-24), `26daaab7e` (2026-08-25),
 `659962929` (2026-08-28, gpuwm 2.5.8), `7e34a48` (2026-08-31, gpuwm
 2.6.0), `df5f34c5c` (2026-09-01, gpuwm 2.6.1), `636ab1b4b`
-(2026-09-02, gpuwm 2.6.3) and `d60b883e7` (2026-09-02, gpuwm 2.6.4).
+(2026-09-02, gpuwm 2.6.3), `d60b883e7` (2026-09-02, gpuwm 2.6.4),
+`a7785421e` (2026-09-13, gpuwm 2.7.3) and `ed957997f` (2026-09-15, gpuwm
+2.7.4).
 
 The 2.5.8 move crosses the executed seam and **has been measured**, in
 the strongest form available short of a re-run: a four-arm byte A/B on one
@@ -116,6 +118,94 @@ The published 2.6.5 (2026-09-02, ninety minutes after 2.6.4) moved none of
 the sixteen pinned files, measured wheel against wheel
 (`../evidence/repin-265-20260902/wheel-pair-264-265.txt`), so it is
 admitted by the range without a pin move and the 2.6.4 arm covers it.
+
+The 2026-09-13 move to gpuwm 2.7.3 crosses the executed seam more widely
+than any before it -- eleven of the sixteen pinned files moved between the
+published 2.6.5 and 2.7.3 wheels, measured wheel against wheel
+(`../verification/engine-verdicts/repin-273-20260913.json`) -- and it is
+the first move since 2.5.8 that carries NO x4 byte arm: the re-pin was
+taken on a 16 GiB card holding none of the pinned x4 assets, so whether the
+F001 SHA-256 that spans 2.5.8 through 2.6.5 survives it is NOT MEASURED,
+and it is not expected to.  What was measured instead is the seam itself,
+engine against engine on fixed columns
+(`../tools/measure_engine_seam_ab.py`; receipts
+`../verification/engine-verdicts/seam-ab-*.json`; one card, eight columns,
+forty levels, twenty 120 s steps, WSM6, YSU, Noah-MP and legacy RRTMG,
+Grell-Freitas on one arm and off on the other).  Two things move.
+
+*Grell-Freitas*, in the pinned `gpuwm/core/kernels/gf.cu`.  The glibc
+`tgammaf` transcription is gone and the mass-flux shape normalisation `fzu`
+uses the engine's own correctly rounded gamma (the engine's own figures:
+`fzu` moves by up to 4 ULP on 21 of the 26 (alpha, beta) pairs its fixture
+reaches, and `xmb` moves by up to 7.3 per cent per ULP of `fzu` through the
+closure), and the cloud-work integral's level loop now includes the `kbcon`
+layer.  On the convective profile, where GF fires on every column: the
+convective rain bucket differs by up to 5.1e-4 mm after forty minutes (0.21
+per cent of the 0.245 mm the largest column accumulated), the phase-one
+theta rate by up to 2.9e-5 K/s (8.7 per cent of the largest rate), the
+vapour rate by up to 7.8e-8 kg/kg/s (15 per cent), and after forty minutes
+theta by up to 9.4e-3 K and qv by 2.3e-5 kg/kg.  With cumulus off the same
+columns are byte-identical between the engines on all 500 arrays captured.
+This is the second divergence below moving with the engine, in the
+direction the engine chose: a correctly rounded gamma is more accurate than
+glibc's, and the port carries it.
+
+*YSU*, in `gpuwm/core/kernels/ysu.cu` -- a file the sixteen-file manifest
+has never pinned.  A column whose first-guess boundary-layer top sits below
+the second model level now stays in the local-K regime for the whole step,
+and the post-scan clamp is WRF's two independent statements, so a theta-li
+revival with `kpbl == 1` no longer survives (the engine's reading of
+`bl_ysu.F90:703-728` and `:765-766`).  On the capped profile, where GF
+never fires and the two arms are byte-identical, the lowest three levels
+move on five of eight columns from step 7 on: the u rate by up to
+1.9e-4 m/s² (55 per cent of the largest rate), the theta rate by up to
+1.8e-4 K/s (43 per cent), the vapour rate by up to 5.6e-7 kg/kg/s, and
+after forty minutes theta by up to 0.139 K and qv by 3.7e-4 kg/kg.  The
+attribution is exact: 2.6.5 with only that one kernel replaced by 2.7.3's
+is byte-identical to 2.7.3 on all 500 arrays of that profile
+(`../verification/engine-verdicts/seam-ab-capped-2.6.5-with-2.7.3-ysu-vs-2.7.3.json`).
+That the manifest does not reach the boundary-layer kernel is a named
+follow-up; it is not a claim this page makes.
+
+The 2026-09-15 move to gpuwm 2.7.4 is the narrowest since 2.6.5: two of
+the sixteen pinned files moved between the published 2.7.3 and 2.7.4
+wheels, measured wheel against wheel
+(`../verification/engine-verdicts/repin-274-20260915.json`) --
+`gpuwm/config.py` gained one function, `radiation_scheme_ids_from_settings`,
+a settings-map reader of the radiation rule that the port never calls,
+and `gpuwm/core/microphysics.py` passes two keyword arguments
+(`condensation_marker`, `source_density`) on the classic Thompson path's
+cloud adjustment and rain evaporation, a scheme the port's WSM6 backend
+never runs -- and the other fourteen, the composed Noah-MP glacier unit
+included, are byte-identical.  Outside the sixteen, the engine's 2.7.4
+work on the physics path is in the Morrison, Thompson, WDM6 and MYNN
+kernels and drivers, none of which the port's fixed-step WSM6, YSU,
+Noah-MP, legacy-RRTMG and Grell-Freitas seam executes; `ysu.cu`,
+`sfclay.cu` and the RRTMG sources did not move.  The move is measured
+byte-neutral through the seam at three scopes, each stated with what it
+covers.  The seam-level A/B (`../tools/measure_engine_seam_ab.py`; receipts
+`../verification/engine-verdicts/seam-ab-{convective,capped}-2.7.3-vs-2.7.4.json`,
+eight columns, forty levels, twenty 120 s steps, WSM6, YSU, Noah-MP and
+legacy RRTMG, Grell-Freitas on one arm and off on the other) is 500 of
+500 arrays byte-identical on both profiles and both arms under the two
+published engines, on node-1's RTX 5070 Ti and again on node-2's RTX 5090.
+The one-hour point-cull forecast (`q0.9375.120.43884.n41.95w94.79`,
+43,884 cells, 55 levels, 720 steps of 5 s, HRRR 2026-09-13 15Z init and
+hourly boundaries, node-2's RTX 5090 with no other process on the card)
+under gpuwm 2.7.4 wrote both history frames byte-identical to the frames
+of record under 2.7.3 (15Z `85cb8196...`, 16Z `4ed8001f...`), at
+0.2617 s per step after the first (median typical step 0.2453 s,
+peak 8,914 MiB), the same figures the same tree measured under 2.7.3 over
+three hours in an earlier session on the same card.  The cull's own
+contract deck under the 2.7.4 install is 8 of 8 decks bitwise against the
+v8.4.1 CPU authority, 22 of 22 regional kernels covered, dual run
+identical, at the same regional kernel-set digest `8a716f28...` -- a
+re-pin touches no CUDA source, and the deck says so rather than assumes
+it.  The x4 F001 byte chain is not re-run at this pin, as at 2.7.3; the
+scopes above are one seam instrument, one mesh, one case and one hour,
+and whether any of the three divergences below moved is what they do not
+measure.  Nothing is declared for this move, because nothing moved
+through the seam.
 
 The 2026-09-01 move crosses the executed seam a third time, and at its
 centre: `gpuwm/core/mpas_column_batch.py`, the seam's own batch driver,

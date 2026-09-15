@@ -299,12 +299,18 @@ def test_the_garbage_discipline_leaves_the_physics_seam_alone():
     full-physics run could take one step.
     """
 
+    # The fifth member is the solve-region check unit: its kernels read the
+    # state (envelope, validations) or are the restoration itself (the fused
+    # scrub), so a scrub after one of its launches would restore nothing and,
+    # after the health gate, would write the default pool over rho_zz's unit
+    # pool between the commit and the next begin_step.
     assert SELF_MANAGED_GARBAGE_MODULES == frozenset(
         {
             "hexcore.cuda_physics_prep_v841",
             "hexcore.cuda_physics_v841",
             "hexcore.cuda_gwdo_v841",
             "hexcore.cuda_arwen_physics_v841",
+            "hexcore.cuda_solve_region_v841",
         }
     )
     # Every module in the set that resolves kernels does so under its own

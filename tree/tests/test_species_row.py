@@ -164,17 +164,30 @@ def _pinned_engine_column_batch():
 
 
 def _pinned_engine_range() -> frozenset[str]:
-    """The exact engine versions this tree's packaging admits."""
+    """The exact engine versions this tree admits: the pinned published
+    engine, plus every engine ``hexcore.engine_pin.ADMITTED_ENGINES`` admits
+    by a measured row of its own.
+
+    An admitted engine IS one the shipped door calls -- the seam check, the
+    door and the adapter accept its bytes under its version string -- so
+    grading hex's rows against its table is grading the real counterparty,
+    not a development checkout that happens to be importable.  Until
+    2026-09-13 this read the published range alone and skipped on an
+    admitted engine, which left the one install that engine ships in with
+    these gates disarmed.
+    """
 
     import re
     import pathlib
+
+    from hexcore import engine_pin
 
     text = (pathlib.Path(__file__).resolve().parents[1]
             / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(r'"gpuwm>=([0-9.]+),<([0-9.]+)"', text)
     assert match, "the packaging no longer pins gpuwm with a >=,< range"
     # The range is always one release wide in this tree, by the 258 runbook.
-    return frozenset({match.group(1)})
+    return frozenset({match.group(1)} | {row.version for row in engine_pin.ADMITTED_ENGINES})
 
 
 def test_rows_match_the_pinned_engine_species_table():

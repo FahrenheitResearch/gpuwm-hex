@@ -698,12 +698,23 @@ def regional_padded_context_v841(
 #: column for the duration of a preparation and giving it back
 #: (``cuda_physics_prep_v841.prepare_mpas_to_phys_cuda_v841``).  Anything
 #: NOT in this set is dycore, and the dycore wants the pool value restored.
+#:
+#: The fifth member is the solve-region check unit
+#: (``hexcore.cuda_solve_region_v841``): its kernels READ the state arrays
+#: they are handed (the health envelope, the density and recovered-state
+#: validations) or ARE the restoration (the fused garbage scrub), and they
+#: write nothing but a flag, an envelope or the pool value itself.  A launch
+#: that dirties no garbage column has nothing to restore, and rewriting a
+#: state array's garbage column after the health gate reads it would write
+#: the default pool over ``rho_zz``'s unit pool between the commit and the
+#: next ``begin_step`` -- the same breakage ``release_unit_pool`` records.
 SELF_MANAGED_GARBAGE_MODULES: frozenset[str] = frozenset(
     {
         "hexcore.cuda_physics_prep_v841",
         "hexcore.cuda_physics_v841",
         "hexcore.cuda_gwdo_v841",
         "hexcore.cuda_arwen_physics_v841",
+        "hexcore.cuda_solve_region_v841",
     }
 )
 
@@ -802,6 +813,11 @@ class RegionalGarbageDiscipline:
         self.last_kernel = ""
         self.audit: Any | None = None
         self._permanent_unit_pool: dict[int, Any] = {}
+        #: The fused restoration (``cuda_solve_region_v841``), attached by
+        #: the runtime that arms this discipline on a KernelCache.  Absent,
+        #: every column is restored by its own ``cupy`` fill.
+        self.fused: Any | None = None
+        self.fused_launches = 0
 
     # -- registration ------------------------------------------------------
 
@@ -841,6 +857,21 @@ class RegionalGarbageDiscipline:
             REGIONAL_GARBAGE_POOL["rho_zz"]
         )
         return array
+
+    def bound_to_unit_pool(self, array: Any) -> bool:
+        """Whether a scrub of ``array`` would write the 1.0 pool right now.
+
+        The one public reading of the registry.  A launch's scrub depends
+        on the registrations live AT THAT LAUNCH, and they are released at
+        every step boundary, so anything that replays a recorded launch
+        after the run (``tools/kernel_element_ab.py``) has to ask this
+        while the launch is live and re-bind before it replays; asked
+        after the run it answers 0.0 for every step-bound image, which is
+        what the replay of 2026-09-14 wrote into four kernels' input
+        garbage columns and reported as a difference.
+        """
+
+        return int(array.data.ptr) in self._unit_pool
 
     def release_unit_pool(self) -> None:
         """Drop every per-step ``rho_zz`` registration at a step boundary.
@@ -896,6 +927,15 @@ class RegionalGarbageDiscipline:
             return
         self.last_kernel = name
         cp = self.cp
+        # One launch restores every padded argument of this launch when the
+        # fused kernel is attached and nothing wants to watch the columns.
+        # The measuring and audited forms keep the per-column fills, because
+        # they READ each column before rewriting it, and the value written
+        # is the same float32 either way.  Measured before the fusion:
+        # 3,328 ``cupy_fill`` launches a step on the 43,884-cell point mesh,
+        # ~40 us of host time each, 51 ms of a 0.38 s step.
+        fused = None if (self.measure or self.audit is not None) else self.fused
+        batch: list[tuple[int, int, int, int, float]] = []
         for value in args:
             if not isinstance(value, cp.ndarray):
                 continue
@@ -912,12 +952,20 @@ class RegionalGarbageDiscipline:
                 if pointer in self._unit_pool
                 else REGIONAL_GARBAGE_POOL["default"]
             )
+            if fused is not None and value.flags.c_contiguous:
+                stride = int(value.shape[-1])
+                batch.append((pointer, int(value.size // stride), stride, solve, float(pool)))
+                self.scrubs += 1
+                continue
             column = value[..., solve]
             if self.measure:
                 same = cp.equal(column, pool)
                 self.dirty_values += int(column.size) - int(same.sum())
             column[...] = pool
             self.scrubs += 1
+        if batch:
+            fused.scrub_columns(batch)
+            self.fused_launches += 1
         if self.audit is not None:
             self.audit(name, args)
 
@@ -927,6 +975,7 @@ class RegionalGarbageDiscipline:
             "n_edges_solve": self.n_edges_solve,
             "n_vertices_solve": self.n_vertices_solve,
             "garbage_columns_restored": self.scrubs,
+            "fused_restoration_launches": self.fused_launches,
             "measured": self.measure,
             "garbage_values_off_pool": self.dirty_values if self.measure else None,
         }
@@ -1051,7 +1100,7 @@ def advance_acoustic_step_regional_cuda_v841(
     max_edges = int(mesh.max_edges)
     kernels.launch(
         "acoustic_ru_regional_v841",
-        nedges,
+        nlev * nedges,
         (
             np.int32(nlev), np.int32(nedges), np.int32(ncells),
             np.int32(small_step), np.float32(dts), np.float32(gravity),
@@ -1075,7 +1124,7 @@ def advance_acoustic_step_regional_cuda_v841(
     ts = cp.zeros_like(rs)
     kernels.launch(
         "acoustic_rs_ts_regional_v841",
-        ncells,
+        nlev * ncells,
         (
             np.int32(nlev), np.int32(ncells), np.int32(nedges),
             np.int32(max_edges), np.float32(dts), mesh.n_edges_on_cell,
@@ -1145,7 +1194,7 @@ def advance_scalars_regional_cuda_v841(
     edge_values = cp.zeros((ntracers, nlev, nedges), dtype=cp.float32)
     runtime.kernels.launch(
         "transport_edge_values_regional_v841",
-        nedges,
+        ntracers * nlev * nedges,
         (
             np.int32(ntracers), np.int32(nlev), np.int32(ncells),
             np.int32(nedges), np.int32(width),
@@ -1179,7 +1228,7 @@ def advance_scalars_regional_cuda_v841(
     output = cp.empty_like(scalar_old)
     runtime.kernels.launch(
         "transport_standard_finish_regional_v841",
-        ncells,
+        ntracers * nlev * ncells,
         (
             np.int32(ntracers), np.int32(nlev), np.int32(ncells),
             np.int32(nedges), np.int32(max_edges), np.float32(dt),
@@ -1343,6 +1392,12 @@ class CudaRegionalRuntimeV841:
             device_atmosphere.state.rho, permanent=True
         )
         self.acoustic_invalid = cp.zeros((1,), dtype=cp.int32)
+        # The solve-region check unit: one launch per validation and per
+        # restoration instead of one CuPy reduction or fill per array.
+        from .cuda_solve_region_v841 import SolveRegionKernels
+
+        self.solve_region = SolveRegionKernels.for_cache(kernel_cache)
+        self.discipline.fused = self.solve_region
         # Arm the discipline on the cache every kernel of the step resolves
         # through, so no shared translation unit needs a line for it.
         kernel_cache.post_launch = self.discipline.scrub
@@ -1458,7 +1513,7 @@ class CudaRegionalRuntimeV841:
         masks = self.masks
         self.kernels.launch(
             "regional_speczone_tend_cell_v841",
-            max(masks.n_spec_cells, 1),
+            max(nlev * masks.n_spec_cells, 1),
             (
                 np.int32(nlev), np.int32(ncells),
                 np.int32(masks.n_spec_cells), masks.spec_cells,
@@ -1469,7 +1524,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_speczone_tend_edge_v841",
-            max(masks.n_spec_edges, 1),
+            max(nlev * masks.n_spec_edges, 1),
             (
                 np.int32(nlev), np.int32(nedges),
                 np.int32(masks.n_spec_edges), masks.spec_edges,
@@ -1485,7 +1540,7 @@ class CudaRegionalRuntimeV841:
         mesh = self.atmosphere.mesh
         self.kernels.launch(
             "regional_relaxzone_rayleigh_cell_v841",
-            max(masks.n_relax_cells, 1),
+            max(nlev * masks.n_relax_cells, 1),
             (
                 np.int32(nlev), np.int32(ncells),
                 np.int32(masks.n_relax_cells), fifty_dt, relax_zone,
@@ -1496,7 +1551,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_relaxzone_rayleigh_edge_v841",
-            max(masks.n_relax_edges, 1),
+            max(nlev * masks.n_relax_edges, 1),
             (
                 np.int32(nlev), np.int32(nedges),
                 np.int32(masks.n_relax_edges), fifty_dt, relax_zone,
@@ -1506,7 +1561,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_relaxzone_filter_cell_v841",
-            max(masks.n_relax_cells, 1),
+            max(nlev * masks.n_relax_cells, 1),
             (
                 np.int32(nlev), np.int32(ncells), np.int32(nedges),
                 np.int32(mesh.max_edges), np.int32(masks.n_relax_cells),
@@ -1520,7 +1575,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_relaxzone_filter_edge_v841",
-            max(masks.n_relax_edges, 1),
+            max(nlev * masks.n_relax_edges, 1),
             (
                 np.int32(nlev), np.int32(ncells), np.int32(nedges),
                 np.int32(mesh.n_vertices), np.int32(mesh.max_edges),
@@ -1556,7 +1611,7 @@ class CudaRegionalRuntimeV841:
         masks = self.masks
         self.kernels.launch(
             "regional_speczone_u_ru_v841",
-            max(masks.n_spec_edges, 1),
+            max(self.nlev * masks.n_spec_edges, 1),
             (
                 np.int32(self.nlev), np.int32(int(rho_u.shape[-1])),
                 np.int32(masks.n_spec_edges), masks.spec_edges,
@@ -1578,7 +1633,7 @@ class CudaRegionalRuntimeV841:
         masks = self.masks
         self.kernels.launch(
             "regional_speczone_u_ru_v841",
-            max(masks.n_spec_edges, 1),
+            max(self.nlev * masks.n_spec_edges, 1),
             (
                 np.int32(self.nlev),
                 np.int32(int(normal_velocity.shape[-1])),
@@ -1632,7 +1687,7 @@ class CudaRegionalRuntimeV841:
         masks = self.masks
         self.kernels.launch(
             "regional_zero_speczone_w_v841",
-            max(masks.n_spec_cells, 1),
+            max((self.nlev + 1) * masks.n_spec_cells, 1),
             (
                 np.int32(self.nlev + 1),
                 np.int32(int(vertical_velocity.shape[-1])),
@@ -1659,7 +1714,8 @@ class CudaRegionalRuntimeV841:
         updates = self.cp.zeros_like(scalars)
         self.kernels.launch(
             "regional_bdy_adjust_scalars_compute_v841",
-            max(masks.n_relax_cells + masks.n_spec_cells, 1),
+            max(ntracers * self.nlev
+                * (masks.n_relax_cells + masks.n_spec_cells), 1),
             (
                 np.int32(ntracers), np.int32(self.nlev), np.int32(ncells),
                 np.int32(nedges), np.int32(mesh.max_edges),
@@ -1674,7 +1730,7 @@ class CudaRegionalRuntimeV841:
         )
         self.kernels.launch(
             "regional_bdy_adjust_scalars_copyback_v841",
-            max(masks.n_nudged_cells, 1),
+            max(ntracers * self.nlev * masks.n_nudged_cells, 1),
             (
                 np.int32(ntracers), np.int32(self.nlev), np.int32(ncells),
                 np.int32(masks.n_nudged_cells), masks.nudged_cells,
@@ -1710,7 +1766,7 @@ class CudaRegionalRuntimeV841:
         ncells = int(theta_m.shape[-1])
         self.kernels.launch(
             "regional_reset_speczone_values_v841",
-            max(masks.n_spec_cells, 1),
+            max(self.nlev * masks.n_spec_cells, 1),
             (
                 np.int32(self.nlev), np.int32(ncells),
                 np.int32(masks.n_spec_cells), masks.spec_cells,
@@ -1722,7 +1778,8 @@ class CudaRegionalRuntimeV841:
         driving = self.driving.state_at("scalars", self.clock, dt_f32)
         self.kernels.launch(
             "regional_bdy_set_scalars_v841",
-            max(masks.n_spec_cells, 1),
+            max(self._driven_tracer_count(scalars) * self.nlev
+                * masks.n_spec_cells, 1),
             (
                 np.int32(self._driven_tracer_count(scalars)), np.int32(self.nlev),
                 np.int32(int(scalars.shape[-1])), np.int32(masks.n_spec_cells),
@@ -1828,41 +1885,44 @@ class CudaRegionalRuntimeV841:
 
         Doing it here rather than by loosening the kernel is what keeps
         ``cuda_dynamics_v841``'s source byte-unchanged.
+
+        The test runs on the device and sets the step's flag there; nothing
+        is read back until the step reads its flag once before publishing.
+        It used to be eleven ``cp.all(cp.isfinite(x) & (x > 0))`` reductions
+        on strided views, each with its own temporaries and its own drain of
+        the stream, per RK stage.
         """
 
-        cp = self.cp
         cells = self.n_cells_solve
         edges = self.n_edges_solve
-        positive = (
-            state.rho[:, :cells],
-            state.rho_theta[:, :cells],
-            saved.theta_m[:, :cells],
-            saved.exner[:, :cells],
+        self.solve_region.validate(
+            flag,
+            positive=(
+                (state.rho, cells),
+                (state.rho_theta, cells),
+                (saved.theta_m, cells),
+                (saved.exner, cells),
+            ),
+            finite=(
+                (saved.density_perturbation, cells),
+                (saved.rho_theta_perturbation, cells),
+                (saved.pressure_perturbation, cells),
+                (state.rho_w, cells),
+                (saved.vertical_velocity, cells),
+                (state.rho_u, edges),
+                (saved.normal_velocity, edges),
+            ),
         )
-        finite_only = (
-            saved.density_perturbation[:, :cells],
-            saved.rho_theta_perturbation[:, :cells],
-            saved.pressure_perturbation[:, :cells],
-            state.rho_w[:, :cells],
-            saved.vertical_velocity[:, :cells],
-            state.rho_u[:, :edges],
-            saved.normal_velocity[:, :edges],
-        )
-        ok = True
-        for block in positive:
-            ok = ok and bool(cp.all(cp.isfinite(block) & (block > 0.0)))
-        for block in finite_only:
-            ok = ok and bool(cp.all(cp.isfinite(block)))
-        if not ok:
-            flag[0] = 1
 
     def validate_density(self, density: Any, flag: Any) -> None:
-        """``_check_density``'s contract, over the SOLVE region."""
+        """``_check_density``'s contract, over the SOLVE region, on the device.
 
-        cp = self.cp
-        block = density[:, : self.n_cells_solve]
-        if not bool(cp.all(cp.isfinite(block) & (block > 0.0))):
-            flag[0] = 1
+        Three calls a step (one per transport stage); each was a full-size
+        ``isfinite`` temporary, a comparison temporary, an ``all`` and a
+        drain -- 10 ms of host wall per call measured on the point mesh.
+        """
+
+        self.solve_region.validate(flag, positive=((density, self.n_cells_solve),))
 
     def history_slice(self, array: Any) -> Any:
         """Strip the garbage element off a field before it leaves the card."""

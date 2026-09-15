@@ -1,0 +1,63 @@
+{
+  "distribution": "gpuwm",
+  "engines": [
+    {
+      "artifacts": [
+        {
+          "kind": "wheel",
+          "name": "gpuwm-2.7.4+soma.1-py3-none-manylinux_2_28_x86_64.whl",
+          "sha256": "960ce1dc5c7992b447b5923981a08e91c0253c7a70567afa487a413e546a6b29"
+        },
+        {
+          "kind": "wheel",
+          "name": "gpuwm-2.7.4+soma.1-py3-none-any.whl",
+          "sha256": "ffaa5b304a716b4846862034d2f752ae2dfb846b1214a196e0f4afc6251f0b5c"
+        },
+        {
+          "kind": "wheel",
+          "name": "gpuwm-2.7.4+soma.1-py3-none-win_amd64.whl",
+          "sha256": "1ff8791eaa7402475223d2b358f528d30c0bdd5b304e061f3a9e3e942437e311"
+        },
+        {
+          "kind": "tree",
+          "name": "engine (source tree)",
+          "sha256": null
+        }
+      ],
+      "base": "2.7.4",
+      "build_commit": "caed7fe860eb78f115e5d95cec1907927675b098",
+      "digests": {
+        "docs/mpas-seam.md": "5cd6934ef8b4f3dabfb7fa2e621ceab309836875a6669319323451ea717f9035",
+        "gpuwm/config.py": "af4cfe03af6de94527e07b8ca9a2d3213eff0a482c909a41c3b5db9182144078",
+        "gpuwm/core/gf.py": "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f",
+        "gpuwm/core/kernels/__init__.py": "5d8a0f17cf477d5a3ee67ae1010baca064572b8dd1e3f0708d72574bdadc9d69",
+        "gpuwm/core/kernels/gf.cu": "334c55ab764732be73d94504d54cb60ad7ca8bf12dbca879d7b3fc3f869d4386",
+        "gpuwm/core/kernels/noahmp_glacier.cu": "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219",
+        "gpuwm/core/kernels/noahmp_leaves.cu": "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497",
+        "gpuwm/core/microphysics.py": "5c169d6309e7a77f32119f195c212eaf1bc6162ba745e24d6a9adc3185c7bc4c",
+        "gpuwm/core/mpas_column_batch.py": "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45",
+        "gpuwm/core/noahmp_glacier.py": "1bb607569b5007c5d2817e879eb82112db7ed01f11931efe1802d35b3fb7b23b",
+        "gpuwm/core/noahmp_glacier_gpu.py": "86d3dbf5dcac3c084bca9a4d819f698122da434d9e994243fd09ea1332337d0a",
+        "gpuwm/core/noahmp_kernel_sources.py": "fcdc097d20f9d0453086bae5ba1007f015d4eca2ac21b39db10a59f15cff26c5",
+        "gpuwm/core/noahmp_runtime.py": "990780ab87764481c463b1fa2f8c988cd9538e0833dc390203d2a0396fee66bc",
+        "gpuwm/core/physics.py": "b3417d878eaab1c8756535dc2721e6f1071e63cf51454faba0376a9223f6e1f1",
+        "gpuwm/core/rrtmg_legacy.py": "8951ce770e10f823d964a4f4564cc9f8989035a7fb9d3fc1448b73f6816bc928",
+        "gpuwm/io/restart.py": "bc52ff0e54c2edf78c425fbe73c087b900f309085588177e787e6b4f4126a60f"
+      },
+      "glacier_composed_tu_sha256": "cde4bfccb40efd54be56700251849e8d18bcd7ae69d85f5737a2cabc32719d84",
+      "instrument_sha256": "31d1ba6774adfd181d4197c608dd1326873719ad1751e71a4373b4c344ccd06d",
+      "measured_at": "2026-09-15T02:07:18+00:00",
+      "moved_from_base": [
+        "gpuwm/config.py",
+        "gpuwm/core/kernels/__init__.py",
+        "gpuwm/core/microphysics.py",
+        "gpuwm/core/physics.py",
+        "gpuwm/io/restart.py"
+      ],
+      "pip_requirement": "gpuwm>=2.7.4,<2.7.5",
+      "version": "2.7.4+soma.1"
+    }
+  ],
+  "instrument": "tools/measure_engine_verdicts.py",
+  "schema": "gpuwm-hex.admitted-engines/v1"
+}

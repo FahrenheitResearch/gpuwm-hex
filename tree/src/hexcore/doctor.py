@@ -547,19 +547,52 @@ def _check_seam_bytes(installed: str) -> Finding:
         )
 
     total = len(engine_pin.seam_manifest())
+    if inspection.misdeclared:
+        return Finding(
+            subject=_SEAM_SUBJECT,
+            status=MISSING,
+            detail=(
+                f"gpuwm {installed} is installed and its {inspection.checked} "
+                f"seam files are, byte for byte, the measured row of the "
+                f"admitted engine gpuwm {inspection.engine}.  An admitted "
+                "engine is keyed by its version string and its bytes "
+                "together, so this install is neither that engine nor the "
+                f"pin ({wanted}); the forecast lane refuses it at launch."
+            ),
+            remedy=(
+                f"  # install the build as it was measured, declaring gpuwm "
+                f"{inspection.engine}, or:\n{engine_pin.remedy(installed)}"
+            ),
+            required=True,
+            evidence={
+                "installed": installed,
+                "bytes_of": inspection.engine,
+                "wanted": wanted,
+                "root": str(root),
+            },
+        )
     if not inspection.drifted:
+        row = (
+            f" -- the measured row of the admitted engine gpuwm "
+            f"{inspection.engine}, not the public pin ({wanted})"
+            if inspection.admitted
+            else ""
+        )
         return Finding(
             subject=_SEAM_SUBJECT,
             status=VERIFIED,
             detail=(
                 f"gpuwm {installed}: {inspection.checked} of {total} pinned "
                 f"files are in this install and all {inspection.checked} match"
+                f"{row}"
             ),
             evidence={
                 "root": str(root),
                 "matched": inspection.checked,
                 "not_in_site_packages": list(inspection.absent),
                 "wanted": wanted,
+                "engine": inspection.engine,
+                "admitted": inspection.admitted,
             },
         )
 

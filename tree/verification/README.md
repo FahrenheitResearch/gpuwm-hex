@@ -13,6 +13,29 @@
   byte-deterministic four-case test. It writes outside the repository unless
   explicitly pointed into it.
 - `schemas/` documents the two receipt contracts for external producers/hooks.
+- `engine-verdicts/` is the output of `tools/measure_engine_verdicts.py`: one
+  JSON per measurement of every published `gpuwm` against this port's
+  sixteen-file seam manifest, with the wheel files hashed, the tag commit,
+  the build-road verdict and the paths that moved.  `hexcore.engine_pin`'s
+  table is spliced from the newest one and `tests/test_engine_pin.py`
+  re-renders it and demands equality, so the JSON is the table's source
+  rather than a copy of it.  `premeasure-273-20260913.json` is the 2.7 line
+  measured against the manifest 0.2.3 shipped (every 2.7 engine fails it);
+  `repin-273-20260913.json` is every engine measured against the 2.7.3
+  bytes (2.7.3 alone passes); `premeasure-274-20260915.json` is every
+  engine measured against the 2.7.3 bytes after 2.7.4 published (2.7.4
+  fails by two files); `repin-274-20260915.json` is every engine measured
+  against the 2.7.4 bytes (2.7.4 alone passes, the table of record).
+  `admitted-engines.json` is the one private row, re-taken on the 2.7.4
+  base.  Beside them, `seam-ab-*.json` are the outputs
+  of `tools/measure_engine_seam_ab.py`: the engine's column-batch seam driven
+  on fixed columns under two engines and compared field by field, which is
+  how a re-pin says which physics number moved and by how much (the
+  `2.6.5-vs-2.7.3` files are the 2.7.3 re-pin's, taken on an RTX 5070 Ti;
+  the `2.7.3-vs-2.7.4` files are the 2.7.4 re-pin's, taken on an RTX 5090,
+  500 of 500 arrays identical on both profiles).  Their
+  ``.npz`` inputs are not carried; the JSON records the SHA-256 of the columns
+  that produced them and of the engine sources on each side.
 
 The checked-in evidence under `evidence/obs-referee-283/` was intentionally
 `NOT_MEASURED` — no real metric values at all — until 2026-08-25, when it was

@@ -161,7 +161,10 @@ class _CandidateMeshDt:
                 f" and the surface/PBL cadence held at "
                 f"{float(surface_pbl_seconds):g} s"
             )
-        anchor = dt_admission.admitted_timestep(
+        # The EXACT lookup: a held cadence admitted through a row derived
+        # from the welded anchor holds no REAL anchor of its own, and this
+        # override exists precisely so a mint can earn it one.
+        anchor = dt_admission.registered_anchor(
             dt_seconds, cumulus_scheme, surface_pbl_seconds
         )
         if anchor is None:

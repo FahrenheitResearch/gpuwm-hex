@@ -28,7 +28,7 @@ tests/test_device_capacity.py
 # column batch on the same P3 columns, byte-compared.  Needs any CUDA
 # device (8 columns, 20 levels -- fits everything) AND
 # HEXCORE_AB_ARWEN_ROOT naming a gpuwm SOURCE CHECKOUT at or above the
-# 2.6.1 line (the P3 transport, microphysics_scheme="p3"; the pinned 2.6.4
+# 2.6.1 line (the P3 transport, microphysics_scheme="p3"; the pinned 2.7.4
 # carries it); without the variable the
 # suite skips by name rather than grading whatever gpuwm sys.path holds.
 tests/test_p3_seam_ab.py

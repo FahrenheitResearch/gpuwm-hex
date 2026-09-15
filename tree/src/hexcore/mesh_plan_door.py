@@ -11,6 +11,11 @@ over **1,251 s** and was then refused on the 200 m shortest-dual-edge floor
 at edge 562175 (36.8 m over an 886 m dcEdge), with no grid written.  The
 report that opened this lane measured the same pair at 711 s on another box.
 
+``--point LAT,LON`` (:mod:`hexcore.mesh_point`) writes the spec itself --
+the registered 937.5 m ladder moved to the point -- prices its CULL against
+the named card on the one admission surface, and with ``--generate``
+builds, admits, registers (a runtime row beside the mesh) and culls it.
+
 This leg costs about a fifth of a second and answers three things:
 
 * what the spec costs -- cells, and the device footprint when a card is named;
@@ -133,6 +138,23 @@ def _report(spec: Mapping[str, Any], receipt: Mapping[str, Any]) -> list[str]:
 def run_mesh_plan(arguments: argparse.Namespace) -> int:
     from .swath.sizing import dry_run
 
+    if getattr(arguments, "point", None) is not None and arguments.spec is not None:
+        raise MpasPortError(
+            "--spec and --point were both given; a plan prices one request. "
+            "--spec hands the generator an authored spec unchanged, --point "
+            "writes the ladder spec for you"
+        )
+    if getattr(arguments, "point", None) is not None:
+        from .mesh_point import run_point
+
+        return run_point(arguments)
+    if arguments.spec is None:
+        raise MpasPortError(
+            "neither --spec nor --point was given; a plan needs a request. "
+            "Pass --spec SPEC.json for an authored resolution spec, or "
+            "--point LAT,LON [--fine-dx-m M --radius-km KM --card KEY] for a "
+            "fine core at a point"
+        )
     spec = _load(arguments.spec)
     receipt = dry_run(
         spec,
@@ -160,8 +182,9 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
         help="price a resolution spec and apply the gates its build applies",
     )
     parser.add_argument(
-        "--spec", type=Path, required=True,
-        help="the resolution spec JSON rw_mpas_mesh would be given",
+        "--spec", type=Path, default=None,
+        help="the resolution spec JSON rw_mpas_mesh would be given "
+             "(or --point, below)",
     )
     parser.add_argument(
         "--card", default=None,
@@ -179,6 +202,9 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
         "--json", action="store_true",
         help="print the whole receipt instead of the report",
     )
+    from .mesh_point import add_point_arguments
+
+    add_point_arguments(parser)
     parser.set_defaults(handler=run_mesh_plan)
 
 

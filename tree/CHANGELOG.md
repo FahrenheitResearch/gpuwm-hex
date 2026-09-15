@@ -6,6 +6,309 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
+## 0.3.1 (2026-09-15)
+
+New:
+- The physics seam re-pins to gpuwm 2.7.4. The sixteen-file manifest
+  carries the published 2.7.4 wheel's bytes (tag ed957997, whose tree
+  agrees with all three platform wheels on every pinned path) and the
+  derived range is gpuwm>=2.7.4,<2.7.5. Two of the sixteen paths moved
+  between the published 2.7.3 and 2.7.4 wheels, measured wheel against
+  wheel (verification/engine-verdicts/repin-274-20260915.json): the config
+  loader gained one settings-map reader of the radiation rule that the
+  port never calls, and the microphysics driver passes two keyword
+  arguments on the classic Thompson path, a scheme the port's WSM6 backend
+  never runs; the other fourteen, the composed Noah-MP glacier unit
+  included, are byte-identical. Measured the other way first, against the
+  manifest 0.3.0 carried (premeasure-274-20260915.json), 2.7.4 fails by
+  those two paths, which is the <2.7.4 ceiling holding installs on 2.7.3
+  for the two days between the 2.7.4 publish and this re-pin. Under the
+  re-pinned manifest 2.7.3 fails by the same two and every earlier engine
+  by exactly the count it failed the 2.7.3 manifest by. What moved through
+  the seam is measured and recorded in docs/declared-divergences.md: the
+  seam-level A/B under both engines on both fixed-column profiles and the
+  one-hour point-cull forecast under 2.7.4 against the 2.7.3 frames of
+  record.
+- The admitted private row is re-taken on the 2.7.4 base, 2.7.4+soma.1,
+  from its three platform wheels and its source tree (which agree with
+  each other and with the tree's HEAD): the same five of sixteen paths
+  differ from the public bytes as before and the composed glacier unit is
+  the pin's. The row on the 2.7.3 base is dropped with the range, because
+  pip no longer resolves 2.7.3+x.1 inside gpuwm>=2.7.4,<2.7.5 and a row
+  whose base the specifier refuses admits nothing; tests/test_engine_pin.py
+  refuses such a row by name. The forecast driver's checkout guard is
+  unchanged and follows the admitted row as before.
+- The surface/PBL cadence is a selectable knob. gpuwm-hex forecast
+  --pbl-cadence SECONDS calls the surface layer, the land-surface model and
+  the PBL once every SECONDS/dt steps and holds the tendency between calls
+  (the engine's own positive-bldt path); radiation keeps its own 600 s
+  cadence. The default stays the weld (bldt = dt, the native x4 reference's
+  semantics) because a held cadence changes the forecast; the run receipt
+  records the decision (calls per hour, held steps, source) and the driver
+  receipt carries the seam's own due/held count against the declared
+  cadence (physics.cadence). Measured on the point mesh in
+  docs/hex-point-hrrr.md: 30, 60 and 120 s each buy the same five per cent
+  per step and each moves the one-hour forecast well past the 2.6.5 to
+  2.7.3 seam movement, so none qualified as the default; the tree at auto
+  is byte-identical to the tree before this change.
+- A held cadence at an anchored timestep and cumulus selection is admitted
+  through a row derived from the welded anchor (hexcore.dt_admission.
+  derived_held_cadence_anchor): the dycore half is the welded row's own,
+  the host half is re-minted for the held cadence, the physics band is
+  stamped NOT MEASURED, and the receipt names the welded row it derives
+  from. A registered held row still wins the exact lookup; a held cadence
+  at an unanchored timestep is refused as the welded run would be.
+- hexcore.cuda_solve_region_v841: four device kernels that check the solve
+  region of a limited-area array and read back once. The per-step health
+  gate takes the envelope of every field (min, max, a NaN verdict, the
+  first-index argmax of |w|) from one launch pair and one read instead of
+  31 strided CuPy reductions each drained to the host; the regional
+  density and recovered-state validations set the step's flag on the
+  device instead of materialising full-size temporaries and draining per
+  array; the garbage discipline restores every padded argument of a
+  launch in one launch instead of one cupy fill per column. The kernels
+  compare, select and store what they are handed and do no arithmetic on
+  the values, so the dycore's byte identity is untouched by construction;
+  the measuring and audited forms of the discipline keep the per-column
+  fills.
+- launch_checked in hexcore.cuda_backend: one launch, the error state
+  checked, no event and no synchronize. recover_state uses it by default
+  (timing_repeats=0); the timed path stays for the benchmark.
+- tools/lts_forced_classing.py and --local-timestep-classing FILE on the
+  forecast door and the driver tool: an A/B instrument that places a rate
+  class where the spacing would not, recorded in receipts as
+  rate_source: explicit.
+
+Fixed:
+- --pbl-cadence that is not a whole number of steps is refused by name at
+  the door (both numbers, the multiples of dt on either side, and auto),
+  on the run route and in --preflight, instead of tracing back after the
+  mesh is bound.
+- A forecast step no longer measures the CUDA admission fifty-nine times.
+  require_cuda memoises a granted admission per argument set (a refusal is
+  never memoised, and a stubbed cupy never inherits a real card's answer);
+  the dycore's translation units re-entered it on every launch group at
+  1.05 ms a call on the CUDA 13.3 driver.
+- Every recovery kernel is launched once. The driver's two recover_state
+  calls went through the timed launch path with timing_repeats=1, which
+  launched each kernel twice with two event synchronizes and a stream
+  synchronize: 36 host stalls and 10.7 ms of repeated device work a step.
+- Measured on the 43,884-cell 937.5 m point cull (55 levels, dt 5 s, HRRR
+  15Z, one hour = 720 steps) on an RTX 5090, both arms in one session on
+  the same card: the composite step 0.3143 s before, 0.2957 s after
+  (1.06x; integration 228.7 s to 215.3 s), the health gate 56.2 s to
+  0.2 s an hour, the loop as a user waits for it 0.3973 to 0.3011 s per
+  step (1.32x; door 328 s to 259 s), both history frames
+  sha256-identical between the arms and across two hostpath runs; the
+  contract deck on the cull's own rings passed at the new kernel-set digest
+  (8 of 8 decks bitwise, 22 of 22 kernels, dual-run identical). Evidence:
+  the hostpath folder of the evidence gallery, 2026-09-13.
+- The regional kernel-set digest moved on three host sources
+  (cuda_backend/runtime.py, cuda_driver.py, cuda_regional_forecast_v841.py)
+  and no CUDA source string; the constant is re-derived, the one class row
+  that carried a literal follows the constant, and the note at the constant
+  records what moved and that the point class was re-minted at it.
+- The campaign's lanes measured together: the tree with the cadence, hostpath
+  and lts lanes merged runs the 3 h point-cull forecast (2,160 steps, HRRR
+  15Z, RTX 5090, both arms in one session) at 0.2978 s per step against the
+  untouched 0.3.0 tree's 0.3193 (1.07x; the loop as a user waits for it
+  679.6 s against 864.7 s, 1.27x; door 728 s against 907 s), with all four
+  history frames byte-identical, the contract deck at the merged kernel set
+  8 of 8 decks bitwise and dual-run identical, and the peak card memory
+  unchanged at 9,485 MiB. The merged tree's kernel-set digest is the
+  hostpath re-mint's. docs/hex-point-hrrr.md, the integrated section.
+- Every level-independent dycore kernel launches one thread per
+  (tracer, level, owner) element. Eight translation units
+  (cuda_regional_v841, cuda_dynamics_v841, cuda_driver, cuda_acoustic,
+  cuda_horizontal, cuda_horizontal_v841, cuda_transport,
+  cuda_backend/recovery) walk a flat element index in a grid-stride loop
+  instead of one thread per owner looping over the levels, and the
+  forecast launches them per element; each element runs the former loop
+  body for its level with the same operands in the same order, the
+  vertically implicit column solve keeps its per-column form, and the
+  momentum kernel gathers a once-per-run reference wind instead of
+  evaluating cosf/sinf per neighbour per stage. The local-timestep unit
+  gathers the two regional acoustic kernels it derives in their element
+  form. Measured on the 43,884-cell point cull (RTX 5090): the lane's own
+  one-hour pair in one session 0.3146 to 0.2836 s per step (1.11x) with
+  both frames byte-identical; the landed tree's 3 h arm (2,160 steps)
+  0.2617 s per step after the first against the integrated tree's 0.2978
+  (1.14x) and the untouched tree's 0.3193 (1.22x), the loop as a user waits
+  for it 572 s against 680 s and 865 s, all four history frames equal to
+  the digests both earlier arms recorded, peak card memory 8,914 MiB; the
+  contract deck on the cull's own rings at the merged kernel set 8 of 8
+  decks bitwise, 22 of 22 kernels, dual-run identical; a per-kernel
+  capture-and-replay of all 49 re-mapped kernels launched by the run
+  bitwise against the previous translation units. The boundary-zone
+  kernels gain 5x to 17x per launch, the level-heavy cell kernels 1.3x to
+  2.6x; a dozen small kernels are slower per launch in element form
+  (named with their numbers in docs/hex-point-hrrr.md, the kernels
+  section) and stay as follow-ups because they are bitwise and the
+  composite step is what moved.
+- tools/kernel_element_ab.py: a per-kernel capture-and-replay instrument
+  that runs the forecast door in-process, captures the first launch of
+  every re-mapped kernel after the warm-up steps with a device copy of
+  every argument before and after, and replays this tree's kernel and the
+  untouched tree's translation unit from the same inputs on the same card,
+  byte for byte and event-timed. Its first run reported five kernels as
+  differing whose arithmetic was byte-identical: four in the 55 values of
+  an input's garbage column, rewritten by the post-launch scrub with the
+  step's unit pool released, and one whose untouched form was launched at
+  one owner because its last device argument is the (1,) invalid flag.
+  The recorder now asks the garbage discipline which arguments are bound
+  at the launch (bound_to_unit_pool) and re-binds them for every replayed
+  launch, the owner-count rule names the edge count, every difference is
+  also classified by garbage column, and tests/test_kernel_element_ab.py
+  parses every target's signature so a flag or index array can never be
+  the owner axis. tools/nvrtc_compile_check.py resolves every kernel of
+  the eight units before card time is spent.
+- The regional kernel-set digest moved again, this time on the CUDA source
+  strings themselves (six of the fourteen sources), and once more on the
+  landing that carries the host-path move and the re-map together; the
+  constant is re-derived at the landed tree, the note at the constant
+  records each move and that the four non-point classes carry the constant
+  without a re-mint of their own, and the point class row records the
+  re-mint the landing measured.
+- The NVRTC reciprocal-rewrite census names hexcore.cuda_solve_region_v841,
+  which the census's own control (every CUDA-bearing module under src must
+  be a listed translation unit) found unregistered on the GPU tier's first
+  pass over the merged tree.
+- The four point-door test files are named once on the CPU tier list; two
+  lanes had each added them and the tier census refuses a file named twice.
+- tests/test_hrrr_intermediate.py, test_mesh_point.py, test_mesh_rows.py and
+  test_regional_class_band.py are named by the CPU tier list; they arrived
+  with the point door on no list, which tests/test_tier_membership.py
+  refused.
+- --local-timestep runs on a limited-area cull. The classing admits a
+  ring-7 edge's missing cell, the attachment counts the regional memory
+  model's padded cell and edge, the regional acoustic sub-step is rebound
+  per rate class (its three kernels derived from the regional translation
+  unit by the same asserted gather), every driven boundary cell is held at
+  rate 1 and a class interface touching the driven zone is refused by
+  name. On the culls the doors make this leaves one class and the run is
+  byte-identical to the default; measured on the RTX 5090, with an
+  interface forced into the interior it is 1.07x slower, so the option
+  stays off by default on every mesh class. docs/local-timestep-lam.md.
+- An explicit local-timestep classing's receipt reports the instrument's
+  request as cells_requested instead of cells_qualified_by_spacing.
+
+## 0.3.0 (2026-09-13)
+
+New:
+- A fine hex core at any point, from HRRR. gpuwm-hex mesh-plan --point
+  LAT,LON writes the registered 937.5 m ladder spec centred on the point,
+  prices parent and cull for a named card, and with --generate builds,
+  admits, registers (a runtime row file beside the mesh, hexcore.mesh_rows,
+  read by tools/mpas_mesh_binding.py through $GPUWM_HEX_MESH_ROWS) and
+  culls it, minting the parent's vertical and culling that too. gpuwm-hex
+  intermediate --source hrrr writes regular lat-lon WPS intermediates from
+  the projected HRRR product through the engine's own decoder, operator and
+  soil layering; gpuwm-hex lbc drives rw_mpas_lbc over the hourly
+  intermediates. rw_mpas_static joins the engine ladder. The two
+  sub-kilometre regional classes admit a same-ladder finest-edge band of
+  five per cent. docs/hex-point-hrrr.md.
+- The engine-verdict instrument ships in the tree. tools/measure_engine_verdicts.py
+  downloads every wheel of every published gpuwm from 2.5.0 up, hashes the
+  sixteen pinned seam files inside each, reads the build road off the
+  engine's tags, and writes the JSON that hexcore.engine_pin's table is
+  spliced from (verification/engine-verdicts/). The table gate in
+  tests/test_engine_pin.py now runs on the published tree and in the sdist
+  instead of skipping there, and a re-pin is one command
+  (--pin-to VERSION --write-manifest --splice) rather than hand-typed
+  digests.
+- A seam-level engine A/B. tools/measure_engine_seam_ab.py drives the
+  engine's column-batch seam on fixed columns under two engines and
+  reports, field by field, what moved and by how much, with a no-cumulus
+  control arm and a capped-profile control. It is how this release states
+  its physics movement below, and how a re-pin taken without the x4 assets
+  and a 32 GiB card can still say what changed.
+- A private engine with a measured row is admitted. An engine that is not
+  on PyPI, carrying a PEP 440 local version label on the pinned base,
+  already satisfies the declared range (2.7.3+x.1 sits inside
+  gpuwm>=2.7.3,<2.7.4); what decides whether this port runs on it is now
+  the same thing that decides for a published engine, its sixteen seam
+  bytes. tools/measure_engine_verdicts.py --admit hashes those files
+  inside the engine's own wheels and source tree (which must agree with
+  each other and with the git tree's HEAD), computes the composed glacier
+  digest by the engine's own hand, and writes the row to
+  verification/engine-verdicts/admitted-engines.json, spliced into
+  hexcore.engine_pin.ADMITTED_ENGINES and gated by tests/test_engine_pin.py
+  like the published table. The seam check, the forecast door, doctor and
+  the adapter's checkout guard accept a tree whose bytes are exactly that
+  row's under that version string, and every receipt and restart identity
+  then names the row's build commit and digests instead of the public
+  pin's; the same bytes under another version string, that version string
+  over other bytes, and any engine with no row are refused by name as
+  before. One row ships, 2.7.3+soma.1: five of the sixteen paths differ
+  from the published 2.7.3 bytes (the config loader, the kernel loader,
+  the microphysics driver, the phase-one driver and the restart identity
+  table) and the composed glacier unit does not. On the public 2.7.3
+  engine nothing this release writes changes.
+
+Fixed:
+- The forecast driver's checkout guard follows an admitted engine's row.
+  verify_arwen_checkout_git in tools/run_cuda_v841_full_physics_x4.py read
+  the public pin's sixteen digests unconditionally, so on the admitted
+  2.7.3+soma.1 engine the frozen row's --preflight refused with
+  "gpuwm/core/physics.py does not match the proven manifest" while the
+  adapter, the forecast door and doctor admitted the same tree (measured
+  2026-09-13). The guard now asks engine_pin.inspect_seam which row the
+  tree's bytes are and gates on that row's digests; a tree matching no
+  row is still measured against the public pin and refused naming the
+  pin's digest, as before. Three tests in tests/test_proof_guard_pins.py.
+- gpuwm-hex init stamps the run declarations the engine's capsule copy
+  left absent (config_start_time, the first-guess level counts, the
+  moisture, sea-ice, extrapolation and land-use switches) onto the init on
+  the compatibility-capsule route, and records in the receipt which were
+  stamped and which the capsule already carried. A capsule minted at mesh
+  time, which is what mesh-plan --point culls, carries no clock, and the
+  forecast driver refused the first 937.5 m point cull with "init carries
+  no config_start_time" after the contract deck had spent seven minutes on
+  the card. Attributes a native capsule carries are left byte for byte.
+- rw_mpas_lbc resolves through the engine ladder. The boundary producer was
+  read from $RW_MPAS_LBC and PATH alone, so a box where gpuwm fetch-bridges
+  had staged it beside rw_mpas_init refused the lbc leg of the very chain
+  whose init leg had just resolved from that directory. hexcore.engines
+  carries an LBC row ($GPUWM_HEX_RW_MPAS_LBC, $RW_MPAS_LBC kept as the
+  legacy spelling, $GPUWM_RW_MPAS_LBC, the bridge directories, PATH), the
+  cycle chain and gpuwm-hex lbc resolve through it, and doctor reports it.
+- Requires gpuwm 2.7.3 and refuses every earlier engine, 2.6.4 and 2.6.5
+  included. Eleven of the sixteen pinned seam files moved between the
+  published 2.6.5 wheel 0.2.3 pinned and the published 2.7.3 wheel: the
+  Grell-Freitas adapter and its kernel, the phase-one physics driver, the
+  microphysics driver, legacy RRTMG, the Noah-MP compile site and glacier
+  unit with the kernel loader and the Noah-MP libm unit, the config loader
+  and the restart identity table; the column batch, the contract document,
+  the Noah-MP runtime and glacier sources did not move, and the seam's
+  constructor takes the same keywords, so no adapter change was needed.
+  2.7.0, 2.7.1 and 2.7.2 carry the same sixteen bytes as each other and
+  fail the re-pinned manifest by eight. Measured the other way first, every
+  2.7 engine failed the 0.2.3 manifest, so the previous ceiling kept
+  installs on 2.6.5 for the ten days the 2.7 line was out. The composed
+  glacier unit's digest and the adapter contract digest moved with the
+  engine's compile-site change and are re-derived by the instrument, not
+  typed.
+- Measured physics movement at this pin, seam against seam on one card
+  (eight columns, forty levels, twenty 120 s steps): Grell-Freitas, whose
+  kernel now uses the engine's own correctly rounded gamma and includes the
+  kbcon layer in the cloud-work integral, moves the convective rain bucket
+  by up to 5.1e-4 mm in forty minutes (0.21 per cent of the largest
+  bucket), the phase-one theta rate by up to 2.9e-5 K/s and theta by up to
+  9.4e-3 K after forty minutes on columns where it fires, and nothing where
+  it does not. The YSU boundary-layer kernel, a file the manifest does not
+  pin, keeps a column whose first-guess boundary-layer top sits below the
+  second model level in the local-K regime for the whole step, and moves
+  the lowest three levels of five of eight capped columns by up to
+  1.9e-4 m/s² in the u rate and 0.139 K in theta after forty minutes;
+  swapping that one file alone reproduces 2.7.3 byte for byte. The x4 F001
+  byte chain that spans 2.5.8 to 2.6.5 is not re-run at this pin and is not
+  expected to survive it. Details and receipts in
+  docs/declared-divergences.md and verification/engine-verdicts/.
+- tools/repin_source_tables.py runs on a tree that holds evidence/ out: the
+  gated-files table is reported as not carried instead of raising, and the
+  stale runner pin it then found on the x1.163842 stabilized-products tool
+  is re-derived.
+
 ## 0.2.3 (2026-09-02)
 
 New:

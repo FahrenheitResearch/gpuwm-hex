@@ -158,10 +158,55 @@ MESH = EngineSpec(
     cargo_package="rw-mpas",
 )
 
+#: The static builder: geography onto a generated grid.
+#:
+#: ``gpuwm-hex mesh-plan --point --generate`` drives it right after the
+#: generator, because a grid without its static is not a deliverable: the
+#: registry pins the two together by byte count and SHA-256 and refuses a
+#: grid carrying one.  Staged by the same bundle as the four above.
+STATIC = EngineSpec(
+    name="rw_mpas_static",
+    flag="--static-exe",
+    env_names=("GPUWM_HEX_RW_MPAS_STATIC", "RW_MPAS_STATIC"),
+    gpuwm_env="GPUWM_RW_MPAS_STATIC",
+    subject="the static builder",
+    what_breaks=(
+        "a generated grid gets no static -- no terrain, land use, soil or "
+        "deriv_two -- and the registry refuses a grid with no matching static, "
+        "so a mesh generated at a point can never be run"
+    ),
+    cargo_package="rw-mpas",
+)
+
+#: The lateral-boundary producer: one boundary file per driving time.
+#:
+#: Every fine grid this distribution cuts is a limited-area cull whose
+#: seven boundary rings hold no atmosphere of their own, so without this
+#: binary a mesh can be generated, initialised and never integrated.  It
+#: used to be resolved by ``hexcore.cycle.chain`` alone, through one
+#: environment variable and PATH, which is exactly the shape that made
+#: the init door refuse on a box where ``gpuwm fetch-bridges`` had already
+#: staged the file: the 2.7.3 and 2.7.4 bundles carry ``rw_mpas_lbc`` beside the
+#: other four, and the ladder reads it from there.
+LBC = EngineSpec(
+    name="rw_mpas_lbc",
+    flag="--lbc-exe",
+    env_names=("GPUWM_HEX_RW_MPAS_LBC", "RW_MPAS_LBC"),
+    gpuwm_env="GPUWM_RW_MPAS_LBC",
+    subject="the lateral-boundary producer",
+    what_breaks=(
+        "no boundary series can be built: every fine grid in a cascade is a "
+        "limited-area cull whose seven boundary rings hold no atmosphere of "
+        "their own, so a mesh can be cut and initialised that can never be "
+        "integrated"
+    ),
+    cargo_package="rw-mpas",
+)
+
 #: Every engine a front door of this distribution drives, best-known name
 #: first.  ``hexcore.doctor`` reads this, so adding an engine is a row
 #: here and is reported without a second edit.
-ENGINES: tuple[EngineSpec, ...] = (INIT, CONVERT, MESH, RENDERER)
+ENGINES: tuple[EngineSpec, ...] = (INIT, CONVERT, MESH, STATIC, LBC, RENDERER)
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +414,7 @@ def _usable(path: Path) -> bool:
 
 def _refuse_not_executable(spec: EngineSpec, path: Path) -> None:
     raise EngineRefusal(
-        f"the {spec.subject} at {path} exists but is not executable.  pip does "
+        f"{spec.subject} at {path} exists but is not executable.  pip does "
         f"not preserve executable bits on package data, so a staged copy can "
         f"arrive present and unrunnable.\n"
         f"  chmod +x {path}"
@@ -453,7 +498,9 @@ __all__ = [
     "ENGINES",
     "FETCH_COMMAND",
     "INIT",
+    "LBC",
     "RENDERER",
+    "STATIC",
     "USER_BRIDGE_DIR",
     "EngineRefusal",
     "EngineSpec",

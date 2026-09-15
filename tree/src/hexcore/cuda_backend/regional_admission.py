@@ -202,6 +202,13 @@ def kernel_set_sha256(root: Path | None = None) -> str:
 #: presented receipt, so it cannot grow to cover a cull nobody looked at.
 UNMEASURED_FINEST_EDGE_MM = -1
 
+#: The relative finest-edge band a same-ladder class admits (see
+#: :meth:`RegionalClassKey.finest_edge_within`).  Five per cent: wide enough
+#: for the relaxation noise between two generations of one ladder spec at
+#: different points, narrow enough that the two sub-kilometre classes (869 m
+#: and 711 m, 18 % apart) can never both admit one measured edge.
+SAME_LADDER_FINEST_EDGE_BAND = 0.05
+
 
 @dataclass(frozen=True, slots=True)
 class RegionalClassKey:
@@ -243,13 +250,38 @@ class RegionalClassKey:
     def finest_edge_measured(self) -> bool:
         return self.finest_edge_mm != UNMEASURED_FINEST_EDGE_MM
 
-    def matches(self, other: "RegionalClassKey") -> bool:
+    def finest_edge_within(self, other: "RegionalClassKey", band: float) -> bool:
+        """Does ``other``'s finest edge sit inside this class's band?
+
+        ``band`` is RELATIVE (0.05 is five per cent either way) and 0.0 is
+        exact equality in millimetres, which is what every class declared
+        until 2026-09-13.  The quantisation was "protection against a value
+        that arrived through a printed number, not against real drift"
+        (above): two culls of ONE parent carry ``min(dcEdge)`` in identical
+        bits.  A parent GENERATED AT ANOTHER POINT from the same ladder spec
+        carries the same delivered rung and a finest edge that differs by
+        relaxation noise -- a few tenths of a per cent to a few per cent --
+        and exact millimetres would refuse it as a different resolution
+        class, which it is not.  A class that admits a band says so in its
+        row (``finest_edge_band_relative``) and the receipt records the
+        measured edge beside the class's own.
+        """
+
+        if not self.finest_edge_measured:
+            return True
+        if band <= 0.0:
+            return self.finest_edge_mm == other.finest_edge_mm
+        return abs(other.finest_edge_mm - self.finest_edge_mm) <= band * self.finest_edge_mm
+
+    def matches(self, other: "RegionalClassKey", *, band: float = 0.0) -> bool:
         """Is ``other`` -- a key measured off a real run -- this class?
 
         Every field compares exactly, except that a class declaring an
-        unmeasured finest edge does not compare one.  Such a class buys that
+        unmeasured finest edge does not compare one (such a class buys that
         looseness back by refusing every geometry that is not already a
-        shipped contract row (see :func:`require_regional_anchor`).
+        shipped contract row, see :func:`require_regional_anchor`), and a
+        class declaring a finest-edge band compares the edge within it
+        (:meth:`finest_edge_within`).
         """
 
         if (
@@ -259,15 +291,14 @@ class RegionalClassKey:
             or self.kernel_set_sha256 != other.kernel_set_sha256
         ):
             return False
-        if not self.finest_edge_measured:
-            return True
-        return self.finest_edge_mm == other.finest_edge_mm
+        return self.finest_edge_within(other, band)
 
-    def differing_fields(self, other: "RegionalClassKey") -> list[str]:
+    def differing_fields(self, other: "RegionalClassKey", *, band: float = 0.0) -> list[str]:
         names = ["boundary_zone_width", "n_vert_levels", "dt_ms", "kernel_set_sha256"]
-        if self.finest_edge_measured:
-            names.append("finest_edge_mm")
-        return [name for name in names if getattr(self, name) != getattr(other, name)]
+        differing = [name for name in names if getattr(self, name) != getattr(other, name)]
+        if self.finest_edge_measured and not self.finest_edge_within(other, band):
+            differing.append("finest_edge_mm")
+        return differing
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -309,11 +340,17 @@ class RegionalClass:
     mint_receipts: tuple[str, ...]
     minted_on_geometries: tuple[str, ...]
     basis: str
+    #: How far, relatively, a measured finest edge may sit from this class's
+    #: own and still be this class.  0.0 (the default) is exact millimetres.
+    #: A class declares a band only when its basis says why; see
+    #: :meth:`RegionalClassKey.finest_edge_within`.
+    finest_edge_band_relative: float = 0.0
 
     def as_dict(self) -> dict[str, object]:
         return {
             "class_id": self.class_id,
             "key": self.key.as_dict(),
+            "finest_edge_band_relative": self.finest_edge_band_relative,
             "parent": self.parent,
             "card": self.card,
             "admitted_on": self.admitted_on,
@@ -402,8 +439,78 @@ class RegionalContract:
 #: question: every cull's contract deck still measures device bits against the
 #: v8.4.1 CPU authority on its own zone geometry, and a spelling cannot touch
 #: that.
+#:
+#: RE-DERIVED 2026-09-14 for the host path of the forecast step (the hex
+#: performance campaign's hostpath lane).  Three of the fourteen sources
+#: moved, all of them HOST Python and none of them a CUDA source string:
+#: ``cuda_backend/runtime.py`` (the admission is measured once per process
+#: and answered from memory; ``launch_checked`` launches once with no event
+#: and no synchronize), ``cuda_driver.py`` (its two ``recover_state`` calls
+#: pass ``timing_repeats=0``, so each recovery kernel is launched once instead
+#: of twice), and ``cuda_regional_forecast_v841.py`` (the garbage discipline
+#: restores every padded argument of a launch in one launch, and the density
+#: and recovered-state validations set the step's flag on the device instead
+#: of draining the stream per array).  Every regional kernel's source is
+#: byte-unchanged -- ``cuda_regional_v841.py`` is not among the three, and the
+#: contract deck re-run on the point cull at this digest records the same
+#: ``translation_unit.source_sha256`` as the receipt taken at the previous
+#: digest -- and the shared translation units' compile keys are the same in
+#: both arms' receipts.  What was RE-MINTED at this digest: the point class
+#: ``graded-869m-dt5-z7``, on the 43,884-cell point cull, in the same session
+#: as a forecast of the untouched tree (its row says what was measured).  The
+#: other four classes carry this digest through the constant and record the
+#: lapse here rather than pretend a re-mint; their kernels launch the same
+#: compiled text they were minted on.
+#:
+#: RE-DERIVED 2026-09-14 for the element-parallel launch geometry of the
+#: level-independent dycore kernels (the hex performance campaign's kernels
+#: lane).  Six of the fourteen sources moved, and this time the CUDA source
+#: strings themselves moved: ``cuda_driver.py``, ``cuda_dynamics_v841.py``,
+#: ``cuda_horizontal.py``, ``cuda_horizontal_v841.py``,
+#: ``cuda_regional_v841.py`` and ``cuda_transport.py`` re-map every kernel
+#: whose levels are independent from one thread per owner looping over
+#: levels to one thread per ``(tracer, level, owner)`` element in a
+#: grid-stride loop, and ``cuda_regional_forecast_v841.py`` launches them
+#: per element; the momentum kernel gathers a once-per-run reference wind
+#: instead of evaluating cosf/sinf per neighbour per stage.  What did NOT
+#: move is the per-element arithmetic: each element runs the former loop
+#: body for its level with the same operands in the same order, the
+#: vertically implicit column solve keeps its per-column form, and the claim
+#: is measured rather than argued -- the cull's own contract deck at this
+#: digest (8 of 8 decks bitwise against the v8.4.1 CPU authority, 22 of 22
+#: kernels, dual run identical) and a per-kernel capture-and-replay of every
+#: re-mapped kernel against the previous translation units on the point
+#: cull's live state (``tools/kernel_element_ab.py``).  What was RE-MINTED
+#: at this digest: the point class ``graded-869m-dt5-z7``, on the 43,884-cell
+#: point cull, in the same session as a forecast of the untouched tree (its
+#: row says what was measured).  The other four classes carry this digest
+#: through the constant and record the lapse here rather than pretend a
+#: re-mint: their kernels now launch re-mapped text, and the evidence that
+#: the re-mapped text computes the minted bits is the deck and the per-kernel
+#: replay above, not a re-run of their own mints.
+#:
+#: RE-DERIVED 2026-09-14 for the landing of the two moves above together
+#: (the hex performance campaign's kernels-land lane).  The host-path move
+#: and the element-parallel re-map were taken on separate branches from the
+#: same base and each re-derived this constant on its own; merged, the
+#: fourteen sources carry both: ``cuda_driver.py``,
+#: ``cuda_backend/recovery.py`` and ``cuda_regional_forecast_v841.py`` hold
+#: a lane each in different lines (the CUDA source strings are the re-map's,
+#: the host path's once-per-kernel launch helper around them), and the other
+#: eleven are one lane's or neither's.  One line moved beyond the union:
+#: ``cuda_regional_forecast_v841.py`` gained a public reading of the garbage
+#: discipline's unit-pool registry (``bound_to_unit_pool``), so the
+#: per-kernel replay can reproduce a launch's scrub after the run; it reads
+#: a dictionary and launches nothing.  What was RE-MINTED at this digest:
+#: the point class ``graded-869m-dt5-z7`` on the 43,884-cell point cull (its
+#: row says what was measured).  The other four classes carry this digest
+#: through the constant and record the lapse here rather than pretend a
+#: re-mint, on the reasoning of the two notes above: the cull's contract
+#: deck at the merged text and the per-kernel replay against the integrated
+#: tree's translation units are the evidence that the merged text computes
+#: the minted bits.
 MINTED_KERNEL_SET_SHA256 = (
-    "ce63c3ddf9c653ef500a178dba0cee2d43bf96f9701ef142fa58677358a17bfc"
+    "8a716f28862a3a89006b017397ad004cb05699a539ac74c9d9b283ba86657818"
 )
 
 _DRY_MINT_CAVEAT = (
@@ -429,13 +536,14 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 n_vert_levels=55,
                 finest_edge_mm=3_314_810,
                 dt_ms=20_000,
-                # The kernel set of the species-row generalization (the
-                # door lane's chain landed 2026-09-01), measured at the
-                # mint; the older classes above and below were minted at
-                # the pre-generalization set and record their own lapse.
-                kernel_set_sha256=(
-                    "ce63c3ddf9c653ef500a178dba0cee2d43bf96f9701ef142fa58677358a17bfc"
-                ),
+                # Minted at the kernel set of the species-row generalization
+                # (the door lane's chain landed 2026-09-01), ce63c3dd...,
+                # measured at the mint; the host-path move and the
+                # element-parallel re-map of 2026-09-14 each carried it onto
+                # the tree's constant like every other row, and the
+                # constant's own note says what moved, what was measured
+                # and what was re-minted.
+                kernel_set_sha256=MINTED_KERNEL_SET_SHA256,
             ),
             parent="generated graded parent: 3.75 km cap of 480 km radius at "
             "42.0 N 86.0 W on a 120 km background, 120,941 cells",
@@ -586,7 +694,16 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "evidence/hex-speed-20260902/class-mint-937/mint-run2/forecast.json",
             ),
             minted_on_geometries=("r0.9.120.40520",),
+            finest_edge_band_relative=SAME_LADDER_FINEST_EDGE_BAND,
             basis=(
+                "BAND 2026-09-13 (hex-point-hrrr lane): a cull of a parent "
+                "GENERATED AT ANOTHER POINT from the same 937.5 m ladder spec "
+                "(gpuwm-hex mesh-plan --point) delivers the same rung and a "
+                "finest edge that differs from 869.251 m by relaxation noise; "
+                "it is this resolution class, and the key admits it within "
+                "5 % either way -- a band that cannot reach the 711 m class "
+                "beside it (18 % apart) and that the Courant admission "
+                "re-measures against the cull's own dcEdge regardless.  "
                 "The class of a 937.5 m limited-area cull of the registered "
                 "v0.9.120.110533 parent, the first sub-kilometre class this "
                 "program has minted: seven boundary rings, 55 levels, the "
@@ -605,6 +722,31 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "speed ladder; the class inherits the graded-parent lane's "
                 "finding that the geometry is not in the key, and pays for "
                 "that inheritance with the cull's own contract deck below.  "
+                "RE-MINTED 2026-09-14 at the kernel set the step's host-path "
+                "change produced (three host sources moved, no CUDA source "
+                "string): on the 43,884-cell 937.5 m point cull of a parent "
+                "generated at 41.95 N 94.79 W, HRRR 15Z init and hourly "
+                "boundaries, 720 steps of 5 s, the hostpath tree ran twice in "
+                "two processes on node-2's RTX 5090 (215.3 s and "
+                "214.3 s of integration) and both history frames agree "
+                "byte for byte -- and agree byte for byte with the untouched "
+                "0.3.0 tree's run of the same hour in the same session, so the "
+                "kernel set moved and the published bytes did not; the cull's "
+                "own contract deck passed at this digest (8 of 8 bitwise, 22 "
+                "of 22 kernels, dual run identical).  "
+                "RE-MINTED 2026-09-14 at the kernel set the element-parallel "
+                "launch geometry produced, landed together with the host-path "
+                "move (six CUDA-bearing sources moved, the per-element "
+                "arithmetic did not): on the same 43,884-cell point cull, "
+                "HRRR 15Z init and hourly boundaries, 2,160 steps of 5 s on "
+                "node-2's RTX 5090 in one process (567.7 s of integration), "
+                "all four history frames agree byte for byte with the "
+                "untouched 0.3.0 tree's run of the same three hours and with "
+                "the integrated tree's; the cull's own contract deck passed at "
+                "this digest (8 of 8 bitwise, 22 of 22 kernels, dual run "
+                "identical) and a per-kernel capture-and-replay of the 49 "
+                "re-mapped kernels the run launches was bitwise against the "
+                "integrated tree's translation units on the run's own state.  "
                 + _DRY_MINT_CAVEAT
             ),
         ),
@@ -626,7 +768,11 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "evidence/hex-speed-20260902/class-mint-800/mint-run2/forecast.json",
             ),
             minted_on_geometries=("r0.8.102.56619",),
+            finest_edge_band_relative=SAME_LADDER_FINEST_EDGE_BAND,
             basis=(
+                "BAND 2026-09-13 (hex-point-hrrr lane): the same-ladder band the "
+                "937.5 m class carries, for the same reason; the two bands do "
+                "not overlap.  "
                 "The finest class this program has minted: an 800 m limited-area "
                 "cull of a generated 800 m parent, seven boundary rings, 55 "
                 "levels, the cull's own finest edge of 710.869 m, dt 5 s (a "
@@ -1064,8 +1210,16 @@ def admitted_class(class_id: str | None) -> RegionalClass | None:
 
 
 def admitted_class_for_key(key: RegionalClassKey) -> RegionalClass | None:
+    # Exact matches first, then the banded ones, so a class that names a
+    # measured edge to the millimetre is never out-ranked by a band around
+    # a neighbour.
     for row in ADMITTED_CLASSES.values():
         if row.key.matches(key):
+            return row
+    for row in ADMITTED_CLASSES.values():
+        if row.finest_edge_band_relative > 0.0 and row.key.matches(
+            key, band=row.finest_edge_band_relative
+        ):
             return row
     return None
 
@@ -1148,11 +1302,12 @@ def uncontracted_geometry_refusal(
 
 
 def class_mismatch_refusal(
-    mesh_row: str, expected: RegionalClassKey, measured: RegionalClassKey
+    mesh_row: str, expected: RegionalClassKey, measured: RegionalClassKey,
+    *, band: float = 0.0,
 ) -> str:
     """The named refusal when a contracted geometry is run off its class."""
 
-    differing = expected.differing_fields(measured)
+    differing = expected.differing_fields(measured, band=band)
     return (
         f"regional CUDA execution is refused for {mesh_row!r}: its contract "
         f"deck belongs to a class minted at [{expected.describe()}] and this "
@@ -1360,12 +1515,15 @@ def require_regional_anchor(
             f"forecast mint.  Minted classes: {admitted_summary()}"
         )
 
-    if measured_key is not None and not klass.key.matches(measured_key):
+    if measured_key is not None and not klass.key.matches(
+        measured_key, band=klass.finest_edge_band_relative
+    ):
         raise RegionalAdmissionRefusal(
             class_mismatch_refusal(
                 str(mesh_row or contract.mesh_row or "an unregistered cull"),
                 klass.key,
                 measured_key,
+                band=klass.finest_edge_band_relative,
             )
         )
     if route == "presented" and not klass.key.finest_edge_measured:

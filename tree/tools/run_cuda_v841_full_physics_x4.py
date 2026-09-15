@@ -323,7 +323,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
     "src/hexcore/cuda_driver.py": (
-        "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb"
+        "cb914d37558d65fc20582a1257e75fec0599e05d2af41044f79a8d8166d628b4"
     ),
     # THE BREAKAGE THIS PREVENTS: the same lane that re-froze cuda_driver.py
     # also changed ``recover_state`` -- it gained ``include_pressure`` and
@@ -333,7 +333,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # freely, so a later edit to the pressure-diagnostic path could change
     # forecast bytes with every proof still reporting frozen sources.
     "src/hexcore/cuda_backend/recovery.py": (
-        "ea5dd7837f411233210f8bb47086e2264a83e2d4334e5ab41dae2bd87ebc5147"
+        "66d023c9921c97961892d918620b50d58162bb215e71a495522a3d2a9baf54bc"
     ),
     # Re-frozen for the regional CPU authority lane (#346 L4): the v8.4.1
     # config admits config_apply_lbcs and config_moist_physics behind the
@@ -469,7 +469,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
     "src/hexcore/dt_admission.py": (
-        "0a6456699b32f1519654ba9838556f2bf9ebe8e5696b56123e594a26f6311e7f"
+        "8a7a57fe45a7957288749aef07feef2f4143aadccfe781a4d096ff41bb8be35a"
     ),
     # New pin (surface/PBL cadence, 2026-08-26): this module decides
     # config_bldt_seconds, a knob the frozen timestep registry keys on, so
@@ -497,7 +497,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
     "src/hexcore/pbl_cadence.py": (
-        "1f7f5b4a41b7004ec1b9fd9ec1091a00997d8d6dbc611f6e6695ae0ca3d2a8ce"
+        "e3f5b865cb1b29b9031138b1630495862f0de67c207ffb416febeac04756a247"
     ),
     # Re-frozen for the seam convergence (#335): the Arwen seam pin moved
     # off the pin-only lineage onto the release line's seam-converge merge,
@@ -518,8 +518,14 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # test_exact_release_scope_and_all_execution_sources_are_frozen was RED at
     # that tip.  Only the digest moved; no behaviour in this module changed
     # beyond the manifest constants the repin deliberately rewrote.
+    # Re-frozen again 2026-09-13: the checkout guard now resolves a tree to
+    # the engine identity its bytes were measured as -- the public pin, or
+    # a row of engine_pin.ADMITTED_ENGINES under that row's own version
+    # string -- and the receipts and restart identity name that identity's
+    # commit and digests.  On the public engine every value it writes is
+    # unchanged; the frozen row's own execution path did not move.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "abf930c9eb34d4a2aaad79721c1db8dc8cfaec01f2c372fc54503e23f44745cb"
+        "46f012b0914d7092d541d8ee8c8e16e1a3b25b2438487194523cc0eaf15d5310"
     ),
     # The v8.4.1 horizontal-mixing execution boundary (2-D Smagorinsky):
     # CPU authorities and the CUDA operator modules the RK1 saved-Euler
@@ -548,10 +554,10 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
         "c5007fa65ddcf67759a7b89e24f2bef615c6a3201d0e8dd2affabd43138e7865"
     ),
     "src/hexcore/cuda_horizontal.py": (
-        "fd09f38619ef3fe9b4b61e6665bd5dd440804f45af6c2ffebf9e47d05573d910"
+        "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5"
     ),
     "src/hexcore/cuda_horizontal_v841.py": (
-        "037f094c55417bef3c3c9a9131d46195bed464122523e7de4f1e9fa286b75412"
+        "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455"
     ),
     # The two-rank (multi-GPU) execution boundary: the scalar-transport module
     # (which gained the guarded FCT halo-exchange hook and executes in every
@@ -573,7 +579,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # with the battery green.  Pinned here so the file that actually supplies
     # the bytes has to move deliberately.
     "src/hexcore/cuda_transport.py": (
-        "e2d3e173e39891e51b578805fc29787a893ed57d7475dc64f8cc49ac8ad36f92"
+        "0cf68d55d00a094590d23ec0c7af6bae8595b2b954c2cdc8efc3e9eff49c112a"
     ),
     "src/hexcore/cuda_fp32.py": (
         "ba6b962cac42454846b96d87bba73ef3ceedbf69cdf8ae6a7f880b31f25cc28e"
@@ -641,7 +647,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "af9044f687dc9d50d66b035eba84373643218c55fb1872e0aeb7c523321c2365"
         ),
         "adapter_contract_sha256": (
-            "fea4fa9ac21b60ef52a9b07340f881de7727ef038c412faa1a94651ae50a1fde"
+            "4b5823f7437c9d7abade1a0b1bd7c8e6051f7f7384b24ec72d8b8b96e03b5db7"
         ),
         "arwen_contract_surface_sha256": ARWEN_CONTRACT_SURFACE_SHA256,
         "arwen_glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
@@ -1009,6 +1015,40 @@ def arwen_source_manifest() -> Mapping[str, str]:
     from hexcore.cuda_arwen_physics_v841 import ARWEN_SOURCE_MANIFEST
 
     return ARWEN_SOURCE_MANIFEST
+
+
+def checkout_manifest_for(root: Path) -> dict[str, str]:
+    """The sixteen-file manifest THIS checkout's seam bytes are bound by.
+
+    The public pin's sixteen digests, unless the tree's seam bytes are, in
+    full and under its own version string, the measured row of an engine
+    :mod:`hexcore.engine_pin` admits (``ADMITTED_ENGINES``): then that
+    row's digests, so a run on an admitted engine is gated and provenanced
+    by the bytes it executes.  The comparison is ``engine_pin.inspect_seam``,
+    the same one the adapter, the forecast door and ``doctor`` run, so the
+    four surfaces cannot disagree about a tree.  A tree that matches no row
+    is measured against the public pin, so the refusal below names the
+    digest the pin wants, as it always has.
+
+    THE BREAKAGE THIS CLOSES (measured 2026-09-13, weather-node-1): the
+    frozen row's ``--preflight`` on the admitted ``2.7.3+soma.1`` engine
+    refused at this guard with ``gpuwm/core/physics.py does not match the
+    proven manifest (expected 898b694b..., found b3417d87...)`` while the
+    adapter, the forecast door and ``doctor`` all admitted the same tree,
+    because this guard read the public sixteen unconditionally.
+    """
+
+    from hexcore import engine_pin
+
+    inspection = engine_pin.inspect_seam(root)
+    if (
+        inspection.engine is None
+        or inspection.absent
+        or inspection.moved
+        or inspection.misdeclared
+    ):
+        return dict(arwen_source_manifest())
+    return dict(engine_pin.identity_for(inspection.engine).manifest)
 
 
 _NETCDF_FILE_ID_ATTRIBUTE = "file_id"
@@ -4694,12 +4734,13 @@ def verify_arwen_checkout_git(
             expect_rename_origin = True
     dirty_paths = sorted(set(dirty_paths))
 
-    # The bytes the RUN's row is bound by: the frozen sixteen unless the
-    # caller hands the manifest of the pin its row runs under (a provider's
-    # row binds a different column batch through its own manifest and can
-    # never match the frozen sixteen by design).  Git state is recorded
-    # either way.
-    manifest = arwen_source_manifest() if manifest is None else dict(manifest)
+    # The bytes the RUN's row is bound by: the sixteen this tree's bytes
+    # name (the public pin, or an admitted engine's own row --
+    # checkout_manifest_for) unless the caller hands the manifest of the pin
+    # its row runs under (a provider's row binds a different column batch
+    # through its own manifest and can never match the frozen sixteen by
+    # design).  Git state is recorded either way.
+    manifest = checkout_manifest_for(root) if manifest is None else dict(manifest)
     files: dict[str, str] = {}
     for relative, expected in manifest.items():
         target = root / relative

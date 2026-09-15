@@ -272,6 +272,44 @@ output, which is also the memory-corruption screen on cards without ECC
 same case twice through two configurations that must coincide on a uniform
 mesh and got byte-identical history, on hardware, in one session.
 
+### The step's host path — what runs on the card, what the host reads
+
+Every forecast step is a two-owner transaction (the dycore, then the
+physics seam) followed by a host health gate that refuses the moment the
+state stops being finite and physical. The dycore's kernels are the step's
+cost and are the only part that touches the prognostic arithmetic; the
+checks around them are meant to be free, and on the 43,884-cell point cull
+they were not: a fifth of every 0.38 s step was the health gate reading 31
+scalars one drain at a time, every recovery kernel ran twice under a timed
+launch, the CUDA admission was re-measured 59 times a step, and the
+garbage discipline (7.4) issued 3,328 tiny fills a step.
+
+Since the hostpath change every check runs on the device over the solve
+region and is read back once (`hexcore.cuda_solve_region_v841`): the gate's
+envelope of every field in one launch pair and one read, the density and
+recovered-state validations as device kernels that set the step's flag,
+the discipline's restoration of a launch's padded columns as one launch,
+each recovery kernel launched once and untimed, and the admission measured
+once per process. None of those kernels computes a value that reaches a
+field — they compare, select and store what they are handed — so a run's
+history is byte-identical to the run before the change; that identity was
+measured on the point cull, two arms in one session on the same card, and
+the contract deck on the cull's rings passed at the new kernel-set digest.
+The cost: the composite step 0.3143 s before, 0.2957 s after (1.06x) on
+an RTX 5090; the health gate 56.2 s to 0.2 s an hour; the loop as you wait
+for it (integration, gate and history) 0.3973 to 0.3011 s per step, 1.32x. The receipt still carries the same
+`step_health` entries (the same numbers, from the same exact reductions)
+and the discipline's receipt gains `fused_restoration_launches` beside
+`garbage_columns_restored`.
+
+What the step still pays for on the host, with the reason: one read of
+the dycore's validation flag before publication, the two preparation
+flags (each raises with the offending field), the physics seam's
+transaction snapshot (the engine copies every persisted seam array to
+the host each step so a refused step can roll back; that is engine code
+under the sixteen-file pin and moves with the engine re-pin, not here),
+and the radiation call's host round trip inside the engine's legacy RRTMG.
+
 ## 6.5 Restarting a run — what exists and what does not
 
 **What is proven:** checkpoint/restart with bitwise-identical continuation
@@ -326,6 +364,16 @@ were verified on hardware:
   so the whole-step ceiling is 1.057x before bookkeeping, and the released
   `(1,3,6)` schedule caps the feature at 1.16x even in the
   every-column-coarse limit [`evidence/local-timestep/speed-qv-*.json`].
+
+- On a **limited-area cull** the option is inert: every driven boundary
+  cell is held at rate 1 and on the culls `mesh-plan` and `cull` make that
+  is the whole coarse class, so the run is byte-identical to the default
+  (point cull, RTX 5090, 2026-09-14: 0.992x the step, both history frames
+  SHA-256-identical). An interface forced into the interior with
+  `--local-timestep-classing` (an instrument, not a feature) is 1.07x
+  slower, because on a 44,000-cell mesh every kernel runs in one wave and a
+  coarse-class launch is a further wave rather than a saving
+  [`docs/local-timestep-lam.md`](../local-timestep-lam.md).
 
 Conservation shape: class boundaries are refluxed (Berger–Colella on the
 acoustic mass flux), so mass and passive vapour are conservative in the
@@ -431,3 +479,52 @@ inside an ice cloud starts without it: hour-0 reflectivity does not
 correlate with the baseline at all. One hour later WSM6 has re-formed the
 ice and r = 0.863; theta agrees to five decimals throughout. If your first
 frame matters, that is the frame to distrust.
+
+
+## 6.10 The surface/PBL cadence — selectable, welded by default
+
+The surface layer, the land-surface model and the PBL are called on every
+model step by default (`config_bldt_seconds = config_dt`, the native x4
+v8.4.1 reference's own semantics). At 120 s that is 30 calls an hour; at
+the 5 s a sub-kilometre mesh declares it is 720, and the 2026-09-13 per-step
+profile on the point mesh put that phase at a fifth of every step.
+
+`--pbl-cadence SECONDS` calls the stack once every `SECONDS / dt` steps and
+holds its tendency on the steps between — the engine's positive-`bldt`
+path, ARW's `stepbl`. Radiation keeps its own 600 s cadence either way.
+
+```sh
+gpuwm-hex forecast --mesh <row> --grid ... --static ... --init ...   --start-time ... --hours 1 --out <dir> --pbl-cadence 60
+```
+
+**Selectable, never silently the default.** It changes the forecast, so
+`auto` (the weld) stays the default until a measured recommendation moves
+it, and an explicit cadence records itself as `source: "explicit"` with
+its calls per hour and held steps in the run receipt. The driver receipt
+adds the seam's own count of due and held steps against the count the
+declared cadence predicts (`physics.cadence` in `forecast-receipt.json`),
+so the receipt itself is the evidence that the hold happened.
+
+**Refused by name, before any card is touched:**
+
+- a cadence that is not a whole number of the row's steps — the refusal
+  names both numbers, the multiples of `dt` on either side, and `auto`;
+  nothing is rounded for you;
+- a request that is not `auto` or a positive number of seconds;
+- a held cadence at a timestep whose welded configuration holds no anchor
+  (anchoring the welded configuration admits the held cadence with it).
+
+**Admitted through a derived row.** A held cadence at an anchored
+`(dt, cumulus)` is admitted on the welded anchor's dycore evidence: the
+outer step, its RK schedule, its clock and its byte-identical dual run are
+properties of the timestep. The physics band is stamped NOT MEASURED at
+the held cadence rather than borrowed, and `surface_pbl_anchor_derived_from`
+in the receipt names the welded row the admission came from. `--preflight`
+answers the same question from the row alone.
+
+The measurement of record — the every-step arm against 30, 60 and 120 s on
+the point mesh, per-step cost and 1 h field differences — is in
+[`docs/hex-point-hrrr.md`](../hex-point-hrrr.md): every held cadence buys
+the same five per cent per step and every one moves the one-hour forecast
+well past the 2.6.5 to 2.7.3 seam movement, so none qualified as the
+default and the weld stays.

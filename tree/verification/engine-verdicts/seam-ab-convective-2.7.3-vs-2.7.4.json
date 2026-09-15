@@ -1,0 +1,106 @@
+{
+  "a": {
+    "engine_sources": {
+      "gpuwm/core/gf.py": "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f",
+      "gpuwm/core/kernels/gf.cu": "334c55ab764732be73d94504d54cb60ad7ca8bf12dbca879d7b3fc3f869d4386",
+      "gpuwm/core/kernels/noahmp_driver.cu": "bd555be10ccade5a5bdddcaf4c56b7f4353dae1208fc48a5586fb7ce7d32d643",
+      "gpuwm/core/kernels/noahmp_energy.cu": "4fd4b5a86ec97371e01aac13d2c5e40e40546b64a77c39e6fb674c96be69d209",
+      "gpuwm/core/kernels/rrtmg_sw.cu": "0301818b55046062ef0b89edc1c2ddc85adb361a4bfd03bc278f56c5fb139aef",
+      "gpuwm/core/kernels/sfclay.cu": "1e0687817889897b950b5ae47e0f0cff58f0a97b32e5b65bcf3bf1ce15215f22",
+      "gpuwm/core/kernels/ysu.cu": "251dc8469b13a18a86f8a4a6546ceb9bb7680407a3f4afa03290d1140a48964b",
+      "gpuwm/core/microphysics.py": "ea51ce3767f15de7c949cf7964f512e6d9d4f32d0b91a1604d49c772f7a2d329",
+      "gpuwm/core/mpas_column_batch.py": "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45",
+      "gpuwm/core/noahmp_driver_gpu.py": "3cb0b0d9ca7f0c4a5d2e6b96e2efe7015e3306011750f5cdfc0f224042804699",
+      "gpuwm/core/physics.py": "898b694bcbad9d0bd981c4e3e958138dd99d084a12a9550b3431a2cc43ae57ce",
+      "gpuwm/core/rrtmg_legacy.py": "8951ce770e10f823d964a4f4564cc9f8989035a7fb9d3fc1448b73f6816bc928",
+      "gpuwm/core/rrtmg_legacy_prep.py": "7a96fbba87424b47622909343a6b6cc35897fe2df1dc6d1dc3583b9b1a76c8cb",
+      "gpuwm/core/sfclay.py": "425655beaccd8917041ce4cdefc851365dbfa55e21818d1c4f5e14528c643c3e",
+      "gpuwm/core/ysu.py": "6e140d641c62d5a0cd82b2998020ef135eb7c93bcc73d75bf75ab3efd6a53f95"
+    },
+    "engine_version": "2.7.3",
+    "path": "convective-2.7.3.npz"
+  },
+  "arms": {
+    "gf": {
+      "arrays_byte_identical": 500,
+      "arrays_compared": 500,
+      "arrays_moved": 0,
+      "by_field": {},
+      "call_counts_a": {
+        "cumulus": 20,
+        "cumulus_history": 0,
+        "noah": 20,
+        "radiation": 4,
+        "sfclay": 20,
+        "ysu": 20
+      },
+      "call_counts_b": {
+        "cumulus": 20,
+        "cumulus_history": 0,
+        "noah": 20,
+        "radiation": 4,
+        "sfclay": 20,
+        "ysu": 20
+      },
+      "per_array": {}
+    },
+    "nocu": {
+      "arrays_byte_identical": 500,
+      "arrays_compared": 500,
+      "arrays_moved": 0,
+      "by_field": {},
+      "call_counts_a": {
+        "cumulus": 0,
+        "cumulus_history": 0,
+        "noah": 20,
+        "radiation": 4,
+        "sfclay": 20,
+        "ysu": 20
+      },
+      "call_counts_b": {
+        "cumulus": 0,
+        "cumulus_history": 0,
+        "noah": 20,
+        "radiation": 4,
+        "sfclay": 20,
+        "ysu": 20
+      },
+      "per_array": {}
+    }
+  },
+  "b": {
+    "engine_sources": {
+      "gpuwm/core/gf.py": "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f",
+      "gpuwm/core/kernels/gf.cu": "334c55ab764732be73d94504d54cb60ad7ca8bf12dbca879d7b3fc3f869d4386",
+      "gpuwm/core/kernels/noahmp_driver.cu": "bd555be10ccade5a5bdddcaf4c56b7f4353dae1208fc48a5586fb7ce7d32d643",
+      "gpuwm/core/kernels/noahmp_energy.cu": "4fd4b5a86ec97371e01aac13d2c5e40e40546b64a77c39e6fb674c96be69d209",
+      "gpuwm/core/kernels/rrtmg_sw.cu": "0301818b55046062ef0b89edc1c2ddc85adb361a4bfd03bc278f56c5fb139aef",
+      "gpuwm/core/kernels/sfclay.cu": "1e0687817889897b950b5ae47e0f0cff58f0a97b32e5b65bcf3bf1ce15215f22",
+      "gpuwm/core/kernels/ysu.cu": "251dc8469b13a18a86f8a4a6546ceb9bb7680407a3f4afa03290d1140a48964b",
+      "gpuwm/core/microphysics.py": "b0d457a48bdc141d6703c7b5aa39faa32a83de1a007c7daae8c9cf9f67676559",
+      "gpuwm/core/mpas_column_batch.py": "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45",
+      "gpuwm/core/noahmp_driver_gpu.py": "3cb0b0d9ca7f0c4a5d2e6b96e2efe7015e3306011750f5cdfc0f224042804699",
+      "gpuwm/core/physics.py": "898b694bcbad9d0bd981c4e3e958138dd99d084a12a9550b3431a2cc43ae57ce",
+      "gpuwm/core/rrtmg_legacy.py": "8951ce770e10f823d964a4f4564cc9f8989035a7fb9d3fc1448b73f6816bc928",
+      "gpuwm/core/rrtmg_legacy_prep.py": "7a96fbba87424b47622909343a6b6cc35897fe2df1dc6d1dc3583b9b1a76c8cb",
+      "gpuwm/core/sfclay.py": "425655beaccd8917041ce4cdefc851365dbfa55e21818d1c4f5e14528c643c3e",
+      "gpuwm/core/ysu.py": "6e140d641c62d5a0cd82b2998020ef135eb7c93bcc73d75bf75ab3efd6a53f95"
+    },
+    "engine_version": "2.7.4",
+    "path": "convective-2.7.4.npz"
+  },
+  "columns": {
+    "dt": 120.0,
+    "dx_m": 25000.0,
+    "ncol": 8,
+    "nz": 40,
+    "p_top_pa": 5000.0,
+    "profile": "convective",
+    "start_time": "2021-06-01T18:00:00",
+    "steps": 20
+  },
+  "engine_sources_moved": [
+    "gpuwm/core/microphysics.py"
+  ],
+  "input_sha256": "a4cffabc24759ac59c8e673d2200c7e1ddeb2b2335e65369127fe531a9cfdfc4"
+}

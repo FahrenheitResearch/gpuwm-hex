@@ -103,10 +103,10 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/cuda_driver.py": (
-            "da4f661351e396c8dd7e1d19e3e0081f7b73230b4af5006b2126fe19d6f82dfb"
+            "cb914d37558d65fc20582a1257e75fec0599e05d2af41044f79a8d8166d628b4"
         ),
         "src/hexcore/cuda_backend/recovery.py": (
-            "ea5dd7837f411233210f8bb47086e2264a83e2d4334e5ab41dae2bd87ebc5147"
+            "66d023c9921c97961892d918620b50d58162bb215e71a495522a3d2a9baf54bc"
         ),
         # Re-frozen for the regional CPU authority lane (#346 L4), again
         # for timestep admission (#358), and again 2026-08-26 for the
@@ -149,7 +149,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/dt_admission.py": (
-            "0a6456699b32f1519654ba9838556f2bf9ebe8e5696b56123e594a26f6311e7f"
+            "8a7a57fe45a7957288749aef07feef2f4143aadccfe781a4d096ff41bb8be35a"
         ),
         # New pin (surface/PBL cadence, 2026-08-26): this module decides
         # config_bldt_seconds, a knob the frozen registry keys on; the
@@ -160,15 +160,16 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/pbl_cadence.py": (
-            "1f7f5b4a41b7004ec1b9fd9ec1091a00997d8d6dbc611f6e6695ae0ca3d2a8ce"
+            "e3f5b865cb1b29b9031138b1630495862f0de67c207ffb416febeac04756a247"
         ),
         # Re-frozen 2026-08-28 for the 2.5.8 engine repin: 77f831b rewrote
         # this module's own ARWEN_SOURCE_MANIFEST/ARWEN_BUILD_COMMIT and did
         # not carry its new digest into either copy of the table, which left
-        # the x4 proof refusing before CUDA.  The rationale lives beside the
-        # runner's pin.
+        # the x4 proof refusing before CUDA.  Re-frozen again 2026-09-13
+        # when the checkout guard learned to resolve an admitted engine's
+        # identity.  The rationale lives beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "abf930c9eb34d4a2aaad79721c1db8dc8cfaec01f2c372fc54503e23f44745cb"
+            "46f012b0914d7092d541d8ee8c8e16e1a3b25b2438487194523cc0eaf15d5310"
         ),
         # Re-frozen for the regional CPU authority lane (#346 L4); the
         # rationale lives beside the runner's pin.
@@ -181,16 +182,16 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
             "c5007fa65ddcf67759a7b89e24f2bef615c6a3201d0e8dd2affabd43138e7865"
         ),
         "src/hexcore/cuda_horizontal.py": (
-            "fd09f38619ef3fe9b4b61e6665bd5dd440804f45af6c2ffebf9e47d05573d910"
+            "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5"
         ),
         "src/hexcore/cuda_horizontal_v841.py": (
-            "037f094c55417bef3c3c9a9131d46195bed464122523e7de4f1e9fa286b75412"
+            "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455"
         ),
         "src/hexcore/cuda_transport_v841.py": (
             "6ac4eece4ed080e7f76a2239b11dc59c984501ee52db900e35e5d74762f78252"
         ),
         "src/hexcore/cuda_transport.py": (
-            "e2d3e173e39891e51b578805fc29787a893ed57d7475dc64f8cc49ac8ad36f92"
+            "0cf68d55d00a094590d23ec0c7af6bae8595b2b954c2cdc8efc3e9eff49c112a"
         ),
         "src/hexcore/cuda_fp32.py": (
             "ba6b962cac42454846b96d87bba73ef3ceedbf69cdf8ae6a7f880b31f25cc28e"

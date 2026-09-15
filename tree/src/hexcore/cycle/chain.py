@@ -324,35 +324,37 @@ def _tool_env(config: CascadeConfig, extra: Mapping[str, str] | None = None) -> 
     return env
 
 
-#: ``rw_mpas_lbc`` has no row in ``hexcore.engines`` -- that ladder covers
-#: the four binaries the shipped doors stage -- so the boundary producer is
-#: resolved here, explicitly, and refused by name when it is absent rather
-#: than being discovered as a missing file halfway through a cycle.
+#: The legacy spelling of the boundary producer's environment variable.
+#: ``hexcore.engines.LBC`` carries it as a legacy name, so an install line
+#: that set it keeps working; new lines set ``$GPUWM_HEX_RW_MPAS_LBC``.
 LBC_ENGINE_ENVIRONMENT = "RW_MPAS_LBC"
 
 
 def resolve_lbc_engine(explicit: Path | None) -> Path:
-    """The boundary producer, or a refusal naming what cannot be built."""
+    """The boundary producer, or a refusal naming what cannot be built.
 
-    candidates: list[Path] = []
-    if explicit is not None:
-        candidates.append(Path(explicit))
-    from_env = os.environ.get(LBC_ENGINE_ENVIRONMENT, "")
-    if from_env:
-        candidates.append(Path(from_env))
-    found = shutil.which("rw_mpas_lbc")
-    if found:
-        candidates.append(Path(found))
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise CycleRefusal(
-        "rw_mpas_lbc was not found: pass --lbc-exe, set "
-        f"${LBC_ENGINE_ENVIRONMENT}, or put it on PATH.  Every fine grid in "
-        "this cascade is a limited-area cull whose seven boundary rings hold "
-        "no atmosphere of their own; with no boundary producer the cycle can "
-        "cut a mesh it can never integrate"
-    )
+    Delegates to :mod:`hexcore.engines`, the ONE ladder every door in this
+    distribution resolves through.  This function used to read
+    ``$RW_MPAS_LBC`` and PATH and nothing else, so a box where
+    ``gpuwm fetch-bridges`` had staged ``rw_mpas_lbc`` into
+    ``~/.gpuwm/bridges`` -- and where the init door had just resolved
+    ``rw_mpas_init`` from that very directory -- refused the boundary leg
+    of the same chain.  The shared ladder reads the staging directory and
+    the installed package's ``libexec/bridges``, and the refusal names the
+    command that fills them.
+    """
+
+    from ..engines import LBC, EngineRefusal, resolve
+
+    try:
+        return resolve(LBC, explicit)
+    except EngineRefusal as error:
+        raise CycleRefusal(
+            f"{error}  Every fine grid in this cascade is a limited-area cull "
+            "whose seven boundary rings hold no atmosphere of their own; with "
+            "no boundary producer the cycle can cut a mesh it can never "
+            "integrate"
+        ) from error
 
 
 def build_boundaries(
