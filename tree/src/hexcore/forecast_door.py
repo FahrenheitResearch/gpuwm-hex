@@ -2,8 +2,8 @@
 
 ``gpuwm-hex forecast`` is the user-reachable command over the same execution
 path the measurement harness drives.  It does not reimplement the model: it
-binds a REGISTERED mesh through ``tools/mpas_mesh_binding.py``, hands the
-bound shape to ``tools/run_cuda_v841_forecast.py`` -- whose ``execute_forecast``
+binds a REGISTERED mesh through ``src/hexcore/drivers/mpas_mesh_binding.py``, hands the
+bound shape to ``src/hexcore/drivers/run_cuda_v841_forecast.py`` -- whose ``execute_forecast``
 is the one integration loop this project has -- and owns everything a
 measurement harness deliberately does not:
 
@@ -48,7 +48,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import platform
 import sys
 import time
 from typing import Any, Mapping, Sequence
@@ -69,6 +68,9 @@ from .physics_backend_admission import (
     registered_backend_names,
     resolve_backend,
 )
+from . import engine_pin
+from . import forecast_preset
+from .host_identity import host_record
 from .errors import ConfigurationRefusal, MpasPortError
 
 __all__ = [
@@ -138,101 +140,62 @@ def checkout_root(start: Path | None = None) -> Path | None:
 
     ``parents[2]`` is the project root of a ``src/`` layout checkout; from an
     installed wheel it is whatever directory happens to sit above
-    ``site-packages``, which is not a place drivers or mesh assets live.
-    Probing for a file only a checkout has keeps the convenience for a
-    checkout and produces a named refusal for an install.
+    ``site-packages``.  Only the CLI's mesh defaults (``data/meshes``) and
+    ``version``'s report use it now: the forecast drivers ship inside the
+    package and no door needs a checkout to open.
     """
 
     root = (start or Path(__file__).resolve().parents[2])
-    if (root / "tools" / "run_cuda_v841_full_physics_x4.py").is_file():
+    if (root / "src" / "hexcore").is_dir() and (root / "tools").is_dir():
         return root
     return None
 
 
 PROJECT_ROOT = checkout_root()
 
-#: What a repo must carry for this door to open.  Named individually so the
-#: refusal can say WHICH file is absent rather than "not a checkout".
+#: The forecast drivers, inside the package that is executing.  They lived
+#: in the repository's ``tools/`` through 0.3.1, which a wheel does not
+#: carry, so ``gpuwm-hex forecast`` refused on every install with "needs the
+#: gpuwm-hex SOURCE CHECKOUT" -- the forecast was not reachable from
+#: ``pip install gpuwm-hex``.  Loaded from here, the drivers and the modules
+#: they verify by SHA-256 are always one copy.
+DRIVERS_DIR = Path(__file__).resolve().parent / "drivers"
+
+#: What the drivers directory must carry.  Named individually so a damaged
+#: install says WHICH file is absent.
 _REQUIRED_DRIVERS = (
-    Path("tools") / "run_cuda_v841_full_physics_x4.py",
-    Path("tools") / "run_cuda_v841_forecast.py",
-    Path("tools") / "mpas_mesh_binding.py",
+    "run_cuda_v841_full_physics_x4.py",
+    "run_cuda_v841_forecast.py",
+    "mpas_mesh_binding.py",
 )
 
 
-def _checkout_from_cwd() -> Path | None:
-    """The documented second gesture: run the door from inside a checkout.
-
-    From an installed wheel the package's own ancestry proves nothing
-    (``PROJECT_ROOT`` is ``None``), but the refusal below and quickstart
-    2.6 both promise that standing inside a checkout is enough.  Keeping
-    that promise means probing the working directory and its parents for
-    the tree that carries the drivers: either the ``tree/`` directory
-    itself or a repository root holding one.  The staleness risk of
-    "whatever checkout you are standing in" is the risk the drivers'
-    own SHA-256 self-verification exists to catch, so nothing here is
-    silently trusted.
-    """
-
-    here = Path.cwd()
-    for candidate in (here, *here.parents):
-        if checkout_root(candidate) is not None:
-            return candidate
-        if checkout_root(candidate / "tree") is not None:
-            return candidate / "tree"
-    return None
-
-
 def resolve_repo(explicit: Path | None) -> Path:
-    """The gpuwm-hex checkout holding the drivers, or a named refusal.
+    """The directory the forecast drivers are loaded from: the package's own.
 
-    The wheel deliberately does not carry ``tools/``: those drivers verify
-    their own executing modules by SHA-256, and a module cannot verify a
-    copy of itself that was never shipped.  A wheel-only forecast would
-    therefore be a door that opens onto a missing floor, so the absence is
-    NAMED here instead of failing as an ImportError three steps later.
-
-    This is the gpuwm-HEX checkout and it is a separate requirement from the
-    gpuwm one below; do not fold the two reasons together again.  The gpuwm
-    seam pin used to be part of this sentence because one of its sixteen
-    paths reached no wheel at all; at 2.5.8 all sixteen resolve from an
-    install and that clause is gone from here.
+    ``--repo`` named a gpuwm-hex checkout's ``tree/`` through 0.3.1, because
+    the drivers lived in its ``tools/``.  They ship in the package now, and
+    loading a checkout's copy beside an installed package is the hybrid in
+    which a gate hashes one copy of a module while another executes, so the
+    value is no longer used.  It is still accepted, so existing scripts keep
+    working, and the door says it was not used.
     """
 
     if explicit is not None:
-        candidate = Path(explicit).expanduser().absolute()
-    elif PROJECT_ROOT is not None:
-        candidate = PROJECT_ROOT
-    else:
-        candidate = _checkout_from_cwd()
-    if candidate is None:
-        raise _refuse(
-            "the forecast lane needs the gpuwm-hex SOURCE CHECKOUT and this "
-            "is an installed wheel: the drivers live in tools/, which the "
-            "wheel does not carry, because they verify their own executing "
-            "modules by SHA-256 and a module cannot verify a copy of itself "
-            "that was never shipped.  Obtain the gpuwm-hex repository and "
-            "pass --repo <checkout>/tree, or run the door from inside it.  "
-            "`gpuwm-hex doctor` does NOT report this gap -- measured on a pure "
-            "wheel install it prints 'Every required check passed' and "
-            "exits 0 while this door is unreachable, so this refusal is "
-            "the only surface that names it.  Doctor does report the "
-            "separate gpuwm one under 'gpuwm git checkout (the forecast "
-            "lane only)'."
+        print(
+            f"NOTE --repo {explicit} is not used: the forecast drivers ship "
+            f"in the package ({DRIVERS_DIR}) since 0.3.2.",
+            file=sys.stderr,
+            flush=True,
         )
-    if not candidate.is_dir():
-        raise _refuse(
-            f"--repo {candidate} is not a directory; it must be the gpuwm-hex "
-            "checkout's tree/ directory, the one holding src/ and tools/"
-        )
-    missing = [str(name) for name in _REQUIRED_DRIVERS if not (candidate / name).is_file()]
+    missing = [name for name in _REQUIRED_DRIVERS if not (DRIVERS_DIR / name).is_file()]
     if missing:
         raise _refuse(
-            f"--repo {candidate} is not a gpuwm-hex checkout: it is missing "
-            f"{', '.join(missing)}.  The forecast lane runs from the "
-            "repository's tree/ directory; point --repo at it."
+            f"this gpuwm-hex install is missing {', '.join(missing)} under "
+            f"{DRIVERS_DIR}; the forecast drivers ship in the package, so the "
+            "install is damaged.  Reinstall gpuwm-hex."
         )
-    return candidate
+    return DRIVERS_DIR
 
 
 def _load_module(name: str, path: Path):
@@ -258,7 +221,7 @@ class MeshRow:
     cells: int
     dt_seconds: float
     #: The row's declared nominal spacing, in metres.  Carried because the
-    #: convection ruling (ruling, 2026-08-26: off below 3 km) is answerable
+    #: convection default (off below 3 km) is answerable
     #: from the row alone -- no card, no file -- exactly as the timestep
     #: anchor is, and preflight's answer and the run's must not disagree.
     #: ``MeshBinding`` requires it, so :func:`load_registry` always fills it;
@@ -268,15 +231,18 @@ class MeshRow:
     nominal_dx_m: float | None = None
 
 
-def load_registry(repo: Path) -> dict[str, MeshRow]:
-    """The registered meshes, read out of ``tools/mpas_mesh_binding.py``.
+def load_registry(drivers: Path | None = None) -> dict[str, MeshRow]:
+    """The registered meshes, read out of ``hexcore/drivers/mpas_mesh_binding.py``.
 
     Read, never restated.  A second copy of the cell counts in this file
     would be a second thing to keep true, and the number it would drift on
-    is the one every admission decision divides by.
+    is the one every admission decision divides by.  ``drivers`` is the
+    directory :func:`resolve_repo` returns; the default is the package's.
     """
 
-    module = _load_module("mpas_mesh_binding", Path(repo) / "tools" / "mpas_mesh_binding.py")
+    module = _load_module(
+        "mpas_mesh_binding", Path(drivers or DRIVERS_DIR) / "mpas_mesh_binding.py"
+    )
     return {
         name: MeshRow(
             name=name,
@@ -465,7 +431,7 @@ def measure_device_memory() -> tuple[int, int]:
             "here refuses a CUDA runtime below 13000, so the cu12 wheel is "
             "not an alternative -- it imports, probes clean, and is then "
             "refused by name at launch.  `gpuwm-hex doctor` reads your "
-            "driver's CUDA major and says whether this box can open the lane "
+            "driver's CUDA major and says whether this box can run the forecast "
             "at all."
         ) from None
     try:
@@ -581,9 +547,9 @@ def admit_timestep(
     from . import pbl_cadence as pbl_cadence_module
 
     # An anchor certifies a CONFIGURATION at a timestep, and the project's
-    # 2026-08-26 ruling made the cumulus selection part of that
+    # 3 km convection default made the cumulus selection part of that
     # configuration.  Answered from the row alone: the row carries its
-    # declared nominal spacing, and the ruling is a comparison against one
+    # declared nominal spacing, and the default is a comparison against one
     # threshold.  A row with no spacing to offer keeps the historical
     # Grell-Freitas answer rather than guessing at one.
     if nominal_dx_m is None:
@@ -711,7 +677,7 @@ class ForecastRequest:
     #: ``None`` means "the model's own margin" -- the default.
     headroom_bytes: int | None
     #: ``None`` means "read the card and select its row at decision time",
-    #: which is the default and the fix for ledger #366.  A ``_SuppliedRow``
+    #: which is the default and the fix for the borrowed-row defect.  A ``_SuppliedRow``
     #: is the user's ``--device-fixed-mib``/``--device-bytes-per-cell`` pair,
     #: still waiting for the card.  A ``ShapedFootprintModel`` is a row
     #: already resolved against a card.
@@ -732,6 +698,11 @@ class ForecastRequest:
     #: Input problems collected rather than raised, preflight only.  Always
     #: empty on a real run, because there the same conditions refuse.
     input_problems: tuple[str, ...] = ()
+    #: The forecast preset row (``hexcore.forecast_preset``) this run selects.
+    preset: str = forecast_preset.DEFAULT_PRESET
+    #: ``"preset"`` when the row decided the surface/PBL cadence,
+    #: ``"explicit"`` when --pbl-cadence was given.
+    pbl_cadence_source: str = "preset"
 
     @property
     def inputs_present(self) -> bool:
@@ -807,7 +778,7 @@ def _parse_rates(raw: Any, flag: str) -> tuple[int, ...]:
 def _resolve_model(arguments: argparse.Namespace) -> ShapedFootprintModel | None:
     """The user's own measured row, or ``None`` to read the card instead.
 
-    ``None`` is the DEFAULT and it is the fix for ledger #366.  The retired
+    ``None`` is the DEFAULT and it is the fix for the borrowed-row defect.  The retired
     door returned the 170 SM card's row here whenever the user did not type
     two numbers, so a 10 GiB desktop was priced with a 32 GiB card's fixed
     term and refused ``x1.40962`` and ``v15.150.38857`` -- two meshes it had
@@ -1084,7 +1055,7 @@ def seam_pin_problem(checkout: Path) -> str | None:
             else "declares no version this door could read"
         )
         return (
-            f"--gpuwm-checkout {checkout} carries the measured seam bytes of "
+            f"the gpuwm at {checkout} carries the measured seam bytes of "
             f"the admitted engine gpuwm {inspection.engine} and {declared}.  "
             "An admitted engine is keyed by its version string and its bytes "
             "together -- a re-versioned copy of a measured build is neither "
@@ -1105,14 +1076,14 @@ def seam_pin_problem(checkout: Path) -> str | None:
         else "declares no version this door could read"
     )
     return (
-        f"--gpuwm-checkout {checkout} {identity}, and this port's physics "
+        f"the gpuwm at {checkout} {identity}, and this port's physics "
         f"seam is pinned to gpuwm {wanted}.  "
         f"{len(inspection.moved or inspection.absent)} of "
         f"{len(engine_pin.seam_manifest())} pinned files {what}: {names}.  "
         "The seam is the whole physics of this model -- the port owns no "
         "parameterization arithmetic -- so running against moved bytes would "
-        "be running physics nobody proved.  Point --gpuwm-checkout at a "
-        f"checkout of v{wanted}:\n"
+        "be running physics nobody proved.  Install the pinned engine, or "
+        f"point --gpuwm-checkout at a clone of v{wanted}:\n"
         f"{engine_pin.remedy(found)}"
     )
 
@@ -1144,7 +1115,7 @@ def resolve_request(
             "by byte count and SHA-256 and declares the timestep its real "
             "dcEdge admits; running an unregistered mesh would run an "
             "unproved shape at an unadmitted timestep.  Register the row in "
-            "tools/mpas_mesh_binding.py before running it."
+            "src/hexcore/drivers/mpas_mesh_binding.py before running it."
         )
     row = registry[mesh]
     preflight = bool(getattr(arguments, "preflight", False))
@@ -1187,7 +1158,21 @@ def resolve_request(
     # to be.  The two blockers are independent and a user fixing one wants to
     # know about the other in the same pass.
     convection = getattr(arguments, "convection", "auto")
-    pbl_cadence = getattr(arguments, "pbl_cadence", "auto")
+    # The preset is a ROW (hexcore.forecast_preset) and resolves into the
+    # knob this door already has: the surface/PBL cadence at this row's
+    # timestep.  An explicit --pbl-cadence is the user's own selection and
+    # wins; the receipt says which of the two decided.
+    try:
+        preset = forecast_preset.resolve_preset(getattr(arguments, "preset", None))
+    except ConfigurationRefusal as error:
+        raise _refuse(str(error)) from None
+    explicit_pbl_cadence = getattr(arguments, "pbl_cadence", None)
+    if explicit_pbl_cadence is None:
+        pbl_cadence = forecast_preset.pbl_cadence_request(preset, row.dt_seconds)
+        pbl_cadence_source = "preset"
+    else:
+        pbl_cadence = str(explicit_pbl_cadence)
+        pbl_cadence_source = "explicit"
     if collected is None:
         admit_timestep(
             mesh, row.dt_seconds,
@@ -1311,42 +1296,39 @@ def resolve_request(
         "Build one with `gpuwm-hex init` (chapter 5 of the manual).", collected)
 
     checkout_argument = getattr(arguments, "gpuwm_checkout", None)
-    if checkout_argument is None and preflight:
-        # The card question does not depend on the seam checkout, so a
-        # preflight answers it and records the gap instead of refusing.
-        checkout = Path("(not given)")
-        collected.append(  # type: ignore[union-attr]
-            "--gpuwm-checkout was not given; the forecast lane needs a gpuwm "
-            "GIT CHECKOUT at the pinned commit.  The seam pin itself is "
-            "satisfied by an install at the pinned engine -- all sixteen "
-            "pinned paths resolve from site-packages there -- but the run's "
-            "proof harness records the checkout's HEAD, tree and dirty paths "
-            "into every receipt, and an install has no commit to name the "
-            "executed bytes by."
-        )
+    have_tree = True
+    if checkout_argument is None:
+        # The installed engine is the default seam tree.  All sixteen pinned
+        # paths resolve from site-packages (since engine 2.5.8), and the
+        # driver names an install by its version and pip's RECORD digest
+        # where it names a clone by its commit, so a clone is no longer
+        # required.  THE BREAKAGE THIS CLOSES: through 0.3.1 this flag was
+        # mandatory, so the forecast could not run from `pip install
+        # gpuwm-hex` without also cloning gpuwm at the pinned tag.
+        installed = engine_pin.installed_root()
+        if installed is None:
+            have_tree = False
+            checkout = Path("(not installed)")
+            problem = (
+                "no gpuwm is installed in this interpreter and "
+                "--gpuwm-checkout was not given; the physics seam runs "
+                "gpuwm's column batch, so the forecast needs the pinned "
+                "engine:\n" + engine_pin.remedy()
+            )
+            if collected is None:
+                raise _refuse(problem)
+            collected.append(problem)
+        else:
+            checkout = Path(installed)
     else:
-        checkout = Path(_require(
-            checkout_argument,
-            "--gpuwm-checkout",
-            "the run's proof harness verifies the seam against a gpuwm GIT "
-            "WORKING TREE and records its HEAD, tree and dirty paths into "
-            "every receipt, so the executed bytes can be named by commit; an "
-            "installed distribution has no commit and site-packages is not a "
-            "git tree.  The forecast lane therefore needs a gpuwm checkout at "
-            "the pinned commit.  This is NOT the old reason -- until engine "
-            "2.5.7 one of the sixteen pinned paths reached no wheel at all, "
-            "and at 2.5.8 all sixteen resolve from an install")
-        ).expanduser().absolute()
+        checkout = Path(checkout_argument).expanduser().absolute()
+    if have_tree:
         if not checkout.is_dir():
             problem = (
-                f"--gpuwm-checkout {checkout} is not a directory.  The "
-                "forecast lane needs a gpuwm GIT CHECKOUT at the pinned "
-                "commit: the run verifies the checkout's git state and the "
-                "sixteen seam digests before CUDA is touched, and writes "
-                "HEAD, tree and dirty paths into the receipt so the executed "
-                "bytes can be named by commit.  An installed distribution "
-                "carries the bytes and no commit, so it cannot stand in for "
-                "the checkout here."
+                f"--gpuwm-checkout {checkout} is not a directory.  It names "
+                "the gpuwm tree whose sixteen seam files the run executes: "
+                "a git clone at the pinned tag, or leave it unset to run on "
+                "the installed engine."
             )
             if collected is None:
                 raise _refuse(problem)
@@ -1457,6 +1439,8 @@ def resolve_request(
         physics_backend=backend_row.name,
         source_table=source_table,
         input_problems=tuple(collected or ()),
+        preset=preset.name,
+        pbl_cadence_source=pbl_cadence_source,
     )
 
 
@@ -1571,7 +1555,7 @@ def build_receipt(
         "created_utc": _dt.datetime.now(_dt.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         ),
-        "host": platform.node(),
+        "host": host_record(),
         "status": status,
         "mesh": {
             "name": request.mesh,
@@ -1588,7 +1572,7 @@ def build_receipt(
                 else str(request.source_table)
             ),
             # The run's own surface/PBL call count against the cadence it
-            # declared (tools/run_cuda_v841_forecast._physics_cadence_proof):
+            # declared (hexcore.drivers.run_cuda_v841_forecast._physics_cadence_proof):
             # a held cadence that reproduced the welded arm exactly would be
             # first evidence the hold never happened, and this is where a
             # reader checks.  ``None`` until the driver has run.
@@ -1610,7 +1594,9 @@ def build_receipt(
         "configuration": {
             "horiz_mixing": request.horiz_mixing,
             "convection": request.convection,
+            "preset": forecast_preset.resolve_preset(request.preset).receipt(),
             "pbl_cadence": request.pbl_cadence,
+            "pbl_cadence_source": request.pbl_cadence_source,
             "local_timestep": request.local_timestep,
             "local_timestep_rates": list(request.local_timestep_rates),
             "local_timestep_buffer_rings": request.local_timestep_buffer_rings,
@@ -1657,16 +1643,16 @@ def _write_receipt(request: ForecastRequest, receipt: Mapping[str, Any]) -> Path
     return path
 
 
-def _load_drivers(repo: Path):
-    """The two driver modules, loaded from the checkout by path."""
+def _load_drivers(drivers: Path):
+    """The two driver modules, loaded from the package's drivers directory.
 
-    for entry in (str(repo / "tools"), str(repo / "src")):
-        if entry not in sys.path:
-            sys.path.insert(0, entry)
-    binding = _load_module("mpas_mesh_binding", repo / "tools" / "mpas_mesh_binding.py")
-    driver = _load_module(
-        "v841_forecast", repo / "tools" / "run_cuda_v841_forecast.py"
-    )
+    The mesh binding is re-executed per run on purpose: a candidate-timestep
+    override (:mod:`hexcore.mesh_row_candidate`) is applied where that module
+    builds its registry, so a fresh execution is how a run sees it.
+    """
+
+    binding = _load_module("mpas_mesh_binding", Path(drivers) / "mpas_mesh_binding.py")
+    driver = importlib.import_module("hexcore.drivers.run_cuda_v841_forecast")
     return binding, driver
 
 
@@ -1994,7 +1980,7 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument(
         "--mesh", default=None, metavar="NAME",
-        help="registered mesh row (tools/mpas_mesh_binding.py)")
+        help="registered mesh row (src/hexcore/drivers/mpas_mesh_binding.py)")
     parser.add_argument(
         "--grid", type=Path, default=None, metavar="FILE",
         help="the row's grid netCDF; pinned by byte count and SHA-256")
@@ -2054,13 +2040,13 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
         help="run receipt path (default: <out>/forecast-receipt.json)")
     parser.add_argument(
         "--gpuwm-checkout", type=Path, default=None, metavar="DIR",
-        help="gpuwm GIT checkout at the pinned commit; the run's proof "
-             "harness records its HEAD, tree and dirty paths into the "
-             "receipt, and an install has no commit")
+        help="gpuwm tree whose seam files run (default: the installed "
+             "engine, recorded by version and pip's RECORD digest); a git "
+             "clone at the pinned tag is recorded by commit instead")
     parser.add_argument(
         "--repo", type=Path, default=None, metavar="DIR",
-        help="gpuwm-hex checkout tree/ holding tools/ "
-             "(default: this checkout, if the door was imported from one)")
+        help="accepted for older scripts and not used: the forecast drivers "
+             "ship in the package since 0.3.2")
     parser.add_argument(
         "--case-label", default=None, metavar="TEXT",
         help="label recorded in the receipt")
@@ -2073,15 +2059,32 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "cannot integrate on convective cases (default: 2d_smagorinsky)")
     parser.add_argument(
         "--convection", choices=("auto", "off", "gf"), default="auto",
-        help="cumulus selection. The default APPLIES DREW'S 2026-08-26 "
-             "RULING -- convection is switched off below 3 km -- decided "
-             "from the bound mesh's own finest spacing with no flag passed. "
-             "'off' and 'gf' are explicit A/B arms and record themselves as "
-             "explicit (default: auto)")
+        help="cumulus selection. The default 'auto' switches the cumulus "
+             "scheme off where the bound mesh's finest spacing is below 3 km, "
+             "with no flag passed: Grell-Freitas is called every model step, "
+             "so a fine mesh's short step calls it up to 24 times as often as "
+             "the proven 120 s, which measured as a different solution "
+             "(vertical velocity still climbing past 80 m/s at 2 h), and "
+             "convection is resolved explicitly at those spacings. 'off' and "
+             "'gf' are explicit A/B arms and record themselves as explicit "
+             "(default: auto)")
     parser.add_argument(
-        "--pbl-cadence", default="auto", metavar="{auto,SECONDS}",
-        help="surface/PBL cadence in seconds (config_bldt_seconds). The "
-             "default 'auto' is the PROVEN CONFIGURATION: welded to "
+        "--preset", choices=forecast_preset.preset_names(),
+        default=forecast_preset.DEFAULT_PRESET,
+        help="named forecast preset (hexcore.forecast_preset). "
+             + " ".join(
+                 f"'{row.name}': {row.summary}."
+                 for row in (forecast_preset.PRESETS[name]
+                             for name in forecast_preset.preset_names())
+             )
+             + " A preset sets --pbl-cadence at the mesh's timestep; an "
+             "explicit --pbl-cadence wins "
+             f"(default: {forecast_preset.DEFAULT_PRESET})")
+    parser.add_argument(
+        "--pbl-cadence", default=None, metavar="{auto,SECONDS}",
+        help="surface/PBL cadence in seconds (config_bldt_seconds); when "
+             "absent the --preset row decides it. 'auto' is the PROVEN "
+             "CONFIGURATION: welded to "
              "config_dt, so the surface layer, the land-surface model and "
              "the PBL run every model step, as the native x4 v8.4.1 "
              "reference ran. A number of seconds calls the stack once every "
@@ -2091,7 +2094,7 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "forecast, and it records itself as an explicit selection with "
              "its calls per hour in the receipt. Radiation keeps its own "
              "600 s cadence either way. Measured on the point mesh in "
-             "docs/hex-point-hrrr.md (default: auto)")
+             "docs/hex-point-hrrr.md (default: the preset's)")
     parser.add_argument(
         "--local-timestep", action="store_true",
         help="OPT-IN, default off: advance coarse columns on fewer, longer "
@@ -2145,7 +2148,7 @@ def add_forecast_parser(commands: Any) -> None:
     parser = commands.add_parser(
         "forecast",
         help="run the model on a registered mesh from an init "
-             "(GPU; needs the source checkout)",
+             "(GPU)",
         description=(
             "Drive the v8.4.1 CUDA forecast on a registered mesh. The door "
             "binds the mesh against the registry's pinned bytes, admits the "

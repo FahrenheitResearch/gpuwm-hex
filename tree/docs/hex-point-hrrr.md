@@ -1,7 +1,7 @@
 # A fine hex core at any CONUS point, from HRRR
 
 Four doors that were missing, in the order a case meets them, and the
-measured chain that ran them end to end on 2026-09-13. Before this lane every
+measured chain that ran them end to end on 2026-09-13. Before this work every
 sub-kilometre row this program held sat at 35.0 N 97.0 W, because a person
 typed its spec and its registry row; and no HRRR byte had ever reached a hex
 init, because a Lambert product is refused by the intermediate writer and the
@@ -80,7 +80,7 @@ and its `next` list is the rest of the chain with every path filled in.
 
 ## Runtime rows: `mesh-rows.json` beside the mesh
 
-`gpuwm-hex forecast` resolves `--mesh` against `tools/mpas_mesh_binding.py`
+`gpuwm-hex forecast` resolves `--mesh` against `src/hexcore/drivers/mpas_mesh_binding.py`
 and refuses a name it does not hold. A mesh generated at an arbitrary point
 cannot be a row in that file, and a checkout edit per point would be the
 hand-written-row-per-swath defect the cascade retired. `hexcore.mesh_rows`
@@ -176,7 +176,7 @@ start moves it on purpose.
 
 The regional forecast opener measures a class key off the run (zone width,
 column count, finest edge, timestep, kernel set) and refuses a configuration
-no forecast mint covers. Until this lane the finest edge compared exact to the
+no forecast mint covers. Until 0.3.0 the finest edge compared exact to the
 millimetre, which was protection against a printed number, not real drift: two
 culls of one parent carry `min(dcEdge)` in identical bits. A parent generated
 at another point from the same ladder spec delivers the same rung and a finest
@@ -190,17 +190,13 @@ geometry half is relaxed.
 
 ## Measured, 2026-09-13
 
-See the section below; it is written from the receipts under
-`C:\Users\drew\Downloads\evidence-gallery\hex-point-hrrr-2026-09-13\`.
-
 Point 41.95 N 94.79 W (central Iowa), HRRR cycle 2026-09-13 15Z, f00 to
-f03, node-2 (RTX 5090, 32,607 MiB, sm_120), gpuwm 2.7.3 from PyPI with its
-2.7.3 bridge bundle, gpuwm-hex 0.3.0 at this lane's tip. Every number below
-is copied from a receipt in that folder; the chain scripts that produced them
-are beside the receipts.
+f03, an RTX 5090 (32,607 MiB, sm_120), gpuwm 2.7.3 from PyPI with its
+2.7.3 bridge bundle, gpuwm-hex 0.3.0. Every number below is copied from a
+run receipt.
 
 The mesh (`mesh-plan --point 41.95,-94.79 --fine-dx-m 937.5 --radius-km 100
---card 32gb --generate`, 276 s wall on node-2's CPU):
+--card 32gb --generate`, 276 s wall on the same machine's CPUs):
 
 - Ladder 120 / 60 / 30 / 15 / 7.5 / 3.75 / 1.875 / 0.9375 km, transition
   factor 18, fine core radius 100 km, fine flat radius 83.1 km, cut radius
@@ -232,8 +228,7 @@ The state (`intermediate`, `init`, `lbc`, all CPU):
 - `lbc`: four boundary files (15Z to 18Z, 87.3 MB each) in 2.08 s through
   `rw_mpas_lbc` resolved from the venv's own bridge directory.
 
-The card (both passes under the shared mutex; 23.3 minutes of card time in
-total):
+The card (both passes; 23.3 minutes of card time in total):
 
 - Contract deck on the cull's own rings (`run_cuda_regional_contract.py
   --class-id graded-869m-dt5-z7`): 8 decks, 8 passed, 22 of 22 regional
@@ -248,7 +243,7 @@ total):
   verification of 23 modules; four history frames; status passed. Peak
   memory on the card 9,485 MiB (nvidia-smi at 5 s cadence), utilisation
   75 to 97 %. Load average at launch 0.34 with nothing else on the node's
-  CPUs; the mutex had been held 420 s by another lane before this pass.
+  CPUs; another job had held the card for 420 s before this pass.
 - The first pass stopped at the forecast opener on the clockless init after
   the deck had run; the deck's receipt pins the boundary mask, the cell count
   and the kernel set, none of which the remade init changes, so the second
@@ -257,7 +252,7 @@ total):
 The picture (`render --products composite_reflectivity,2m_temperature_10m_winds`
 on the 18Z frame): `rw_mpas_convert` framed the mesh window at 233 x 235
 columns (924 m, mean nearest-neighbour 0.51 km) in 0.81 s and `rw_wrfbatch`
-drew both panels; 5 s in all. `theta_e_2m_10m_winds` is in the renderer's
+rendered both panels; 5 s in all. `theta_e_2m_10m_winds` is in the renderer's
 catalog but not realised by the wrfout import lane for this history, and the
 door refuses it by name before drawing anything.
 
@@ -265,21 +260,20 @@ door refuses it by name before drawing anything.
 ## The surface/PBL cadence, measured 2026-09-13
 
 Same point mesh, same HRRR 15Z init and boundary files (one `intermediate`,
-`init` and `lbc` pass, digests in the evidence folder), node-2's RTX 5090
+`init` and `lbc` pass, digests in the run receipts), an RTX 5090
 with no other process on the card during any arm (a co-tenant job had
 finished before the first arm; load average 1.0 to 1.3 throughout), one
 session, one hour (720 steps of 5 s), history every 60 minutes. Five arms
-back to back under one mutex hold: the untouched `lane/hex-point-hrrr` tree
+back to back in one session: the untouched 0.3.0 tree
 in the shared venv at the welded default, then this tree at 120, 60 and
 30 s, then this tree at the welded default. Card time 1,656 s (688 s for
 the first two arms, 968 s for the last three; a fresh-scratch refusal split
-the chain once). Receipts, step receipts, logs and the nvidia-smi trace are
-under `C:\Users\drew\Downloads\evidence-gallery\hex-perf-cadence-2026-09-13\`.
+the chain once).
 
 **The default is unchanged, byte for byte.** This tree at `auto` wrote both
 history frames byte-identical to the untouched tree's (15Z
 `85cb8196...`, 16Z `4ed8001f...`, the same two digests the 2026-09-13 profile
-lane recorded), at 0.3156 s per step after the first against the untouched
+measurement recorded), at 0.3156 s per step after the first against the untouched
 tree's 0.3148 (median composite step 0.2994 s in both).
 
 **The hold is real, and the receipt proves it.** At 120 s the seam
@@ -346,7 +340,7 @@ observations (MRMS, ASOS; the referee `docs/obs-referee.md` names), 30 s is
 the arm to grade: the same saving as 120 s with the smallest differences.
 The time in a step is elsewhere -- the host health gate (a fifth of it),
 the per-step rollback snapshot and the double-launched recovery kernels
-the profile named -- and that is where the next lanes should look.
+the profile named -- and that is where the next changes should look.
 
 The reflectivity panels for the every-step arm and the 120 s arm
 (`composite_reflectivity` and `2m_temperature_10m_winds` on the 16Z frame,
@@ -356,7 +350,7 @@ receipts; they are model results, not evidence about the atmosphere.
 ## The step's host path, measured 2026-09-14
 
 The same cull, the same init and boundaries, one hour (720 steps of 5 s),
-two arms back to back under one mutex hold on node-2's RTX 5090, the
+two arms back to back in one session on an RTX 5090, the
 untouched 0.3.0 tree first and the hostpath tree second, the card otherwise idle (no other GPU process during any arm; load average 1.05 at the second mutex hold, 1.5 at the first):
 
 - Contract deck on the cull's own rings at the hostpath tree's kernel-set
@@ -385,43 +379,43 @@ returns identical; the density validation 0.15 to 0.01; the
 recovered-state validation 1.19 to 0.04; the garbage scrub 15.6 to 5.9.
 The loop as a user waits for it (integration, gate and history) went
 from 0.3973 to 0.3011 s per step, 1.32x. The pictures and every receipt are
-in the hostpath folder of the evidence gallery.
+in the run receipts.
 
 ## The integrated performance tree, measured 2026-09-14
 
-`lane/hex-perf` is `lane/hex-point-hrrr` with the cadence, hostpath and lts
-lanes merged in that order (the kernels lane was not merged at this
+The integrated performance tree is the 0.3.0 tree with the cadence, host-path
+and local-time-stepping changes merged in that order (the kernels change was not
+merged at this
 measurement: its per-kernel capture-and-replay instrument reported 49 kernels
 compared and one, `transport_standard_finish_regional_v841`, not bitwise; the
-section after this one is that lane's landing, once the replay was bitwise
+section after this one is that change's landing, once the replay was bitwise
 for all 49). At this measurement the merged tree's regional kernel-set
-digest was the one the hostpath lane re-minted (`191af5f9...`), computed on the
+digest was the one the host-path change re-minted (`191af5f9...`), computed on the
 merged sources and equal to `MINTED_KERNEL_SET_SHA256`; the four frozen-source
-digests the two lanes moved (`dt_admission.py`, `pbl_cadence.py` from cadence;
+digests the two changes moved (`dt_admission.py`, `pbl_cadence.py` from cadence;
 `cuda_driver.py`, `cuda_backend/recovery.py` from hostpath) were each moved by
-exactly one lane and the CPU battery's pin tests hold them on the merged tree.
+exactly one change and the CPU battery's pin tests hold them on the merged tree.
 
 Same point cull (`q0.9375.120.43884.n41.95w94.79`, 43,884 cells, 55 levels,
 dt 5 s; grid `e4fb6704...`, init `4c6deb1c...`), same HRRR 15Z init and
-boundary files, node-2's RTX 5090 (32,607 MiB, sm_120), one mutex hold, the
+boundary files, an RTX 5090 (32,607 MiB, sm_120), one session, the
 card otherwise idle (no other GPU process during any step; load average 1.14
 at the first arm's launch, 3.91 at the second's, the first arm's own writer
 tail), gpuwm 2.7.3 from PyPI with its 2.7.3 bridge bundle in both venvs. Every
-number is from a receipt under
-`C:\Users\drew\Downloads\evidence-gallery\hex-perf-integrate-2026-09-13\raw\`.
+number is from a run receipt.
 
 - Contract deck on the cull's own rings at the merged tree's kernel set
   (`run_cuda_regional_contract.py --class-id graded-869m-dt5-z7`): 8 of 8
   decks bitwise, 22 of 22 regional kernels covered, dual run identical, every
   control with teeth; 424 s, peak 1,597 MiB.
-- `forecast --hours 3 --history-every-minutes 60` at the defaults each lane
+- `forecast --hours 3 --history-every-minutes 60` at the defaults each change
   recommended (surface/PBL every step, local time stepping off, the hostpath
   device checks on), 2,160 steps of 5 s, both arms back to back:
 
 | arm | door wall | driver execution | integration | s/step after the first | median typical step | health gate | loop incl. I/O | peak card memory | utilisation, mean |
 |---|---|---|---|---|---|---|---|---|---|
-| `lane/hex-point-hrrr` (untouched, shared venv) | 906.8 s | 875.5 s | 692.1 s | 0.3193 s | 0.3007 s | 168.6 s | 864.7 s | 9,485 MiB | 85.1 % |
-| `lane/hex-perf` (this tree, its own venv) | 728.1 s | 696.6 s | 675.0 s | 0.2978 s | 0.2797 s | 0.6 s | 679.6 s | 9,485 MiB | 79.8 % |
+| 0.3.0 tree (untouched, shared venv) | 906.8 s | 875.5 s | 692.1 s | 0.3193 s | 0.3007 s | 168.6 s | 864.7 s | 9,485 MiB | 85.1 % |
+| integrated performance tree (its own venv) | 728.1 s | 696.6 s | 675.0 s | 0.2978 s | 0.2797 s | 0.6 s | 679.6 s | 9,485 MiB | 79.8 % |
 | ratio | 1.245 | 1.257 | 1.025 | 1.072 | 1.075 | 293 | 1.272 | 1.000 | |
 
   The integration ratio reads low because the second arm's first step was
@@ -434,7 +428,7 @@ number is from a receipt under
   where the loop's 1.27x comes from.
 - Identity: all four history frames (15Z, 16Z, 17Z, 18Z) sha256-identical
   between the arms (`85cb8196...`, `4ed8001f...`, `8943dcf9...`,
-  `9f332aa8...`; the first two are the digests every lane of the campaign
+  `9f332aa8...`; the first two are the digests every arm of the campaign
   recorded for the untouched tree), the 2,160 `step_health` envelopes
   identical entry for entry, and the 18Z composite-reflectivity panel through
   `gpuwm-hex render` the same PNG byte for byte (`3b02745f...`). The receipt's
@@ -444,15 +438,15 @@ number is from a receipt under
   in the same session: one failure on the first pass, the NVRTC
   reciprocal-rewrite census finding `cuda_solve_region_v841.py` unregistered
   (the control that test exists for); registered, the tier is 47 passed, 1
-  skipped, and the CPU battery on node-1 is 1,194 passed, 70 skipped, 16
+  skipped, and the CPU battery on a CPU node is 1,194 passed, 70 skipped, 16
   deselected. Card time for the whole chain 2,080 s, plus 8 s for the tier's
   re-run.
 - Not run: the x4 full-physics dycore anchor. Its nine authority assets are not
-  on node-2 (no `work/v841-vr-static/` or
+  on that machine (no `work/v841-vr-static/` or
   `work/v841-full-physics-gf-gwdo-native-authority-20260820a/` under any
   checkout there), and the tool refuses by name without them.
 
-What ships as the default from this campaign is the hostpath lane's host path
+What ships as the default from this campaign is the host-path change's host path
 and, from the section below, the element-parallel launch geometry of the
 level-independent dycore kernels, neither of which changes a byte; the cadence
 knob and local time stepping ship selectable and off, each with the
@@ -485,14 +479,13 @@ unit derives from the regional unit are gathered in their element form
 (`cuda_acoustic_lts.py`), because the derivation anchored on the two
 per-owner preambles the re-map removed and refused to build.
 
-The replay verdict and its resolution. The lane's own node-2 chain
+The replay verdict and its resolution. The kernels change's own chain
 (2026-09-14 16:14 to 16:39Z, RTX 5090, load average 0.08, no other GPU
-process at any step; its receipts are `kernels-lane-chainC-receipts-2026-09-14.tgz`
-in the integrate folder of the evidence gallery) passed the NVRTC compile of
-all eight units, the contract deck at the lane's kernel set (`82a0b9ae...`; 8
+process at any step) passed the NVRTC compile of
+all eight units, the contract deck at the change's kernel set (`82a0b9ae...`; 8
 of 8 decks bitwise, 22 of 22 kernels, dual run identical, 420 s), and three
 one-hour arms: the untouched tree 0.3146 s per step after the first (door
-328.5 s, loop as a user waits for it 286.5 s), the lane tree 0.2836 s (1.109x;
+328.5 s, loop as a user waits for it 286.5 s), the change's tree 0.2836 s (1.109x;
 door 305.6 s, loop 264.1 s, 1.085x) and 0.2860 s in a second process, both
 frames (15Z `85cb8196...`, 16Z `4ed8001f...`) byte-identical across all
 three. Its per-kernel capture-and-replay (`tools/kernel_element_ab.py`, which
@@ -536,15 +529,15 @@ no kernel's output differed; what differed was an input slot neither kernel
 wrote, written by the instrument itself. `tools/nvrtc_compile_check.py`
 resolves every kernel of the eight units before any card time is spent.
 
-The landing, measured. `lane/kernels-land` is `lane/hex-perf` with
-`lane/kernels` merged (`04c4c69`: the recovery launches keep the host path's
+The landing, measured. The landed tree is the integrated performance tree with
+the element-parallel kernels change merged (`04c4c69`: the recovery launches keep the host path's
 once-per-kernel untimed helper and take the re-map's element grids), the
-instrument fix and the local-timestep gather above. On node-2's RTX 5090
-(32,607 MiB), one mutex hold 2026-09-14 22:22:20Z to 22:41:43Z (1,163 s of
+instrument fix and the local-timestep gather above. On an RTX 5090
+(32,607 MiB), one session 2026-09-14 22:22:20Z to 22:41:43Z (1,163 s of
 card time against the 35 min budget), no other GPU process at any step (the
-hold waited 120 s for another project's process to finish and took the card
-empty), load average 0.83 at the hold and 1.02 to 1.03 at every step after,
-gpuwm 2.7.3 from PyPI, the lane venv cloned from the integrated tree's and
+session waited 120 s for another process to finish and took the card
+empty), load average 0.83 at the start and 1.02 to 1.03 at every step after,
+gpuwm 2.7.3 from PyPI, the venv cloned from the integrated tree's and
 editable to a copy of this tree that hashes file for file to `0648789`:
 
 - NVRTC compile check of the eight units, 104 kernels resolved, 7 s.
@@ -564,13 +557,13 @@ editable to a copy of this tree that hashes file for file to `0648789`:
   earlier session the same day (16:46 to 17:18Z) and not beside this one, so
   the ratios below are across sessions on the same card and mesh, not the
   same-session pair the campaign's method asks for; the same-session pair for
-  this re-map is the lane's own one-hour chain above (1.109x):
+  this re-map is the change's own one-hour chain above (1.109x):
 
 | arm | door wall | driver execution | integration | s/step after the first | median typical step | health gate | loop incl. I/O | peak card memory | utilisation, mean |
 |---|---|---|---|---|---|---|---|---|---|
-| `lane/hex-point-hrrr` (integrate's baseline arm) | 906.8 s | 875.5 s | 692.1 s | 0.3193 s | 0.3007 s | 168.6 s | 864.7 s | 9,485 MiB | 85.1 % |
-| `lane/hex-perf` (integrate's arm) | 728.1 s | 696.6 s | 675.0 s | 0.2978 s | 0.2797 s | 0.6 s | 679.6 s | 9,485 MiB | 79.8 % |
-| `lane/kernels-land` (this arm) | 614.5 s | 583.0 s | 567.7 s | 0.2617 s | 0.2442 s | 0.6 s | 572.1 s | 8,914 MiB | 80.9 % |
+| 0.3.0 tree (integrate's baseline arm) | 906.8 s | 875.5 s | 692.1 s | 0.3193 s | 0.3007 s | 168.6 s | 864.7 s | 9,485 MiB | 85.1 % |
+| integrated performance tree (integrate's arm) | 728.1 s | 696.6 s | 675.0 s | 0.2978 s | 0.2797 s | 0.6 s | 679.6 s | 9,485 MiB | 79.8 % |
+| landed kernels tree (this arm) | 614.5 s | 583.0 s | 567.7 s | 0.2617 s | 0.2442 s | 0.6 s | 572.1 s | 8,914 MiB | 80.9 % |
 | ratio, hex-perf / kernels-land | 1.185 | 1.195 | 1.189 | 1.138 | 1.145 | 1.0 | 1.188 | 1.064 | |
 | ratio, baseline / kernels-land | 1.476 | 1.502 | 1.219 | 1.220 | 1.231 | 281 | 1.511 | 1.064 | |
 
@@ -584,7 +577,7 @@ editable to a copy of this tree that hashes file for file to `0648789`:
   `physics.cadence` reads consistent (2,160 surface-layer, Noah-MP and YSU
   calls, 18 radiation calls, nothing held).
 - The tree's GPU tier (`-m "gpu and not bigcard and not assets"`) in the same
-  hold: 47 passed, 1 skipped, 19 s. The CPU battery on node-1 (no card,
+  session: 47 passed, 1 skipped, 19 s. The CPU battery on a CPU node (no card,
   `GPUWM_NO_LOCAL_GPU=1`, load average 0.55 to 0.97): 1,346 passed, 70
   skipped, 16 deselected, 65 s.
 
@@ -613,10 +606,109 @@ and the element form pays the edge's connectivity and mask loads and the
 `rgas / (cp - rgas)` division per element where the per-owner form paid them
 once per edge; three launches a step take that path (the first sub-step of
 each Runge-Kutta stage), about 0.9 ms of a 244 ms step. All of these are
-bitwise; each is a named follow-up for a later lane (a per-owner text for the
+bitwise; each is a named follow-up for a later change (a per-owner text for the
 first sub-step, or hoisting the per-edge loads out of the level axis), and
 none of them holds the landing, because the composite step, which is what a
 user waits for, went from 0.2978 to 0.2617 s with the frames unchanged.
 
-Every number above is from a receipt under
-`C:\Users\drew\Downloads\evidence-gallery\hex-perf-kernels-2026-09-13\raw\`.
+## The forecast presets, measured 2026-09-27
+
+`gpuwm-hex forecast --preset NAME` selects a row of `hexcore.forecast_preset`.
+Two rows ship. `reference`, the default, is the proven configuration: legacy
+RRTMG, Noah-MP, revised MO and YSU, with the surface layer, Noah-MP and YSU
+called every model step. `fast` keeps the same schemes and holds the
+surface/PBL stack for up to 30 s between calls (six steps at dt 5 s; the weld
+where dt is 20 s or longer). The door turns the row into `--pbl-cadence` at
+the mesh's timestep and hands it to the same admission; an explicit
+`--pbl-cadence` wins, and the receipt's `configuration.preset` and
+`pbl_cadence_source` say which decided.
+
+**Every row got faster, with the frames unchanged.** Before phase one of every
+step the physics adapter copied every persisted seam array to the host (447 MB
+and 192 copies a step on this cull) so that a refused step could be rolled
+back. Only `--stop-on-refusal` reads that export, so the forecast now takes it
+only under that option. The 3 h forecast of 2026-09-13 wrote all four history
+frames with the same SHA-256 as before (`85cb8196...`, `4ed8001f...`,
+`8943dcf9...`, `9f332aa8...`).
+
+**Speed, one session.** The 1 h forecast of 2026-09-13 (720 steps of 5 s),
+four arms back to back on an RTX 5090 in one mutex hold, the card otherwise
+idle:
+
+| arm | s per step after the first | minutes per simulated hour | median step | radiation step | door wall | 16Z frame |
+|---|---|---|---|---|---|---|
+| before: the default at `c9f2edf` | 0.2678 | 3.21 | 0.2517 s | 2.56 s | 240.3 s | `4ed8001f...` |
+| after: `reference`, the default | 0.2367 | 2.84 | 0.2216 s | 2.49 s | 219.9 s | `4ed8001f...`, the same bytes |
+| after: `--preset fast` | 0.2225 | 2.67 | 0.2051 s | 2.39 s | 205.5 s | differs |
+| measurement arm: RTE-RRTMGP seam | 0.2228 | 2.67 | 0.2222 s | 0.33 s | 201.3 s | differs |
+
+The mutex hold ran 14:27 to 14:49Z (load average 1.0 at the first arm and a
+transient 18.5 as the second started; that arm's step time is within 2 per
+cent of the same row's other 1 h runs of the day). The 15Z frame is
+`85cb8196...` in all four. The before arm reproduces the September reference
+number for this case (0.2617 s a step on a 3 h arm) within 2.3 per cent.
+
+The 3 h forecasts agree: 0.2683 s a step before the change and 0.2451 s after
+it on 2026-09-13; on the four graded cases the reference row ran 0.2353 to
+0.2451 s a step, `fast` 0.2220 to 0.2258 and the RTE-RRTMGP arm 0.2203 to
+0.2242.
+
+**Skill against observations.** Four 3 h forecasts from HRRR 15Z on this
+cull: 2026-09-13 (the profile's case) and 2026-09-25, 2026-05-22 and
+2026-08-04, the three wettest days over the cull in Stage-IV hourly
+precipitation at 16 to 18Z between May and September, at least a week apart.
+The observation referee (`tools/run_obs_referee.py`) scored each arm against
+MRMS composite reflectivity, Stage-IV hourly precipitation (the MRMS door
+decodes reflectivity only) and ASOS 2 m temperature, 2 m dewpoint and 10 m
+wind, paired by case, 5,000 bootstrap replicates. Means over the four cases,
+each arm minus the reference row, in the score's own units:
+
+| score | reference | `fast` minus reference | verdict | RTE-RRTMGP arm minus reference | verdict |
+|---|---|---|---|---|---|
+| ASOS 2 m temperature RMSE, K | 2.369 | +0.013 (worse on 3 of 4) | indistinguishable | -0.046 (better on 3 of 4) | favors the arm |
+| ASOS 2 m dewpoint RMSE, K | 1.500 | +0.017 (worse on 3 of 4) | indistinguishable, guardrail fails | -0.001 | indistinguishable |
+| ASOS 10 m wind speed RMSE, m/s | 1.760 | +0.049 (worse on 4 of 4) | favors reference | +0.011 (worse on 3 of 4) | favors reference |
+| Stage-IV 1 h precipitation RMSE, mm | 1.556 | +0.004 | favors reference | +0.009 | favors reference |
+| Stage-IV 1 h precipitation CSI, 1 mm | 0.259 | -0.0001 | indistinguishable | +0.0017 | favors the arm |
+| Stage-IV 1 h precipitation FSS, 1 mm, 4 cells | 0.471 | +0.0001 | indistinguishable | +0.0021 | favors the arm |
+| Stage-IV 1 h precipitation CSI, 10 mm | 0.037 | 0.0000 | indistinguishable | -0.0003 | indistinguishable |
+| MRMS composite reflectivity CSI, 20 dBZ | 0.366 | -0.0003 | indistinguishable | +0.0002 | indistinguishable |
+| MRMS composite reflectivity CSI, 40 dBZ | 0.032 | +0.0001 | indistinguishable | +0.0001 | indistinguishable |
+| MRMS object centroid displacement, km | 34.4 | -0.8 | indistinguishable | +3.7 | indistinguishable |
+
+The referee's verdict on both arms is DISFAVORED: its guardrails (the ASOS
+scores) allow no adverse change, and each arm has one. The Stage-IV bias row
+is left out of the table because the manifest scores it lower-is-better on a
+negative bias; the RTE-RRTMGP arm's bias is closer to zero on three of four
+cases.
+
+**The decision.** `fast` does not score as well as `reference`: its
+reflectivity and precipitation threshold scores are the same, and it loses
+near the ground, 10 m wind on every case and 2 m dewpoint and temperature on
+three of four, the fields the held surface layer, Noah-MP and YSU act on
+directly. It stays selectable at about 6 per cent less time per
+step, and `reference` stays the default.
+
+**RTE-RRTMGP, measured but not selectable.** The engine's column seam writes
+the radiation variant into its `RunConfig` as a literal
+(`gpuwm/core/mpas_column_batch.py`, one of the sixteen pinned files), so no
+row can select RTE-RRTMGP through the pinned engine. The arm above was run by
+a measurement script that substitutes the seam's `RunConfig` in-process; no
+engine or hex file is changed, and no shipped option runs it. Its radiation
+call takes about 0.10 s against legacy RRTMG's 2.2 s (the radiation step 0.33
+s against 2.49 s), which alone buys about as much as the `fast` hold does,
+with the surface stack still called every step. Its scores are mixed: better 2
+m temperature and 1 mm precipitation placement, slightly worse 10 m wind and
+hourly precipitation RMSE. It becomes a row here once the engine seam takes
+the radiation variant as an argument.
+
+**Where a step's time is now.** Nsight Systems over steps 101 to 160 of the
+reference row under the profiler (the radiation step left out): 0.2256 s a
+step on the host, 0.2027 s of it the card busy and 0.0229 s idle. The dycore
+is 1,419 kernels, 550 copies and 184 memsets a step and keeps the card busy
+for 0.189 s of its 0.192 s, so it is bound by the card, not by its launches;
+its idle time is 2.9 ms a step. Of the remaining idle time, 14.5 ms a step is
+Noah-MP inside the engine (1,613 kernels, 229 memsets and 83 copies a call for
+2.4 ms of device work) and about 4 ms is the preparation, recovery, clamp and
+gate flag reads. The CUDA admission is answered from memory (68 calls a step,
+0.14 ms in all) and the health gate costs 0.3 ms a step.

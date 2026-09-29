@@ -20,7 +20,6 @@ import argparse
 import hashlib
 import json
 import os
-import platform
 import struct
 import subprocess
 import sys
@@ -30,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .host_identity import host_record
 from .errors import MpasPortError
 
 SURFACE_LEVEL_TAG = 200100.0
@@ -732,7 +732,7 @@ def run_init_command(arguments: argparse.Namespace) -> int:
         "tool": "gpuwm-hex init",
         "door_version": __version__,
         "created_utc": _utc_now(),
-        "host": platform.node(),
+        "host": host_record(),
         "engine": _described(engine),
         "vertical_source": {
             "mode": vertical.mode,

@@ -29,7 +29,7 @@ independent port and is not affiliated with or endorsed by them.)*
 5. [Initial conditions](05-initial-conditions.md) — the init door: the
    native-free vertical path, the capsule compatibility mode, and every
    physics switch with its native namelist key.
-6. [Running a forecast](06-forecast.md) — the source-checkout requirement,
+6. [Running a forecast](06-forecast.md) — what the run verifies at launch,
    registered meshes and timestep admission, local time stepping and its
    measured cost, restart, and what a run receipt claims and does not claim.
 7. [Rendering products](07-render.md) — history files to product PNGs through
@@ -59,31 +59,28 @@ gpuwm 2.5.7. Two are closed by the 2.5.8 floor this distribution now declares,
 re-measured 2026-08-28 against the published bundle: the **limited-area lane**
 of chapter 6.8 and the `cull` door of chapter 9 have the engine capabilities
 they need, and the render door's **default window** is understood by the
-published converter. The third stands, with a narrower reason than it had: the forecast lane needs
-a `gpuwm` **git** checkout at **v2.7.4**, not just whatever pip installs — not
-because a pinned file is missing from the wheel (at 2.5.8 all sixteen resolve
-from `site-packages`, measured 2026-08-28) but because the run records the
-checkout's HEAD, tree and dirty paths into every receipt. Each is written
-where you meet it; the 2026-08-27 walk is in
-`evidence/userwalk-20260827/RECEIPT.md` and is a record of 2.5.7.
+published converter. The third, the forecast lane's need for checkouts of
+both projects, is closed by 0.3.2: the drivers ship in the wheel and the run
+names the installed engine by version and `RECORD` digest. Each is written
+where you meet it; the 2026-08-27 walk is a record of 2.5.7.
 
 **Citations.** Bare paths (`docs/init-door.md`, `tools/battery/README.md`) are
-repository-relative files. Paths under `evidence/` are measurement receipts
-committed beside the code they measure. A claim with no bracket is a
-definition or a description of behavior, not a measurement.
+repository-relative files. A measured claim says what it was measured on
+and when; a claim without that is a definition or a description of
+behavior, not a measurement.
 
 **Declared divergences.** gpuwm-hex differs from native MPAS-Atmosphere in
 three measured, physics-shaped ways. They are stated in chapter 3, quantified
 in [`docs/declared-divergences.md`](../declared-divergences.md), and never
 hidden behind an option. Read them before trusting a number.
 
-**Version.** This manual describes gpuwm-hex 0.3.1 with the gpuwm 2.7.4
+**Version.** This manual describes gpuwm-hex 0.3.2 with the gpuwm 2.8.0
 engine. Where a measurement was taken on specific hardware, the card is
 named beside the number.
 
 **Vocabulary.** The *distribution* (what you `pip install`) and the *command*
 (what you type) are both `gpuwm-hex`. The *import namespace* is `hexcore`,
 renamed from `mpas_port` at 0.2.0 and explained in the README. A *door* is a command a
-user can walk through; a *lane* is a capability that today requires a source
-checkout. The *engine* is the `gpuwm` distribution that supplies the physics
+user can walk through; a *lane* is a capability path such as the forecast
+or limited-area lane. The *engine* is the `gpuwm` distribution that supplies the physics
 seam and the Rust binaries.

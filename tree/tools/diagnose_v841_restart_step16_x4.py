@@ -32,7 +32,7 @@ Cutpoints (each: npz of raw arrays + JSON manifest with per-array sha256):
 This tool only READS model state between exactly the frozen proof's own
 per-step operations; every dump is a pure device-to-host download.  The step
 sequence is byte-for-byte the sequence of ``execute_composite_step`` in
-``tools/run_cuda_v841_full_physics_x4.py``.
+``src/hexcore/drivers/run_cuda_v841_full_physics_x4.py``.
 """
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ def run_instrumented_step16(
         # _run_steps derives the previous-surface carriers from the committed
         # diagnostic snapshot at the start of the continuation in BOTH arms.
         previous = runner._previous_surface_updates(stack)
-    # The GF advective-forcing carrier the previous step formed (#327): the
+    # The GF advective-forcing carrier the previous step formed (the step-16 restart divergence): the
     # baseline arm holds it on the stack from _run_steps; a restored arm
     # holds the checkpoint's re-seeded pair.  begin_step below consumes it
     # exactly as execute_composite_step does.

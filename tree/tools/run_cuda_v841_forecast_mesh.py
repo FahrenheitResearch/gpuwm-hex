@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Run the frozen v8.4.1 full-physics forecast at a REGISTERED mesh shape.
 
-This is the door for every mesh in ``tools/mpas_mesh_binding.py``, including
+This is the door for every mesh in ``src/hexcore/drivers/mpas_mesh_binding.py``, including
 the native ``x4.163842`` -- where the binding is a proven no-op, so the same
 command runs the frozen shape without changing it.
 
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     repo = args.repo.resolve(strict=True)
     sys.path.insert(0, str(repo / "src"))
     binding_mod = _load(
-        "mpas_mesh_binding", repo / "tools" / "mpas_mesh_binding.py"
+        "mpas_mesh_binding", repo / "src" / "hexcore" / "drivers" / "mpas_mesh_binding.py"
     )
 
     grid = _extract(rest, "--grid")
@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     forecast = _load(
-        "v841_forecast", repo / "tools" / "run_cuda_v841_forecast.py"
+        "v841_forecast", repo / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py"
     )
     proof = forecast.proof
 

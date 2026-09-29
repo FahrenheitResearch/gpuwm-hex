@@ -635,7 +635,7 @@ def main() -> int:
     #
     # THE BREAKAGE THIS PREVENTS, measured 2026-08-26: the first version of
     # this list named cuda_driver.py but NOT cuda_transport.py.  The NVRTC
-    # reciprocal-rewrite fix (#355) changed BOTH -- the third-order stencil
+    # reciprocal-rewrite fix changed BOTH -- the third-order stencil
     # denominator moved from a source literal to a translation-unit constant
     # in each -- and the receipt would have caught only half of that.  Every
     # translation unit the regional step actually launches through is listed
@@ -726,7 +726,7 @@ def main() -> int:
             },
             # io_type="netcdf" writes NETCDF3_64BIT_OFFSET, the classic
             # header the house file_id-masked digest is defined against
-            # (tools/run_cuda_v841_full_physics_x4.netcdf_masked_digests).
+            # (hexcore.drivers.run_cuda_v841_full_physics_x4.netcdf_masked_digests).
             stream_options=HistoryStreamOptions(
                 io_type="netcdf", clobber_mode="truncate"
             ),

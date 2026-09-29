@@ -84,7 +84,7 @@ PORT_SOURCE_FILES = (
     "src/hexcore/partition_executor_v841.py",
     "src/hexcore/partition_net_v841.py",
     "src/hexcore/partition_device_scheduler_v841.py",
-    "tools/run_cuda_v841_full_physics_x4.py",
+    "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py",
     "tools/v841_partstream_common.py",
     "tools/run_cuda_v841_resident_baseline_lwfix.py",
     "tools/run_cuda_v841_forecast_2gpu.py",

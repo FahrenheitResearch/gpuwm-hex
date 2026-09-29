@@ -533,7 +533,7 @@ def main(argv: list[str] | None = None) -> int:
         "card": arguments.card,
         "mesh": arguments.mesh,
         "hours": arguments.hours,
-        "host": os.environ.get("COMPUTERNAME") or os.uname().nodename,
+        "host": __import__("hexcore.host_identity", fromlist=["host_record"]).host_record(),
         "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "init": str(arguments.init),
         "init_source": arguments.init_source,

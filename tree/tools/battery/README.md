@@ -1,7 +1,7 @@
 # The gpuwm-hex test battery
 
 Three tiers. The split is not by speed, it is by **what a machine has to own**
-to run a tier honestly, and each tier that cannot run says which thing is
+to run a tier in full, and each tier that cannot run says which thing is
 missing rather than dying somewhere unrecognisable.
 
 The lists in this directory are the source of truth for what a tier covers.

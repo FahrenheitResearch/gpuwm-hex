@@ -26,22 +26,20 @@ The mesh and static are reusable for years; the init is per-forecast.
 
 A *door* is a command a user can walk through: it validates its inputs,
 names any refusal, does its work through proven engines, and writes a
-receipt. The 0.2.0 doors are `gpuwm-hex version`, `doctor`, `mesh-check`,
-`oracle-gate`, `cull`, `init`, `forecast`, `swath`, `cycle` and `render`;
-chapter 9.1 tabulates what each one needs, and `cycle` has its own
+receipt. The 0.2.0 doors were `gpuwm-hex version`, `doctor`, `mesh-check`,
+`oracle-gate`, `cull`, `init`, `forecast`, `swath`, `cycle` and `render`,
+and 0.3 added `mesh-plan`, `intermediate`, `lbc` and `pair`; chapter 9.1 tabulates what each one needs, and `cycle` has its own
 document ([`docs/cycle-door.md`](../cycle-door.md)). The engine side
 contributes `gpuwm mesh` (mesh + static generation) and
 `gpuwm fetch-bridges` (engine staging).
 
-**Forecasting is a door, and it needs two checkouts.**
-`gpuwm-hex forecast` runs the model — and `cycle run` drives it — but it
-refuses by name without a `gpuwm-hex` checkout for the drivers under
-`tools/`, which verify their own executing modules by SHA-256 before CUDA
-is touched, and a `gpuwm` **git** checkout at the pinned commit, whose
-HEAD, tree and dirty paths go into every receipt so the executed seam
-source can be named by commit. Those are named refusals at a real door,
-not the absence of a door; chapter 6 states exactly why. Every door around
-it runs from the wheel.
+**Forecasting is a door, and it runs from the wheel.**
+`gpuwm-hex forecast` runs the model — and `cycle run` drives it. Its drivers
+ship in the package and verify their own executing modules by SHA-256 before
+CUDA is touched; the physics seam is the installed `gpuwm`, whose version and
+`RECORD` digest go into every receipt so the executed seam source can be
+named. A `gpuwm` git clone passed as `--gpuwm-checkout` is named by commit
+instead (chapter 6.1).
 
 **Fetching is deliberately not a door.** Nothing in gpuwm-hex downloads
 meshes, statics, or meteorological data.
@@ -85,8 +83,7 @@ no receipt directory, no card and no run commit; the commit that introduced
 them pinned engine `629ddb6f0`, which is the ceiling on when they were taken.
 Three engine pin moves have landed since. The last one is measured to change
 nothing on one case — a byte A/B of the two pins found the atmosphere
-fingerprint identical at all 31 steps
-(receipt `evidence/seam-258-ab-20260828/`) —
+fingerprint identical at all 31 steps —
 but the two earlier moves have no such arm and no magnitude has been
 re-measured over 24 h, so whether any of them moved is **NOT MEASURED**.
 Read them as pre-2026-08-20 numbers.
@@ -115,8 +112,7 @@ Read them as pre-2026-08-20 numbers.
 None of the three is softened by declaring it. Two of them have now been
 judged: the obs-referee ran for the first time on 2026-08-25, four cases
 scored against Stage-IV precipitation, MRMS reflectivity and ASOS surface
-reports ([`docs/obs-referee.md`](../obs-referee.md),
-receipt `evidence/obs-referee-283/`). (2) is scored
+reports ([`docs/obs-referee.md`](../obs-referee.md)). (2) is scored
 against real rainfall. (3) is scored on **both** halves: its
 precipitation-extreme half from that run, and its reflectivity half from the
 default history stream, which publishes `refl10cm` computed inside the due
@@ -128,8 +124,7 @@ declared condensate surplus, on one case. Point CSI is **0.0916** at 20 dBZ
 and **0.0097** at 40 dBZ over 643,419 pairs; both pay the documented cost of
 comparing a 22 km model box against a 0.01° pixel and should not be read
 alone. The other three cases' bundles predate the field and re-run
-mechanically
-(receipt `evidence/history-refl-q2-20260825/`).
+mechanically.
 The cloud-water/rain-water partition itself stays outside MRMS and ASOS scope,
 and (1) stays outside what these instruments can see at all. A bias that is wrong against observations is still
 wrong — declaring MPAS no longer the referee changes the referee, it does not
@@ -167,6 +162,5 @@ Every door writes down what it did and what it claims: the init door's
 output), the render door's `render-manifest.json` (engine digests, per-frame
 results, exact invocations), the forecast's `cuda-v841-forecast-receipt.json`
 (the claim, and at equal prominence the non-claims and dropped guarantees).
-Measurement campaigns commit their receipts under `evidence/`. When this
-manual cites a number, the bracket names the receipt; if you cannot find a
-receipt for a claim, treat the claim as wrong and say so.
+Every number this manual quotes was measured, and the text says on what
+and when; a number without that is a definition, not a measurement.

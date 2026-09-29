@@ -42,7 +42,29 @@ this.**  An engine nobody has measured against the manifest is never
 resolved onto by default; admitting one is a deliberate act that re-runs the
 instrument and moves this table.
 
-WHERE THIS STANDS NOW, re-measured 2026-09-15
+WHERE THIS STANDS NOW, re-measured 2026-09-29
+(``verification/engine-verdicts/repin-280-20260929.json``, after the
+pre-move measurement ``premeasure-280-20260929.json`` the same day).  The
+engine published 2.7.5, 2.7.6, 2.7.7 and 2.8.0 while the port pinned
+2.7.4; measured against that manifest all four fail, 2.8.0 by eight paths
+(``gpuwm/config.py``, ``gpuwm/core/gf.py``, ``gpuwm/core/kernels/gf.cu``,
+``gpuwm/core/kernels/__init__.py``, ``gpuwm/core/microphysics.py``,
+``gpuwm/core/physics.py``, ``gpuwm/core/rrtmg_legacy.py``,
+``gpuwm/io/restart.py``).  The other eight are byte-identical between the
+published 2.7.4 and 2.8.0 wheels: the column batch, the seam document and
+the Noah-MP files, the composed glacier unit included, so
+``ARWEN_GLACIER_COMPOSED_TU_SHA256`` did not move.  The manifest was
+re-pinned to the published 2.8.0 wheel's bytes (tag ``0164ae0f``, whose
+tree agrees with all three platform wheels on every pinned path) and the
+instrument re-run over every published engine.  The derivation now returns
+``gpuwm>=2.8.0,<2.8.1``: 2.8.0 is the one engine measured usable and 2.7.4
+fails the re-pinned manifest by those eight paths.  What the moved paths
+do to the fixed-step WSM6, YSU, Noah-MP, legacy-RRTMG and Grell-Freitas
+seam was measured with the seam-level A/B
+(``tools/measure_engine_seam_ab.py``) and a point-cull forecast arm, cited
+from ``docs/declared-divergences.md``.
+
+THE 2.7.4 MOVE, re-measured 2026-09-15
 (``verification/engine-verdicts/repin-274-20260915.json``, after the
 pre-move measurement ``premeasure-274-20260915.json`` the same day).  The
 engine published 2.7.4 (2026-09-13); measured against the manifest the
@@ -57,7 +79,7 @@ included, so ``ARWEN_GLACIER_COMPOSED_TU_SHA256`` did not move.  The
 manifest was re-pinned to the published 2.7.4 wheel's bytes (tag
 ``ed957997``, whose tree agrees with all three platform wheels on every
 pinned path) and the instrument re-run over every published engine.  The
-derivation now returns ``gpuwm>=2.7.4,<2.7.5``: 2.7.4 is the one engine
+derivation then returned ``gpuwm>=2.7.4,<2.7.5``: 2.7.4 was the one engine
 measured usable, 2.7.3 fails the re-pinned manifest by those two paths,
 and every earlier engine fails it by the same counts it failed the 2.7.3
 manifest by, because the two paths that moved were already in every one
@@ -136,8 +158,7 @@ that one file.  Both are stated with their magnitudes in
 follow-up.  If the one admitted engine were yanked from PyPI, the correct
 answer is :class:`EnginePinError`, not a loosened bound.
 
-ADMITTED ENGINES, added 2026-09-13, re-taken 2026-09-15 at the 2.7.4 pin.
-A build that is not on PyPI -- a private engine carrying a PEP 440 local
+ADMITTED ENGINES.  A build that is not on PyPI -- a private engine carrying a PEP 440 local
 version label on a published base, ``2.7.4+x.1`` -- has no row in the published table, because that table is a
 measurement of what PyPI serves, and it satisfies the derived specifier
 anyway, because PEP 440 orders a local version immediately after its base.
@@ -152,13 +173,14 @@ public pin's.  :func:`inspect_seam` tries an admitted row only when the
 public pin is not matched, matches it only in full, and refuses the row's
 bytes under any other version string.  An engine with no row -- a private
 build nobody measured, a re-versioned copy -- is refused exactly as an
-unmeasured public engine is.  The one row shipped moves five of the
-sixteen paths from the public 2.7.4 bytes and leaves the composed glacier
-unit identical; what the row is for is not this module's business.  The
-row on the 2.7.3 base that the 0.3.0 candidate carried was dropped when
-the range moved: pip no longer resolves ``2.7.3+x.1`` inside
-``gpuwm>=2.7.4,<2.7.5``, and a row whose base the specifier refuses
-admits nothing (``tests/test_engine_pin.py`` refuses such a row by name).
+unmeasured public engine is.  The published distribution ships the table
+EMPTY: a row names a build that is not public, so it belongs to whoever
+builds and installs that engine, who writes it with ``--admit`` into their
+own copy of this tree.  The mechanism ships and is tested with a
+synthetic row, so an admitted engine is gated and provenanced by exactly
+the same code whether or not a public row exists.  A row whose base the
+specifier refuses admits nothing (``tests/test_engine_pin.py`` refuses
+such a row by name).
 
 Two facts the 2026-08-27 measurement turned up that no document in the tree
 carried.  Both are still true, and both are now moot for the FLOOR, because
@@ -222,13 +244,13 @@ class PublishedEngine:
         return self.on_pypi and self.satisfies_manifest and self.offline_build_road
 
 
-#: THE OUTPUT OF AN INSTRUMENT, NOT A TRANSCRIPTION.  Re-measured 2026-09-15
-#: against the published bytes of every 2.5.x, 2.6.x and 2.7.x gpuwm, plus
+#: THE OUTPUT OF AN INSTRUMENT, NOT A TRANSCRIPTION.  Re-measured 2026-09-29
+#: against the published bytes of every 2.5.x, 2.6.x, 2.7.x and 2.8.x gpuwm, plus
 #: the v2.5.5 and v2.6.2 tags that have no PyPI release.  The instrument is
 #: ``tools/measure_engine_verdicts.py`` (network: it downloads every
 #: published wheel of every version and refuses a version whose platform
 #: wheels disagree); the JSON behind THIS table is
-#: ``verification/engine-verdicts/repin-274-20260915.json``, and the block
+#: ``verification/engine-verdicts/repin-280-20260929.json``, and the block
 #: below is that JSON rendered by the same instrument's ``--splice``.
 #:
 #: DO NOT HAND-PATCH A ROW.  ``moved`` is measured against THIS port's
@@ -541,7 +563,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         on_pypi=True,
         moved=(
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/noahmp_glacier_gpu.py",
             "gpuwm/core/noahmp_kernel_sources.py",
@@ -556,7 +580,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         on_pypi=True,
         moved=(
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/noahmp_glacier_gpu.py",
             "gpuwm/core/noahmp_kernel_sources.py",
@@ -571,7 +597,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         on_pypi=True,
         moved=(
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/noahmp_glacier_gpu.py",
             "gpuwm/core/noahmp_kernel_sources.py",
@@ -586,12 +614,73 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         on_pypi=True,
         moved=(
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
         ),
         offline_build_road=True,
     ),
     PublishedEngine(
         version="2.7.4",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.7.5",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/kernels/gf.cu",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.7.6",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.7.7",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/microphysics.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.8.0",
         on_pypi=True,
         moved=(),
         offline_build_road=True,
@@ -656,45 +745,7 @@ class AdmittedEngine:
 #:
 #: DO NOT HAND-PATCH A ROW, for the reason the published table gives.
 # --- BEGIN GENERATED: ADMITTED_ENGINES ---
-ADMITTED_ENGINES: tuple[AdmittedEngine, ...] = (
-    AdmittedEngine(
-        version="2.7.4+soma.1",
-        base="2.7.4",
-        build_commit="caed7fe860eb78f115e5d95cec1907927675b098",
-        digests=(
-            ("docs/mpas-seam.md", "5cd6934ef8b4f3dabfb7fa2e621ceab309836875a6669319323451ea717f9035"),
-            ("gpuwm/config.py", "af4cfe03af6de94527e07b8ca9a2d3213eff0a482c909a41c3b5db9182144078"),
-            ("gpuwm/core/gf.py", "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f"),
-            ("gpuwm/core/kernels/__init__.py", "5d8a0f17cf477d5a3ee67ae1010baca064572b8dd1e3f0708d72574bdadc9d69"),
-            ("gpuwm/core/kernels/gf.cu", "334c55ab764732be73d94504d54cb60ad7ca8bf12dbca879d7b3fc3f869d4386"),
-            ("gpuwm/core/kernels/noahmp_glacier.cu", "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"),
-            ("gpuwm/core/kernels/noahmp_leaves.cu", "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497"),
-            ("gpuwm/core/microphysics.py", "5c169d6309e7a77f32119f195c212eaf1bc6162ba745e24d6a9adc3185c7bc4c"),
-            ("gpuwm/core/mpas_column_batch.py", "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45"),
-            ("gpuwm/core/noahmp_glacier.py", "1bb607569b5007c5d2817e879eb82112db7ed01f11931efe1802d35b3fb7b23b"),
-            ("gpuwm/core/noahmp_glacier_gpu.py", "86d3dbf5dcac3c084bca9a4d819f698122da434d9e994243fd09ea1332337d0a"),
-            ("gpuwm/core/noahmp_kernel_sources.py", "fcdc097d20f9d0453086bae5ba1007f015d4eca2ac21b39db10a59f15cff26c5"),
-            ("gpuwm/core/noahmp_runtime.py", "990780ab87764481c463b1fa2f8c988cd9538e0833dc390203d2a0396fee66bc"),
-            ("gpuwm/core/physics.py", "b3417d878eaab1c8756535dc2721e6f1071e63cf51454faba0376a9223f6e1f1"),
-            ("gpuwm/core/rrtmg_legacy.py", "8951ce770e10f823d964a4f4564cc9f8989035a7fb9d3fc1448b73f6816bc928"),
-            ("gpuwm/io/restart.py", "bc52ff0e54c2edf78c425fbe73c087b900f309085588177e787e6b4f4126a60f"),
-        ),
-        glacier_composed_tu_sha256="cde4bfccb40efd54be56700251849e8d18bcd7ae69d85f5737a2cabc32719d84",
-        moved_from_base=(
-            "gpuwm/config.py",
-            "gpuwm/core/kernels/__init__.py",
-            "gpuwm/core/microphysics.py",
-            "gpuwm/core/physics.py",
-            "gpuwm/io/restart.py",
-        ),
-        artifacts=(
-            ("gpuwm-2.7.4+soma.1-py3-none-manylinux_2_28_x86_64.whl", "960ce1dc5c7992b447b5923981a08e91c0253c7a70567afa487a413e546a6b29"),
-            ("gpuwm-2.7.4+soma.1-py3-none-any.whl", "ffaa5b304a716b4846862034d2f752ae2dfb846b1214a196e0f4afc6251f0b5c"),
-            ("gpuwm-2.7.4+soma.1-py3-none-win_amd64.whl", "1ff8791eaa7402475223d2b358f528d30c0bdd5b304e061f3a9e3e942437e311"),
-            ("engine (source tree)", None),
-        ),
-    ),
-)
+ADMITTED_ENGINES: tuple[AdmittedEngine, ...] = ()
 # --- END GENERATED: ADMITTED_ENGINES ---
 
 
@@ -1061,31 +1112,23 @@ def version_from_moved(moved: tuple[str, ...]) -> str | None:
 
 
 def remedy(found: str | None = None) -> str:
-    """The commands that put a usable engine on this machine.
+    """The command that puts a usable engine on this machine.
 
-    Both routes, because the two halves of this distribution need different
-    things: the install is what pip resolves, the checkout is what the
-    forecast lane's proof harness reads a git state out of.
-
-    THE REASON MOVED AT 2.5.8 AND THIS TEXT MOVES WITH IT.  Until 2.5.7 the
-    second line was owed because the seam pin named ``docs/mpas-seam.md``,
-    which no wheel placed in site-packages: an install could not satisfy the
-    pin at all.  2.5.8 ships it, all sixteen paths resolve from an install
-    (measured 2026-08-28), and the clone is now owed for provenance instead.
-    A remedy that keeps a dead reason is a refusal that does not name its
-    breakage, which is the law this line is subject to.
+    The install is the whole remedy: all sixteen pinned paths resolve from
+    site-packages (since 2.5.8) and, since 0.3.2, the forecast names an
+    install by version and pip's RECORD digest, so the clone this text used
+    to owe for receipt provenance is optional.  It is still printed, as the
+    one alternative, because a clone passed as ``--gpuwm-checkout`` is
+    recorded by commit.
     """
 
     wanted = wanted_version()
     lines = [
         f'  pip install "{gpuwm_requirement()}"',
+        "      # optional: a clone at the pinned tag, passed as",
+        "      # --gpuwm-checkout, is recorded by commit instead of by the",
+        "      # install's version and RECORD digest",
         f"  git clone --depth 1 --branch v{wanted} {REPOSITORY}",
-        "      # the forecast lane needs the GIT CHECKOUT too, and at "
-        f"{wanted} the",
-        "      # reason is provenance rather than a missing file: the run's",
-        "      # proof harness records the checkout's HEAD, tree and dirty",
-        "      # paths into every receipt, and an install has no commit to",
-        "      # name the executed bytes by.  Pass it as --gpuwm-checkout.",
     ]
     if found is not None:
         lines.insert(0, f"  # found gpuwm {found}; this port pins {wanted}.")

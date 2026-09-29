@@ -5,7 +5,7 @@ OPT-IN.  Nothing in this module runs unless ``config_local_timestep`` is on.
 Why derive instead of copy
 --------------------------
 ``src/hexcore/cuda_driver.py``, ``cuda_horizontal.py`` and ``cuda_horizontal_v841.py``
-are exact-byte pinned by ``tools/run_cuda_v841_full_physics_x4.py``'s
+are exact-byte pinned by ``src/hexcore/drivers/run_cuda_v841_full_physics_x4.py``'s
 ``EXECUTION_SOURCE_PINS``, so the rate-class launches cannot be added in place.
 A hand-copied kernel would drift from its original the first time the original
 changed, and the drift would be silent.  Instead every kernel here is produced

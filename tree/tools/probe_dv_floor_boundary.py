@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Measure the REAL post-#311 dvEdge load boundary, through the real loader.
+"""Measure the REAL post-fix dvEdge load boundary, through the real loader.
 
 WHY THIS EXISTS.  The engine's ``validate.rs`` CARRIED an absolute
 ``min_dv_edge_m = 7,500.0`` floor whose stated breakage was the port's OLD
@@ -20,7 +20,7 @@ vertex to its recomputed f64 arc (cast to the file's own dtype) and the
 moved vertices' lat/lon.  Nothing else in ``Mesh.validate`` reads vertex
 positions, so the edited pair isolates exactly the check under test, and the
 verdict comes from ``Mesh.from_netcdf(grid, static, validate=True)`` -- the
-real loader, on real files, not a reimplementation.  The pre-#311 verdict
+real loader, on real files, not a reimplementation.  The pre-fix verdict
 (rtol 2e-5, atol 0.0) is computed alongside for the same edge, so the
 retirement of the old boundary is a measured before/after, not a claim.
 """
@@ -131,7 +131,7 @@ def edit_static(source: Path, target: Path, dv_target_m: float) -> dict:
             ds.variables["dvEdge"][e] = new_dv
             updates[e] = new_dv
 
-        # The pre-#311 verdict for the edited edge, computed against the
+        # The pre-fix verdict for the edited edge, computed against the
         # values as STORED (both sides quantized the way the loader sees
         # them), so the old check's failure is measured, not modelled.
         stored_dv = float(np.asarray(ds.variables["dvEdge"][pick], dtype=np.float64))
@@ -212,7 +212,7 @@ def main() -> int:
             f"  dvEdge {edit['stored_dv_m']:.3f} m (target {target:.0f}): "
             f"loader={'PASS' if verdict['loaded'] else 'REFUSED'}; "
             f"quantization gap {edit['quantization_gap_m']:.3f} m; "
-            f"pre-#311 check would {'PASS' if edit['pre_311_check']['passes'] else 'FAIL'}",
+            f"pre-fix check would {'PASS' if edit['pre_311_check']['passes'] else 'FAIL'}",
             flush=True,
         )
         if not verdict["loaded"]:

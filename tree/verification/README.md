@@ -25,14 +25,19 @@
   bytes (2.7.3 alone passes); `premeasure-274-20260915.json` is every
   engine measured against the 2.7.3 bytes after 2.7.4 published (2.7.4
   fails by two files); `repin-274-20260915.json` is every engine measured
-  against the 2.7.4 bytes (2.7.4 alone passes, the table of record).
-  `admitted-engines.json` is the one private row, re-taken on the 2.7.4
-  base.  Beside them, `seam-ab-*.json` are the outputs
+  against the 2.7.4 bytes (2.7.4 alone passes);
+  `premeasure-280-20260929.json` is every engine measured against the 2.7.4
+  bytes after 2.7.5 to 2.8.0 published (all four fail);
+  `repin-280-20260929.json` is every engine measured against the 2.8.0
+  bytes (2.8.0 alone passes, the table of record).
+  `admitted-engines.json` is the admitted-engine document; the public
+  release carries no row in it.  Beside them, `seam-ab-*.json` are the outputs
   of `tools/measure_engine_seam_ab.py`: the engine's column-batch seam driven
   on fixed columns under two engines and compared field by field, which is
   how a re-pin says which physics number moved and by how much (the
   `2.6.5-vs-2.7.3` files are the 2.7.3 re-pin's, taken on an RTX 5070 Ti;
-  the `2.7.3-vs-2.7.4` files are the 2.7.4 re-pin's, taken on an RTX 5090,
+  the `2.7.3-vs-2.7.4` files are the 2.7.4 re-pin's and the
+  `2.7.4-vs-2.8.0` files the 2.8.0 re-pin's, both taken on an RTX 5090,
   500 of 500 arrays identical on both profiles).  Their
   ``.npz`` inputs are not carried; the JSON records the SHA-256 of the columns
   that produced them and of the engine sources on each side.

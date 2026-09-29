@@ -379,10 +379,10 @@ ADMITTED_TIMESTEPS: Mapping[str, DtAnchor] = MappingProxyType(
             card="RTX 5070 Ti (70 SM)",
             admitted_on="2026-08-26",
             schedule_receipt=(
-                "evidence/dt-anchors-20260826/dt75-node1/schedule-receipt-dt75.json"
+                "evidence/dt-anchors-20260826/, schedule-receipt-dt75.json"
             ),
             integration_anchor=(
-                "evidence/dt-anchors-20260826/dt75-node1/anchor-dt75.json, "
+                "evidence/dt-anchors-20260826/, anchor-dt75.json, "
                 "evidence/dt-anchors-20260826/RECEIPT.md"
             ),
             native_reference=None,

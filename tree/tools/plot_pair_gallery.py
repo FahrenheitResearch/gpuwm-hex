@@ -500,9 +500,10 @@ def control_presence(control: Any, name: str, record: int) -> str:
     """One measured sentence on what the control leg holds for an extra.
 
     A DISCOVERED extra is absent from the control leg by definition.  An
-    extra named with ``--extras`` need not be: a seeded row run with no
-    point-source table carries every agent bank at zero, and the reader who
-    opens that panel is checking exactly whether the control was unseeded.
+    extra named with ``--extras`` need not be: a treatment row run with no
+    point-source table carries every tracer field at zero, and the reader
+    who opens that panel is checking exactly whether the control leg carried
+    none of the tracer.
     A caption that asserted "the control leg does not carry this field" for
     a field the control leg does carry would be false at the one moment it
     was being relied on, so the control frame is READ and the sentence

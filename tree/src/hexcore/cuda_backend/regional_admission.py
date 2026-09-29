@@ -145,7 +145,7 @@ def kernel_set_sha256(root: Path | None = None) -> str:
     classifiers hashing the same arrays two different ways.
 
     EACH NAME RESOLVES TO THE FILE THIS INTERPRETER WILL LAUNCH, through
-    :mod:`hexcore.shipped_sources`, and that is ledger #379's fix.  The
+    :mod:`hexcore.shipped_sources`, and that is the wheel-reach defect's fix.  The
     constant this replaced walked three directories up from here and assumed
     a checkout underneath; from an installed wheel that lands on
     ``<venv>/lib/python3.13``, where no ``src/`` exists, so this function
@@ -154,7 +154,7 @@ def kernel_set_sha256(root: Path | None = None) -> str:
     unchanged, the bytes under them in a checkout are unchanged, and the
     digest is therefore unchanged: ``MINTED_KERNEL_SET_SHA256`` did not move
     and no admitted class lapsed.  Measured both ways in
-    ``evidence/wheel-reach-20260827``.  That paragraph is about ledger #379
+    ``evidence/wheel-reach-20260827``.  That paragraph is about the wheel-reach defect
     and nothing else.  0.2.0's package rename moved this digest twice over --
     every declared NAME went from ``src/mpas_port/`` to ``src/hexcore/``, and
     eleven of the fourteen PAYLOADS moved with them, because the same token is
@@ -397,7 +397,7 @@ class RegionalContract:
 #: test_regional_forecast_anchor.py`` re-computes it from the sources and
 #: refuses a mismatch by name, so a kernel edit that silently kept an anchor
 #: alive is impossible.
-#: RE-MINTED 2026-08-27 for the provenance scrub (ledger #377).  Three of the
+#: RE-MINTED 2026-08-27 for the provenance scrub.  Three of the
 #: fourteen hashed sources moved -- ``cuda_driver.py`` and ``regional_v841.py``
 #: carried a person's name, a node label and a machine-shaped rig description
 #: in comments and docstrings, and those had to leave the PRIVATE tree rather
@@ -412,14 +412,14 @@ class RegionalContract:
 #:
 #: RE-DERIVED 2026-08-28 for the 0.2.0 package rename, and this is a different
 #: KIND of move from the one above, which is why it is written out rather than
-#: folded into that paragraph.  #377 moved BYTES: three sources were edited and
+#: folded into that paragraph.  The provenance scrub moved BYTES: three sources were edited and
 #: the two shipped classes were RE-MINTED on the card, two fresh 1,080-step
 #: pairs, 17 min 29 s of a 5090.  The rename moved NAMES and the spelling of
 #: one identifier: all fourteen declared names changed prefix, and eleven of
 #: the fourteen files changed bytes by the substitution of the token
 #: ``mpas_port`` with ``hexcore`` AND NOTHING ELSE -- measured, not argued.
 #: Each of those eleven is byte-identical to its pre-rename self once that one
-#: identifier is substituted, which is a stronger statement than #377's
+#: identifier is substituted, which is a stronger statement than the provenance scrub's
 #: AST comparison and needs no docstring-stripping to make.  The 32 lines
 #: carrying the token are 19 comment, docstring and cross-reference lines, 12
 #: NVRTC ``module_key`` / module-name labels, and one import.  Not one is
@@ -430,12 +430,12 @@ class RegionalContract:
 #: name mint receipts taken at kernel set ``237630342e...``, and this constant
 #: is no longer that value.  Those receipts are NOT re-pointed and their prose
 #: is not edited to pretend otherwise.  A re-mint at this digest -- the four
-#: 1,080-step integrations #377 paid for, on a card -- is an OPEN follow-up of
-#: the 0.2.0 cut and was not taken by the lane that re-derived this constant.
+#: 1,080-step integrations the provenance scrub paid for, on a card -- is an OPEN follow-up of
+#: the 0.2.0 cut and was not taken when this constant was re-derived.
 #: The constant moved anyway because the alternative is worse by a wide margin:
 #: a stale value here is not a failing test, it is ``require_regional_anchor``
 #: refusing every limited-area run at the door of the shipped package, which is
-#: ledger #379's breakage restaged.  Only one half of the anchor is in
+#: the wheel-reach defect's breakage restaged.  Only one half of the anchor is in
 #: question: every cull's contract deck still measures device bits against the
 #: v8.4.1 CPU authority on its own zone geometry, and a spelling cannot touch
 #: that.
@@ -609,7 +609,7 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "same 1.605x Courant margin under a 32.092 s limit.  Not one "
                 "input this instrument reads distinguished them, which is why "
                 "the geometry is not in the key.  RE-MINTED 2026-08-27 at "
-                "the kernel set the provenance scrub produced (#377), on the "
+                "the kernel set the provenance scrub produced, on the "
                 "same 14,050-cell cull and the same namelist: 1,080 steps in "
                 "two independent processes, 192 s and 184 s, all THIRTEEN "
                 "published frames identical under masked digests and every "
@@ -650,7 +650,7 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "history frames agree under masked digests across all four, "
                 "while every whole-file digest differs on its own file_id.  "
                 "RE-MINTED at the merged tip after the NVRTC "
-                "reciprocal-rewrite fix (#355), which moved the third-order "
+                "reciprocal-rewrite fix, which moved the third-order "
                 "stencil denominator off a source literal in both cuda_driver "
                 "and cuda_transport: the pre-fix pair is superseded.  ONE "
                 "MEMBER ONLY, and that is a statement about the evidence "
@@ -667,7 +667,7 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "cannot grow to cover a cull nobody looked at.  Measuring the "
                 "edge on a machine holding the reference mirror retires that "
                 "restriction.  RE-MINTED 2026-08-27 at the kernel set the "
-                "provenance scrub produced (#377), on the same cull and the "
+                "provenance scrub produced, on the same cull and the "
                 "same CANDIDATE-REGIONAL-DRY namelist: 90 steps in two "
                 "independent processes, 13 s each on an RTX 5090, all SEVEN "
                 "published frames identical under masked digests and every "
@@ -696,7 +696,7 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
             minted_on_geometries=("r0.9.120.40520",),
             finest_edge_band_relative=SAME_LADDER_FINEST_EDGE_BAND,
             basis=(
-                "BAND 2026-09-13 (hex-point-hrrr lane): a cull of a parent "
+                "BAND 2026-09-13 (point door): a cull of a parent "
                 "GENERATED AT ANOTHER POINT from the same 937.5 m ladder spec "
                 "(gpuwm-hex mesh-plan --point) delivers the same rung and a "
                 "finest edge that differs from 869.251 m by relaxation noise; "
@@ -727,7 +727,7 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "string): on the 43,884-cell 937.5 m point cull of a parent "
                 "generated at 41.95 N 94.79 W, HRRR 15Z init and hourly "
                 "boundaries, 720 steps of 5 s, the hostpath tree ran twice in "
-                "two processes on node-2's RTX 5090 (215.3 s and "
+                "two processes on the proving RTX 5090 (215.3 s and "
                 "214.3 s of integration) and both history frames agree "
                 "byte for byte -- and agree byte for byte with the untouched "
                 "0.3.0 tree's run of the same hour in the same session, so the "
@@ -739,7 +739,7 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
                 "move (six CUDA-bearing sources moved, the per-element "
                 "arithmetic did not): on the same 43,884-cell point cull, "
                 "HRRR 15Z init and hourly boundaries, 2,160 steps of 5 s on "
-                "node-2's RTX 5090 in one process (567.7 s of integration), "
+                "the proving RTX 5090 in one process (567.7 s of integration), "
                 "all four history frames agree byte for byte with the "
                 "untouched 0.3.0 tree's run of the same three hours and with "
                 "the integrated tree's; the cull's own contract deck passed at "
@@ -770,7 +770,7 @@ ADMITTED_CLASSES: Mapping[str, RegionalClass] = MappingProxyType(
             minted_on_geometries=("r0.8.102.56619",),
             finest_edge_band_relative=SAME_LADDER_FINEST_EDGE_BAND,
             basis=(
-                "BAND 2026-09-13 (hex-point-hrrr lane): the same-ladder band the "
+                "BAND 2026-09-13 (point door): the same-ladder band the "
                 "937.5 m class carries, for the same reason; the two bands do "
                 "not overlap.  "
                 "The finest class this program has minted: an 800 m limited-area "
@@ -1294,7 +1294,8 @@ def uncontracted_geometry_refusal(
         f"cull's specified and relaxation zones -- a mask-4/5 downgrade, a "
         f"spec-zone pgrad mask or a one-cell ring-7 edge that is wrong HERE "
         f"would be reproduced identically by two runs and caught by neither.  "
-        f"Run tools/run_cuda_regional_contract.py against this grid and "
+        f"Run `python -m hexcore.drivers.run_cuda_regional_contract` (in a "
+        f"checkout, tools/run_cuda_regional_contract.py) against this grid and "
         f"present its receipt through the {CONTRACT_LEDGER_ENVIRONMENT} "
         f"directory (or add a row to SHIPPED_CONTRACTS).  Contracted "
         f"geometries: {contract_summary()}.{looked}"

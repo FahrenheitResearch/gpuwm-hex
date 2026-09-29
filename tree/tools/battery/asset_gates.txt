@@ -4,7 +4,7 @@
 #
 # About 6.9 GiB of files that gpuwm-hex ships with no fetch path.  They are
 # pinned by byte count and SHA-256 in
-# tools/run_cuda_v841_full_physics_x4.py::AUTHORITY_PINS -- masked over the
+# src/hexcore/drivers/run_cuda_v841_full_physics_x4.py::AUTHORITY_PINS -- masked over the
 # netCDF file_id nonce for the three history files, since that nonce is random
 # per write and would otherwise make every re-mint look like corruption.
 #

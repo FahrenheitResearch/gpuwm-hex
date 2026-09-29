@@ -200,10 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     binding_mod = _load(
-        "mpas_mesh_binding", repo / "tools" / "mpas_mesh_binding.py"
+        "mpas_mesh_binding", repo / "src" / "hexcore" / "drivers" / "mpas_mesh_binding.py"
     )
     forecast = _load(
-        "v841_forecast", repo / "tools" / "run_cuda_v841_forecast.py"
+        "v841_forecast", repo / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py"
     )
 
     def _flag(name: str) -> str | None:

@@ -768,7 +768,7 @@ def materialize_vertical_artifact(
         },
         "arrays": {name: _raw_array_receipt(value) for name, value in arrays.items()},
         "output": {"path": str(out), "bytes": out.stat().st_size, "sha256": _sha256_file(out)},
-        # #373: every digest above belongs to a C library, not to the source
+        # The libm-identity finding: every digest above belongs to a C library, not to the source
         # alone.  `dcEdge**2` in `vertical.edge_dc_squared_over_twelve` goes
         # through the platform `powf`, which glibc 2.43 and the MSVC CRT round
         # differently for 215 of this parent's 338,022 edges -- so `zb` and

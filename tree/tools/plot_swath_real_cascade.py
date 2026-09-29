@@ -9,7 +9,7 @@ through ``gpuwm-hex render`` and is delivered unmodified beside these.
 WHY THERE IS NO COMPOSITE OF THE RING ONTO A RENDERED WEATHER RASTER, MEASURED.
 Drawing the placed ring on top of the Rust renderer's own global PNG needs that
 PNG's geographic transform.  The renderer publishes none -- neither the render
-manifest nor the PNG carries the plot rectangle or the projection it drew -- so
+manifest nor the PNG carries the plot rectangle or the projection it used -- so
 the transform can only be recovered by registration.  It was attempted, against
 the converter's own 0.25 degree frame for the same valid time: the best linear
 plate-carree fit put 4.175 px/deg across longitude against 4.38 px/deg across

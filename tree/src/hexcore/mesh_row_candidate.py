@@ -5,7 +5,7 @@ problem: ``candidate_mint`` admits ONE unanchored ``config_dt`` while a mint
 run is in flight, so the sealed v8.4.1 configuration will build at a timestep
 nobody has proven yet.
 
-The other half is the mesh registry.  ``tools/mpas_mesh_binding.py`` rows
+The other half is the mesh registry.  ``src/hexcore/drivers/mpas_mesh_binding.py`` rows
 carry a *declared* timestep, the forecast door computes its step schedule
 from that field, and ``bind_mesh`` admits it against the earned-anchor
 registry.  So an admitted candidate timestep is not reachable at all unless
@@ -37,7 +37,7 @@ Everything about the path is loud and it cannot be entered by accident:
 * the override is removed when the mint finishes.
 
 It admits nothing on its own.  What a mint earns is evidence; registering the
-anchor that evidence supports is a ruling.
+anchor that evidence supports is a decision of record.
 
 The state lives here rather than in ``mpas_mesh_binding`` itself because the
 forecast door loads that file by path with ``importlib`` and re-executes it
@@ -79,7 +79,7 @@ def apply_overrides(rows: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return ``rows`` with any live candidate timestep applied.
 
     Returns the mapping unchanged when no mint is in flight, which is every
-    ordinary run.  ``tools/mpas_mesh_binding.py`` calls this once, where it
+    ordinary run.  ``src/hexcore/drivers/mpas_mesh_binding.py`` calls this once, where it
     builds ``MESH_BINDINGS``, so a re-executed copy of that module picks the
     override up exactly as the first copy did.
     """
@@ -100,7 +100,7 @@ def apply_overrides(rows: Mapping[str, Any]) -> Mapping[str, Any]:
                 f"anchor mint, on unchanged grid/static bytes.  The registered "
                 f"row declares {float(row.dt_seconds):g} s and is restored when "
                 f"the mint exits.  Nothing this run produces is an anchored "
-                f"forecast; it is evidence for a ruling.  || {row.notes}"
+                f"forecast; it is evidence for registering an anchor.  || {row.notes}"
             ),
         )
     return MappingProxyType(patched)

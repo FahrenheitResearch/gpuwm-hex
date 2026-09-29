@@ -17,7 +17,7 @@ PROOF_RECEIPT=$W/v841-releaseproof-20260812-out-d/cuda-v841-full-physics-x4-rece
 cd "$REPO" || exit 90
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) forkgate run start" >> "$W/$TAG.log"
-"$PY" tools/run_cuda_v841_forecast.py \
+"$PY" src/hexcore/drivers/run_cuda_v841_forecast.py \
   --init "$INIT" \
   --init-source 'AUTHORITY init (release-proof pinned) 2026-08-10 12Z' \
   --start-time 2026-08-10_12:00:00 \

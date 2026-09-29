@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Per-allocation device-memory ledger for the MPAS-A v8.4.1 CUDA port.
 
-Runs the REAL forecast driver (tools/run_cuda_v841_forecast.py) through the
-REAL mesh binder (tools/mpas_mesh_binding.py) and records where device memory
+Runs the REAL forecast driver (src/hexcore/drivers/run_cuda_v841_forecast.py) through the
+REAL mesh binder (src/hexcore/drivers/mpas_mesh_binding.py) and records where device memory
 actually goes.  Nothing in the port tree is modified: the instruments are
 
   1. a cupy.cuda.MemoryHook that records (nbytes, site) for every pool
@@ -637,8 +637,8 @@ def selftest(args) -> int:
 def run(args) -> int:
     repo = Path(args.repo).resolve(strict=True)
     sys.path.insert(0, str(repo / "src"))
-    binding = _load("mpas_mesh_binding", repo / "tools" / "mpas_mesh_binding.py")
-    forecast = _load("v841_forecast", repo / "tools" / "run_cuda_v841_forecast.py")
+    binding = _load("mpas_mesh_binding", repo / "src" / "hexcore" / "drivers" / "mpas_mesh_binding.py")
+    forecast = _load("v841_forecast", repo / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py")
     proof = forecast.proof
 
     # The ArWen checkout is a root too.  Without it every allocation made

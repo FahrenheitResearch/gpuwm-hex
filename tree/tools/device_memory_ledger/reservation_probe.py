@@ -17,10 +17,10 @@ Because a kernel that dereferences BEFORE its guard would fault the whole
 context, each kernel is measured in its own process by --sweep, so one bad
 kernel costs one row and not the run.
 
-Validation is built in, and it was re-pinned 2026-08-25 (stale-guard audit
-#347, finding 6).  The original positive control pinned ``gf_gfdrv_stage``
+Validation is built in, and it was re-pinned 2026-08-25 (stale-guard audit,
+finding 6).  The original positive control pinned ``gf_gfdrv_stage``
 at 7,034.0 MiB -- the sum of the pre-cut in-run increments (rlw_rtrn_march
-254.0 + ysu_column 1790.0 + gf_gfdrv_stage 4990.0).  The #294
+254.0 + ysu_column 1790.0 + gf_gfdrv_stage 4990.0).  The
 Grell-Freitas frame cut retired that premise (the gf frame is now 88/72 B),
 so the instrument declared its own technique invalid against a dead number.
 The control is now the POST-CUT widest launched frame, ``wsm6_column`` at
@@ -154,13 +154,13 @@ def build_args(cp, np, params):
 # shipped block of 64 and 7034 MiB at 128), so every row is launched at the
 # block size the shipped call site uses.
 DEFAULT_SWEEP_TARGETS = (
-    # POSITIVE CONTROL, re-pinned 2026-08-25 (stale-guard audit #347,
+    # POSITIVE CONTROL, re-pinned 2026-08-25 (stale-guard audit,
     # finding 6): the post-cut widest LAUNCHED frame, wsm6_column at
     # 7,216 B (STATE.md section 5), at its shipped call-site block of 32
     # (gpuwm/core/wsm6.py::_COLUMN_TPB).  "bound" = the reservation must
     # be positive and inside the device-derived backing-store bound
     # (frame x resident threads; 1,797.0 MiB on the 170 SM card).  The
-    # retired control pinned gf_gfdrv_stage at the pre-#294-cut
+    # retired control pinned gf_gfdrv_stage at the pre-frame-cut
     # 7,034.0 MiB; the cut shrank that frame to 88/72 B, so the pin
     # failed against a dead premise.  Restoring a measured-equality
     # control needs one post-cut run on real hardware (named follow-up).

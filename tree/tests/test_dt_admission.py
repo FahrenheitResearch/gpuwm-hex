@@ -45,13 +45,14 @@ from hexcore.errors import ConfigurationRefusal
 
 TREE_ROOT = Path(__file__).resolve().parents[1]
 TOOLS = TREE_ROOT / "tools"
+DRIVERS = TREE_ROOT / "src" / "hexcore" / "drivers"
 
 
 def _load_tool(filename: str, alias: str) -> object:
     sys.modules.pop(alias, None)
     if str(TOOLS) not in sys.path:
         sys.path.insert(0, str(TOOLS))
-    spec = importlib.util.spec_from_file_location(alias, TOOLS / filename)
+    spec = importlib.util.spec_from_file_location(alias, (DRIVERS if (DRIVERS / filename).is_file() else TOOLS) / filename)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[alias] = module
@@ -443,7 +444,7 @@ def test_an_unanchored_timestep_is_refused_before_a_mesh_file_is_opened():
 def test_the_constructor_values_take_their_clocks_from_the_config():
     """Not "both rebinds agree" -- one source, by construction."""
 
-    source = (TOOLS / "run_cuda_v841_forecast.py").read_text(encoding="utf-8")
+    source = (DRIVERS / "run_cuda_v841_forecast.py").read_text(encoding="utf-8")
     assert '"dt": float(config.config_dt),' in source
     assert '"surface_pbl_seconds": float(config.config_bldt_seconds),' in source
     # The cumulus cadence is nullable since the convection ruling, so the

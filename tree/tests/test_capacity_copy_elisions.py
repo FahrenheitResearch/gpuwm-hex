@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "hexcore"
 
 EXPECTED_SOURCE_SHA256 = {
-    # Moved by the NVRTC reciprocal-rewrite lane (#355): the flux3/flux4
+    # Moved by the NVRTC reciprocal-rewrite lane: the flux3/flux4
     # denominator in the three vertical-flux kernels is a translation-unit
     # constant rather than a source literal, so NVRTC cannot rewrite the
     # division as a reciprocal multiply on a compute_100-or-above target.
@@ -28,7 +28,7 @@ EXPECTED_SOURCE_SHA256 = {
     # digest has one definition again and cuda_driver delegates to it, and
     # the full-physics commit's recovered-state gate is routed through the
     # regional runtime like every other recovered-state gate already was.
-    # Moved again 2026-08-27 by the provenance scrub (#377): three comment
+    # Moved again 2026-08-27 by the provenance scrub: three comment
     # and docstring lines naming a person and a machine were rewritten so the
     # public assembly no longer has to move bytes that sit under a pin.  The
     # elisions this table guards are untouched, which is checked by name in

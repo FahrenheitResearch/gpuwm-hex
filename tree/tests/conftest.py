@@ -37,7 +37,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = ROOT / "tools" / "run_cuda_v841_full_physics_x4.py"
+RUNNER_PATH = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
 
 import sys
 

@@ -33,11 +33,19 @@ tests/test_checkout_reproducibility.py
 tests/test_init_door.py
 tests/test_render_door.py
 
+# doctor and the doors agree about a staged bridge that is present and not
+# executable: a gap with its chmod, never a find the door then refuses
+tests/test_doctor_bridge_mode.py
+
 # the forecast door: argument grammar, the refusal inventory, and the device
 # admission decision.  The decision is exercised at free-memory values no
 # card here has, which is the only way to test the refusal that fires when a
 # card is too small; the door's one point of device contact is substituted
 tests/test_forecast_door.py
+
+# the forecast receipt names the engine its seam bytes matched, not the x4
+# proof's sealed engine constants
+tests/test_forecast_receipt_engine.py
 
 # the proof guards: pin structure, authority pin shapes, and the ordering law
 # that the source pins are verified before the checkout guard reads the
@@ -226,15 +234,26 @@ tests/test_tier_membership.py
 # leg that RUNS this can see it.
 tests/test_tracked_file_writers_keep_lf.py
 
-# The mp=28 seeded-pair door and its scalar rows, added when the hex-mod lane
-# folded into the integration tip these files rode in on. No card, no assets,
+# The paired control/treatment door and its scalar rows. No card, no assets,
 # no network: the pair door's argument surface and refusals, the gallery
-# caption logic, the backend row builder, and the species-row extras hook.
+# caption logic, the backend row builder, the species-row extras hook, and
+# the entry-point group further backend rows arrive through.
 tests/test_pair_door.py
 tests/test_plot_pair_gallery.py
-# The point-source placement instrument: the table arithmetic pinned to the
-# proven 3.75 km table's own epoch, and the census and upwind placement run
-# over a synthetic leg with one supercooled strip. No card, no assets.
+# The tracer release-line instrument: the table arithmetic pinned to the
+# engine's point-source epoch, and the upwind placement read off a synthetic
+# leg's own wind. No card, no assets.
 tests/test_point_source_placement.py
 tests/test_backend_row_builder.py
+tests/test_physics_backend_rows.py
+# Receipts name the machine by a salted digest, never by its network name.
+tests/test_host_identity.py
 tests/test_species_row_extended.py
+# The per-step physics rollback export is armed only when --stop-on-refusal
+# reads it, and an unarmed failure retires the seam instead of pretending it
+# rolled back. Fake engine, no card.
+tests/test_physics_rollback_policy.py
+# Forecast presets are table rows the door resolves into its own cadence knob,
+# and a row cannot declare a physics suite the pinned engine seam does not
+# take as an argument.
+tests/test_forecast_preset.py

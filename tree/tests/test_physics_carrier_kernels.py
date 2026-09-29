@@ -2,7 +2,7 @@
 
 THE GAP THIS CLOSES, found the hard way.  ``couple_cells_v841_f32``,
 ``recover_wsm6_v841_f32`` and ``validate_wsm6_surface_v841_f32`` had no
-test at all: only ``tools/run_cuda_v841_full_physics_x4.py`` ever launched
+test at all: only ``src/hexcore/drivers/run_cuda_v841_full_physics_x4.py`` ever launched
 them, so an argument-order mistake between the CUDA signature and the
 Python launch site was invisible until a full-physics run on a big card.
 The species-row generalization introduced exactly that mistake -- the

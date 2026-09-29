@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Donor-readability audit for the #333 padding defect.
+"""Donor-readability audit for the donor-padding defect.
 
 A graded global mesh is the LAM donor, and an outside reader of a CULLED
 donor walks ``edgesOnCell``/``cellsOnCell`` rows to their declared padding.
@@ -7,7 +7,7 @@ Native ``init_atmosphere`` statics pad those rows with 0 (one-based files),
 so a reader that overruns ``nEdgesOnCell`` gathers a sentinel; a file that
 pads with a REAL index hands that reader a real edge to gather into a
 pentagon.  This tool measures which convention a file actually carries --
-it changes nothing and fixes nothing (task #333 owns the fix).
+it changes nothing and fixes nothing (the donor-padding defect owns the fix).
 
 MEASURED 2026-08-25 (this lane), for the record the tool exists to extend:
 
@@ -73,7 +73,7 @@ def main() -> int:
             verdict = (
                 "zeros (native static convention)"
                 if reading["real_indices"] == 0 and reading["negatives"] == 0
-                else "REAL INDICES (published grid convention; #333 surface on a static)"
+                else "REAL INDICES (published grid convention; donor-padding surface on a static)"
                 if reading["zeros"] == 0
                 else "MIXED"
             )

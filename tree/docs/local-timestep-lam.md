@@ -1,7 +1,7 @@
 # Local time stepping on limited-area culls: what it is worth, measured
 
-Lane `lts` of the 2026-09-13 performance campaign, measured 2026-09-14 on
-the RTX 5090 (weather-node-2, 170 SMs, 32 GB) with public gpuwm 2.7.3 as the
+The local-time-stepping part of the 2026-09-13 performance campaign,
+measured 2026-09-14 on an RTX 5090 (170 SMs, 32 GB) with public gpuwm 2.7.3 as the
 engine. Two culls, both 1 h = 720 steps of 5 s, full physics, radiation
 every 600 s, surface/PBL welded to every step:
 
@@ -11,11 +11,9 @@ every 600 s, surface/PBL welded to every step:
 | corridor `r0.9.120.40520` (`cull --region`, 125 km cap) | 40,520 x 55 | 869.3 m | GFS 2026-09-10 18Z through `gpuwm-hex init` on the 937.5 m parent, culled | 7 (2,468 cells) |
 
 Seven arms ran in one session on the one card (05:39-06:17 UTC), the
-baseline arms from the untouched `lane/hex-point-hrrr` tree in the shared
-2.7.3 venv and the option arms from this lane's tree in its own venv; every
-receipt records which tree ran it (`repo` in `forecast-receipt.json`).
-Receipts, logs, per-cell tables and charts:
-`Downloads/evidence-gallery/hex-perf-lts-2026-09-13/`.
+baseline arms from the untouched 0.3.0 tree in the shared 2.7.3 venv and
+the option arms from this change's tree in its own venv; every receipt
+records which tree ran it (`repo` in `forecast-receipt.json`).
 
 ## The decision
 
@@ -51,8 +49,8 @@ arms have the coarse class the shipped classing lacks, with an arithmetic
 acoustic saving of 8.5 % (point) and 7.0 % (corridor) of the sub-step cell
 work, and they are 7 % SLOWER per step. The card explains it. Every hex
 dycore kernel on these meshes runs in a single wave (a cell kernel over
-43,884 cells at 128 threads per block is 343 blocks on 170 SMs; lane
-`profile`), so a launch's wall is the per-thread column latency, not the
+43,884 cells at 128 threads per block is 343 blocks on 170 SMs; measured by the
+profile instrument), so a launch's wall is the per-thread column latency, not the
 cell count. The fine class at 86 % of the cells (295 blocks) costs what the
 whole mesh costs, and each coarse-class launch (49 blocks) is a further
 wave of the same latency. The coarse class is active on 4 of the 10
@@ -68,8 +66,8 @@ rate 3, so a coarse column still runs 4 of 10 sub-steps.
 change it is a mesh whose classes each hold several waves of blocks on the
 card that runs it (an order of magnitude more cells than these culls, with
 most of them coarse), or a way of overlapping the classes' launches on
-concurrent streams; neither exists in the tree, and the instrument in this
-lane (`tools/lts_forced_classing.py`) is what to re-run when one does.
+concurrent streams; neither exists in the tree, and the instrument this
+change ships (`tools/lts_forced_classing.py`) is what to re-run when one does.
 
 ## Measured
 
@@ -84,11 +82,11 @@ another process arrived on the card at about step 560 (below).
 | arm | tree, venv | median s/step (2-500) | ratio | receipt s/step after first (720 steps) | door wall | first step |
 |---|---|---|---|---|---|---|
 | point-baseline | untouched, shared | 0.2992 | 1.000 | 0.3155 | 329.5 s | 3.8 s |
-| point-lts (option on, shipped classing) | lane, own | 0.2967 | 0.992 | 0.3130 | 365.4 s | 35.0 s |
-| point-lts-forced (instrument) | lane, own | 0.3205 | 1.071 | 0.3370 | 344.2 s | 2.9 s |
+| point-lts (option on, shipped classing) | change, own | 0.2967 | 0.992 | 0.3130 | 365.4 s | 35.0 s |
+| point-lts-forced (instrument) | change, own | 0.3205 | 1.071 | 0.3370 | 344.2 s | 2.9 s |
 | swath-baseline | untouched, shared | 0.2844 | 1.000 | 0.2991 | 311.0 s | 2.8 s |
-| swath-lts (option on, shipped classing) | lane, own | 0.2812 | 0.989 | 0.2956 | 306.0 s | 2.5 s |
-| swath-lts-forced (instrument) | lane, own | 0.3037 | 1.068 | 0.4049 (co-tenant) | 398.7 s | 2.6 s |
+| swath-lts (option on, shipped classing) | change, own | 0.2812 | 0.989 | 0.2956 | 306.0 s | 2.5 s |
+| swath-lts-forced (instrument) | change, own | 0.3037 | 1.068 | 0.4049 (co-tenant) | 398.7 s | 2.6 s |
 
 Host load at each arm's start was 0.8-1.1 (1-minute average) with no other
 GPU process; utilisation during integration 88-95 % (busy mean) at
@@ -117,7 +115,7 @@ card 25.9-27.4 GB; chart 05). Steps 600-720 of that arm averaged 0.832 s
 against 0.304 s before it, so the receipt's integration total (293.7 s,
 0.408 s/step) is contaminated and the number of record for that arm is the
 window median above. Nothing was killed or reniced; the process was not
-this lane's. The mutex was held by this lane throughout.
+part of this measurement.
 
 ### Fields at 1 h
 
@@ -179,7 +177,7 @@ receipts. Budget was 40 minutes for each session.
 
 ## What changed in the tree
 
-Before this lane, `--local-timestep` on any limited-area cull failed, and
+Before this change, `--local-timestep` on any limited-area cull failed, and
 had it not failed it would have computed wrong arithmetic. Each item below
 is tested in `tests/test_local_timestep.py`.
 
@@ -225,7 +223,7 @@ is tested in `tests/test_local_timestep.py`.
 
 The default path is untouched: with the switch off nothing in these
 modules runs, and the contract deck's kernel-set digest is the same on this
-lane's tree as on the base tree, which is why the point cull's own contract
+change's tree as on the base tree, which is why the point cull's own contract
 receipt (`receipts/contract/hexpt-cull.contract.json`) admits both.
 
 ## The instrument: an interface in the interior

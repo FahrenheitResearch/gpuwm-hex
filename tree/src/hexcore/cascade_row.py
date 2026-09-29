@@ -1,7 +1,7 @@
 """Registering a cull the cascade placed this cycle, from its own bytes.
 
 THE BLOCKER THIS REMOVES, and it is not the anchor.  ``gpuwm-hex forecast``
-resolves ``--mesh`` against ``tools/mpas_mesh_binding.MESH_BINDINGS`` and
+resolves ``--mesh`` against ``hexcore.drivers.mpas_mesh_binding.MESH_BINDINGS`` and
 refuses a name it does not hold, by name:
 
     running an unregistered mesh would run an unproved shape at an unadmitted
@@ -53,7 +53,7 @@ WHAT THIS MODULE REFUSES:
 
 Rows are supplied through a FILE, not a context manager, because the door
 runs the driver in another process and a process-local override would be
-invisible to it.  ``tools/mpas_mesh_binding`` applies them where it builds
+invisible to it.  ``hexcore.drivers.mpas_mesh_binding`` applies them where it builds
 ``MESH_BINDINGS``, the same hook ``mesh_row_candidate`` uses, so the door's
 by-path re-execution of that module picks them up as the first copy did.
 """

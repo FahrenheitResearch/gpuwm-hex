@@ -1,10 +1,131 @@
 # Changelog
 
 *This file accumulated without a version cut through 0.1.0 and 0.1.1, so
-entries below carry work from those lines as well as this one, and no honest
+entries below carry work from those lines as well as this one, and no clean
 boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
+
+## 0.3.2 (2026-09-29)
+
+New:
+- gpuwm-hex forecast --preset NAME selects a row of hexcore.forecast_preset,
+  and the door turns the row into the surface/PBL cadence it already admits
+  (an explicit --pbl-cadence still wins; the receipt says which decided).
+  reference, the default, is the proven configuration. fast holds the
+  surface layer, Noah-MP and YSU for up to 30 s between calls (six steps at
+  dt 5 s, the weld where dt is 20 s or longer). Graded against MRMS
+  reflectivity, Stage-IV hourly precipitation and ASOS on four 3 h
+  HRRR-driven forecasts of a 937.5 m point cull, fast took about 6 per cent
+  less time per step and forecast 10 m wind worse on all four cases and 2 m
+  dewpoint and temperature worse on three, so reference stays the default.
+  A row declaring a radiation, land-surface, surface-layer or PBL scheme the
+  engine's column seam does not take as an argument is refused by name.
+
+Changed:
+- The physics seam re-pins to gpuwm 2.8.0: gpuwm>=2.8.0,<2.8.1. Eight of
+  the sixteen pinned engine files moved between the published 2.7.4 and
+  2.8.0 wheels (gpuwm/config.py, gpuwm/core/gf.py, gpuwm/core/kernels/gf.cu,
+  gpuwm/core/kernels/__init__.py, gpuwm/core/microphysics.py,
+  gpuwm/core/physics.py, gpuwm/core/rrtmg_legacy.py, gpuwm/io/restart.py);
+  the column batch, the seam document and the Noah-MP files did not, and
+  the composed glacier unit is unchanged. Measured through the seam on an
+  RTX 5090: the seam A/B is 500 of 500 arrays byte-identical on both
+  profiles and both arms under the published 2.7.4 and 2.8.0, and a
+  10-minute forecast on a 12,795-cell 937.5 m point cull wrote both history
+  frames byte-identical under the two engines; the cull's contract deck is
+  8 of 8 decks bitwise and 22 of 22 kernels at the unchanged kernel-set
+  digest. Nothing is declared for the move.
+  verification/engine-verdicts/repin-280-20260929.json is the table of
+  record; premeasure-280-20260929.json shows 2.7.5, 2.7.6, 2.7.7 and 2.8.0
+  all failing the 2.7.4 manifest, so 0.3.1 installs kept resolving 2.7.4.
+- The physics seam's per-step rollback export is taken only under
+  --stop-on-refusal, the one option that reads it. It copied every persisted
+  seam array to the host before every step (447 MB and 192 copies a step on
+  a 43,884-cell mesh, about 24 ms of host time). Measured on that
+  mesh, one session on an RTX 5090: 0.2678 to 0.2367 s a step, 3.21 to 2.84
+  minutes per simulated hour. Every history
+  frame is byte-identical. Without --stop-on-refusal a refused step ends the
+  run as before, and the receipt records the seam as retired rather than
+  restored (physics_rollback in the driver receipt).
+
+Fixed:
+- gpuwm-hex doctor reports a staged bridge that is present and not
+  executable as missing, with chmod +x as its remedy. It reported the file
+  found while the door refused it (measured on a pip install of 0.3.1,
+  whose engine wheel's bridges arrived mode 664).
+- The forecast receipt's arwen_commit and glacier digest name the engine
+  the seam bytes matched, with its version beside them. They restated the
+  x4 proof's constants, which name an older engine than the one that ran.
+- Receipts from the forecast, init and pair doors, the contract deck and
+  four measurement tools name the machine by a salted digest
+  (hexcore.host_identity, a per-user salt in ~/.gpuwm/hex-host-salt)
+  instead of its network name.
+- The point door's printed forecast command no longer adds
+  --gpuwm-checkout at a fixed engine version or the unused --repo, and two
+  ingest refusals stop naming an engine version.
+- Evidence citations in row notes and comments name the evidence folder
+  instead of a machine label.
+- Two tool pins that the text cleanup edited without re-deriving are
+  re-derived: SOURCE_DRIFT_SINCE_CAMPAIGN.current in
+  tests/test_regional_forecast_anchor.py and EXPECTED_RUNNER_SHA256 in
+  tools/run_cuda_x1_163842_stabilized_products.py.
+  tools/repin_source_tables.py reported both as drift and now reports none.
+- gpuwm-hex forecast runs from an install. The three modules the door
+  drives (the forecast driver, the proof harness it reaches the model
+  through, and the mesh registry) and the limited-area contract deck ship
+  in the package as hexcore.drivers; through 0.3.1 they lived in the
+  repository's tools/, which the wheel does not carry, and the door refused
+  every install. tools/ keeps a same-named entry for each that hands back
+  the packaged module. --repo is accepted, reported and not used.
+- The physics seam defaults to the installed gpuwm. --gpuwm-checkout is
+  optional: with none given the run verifies the installed engine's sixteen
+  pinned files and records it by version, the SHA-256 of pip's RECORD and
+  direct_url; a git clone passed as --gpuwm-checkout is still recorded by
+  HEAD, tree and dirty paths, and any other directory is refused by name.
+  doctor and the pip remedy stop sending users to clone gpuwm. Measured
+  2026-09-26 from a wheel built from this tree and installed with pip into
+  a clean venv, standing outside any checkout: the contract deck on a
+  937.5 m point cull passed (8 of 8 decks bitwise, 22 of 22 kernels) in
+  126 s, and a 10-minute forecast on it ran 120 steps of 5 s in 50.0 s of
+  integration (73 s door wall, shared RTX 5090), receipt kind "installed".
+- The cycle door no longer requires --gpuwm-checkout, runs the contract deck
+  from the package, and its subprocesses import the hexcore the parent runs.
+- Further physics-backend rows arrive through the gpuwm_hex.rows entry-point
+  group (a module that registers on import, or a callable returning rows);
+  the row table names no provider module, a provider still cannot rebind the
+  default row, and a declared provider that fails to load is named in the
+  refusal for the row it would have carried.
+- The published admitted-engine table is empty: a row names a build that is
+  not on PyPI and belongs in that build's own tree. The mechanism and its
+  tests are unchanged (the tests use a synthetic row).
+- tools/point_source_placement.py places a tracer release line upwind of a
+  target the user names, in the control leg's own wind (`place --target
+  LAT LON --alt-m Z`), and writes the release table as before; the
+  cloud-water targeting census is gone from the public tool. The pair
+  gallery and its tests say control and treatment legs and tracer fields.
+- --convection's help states the default and its reason: the cumulus
+  scheme is off where the mesh's finest spacing is below 3 km, because
+  Grell-Freitas is called every step and a fine mesh's short step calls it
+  up to 24 times as often as the proven 120 s, which measured as a
+  different solution.
+- NOTICE credits the MPAS-Tools grid_rotate.f90 longitude formula that
+  hexcore.mesh reproduces, the MPAS-Atmosphere v8.2.3 loop bodies the
+  Fortran oracles transcribe, and the WRF lineage of the gravity-wave-drag
+  operator.
+- Documentation and messages: private task numbers are replaced by the
+  named breakage or instrument they cite, private evidence-folder paths,
+  machine names and branch names are gone from the docs (the measured
+  results stay), and the README headline and the repository README's
+  engine range are current.
+- Not changed, with the reason: four task-number citations remain in
+  hexcore/partition_device_scheduler_v841.py and a receipt path in
+  hexcore/dt_admission.py, whose bytes the frozen execution set pins by
+  SHA-256, so moving them needs the pins re-derived and re-proven on a
+  card. The architecture
+  anchor record in hexcore.cuda_backend.arch_admission keeps its receipt
+  path because that path is the record's identity, printed on the
+  ARCHITECTURE line and asserted by its tests.
 
 ## 0.3.1 (2026-09-15)
 
@@ -29,7 +150,7 @@ New:
   seam-level A/B under both engines on both fixed-column profiles and the
   one-hour point-cull forecast under 2.7.4 against the 2.7.3 frames of
   record.
-- The admitted private row is re-taken on the 2.7.4 base, 2.7.4+soma.1,
+- The admitted private row is re-taken on the 2.7.4 base
   from its three platform wheels and its source tree (which agree with
   each other and with the tree's HEAD): the same five of sixteen paths
   differ from the public bytes as before and the composed glacier unit is
@@ -108,8 +229,8 @@ Fixed:
   and no CUDA source string; the constant is re-derived, the one class row
   that carried a literal follows the constant, and the note at the constant
   records what moved and that the point class was re-minted at it.
-- The campaign's lanes measured together: the tree with the cadence, hostpath
-  and lts lanes merged runs the 3 h point-cull forecast (2,160 steps, HRRR
+- The campaign's changes measured together: the tree with the cadence, hostpath
+  and local-time-stepping changes merged runs the 3 h point-cull forecast (2,160 steps, HRRR
   15Z, RTX 5090, both arms in one session) at 0.2978 s per step against the
   untouched 0.3.0 tree's 0.3193 (1.07x; the loop as a user waits for it
   679.6 s against 864.7 s, 1.27x; door 728 s against 907 s), with all four
@@ -129,7 +250,7 @@ Fixed:
   momentum kernel gathers a once-per-run reference wind instead of
   evaluating cosf/sinf per neighbour per stage. The local-timestep unit
   gathers the two regional acoustic kernels it derives in their element
-  form. Measured on the 43,884-cell point cull (RTX 5090): the lane's own
+  form. Measured on the 43,884-cell point cull (RTX 5090): the change's own
   one-hour pair in one session 0.3146 to 0.2836 s per step (1.11x) with
   both frames byte-identical; the landed tree's 3 h arm (2,160 steps)
   0.2617 s per step after the first against the integrated tree's 0.2978
@@ -174,7 +295,7 @@ Fixed:
   be a listed translation unit) found unregistered on the GPU tier's first
   pass over the merged tree.
 - The four point-door test files are named once on the CPU tier list; two
-  lanes had each added them and the tier census refuses a file named twice.
+  changes had each added them and the tier census refuses a file named twice.
 - tests/test_hrrr_intermediate.py, test_mesh_point.py, test_mesh_rows.py and
   test_regional_class_band.py are named by the CPU tier list; they arrived
   with the point door on no list, which tests/test_tier_membership.py
@@ -239,7 +360,7 @@ New:
   then names the row's build commit and digests instead of the public
   pin's; the same bytes under another version string, that version string
   over other bytes, and any engine with no row are refused by name as
-  before. One row ships, 2.7.3+soma.1: five of the sixteen paths differ
+  before. One private row shipped on the 2.7.3 base: five of the sixteen paths differ
   from the published 2.7.3 bytes (the config loader, the kernel loader,
   the microphysics driver, the phase-one driver and the restart identity
   table) and the composed glacier unit does not. On the public 2.7.3
@@ -249,7 +370,7 @@ Fixed:
 - The forecast driver's checkout guard follows an admitted engine's row.
   verify_arwen_checkout_git in tools/run_cuda_v841_full_physics_x4.py read
   the public pin's sixteen digests unconditionally, so on the admitted
-  2.7.3+soma.1 engine the frozen row's --preflight refused with
+  private engine the frozen row's --preflight refused with
   "gpuwm/core/physics.py does not match the proven manifest" while the
   adapter, the forecast door and doctor admitted the same tree (measured
   2026-09-13). The guard now asks engine_pin.inspect_seam which row the
@@ -417,7 +538,7 @@ New:
   theta 1.117 K RMS (r = 0.999973), precipitation r = 0.95, reflectivity
   r = 0.82, vertical velocity r = 0.621. Before this, the regional path was a
   dry dycore carrying one passive moisture variable and published no
-  renderable weather field at all. `evidence/regional-physics-20260826/`.
+  renderable weather field at all.
 - **`gpuwm-hex cull`** cuts a limited-area grid, static and initial condition
   out of a global case in about a second, where a native regional init took
   775 s on the 121,182-cell parent `v4.75.121182`, measured 2026-08-26 with
@@ -429,15 +550,14 @@ New:
   declarative threat grammar, ranking that is commensurable across phenomena
   carrying different units, and hysteresis so a placement does not chase
   noise. Four independently placed grids over four different kinds of weather
-  each completed 1,080/1,080 full-physics steps on one card
-  (`evidence/four-swaths-20260827/`).
+  each completed 1,080/1,080 full-physics steps on one card.
 - **`gpuwm-hex cycle`** follows weather across cycles: plan, cull, force,
   forecast, render. Two cycles of one real case ran end to end in 1,058 s at
   peak 7,744 MiB, cycle 2 re-detecting six hours on and continuing all four
   slots — three reusing their mesh, one regenerating. Starting a corridor
   from transplanted parent state rather than from the beginning transplants
   in 0.83 s and saves **273.8 s, 43 %**, against a real baseline arm.
-  `docs/cycle-door.md`, `evidence/cycling-loop-20260827/`.
+  `docs/cycle-door.md`.
 - **The regional anchor is keyed to a configuration class, not to a cull's
   own boundary-mask digest.** A re-placed swath was a new digest and therefore
   a new anchor, at 5.5 to 8.7 minutes of card against 4 to 6 minutes for the
@@ -471,7 +591,7 @@ Changed:
   intermediate-resolution ladder and is already inside the mesh. The knee is
   **1.35x** (`w` r 0.624 to 0.744, 2 m temperature r 0.578 to 0.852) for
   +27 % cells, +25 s wall, +42 MiB and zero extra forecasts. All nine shipped
-  placement rows carry `cull_pad_scale` 1.35. `evidence/nest-ratio-20260827/`.
+  placement rows carry `cull_pad_scale` 1.35.
 - **Device-memory admission takes the card's shape.** See the closed items
   below: this replaces the affine row and the flat headroom outright.
 
@@ -489,15 +609,14 @@ Fixed:
   pinned files that live in `site-packages` and reports the offending version
   and the fix; and the forecast door's refusal names the version it found, the
   version it wants, which files moved, and the two commands that close the
-  gap. `evidence/standalone-20260827/`, `evidence/userwalk-20260827/`.
+  gap.
 - **The engine floor is 2.5.8, and it is the only usable engine.** The seam
   manifest was re-pinned on 2026-08-28 and every row of the verdict table
   moved with it, because `moved` is measured against *this port's* sixteen
   files: 2.5.6, the floor of the day before, now reads 4 of 16 moved. 2.5.8 is
   the only published gpuwm whose bytes match, so this port has no fallback
   engine — stated because it is a real exposure, not because it is
-  comfortable. The table is spliced from the instrument's JSON, never typed
-  (`evidence/repin-258-20260828/engine-verdicts.json`).
+  comfortable. The table is spliced from the instrument's JSON, never typed.
 - **`doctor` printed two adjacent lines that contradicted each other, and the
   forecast lane refused for a reason that had stopped being true.** On a
   byte-perfect install of the pinned engine the report read `16 of 16 pinned
@@ -518,7 +637,7 @@ Fixed:
   both doors, `doctor`, `tools/battery/gpu_gates.txt`, `pyproject.toml`,
   README and five manual chapters. Retiring it needs a receipt identity that
   does not spell a commit and is a named follow-up in
-  `docs/release-checklist-0.2.md`. `evidence/checkout-reason-20260828/`.
+  `docs/release-checklist-0.2.md`.
 - **The precipitation verdict was stated backwards on three user-facing
   pages.** README, the concepts chapter and the troubleshooting chapter all
   carried "net domain-mean precipitation runs about 15 % dry" with no referee
@@ -547,7 +666,7 @@ Fixed:
   now carries what the run returned: on the one case re-run with the field,
   86 model 35 dBZ objects against 54 observed, 8 matched at a median 110.9 km
   displacement, point CSI 0.0916 at 20 dBZ and 0.0097 at 40 dBZ over 643,419
-  pairs, with the resolution cost named. `evidence/history-refl-q2-20260825/`.
+  pairs, with the resolution cost named.
 - **The limited-area lane is reachable from published artefacts.** Through
   2.5.7 it was not: no published `rw_mpas_mesh` carried `--cull-parent` and
   `rw_mpas_lbc` was in no bundle and no published source, so the flagship
@@ -599,7 +718,6 @@ Fixed:
   11.2 MiB of instrument convention — instead of a flat 512 MiB. The retired
   arm stays computable at `device_admission.RETIRED_AFFINE_ROW_20260826` so
   the comparison can be re-made rather than re-argued.
-  `evidence/memory-shape-20260827/`.
 - **The door reads the live card.** Two registered meshes that the shaped
   gate's predecessor had moved from admitted to refused on a 10 GiB card are
   admitted again, confirmed on the real hardware rather than derived. The
@@ -633,7 +751,7 @@ Known issue:
 Added:
 - Registry row `v16.66.195629` — `v16.66.195630` regenerated from its own spec
   row, unchanged, by a generator that no longer makes four-sided cells (gpuwm
-  2026-08-26, `evidence/meshgen-coordination-20260826/`).
+  2026-08-26).
   The cause of the old row's blow-up was the graded generator's insertion
   operator placing its new generator on the near-cocircular quad's own
   circumcentre, where its Delaunay ring is exactly the four quad cells — 18 of
@@ -651,8 +769,7 @@ Added:
   cell centre, ring and edge length exactly equal — so its completed 6 h
   forecast still describes what the generator emits.
 
-- Ledger #367 is closed at the producer, and it was never reporting-only
-  (`evidence/meshgen-coordination-20260826/LEDGER-367-CLOSEOUT.md`).
+- The polygon-complement defect is closed at the producer, and it was never reporting-only.
   `rw-mpas` `density.rs::polygon_contains` accepted on `|winding| > pi`, which
   cannot tell a point inside a ring from a point whose ANTIPODE is inside it,
   so every polygon region refined a congruent ghost of itself on the far side
@@ -678,10 +795,10 @@ Changed:
   exists, is still registered, and is still on disk.
 - The `v16.66.195630` row records that it is superseded. It stays registered
   and stays refused, because it is the bytes that measured the cost.
-- The device-memory row of record is re-fitted at the merged tip (ruled 2026-08-26): `5,016.5 MiB + 98,748 B/cell` on the 170 SM card,
-  replacing the 2026-08-25 row measured at hex `7fe514b`. One #264 session,
+- The device-memory row of record is re-fitted at the merged tip (2026-08-26): `5,016.5 MiB + 98,748 B/cell` on the 170 SM card,
+  replacing the 2026-08-25 row measured at hex `7fe514b`. One per-allocation ledger session,
   both published meshes, same card, same engine pin, same protocol
-  byte-for-byte — `evidence/memory-row-refit-20260826/`. The tip did NOT
+  byte-for-byte. The tip did NOT
   shift the footprint uniformly: `x1.40962` rose 484.0 MiB (8,390.0 ->
   8,874.0) while `x4.163842` FELL 96.0 MiB (20,542.0 -> 20,446.0), so the
   fixed term rose 677.4 MiB, the slope fell 4,948 B/cell, and the two rows
@@ -690,7 +807,7 @@ Changed:
   shared 512 MiB headroom, on the smallest published mesh. The superseded row
   retires computably (`device_admission.RETIRED_ROW_20260825`,
   `retired_converged_row_floor_bytes`), a test refuses any governing surface
-  that quotes it as the footprint (RED at the lane base, 18 offences) and any
+  that quotes it as the footprint (RED at the change's base, 18 offences) and any
   shipped caller of either retired arm, and every `CARD_TIER_ROWS` entry now
   carries `measured_at_pin` / `restated_at_tip` — a per-card row with no pin
   on it is how the 170 SM row outlived its tree. Cells admitted: the 32 GiB
@@ -722,9 +839,8 @@ either as open.)*:
   At most 11.2 MiB is the whole-device sampling convention, measured side by
   side in the same session. Pinned by
   `test_the_graded_point_exceeds_the_shipped_rows_requirement_and_says_so`.
-  The remedy is one #264 arm on a graded mesh at this row's own protocol, not
-  a wider gate; the drive script is committed at
-  `evidence/memory-row-refit-20260826/node2/drive_graded.sh` and has not run.
+  The remedy is one per-allocation ledger arm on a graded mesh at this row's own protocol, not
+  a wider gate; that arm has not run.
   Until it does, the 512 MiB headroom is not spendable and graded meshes want
   margin above what the row returns.
 - Two registered meshes — `x1.40962` and `v15.150.38857` — move from admitted
@@ -754,16 +870,16 @@ Fixed:
   unanswered for exactly the meshes people ask it about.
 
 Changed:
-- The device admission floor is re-proved against hardware (ruled 2026-08-26) and the citations that outlived the constant it replaced are
+- The device admission floor is re-proved against hardware (2026-08-26) and the citations that outlived the constant it replaced are
   retired. The floor itself is unchanged — the measured affine row plus one
   512 MiB headroom, from the single `hexcore.device_admission` surface,
-  since 2026-08-25 — but the graded-mesh lane measured its capacity
+  since 2026-08-25 — but the graded-mesh work measured its capacity
   boundaries on a base that predated that change and merged the conclusions
   beside it, so three registry rows described a retired linear proxy as
   governing. `device_admission.retired_linear_floor_bytes` is now the one
   place that computes the retired arm, tests refuse any governing surface
   that quotes it as a requirement and any shipped caller of it, and
-  `FLOOR_DERIVATION` records the ruling, the finding and the measured
+  `FLOOR_DERIVATION` records the decision, the finding and the measured
   consequence. Measured on an RTX 5090: the 224,210-cell graded mesh is
   admitted on device memory (26,511.7 MiB predicted against 31,642.6 MiB
   free) where the proxy demanded more than the card holds, the 32 GiB part
@@ -774,7 +890,7 @@ Changed:
   the row at the merged tip is a named follow-up.
 
 New:
-- **The frozen lane runs at five timesteps, not one.** It was ruled on 2026-08-26 that the v8.4.1 column-physics lane stops being pinned to 120 s,
+- **The frozen lane runs at five timesteps, not one.** From 2026-08-26 the v8.4.1 column-physics lane is no longer pinned to 120 s,
   and anchors were earned the same day at **100 s, 75 s, 20 s and 5 s** — each
   two forecasts on named hardware, finite at every step, every history frame
   identical between arms, minted on the already-registered `x1.40962` because
@@ -811,7 +927,7 @@ Fixed:
   mesh that is not a closed sphere is refused by name.
 
 - The regional anchor is re-minted at the merged tip, and the NVRTC
-  reciprocal defect is measured on a live sm_120 forecast. The #355 fix moved
+  reciprocal defect is measured on a live sm_120 forecast. The NVRTC reciprocal-rewrite fix moved
   the third-order stencil denominator off a source literal in both
   `cuda_driver` and `cuda_transport`, superseding the pre-fix forecast pair;
   the anchor's source-binding check caught it and also showed the check was
@@ -823,7 +939,7 @@ Fixed:
   at every field and every lead. The same attribution probe re-run at the
   merged tip gives an unchanged 36,750 of 163,405 `kinetic_energy` values, so
   the reciprocal defect explains none of that divergence and its cause is
-  still open; the count is pinned so a later lane cannot adopt the fix as its
+  still open; the count is pinned so a later change cannot adopt the fix as its
   explanation.
 - The model timestep is admitted from an earned-anchor registry
   (`hexcore.dt_admission`), on the same pattern as per-architecture and
@@ -845,8 +961,8 @@ Fixed:
   mints and verifies; its verifier certifies the registered row and fails all
   six fabricated variants of it, and it refuses to mint at all unless it
   reproduces the archived 120 s stage tables exactly. Registering a second
-  anchor moves the frozen lane off its proven timestep and is a ruling, not a
-  tool run: `evidence/dt-admission-20260826/RULING-PACKET.md`.
+  anchor moves the frozen lane off its proven timestep and is a decision of
+  record, not a tool run.
 - `gpuwm-hex forecast --preflight` answers the timestep question from the
   registry row alone, with no card and no file, the same way it answers the
   architecture question. A row whose declared timestep holds no anchor is
@@ -890,7 +1006,7 @@ Fixed:
   and the scalar-transport mask-4/5 edge downgrade with its specified-zone
   cell skip. Each kernel mirrors exactly one function of the v8.4.1 CPU
   authority, which is its expected-bits oracle, and the four native quirks
-  are replicated at their sites citing that lane's anchors rather than
+  are replicated at their sites citing that work's anchors rather than
   re-derived. The kernels live in their own translation unit and under their
   own names so the global lane's sources stay byte-identical and every
   archived compile manifest, FTZ audit count and receipt that pins them
@@ -901,11 +1017,10 @@ Fixed:
   kernel lacking a deck, dual-run stable both within a process and across
   two independent processes (84 of 84 payload digests identical), and every
   deck re-run with a deliberately wrong zone geometry FAILS, so each proof
-  is shown to work in both directions. Evidence:
-  `evidence/regional-cuda-l5-20260826/`.
+  is shown to work in both directions.
 - Regional CUDA execution is refused by name until a registered regional
-  anchor exists (`hexcore.cuda_backend.regional_admission`), the ruling
-  of 2026-08-25, mirroring the per-architecture earned-anchor pattern. An
+  anchor exists (`hexcore.cuda_backend.regional_admission`), decided
+  2026-08-25, mirroring the per-architecture earned-anchor pattern. An
   anchor is a row naming a contract receipt and a byte-identical forecast
   pair that exist in this repository; adding a region is table work. The
   registry is empty, so every regional configuration refuses, and the
@@ -965,8 +1080,7 @@ Fixed:
   compiler therefore may not fold; `mpas_div` still carries the division, so
   its FTZ subnormal guard stays on the path. On targets below the boundary
   every payload digest is byte-unchanged, measured on sm_86 against the CPU
-  authority on the reference regional bytes. Evidence:
-  `evidence/nvrtc-reciprocal-20260826/`.
+  authority on the reference regional bytes.
 - The `transport_vertical_flux` divergence is explained in full, not
   partly. Reproduced independently on the RTX 3080 by running the shipped
   kernel and an instruction-level emulation of the higher target's
@@ -979,7 +1093,7 @@ Fixed:
   themselves. `cuda_transport_v841` compiles `cuda_transport._CUDA_SOURCE`
   and every unit prepends `cuda_fp32.CUDA_FTZ_HELPERS`, so while those two
   were unpinned an edit to either changed a pinned unit's compiled bytes
-  with every pinned digest still matching. This lane's own remedy landed in
+  with every pinned digest still matching. This change's own remedy landed in
   `cuda_transport.py` with the frozen-source proof reporting green, which is
   how the hole was found.
 
@@ -1010,8 +1124,7 @@ New:
   regardless of `config_apply_lbcs`; ring 1 never being nudged; and the
   `tend_rho` pool, which `atm_compute_dyn_tend_work` writes only at
   `rk_step == 1`, so the regional adjustments persist into RK stages 2 and
-  3 and are applied again on top of themselves. Evidence:
-  `evidence/regional-cpu-l4-20260825/`.
+  3 and are applied again on top of themselves.
 
 Fixed:
 - `rvord` is the REAL(RKIND) quotient of the float32 constants, not the
@@ -1019,11 +1132,11 @@ Fixed:
   bitwise identity against the compiled reference.
 
 - One device-memory admission surface (`hexcore.device_admission`), and
-  the `NATIVE_DEVICE_FLOOR` re-derived from measurement (ruled 2026-08-25).
+  the `NATIVE_DEVICE_FLOOR` re-derived from measurement (2026-08-25).
   Every free-memory gate — the forecast door, `--preflight`, the mesh
   binding's per-mesh floor, the driver's `MIN_FREE_DEVICE_BYTES` and the
   restart-worker floor — now computes the same sum, the converged-pin
-  measured row (4,339.1 MiB + 103,696 B/cell, the 170 SM #264 fit) plus one
+  measured row (4,339.1 MiB + 103,696 B/cell, the 170 SM per-allocation ledger fit) plus one
   shared 512 MiB headroom, and the door forwards its resolved requirement
   into the driver argv (`--required-free-bytes`) so a card admitted on its
   own measured row cannot be refused downstream on the default model. The
@@ -1037,7 +1150,7 @@ Fixed:
   10 GiB desktop card, where the superseded row refused it. No 12 GiB card
   exists in the fleet: the 12 GiB tier figure ships as a DECLARED
   DERIVATION, labeled `DERIVED, NOT MEASURED`, and the label is
-  test-pinned. Evidence: `evidence/l6-capacity-20260825/`.
+  test-pinned.
 - Regional (limited-area) meshes are admitted. `Mesh.validate()` recognises
   the `bdyMaskCell/Edge/Vertex` triple a native cull adds and validates the
   measured regional contract: absent-neighbour sentinels tolerated in
@@ -1049,8 +1162,7 @@ Fixed:
   masks within 1; ring populations growing outward; incidence identities
   corrected by exactly the sentinel counts. Every refusal names the concrete
   breakage. Both native culls of the regional reference mint load through
-  `Mesh.from_netcdf` and pass `mesh-check`
-  (`evidence/regional-admission-l1-20260825/`). The registry gains regional
+  `Mesh.from_netcdf` and pass `mesh-check`. The registry gains regional
   ROW fields — `boundary_zone_width`, `bdy_mask_sha256`
   (`regional_mask_digest`), and a nullable `lbc_source` — cross-examined at
   bind for every row before any constant moves: a regional cull on a global
@@ -1096,11 +1208,11 @@ Fixed:
   min `dvEdge/dcEdge` 0.0406-0.1023, 2.0x to 5.1x the admission floor, with
   zero edges under 0.04; the Fibonacci-seeded mesh this registry refuses
   reads 1.685e-4.
-- `tools/probe_dv_floor_boundary.py` measures the real post-#311 dvEdge
+- `tools/probe_dv_floor_boundary.py` measures the real post-fix dvEdge
   load boundary through the actual loader on the actual published pair
   (edited copies at 50/200/1,000/5,000 m dual edges), and
   `tools/audit_donor_padding.py` reports which padding convention a grid or
-  static carries -- the #333 donor-readability surface, measured on four
+  static carries -- the donor-padding defect's donor-readability surface, measured on four
   artifacts and handed over rather than silently changed.
 
 Fixed:
@@ -1123,7 +1235,7 @@ Fixed:
   line now verifies 16/16 with no recorded dirt, so the next public engine
   snapshot satisfies the port's pins as cut. No port behavior changes;
   the pinned engine bytes gain the release line's own seam-file evolution
-  (per-PBL GF forcing wiring and the task-206/#310-era support files).
+  (per-PBL GF forcing wiring and the support files of that era).
 - The default history stream publishes `refl10cm` and `q2`, the two fields
   whose absence left four registered obs-referee metrics unscorable on the
   first real run. `refl10cm` is computed inside the due step's own WSM6 call
@@ -1141,13 +1253,13 @@ Fixed:
   `pin/mpas-port-arwen-seam-v2`); snapshot schema v3.
 
 Fixed:
-- Stale-guard sweep, hex side (2026-08-25, audit #347 findings 5-10 +
+- Stale-guard sweep, hex side (2026-08-25, stale-guard audit findings 5-10 +
   unknowns). The 2-GPU partition scheduler's floors route through
   `hexcore.device_admission` (the retired 22 GiB linear shape and the
   20 GiB `require_devices` default are gone; the per-partition
   application of the measured row is labeled `DERIVED, NOT MEASURED`
-  pending a 2-GPU #264 run). `reservation_probe`'s self-validation
-  control is re-pinned from the dead pre-#294 `gf_gfdrv_stage` 7,034 MiB
+  pending a 2-GPU per-allocation ledger run). `reservation_probe`'s self-validation
+  control is re-pinned from the dead pre-frame-cut `gf_gfdrv_stage` 7,034 MiB
   premise to the post-cut widest frame (`wsm6_column`, 7,216 B) with a
   device-derived bound, and `module_image_probe` gains the registry
   route so the widest-frame module cannot escape the ledger.
@@ -1168,7 +1280,7 @@ Fixed:
   evidence ledgers and pins the shipped coefficients to them, so a
   constant drifting from the evidence it cites fails by name (#340).
 - The registered v15.150.38857 static is rebuilt on the unified 82-variable
-  `rw_mpas_static` writer and re-registered (#330). The retired writer's
+  `rw_mpas_static` writer and re-registered (the unified static writer). The retired writer's
   drag band sampled terrain 180 degrees of longitude from every cell (the
   archive-origin assumption): measured corr(old, new) for var2d is +0.003
   at the same cell and +0.697 at lon+180, and the field-by-field compare
@@ -1198,7 +1310,7 @@ Fixed:
   restart payload. The F030 checkpoint never captured it, so every
   restored run re-entered step 16 with zero forcing lanes while the
   unbroken run fed the real step-15 pair, and the step-16 identity gate
-  failed deterministically on every arm (#327, 5/5 red on the reference node, red
+  failed deterministically on every arm (the step-16 restart divergence, 5/5 red on the reference node, red
   since the forcing lanes landed). Checkpoint schema v3 downloads the
   pair at F030, refuses to write a checkpoint without it, re-seeds it on
   restore in both the fresh-process worker and the in-process

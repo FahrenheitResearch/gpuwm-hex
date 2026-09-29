@@ -9,7 +9,7 @@ This probe runs the same spec twice through the SAME binary: once with the
 shape the layer emits (``polygon``), once as the equivalent ``cap`` at the
 same background, the same fine spacing and the same place.  If the cap
 builds and the polygon does not, the difference is the shape -- which is
-where ledger #367 lives (``polygon_contains`` accepts on
+where the polygon-complement defect lives (``polygon_contains`` accepts on
 ``abs(winding) > pi``, so a closed ring's COMPLEMENT reads as interior and
 the transition band collapses to one cell).
 
@@ -144,7 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "the gradient gate and proceeds to relaxation, while the polygon the "
             "layer emits is refused at every fine spacing tried. The shape is the "
             "only difference, which points at rw-mpas density.rs::polygon_contains "
-            "(ledger #367): a closed ring's complement reads as interior, so the "
+            "(the polygon-complement defect): a closed ring's complement reads as interior, so the "
             "transition band has nowhere to be"
         ),
     }

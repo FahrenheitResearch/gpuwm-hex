@@ -12,7 +12,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = ROOT / "tools" / "run_cuda_v841_full_physics_x4.py"
+RUNNER_PATH = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
 
 
 def _load_runner() -> object:
@@ -97,7 +97,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # 2026-08-26 for the limited-area physics lane, which retired the
         # second bdyMask digest convention.  Both rationales live beside the
         # runner's pin.
-        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # Re-frozen 2026-08-27 for the provenance scrub: provenance is
         # now rewritten out of the shipped source in THIS tree rather than on
         # the public copy, because the copy carries these pins with it and one
         # of the two digest gates is an admission-time refusal, not a test.
@@ -108,10 +108,10 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         "src/hexcore/cuda_backend/recovery.py": (
             "66d023c9921c97961892d918620b50d58162bb215e71a495522a3d2a9baf54bc"
         ),
-        # Re-frozen for the regional CPU authority lane (#346 L4), again
-        # for timestep admission (#358), and again 2026-08-26 for the
+        # Re-frozen for the regional CPU authority lane, again
+        # for timestep admission, and again 2026-08-26 for the
         # convection ruling; the rationale lives beside the runner's pin.
-        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # Re-frozen 2026-08-27 for the provenance scrub: provenance is
         # now rewritten out of the shipped source in THIS tree rather than on
         # the public copy, because the copy carries these pins with it and one
         # of the two digest gates is an admission-time refusal, not a test.
@@ -123,7 +123,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # config_convection_scheme from this module and the timestep registry
         # keys on the selection it produces; the rationale lives beside the
         # runner's pin.
-        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # Re-frozen 2026-08-27 for the provenance scrub: provenance is
         # now rewritten out of the shipped source in THIS tree rather than on
         # the public copy, because the copy carries these pins with it and one
         # of the two digest gates is an admission-time refusal, not a test.
@@ -131,7 +131,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         "src/hexcore/convection_admission.py": (
             "e4b2101a63a7a6bf577744f27b53a4eb8b36e3f82f8239ae544ac5d8f9bd126f"
         ),
-        # New pin (#358): the frozen config ADMITS config_dt from this
+        # New pin (the timestep-anchor campaign): the frozen config ADMITS config_dt from this
         # module, so the pinned config's meaning depends on these bytes.
         # Re-frozen 2026-08-26: ADMITTED_TIMESTEPS gained the four anchors
         # ruled for that day (100, 75, 20, 5 s), each naming the campaign
@@ -143,18 +143,18 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # fragment, the surface/PBL cadence, so a run holding the cadence
         # cannot occupy the welded row's slot; the rationale lives beside
         # the runner's pin.
-        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # Re-frozen 2026-08-27 for the provenance scrub: provenance is
         # now rewritten out of the shipped source in THIS tree rather than on
         # the public copy, because the copy carries these pins with it and one
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/dt_admission.py": (
-            "8a7a57fe45a7957288749aef07feef2f4143aadccfe781a4d096ff41bb8be35a"
+            "8c4e1c45e89511409bef8f072f282f2ee01392238bfad8e59c38d6b299750078"
         ),
         # New pin (surface/PBL cadence, 2026-08-26): this module decides
         # config_bldt_seconds, a knob the frozen registry keys on; the
         # rationale lives beside the runner's pin.
-        # Re-frozen 2026-08-27 for the provenance scrub (#377): provenance is
+        # Re-frozen 2026-08-27 for the provenance scrub: provenance is
         # now rewritten out of the shipped source in THIS tree rather than on
         # the public copy, because the copy carries these pins with it and one
         # of the two digest gates is an admission-time refusal, not a test.
@@ -167,16 +167,18 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # not carry its new digest into either copy of the table, which left
         # the x4 proof refusing before CUDA.  Re-frozen again 2026-09-13
         # when the checkout guard learned to resolve an admitted engine's
-        # identity.  The rationale lives beside the runner's pin.
+        # identity.  Re-frozen again 2026-09-27 when the per-step boundary
+        # export became declinable (default armed).  The rationale lives
+        # beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "46f012b0914d7092d541d8ee8c8e16e1a3b25b2438487194523cc0eaf15d5310"
+            "6a0c9401b71ef460fbd1de0b56a88c2701f46c43e0ba5e5d7227b35d4e18e440"
         ),
-        # Re-frozen for the regional CPU authority lane (#346 L4); the
+        # Re-frozen for the regional CPU authority lane; the
         # rationale lives beside the runner's pin.
         "src/hexcore/mixing.py": (
             "7b5f9f8ac8f93f66e180d85f90ba3181eac2547c0ef7146b752eb5dd2c1a6433"
         ),
-        # Re-frozen for the regional CPU authority lane (#346 L4); the
+        # Re-frozen for the regional CPU authority lane; the
         # rationale lives beside the runner's pin.
         "src/hexcore/mixing_v841.py": (
             "c5007fa65ddcf67759a7b89e24f2bef615c6a3201d0e8dd2affabd43138e7865"
@@ -207,7 +209,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         ),
         "src/hexcore/partition_device_scheduler_v841.py": (
             # re-frozen 2026-08-25: admission floors rerouted through
-            # device_admission (stale-guard audit #347, finding 5)
+            # device_admission (stale-guard audit, finding 5)
             "b544707943ab75ce27e1972a7a57dd9a3eeed7aa23b2fa332e92594983de97e4"
         ),
         "src/hexcore/partition_executor_v841.py": (
@@ -1028,7 +1030,7 @@ def test_restart_localization_gates_precede_first_resumed_step() -> None:
 
 
 def test_checkpoint_carries_and_restores_the_gf_advective_forcing() -> None:
-    """The #327 mechanism, pinned: GF's rthdynten/rqvdynten pair is per-step
+    """The step-16 restart mechanism, pinned: GF's rthdynten/rqvdynten pair is per-step
     carried state formed by each step's dynamics and consumed by the NEXT
     begin_step -- outside both the MPAS atmosphere and the Arwen backend
     restart payload.  The v2 checkpoint never carried it, so every restored

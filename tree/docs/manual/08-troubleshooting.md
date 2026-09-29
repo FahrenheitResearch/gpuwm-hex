@@ -93,7 +93,7 @@ registered bytes you hold.
 conus-x1.2971, r4.75.11020, … x4.163842.`** — the forecast door only binds
 registered meshes. The refusal prints the whole registry — 21 rows at this
 release — so a deliberately wrong name is also how you list it (chapter
-4.1). Register the pair (table work in `tools/mpas_mesh_binding.py`) or name
+4.1). Register the pair (table work in `src/hexcore/drivers/mpas_mesh_binding.py`) or name
 a registered one. The binding layer states the same thing as `unknown mesh
 'NAME'; registered meshes are [...]` when it is called directly.
 
@@ -103,8 +103,7 @@ polyhedron cannot have, put there by a generator defect fixed on
 2026-08-26. Do not reduce `dt`: the refusal shows the same failure at the
 same model time across three timesteps. Regenerate with a current engine, or
 run the replacement row the refusal names (chapter 4.5). Receipt-checked,
-not reproduced here — it needs the refused mesh's own multi-GiB pair
-[`evidence/meshgen-coordination-20260826/RECEIPT.md`, the control leg].
+not reproduced here — it needs the refused mesh's own multi-GiB pair.
 
 **`mesh 'NAME': grid byte count N != declared M`** — the file you passed is
 not the registered bytes for that name (wrong file, wrong mesh name, or
@@ -143,8 +142,7 @@ the wheel; pass `--fixtures` pointing at a checkout's oracle directory.
 
 **Engine refusal on a native-free mint (`--vertical-spec`)** — not
 expected at this release: the native-free mint is proven end to end
-(schema-complete, dycore rc 0 —
-[`evidence/native-free-proof-20260824/RECEIPT.md`]). If the engine
+(schema-complete, dycore rc 0 —). If the engine
 refuses one naming missing init-stream variables, the door and engine
 are from different releases; align the checkout and the installed wheel
 (chapter 5.1).
@@ -178,28 +176,30 @@ its own — an escape hatch, not the remedy of first resort.
 must be given together`** — half a row mixes this card's fixed term with
 another card's slope, which is a footprint nothing ever measured.
 
-**`the forecast lane needs the gpuwm-hex SOURCE CHECKOUT and this is an
-installed wheel`** — the drivers live in `tree/tools/`, which the wheel
-does not carry. Run the door from inside a checkout or pass
-`--repo <checkout>/tree`.
+**`NOTE --repo ... is not used`** — informational. The forecast drivers ship
+in the package since 0.3.2; drop `--repo` from the command.
 
-**`--gpuwm-checkout ... is not a directory`** — the forecast lane needs a
-`gpuwm` git checkout, not the installed distribution (chapter 6.1).
+**`this gpuwm-hex install is missing ... under .../hexcore/drivers`** — the
+install is damaged; reinstall gpuwm-hex.
 
-**`... is not a git working tree, and the Arwen checkout has to be one`** —
-you pointed `--gpuwm-checkout` at an unpacked tarball or at `site-packages`.
-The bytes there may well be right: at 2.5.8 all sixteen pinned paths resolve
-from an install. What is missing is the commit — the run writes the
-checkout's HEAD, tree and dirty paths into every receipt so the executed seam
-source can be named — so clone the tag instead of copying the files.
+**`no gpuwm is installed in this interpreter and --gpuwm-checkout was not
+given`** — install the pinned engine with the `pip install` line the refusal
+prints.
 
-**`--gpuwm-checkout ... is gpuwm 2.5.8, and this port's physics seam is
-pinned to gpuwm 2.7.4`** — the checkout is a real gpuwm tree at the wrong
-version. The refusal names both versions, lists which of the sixteen pinned
-files moved, and prints the two commands that close it: the bounded `pip
-install` and the `git clone --depth 1 --branch v<version>` for the checkout
-the forecast lane needs on top of the wheel. Nothing to work out; clone the
-tag it names.
+**`--gpuwm-checkout ... is not a directory`** — the flag names a gpuwm tree;
+leave it unset to run on the installed engine (chapter 6.1).
+
+**`... is neither a gpuwm git working tree nor the gpuwm this interpreter has
+installed`** — you pointed `--gpuwm-checkout` at an unpacked tarball or a
+copied `site-packages`. Neither names the bytes it holds (no commit, no pip
+record). Leave the flag unset, or clone the tag.
+
+**`the gpuwm at ... is gpuwm 2.5.8, and this port's physics seam is
+pinned to gpuwm 2.8.0`**: the installed engine, or the tree passed as
+`--gpuwm-checkout`, is a real gpuwm at the wrong version. The refusal names
+both versions, lists which of the sixteen pinned files moved, and prints the
+bounded `pip install` that closes it, with a `git clone --depth 1 --branch
+v<version>` as the optional alternative.
 
 The same comparison runs at install time. `gpuwm-hex doctor` hashes the
 pinned files that live inside `site-packages` — at 2.5.8 that is all sixteen,
@@ -209,7 +209,7 @@ with the same two versions and the same
 remedy — so a wrong engine is a report you get before a run, not a digest
 mismatch you meet after one. Before 2026-08-27 there was no such check: the
 report said *Every check passed* and exited 0 while the forecast lane was
-dead (`evidence/userwalk-20260827/`).
+dead.
 
 **`--out ... exists`** / **`--scratch ... exists`** — both must be fresh.
 A second run into an existing output tree can be read as the first one's
@@ -241,9 +241,10 @@ device even to measure it.
 
 **Launch refusal naming a seam file with expected and found digests
 (`does not match the proven manifest ... re-prove before running`), or a
-dirty pinned file** — the `--arwen-checkout` is not at the pinned commit,
-or its working tree is dirty in a pinned file. Check out the pinned commit
-and restore the bytes; do not edit the pin.
+dirty pinned file** — the installed engine, or the clone passed as
+`--gpuwm-checkout`, is not the pinned engine, or the clone is dirty in a
+pinned file. Install the pinned engine (or check out the pinned tag and
+restore the bytes); do not edit the pin.
 
 **`requested dt=... s` timestep admission refusal** — the declared timestep
 fails the geometry gate against the file's real `min(dcEdge)`; the refusal
@@ -257,8 +258,7 @@ terms divide by it, so it cannot integrate at any timestep (chapter 4.5).
 The refusal prints the edge, its `dvEdge` and `dcEdge`, the amplification,
 how many edges are below the floor, and the remedy. Regenerate the mesh;
 do not reduce `dt`, which is not the lever. This replaced the unattributed
-step-0 `FloatingPointError` that generated meshes used to die on
-[`evidence/genmesh-dual-edge-20260824/RECEIPT.md`].
+step-0 `FloatingPointError` that generated meshes used to die on.
 
 **`FloatingPointError: v8.4.1 CUDA validation flag refused the outer step
 before publish`** — the model declined to publish a step it does not trust

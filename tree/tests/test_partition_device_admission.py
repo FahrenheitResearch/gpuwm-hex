@@ -74,7 +74,7 @@ def test_partition_floor_still_validates_its_inputs() -> None:
 
 
 def test_partition_floor_derivation_is_labeled_derived_not_measured() -> None:
-    """No 2-GPU #264 ledger row exists at the converged pin, so the
+    """No 2-GPU per-allocation ledger row exists at the converged pin, so the
     per-partition application of the measured row is a DECLARED DERIVATION
     and must say so, and must name the measurement that replaces it."""
 

@@ -34,6 +34,7 @@ from hexcore.cell_coordination_admission import (
 )
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
+DRIVERS = Path(__file__).resolve().parents[1] / "src" / "hexcore" / "drivers"
 
 #: The mesh that completed a 6 h forecast, read from run20.grid.nc.
 V20_HISTOGRAM = {5: 1029, 6: 149603, 7: 1017}
@@ -53,7 +54,7 @@ def _counts(histogram: dict[int, int]) -> np.ndarray:
 def _load_binding() -> object:
     name = "_test_cell_coordination_mesh_binding"
     sys.modules.pop(name, None)
-    spec = importlib.util.spec_from_file_location(name, TOOLS / "mpas_mesh_binding.py")
+    spec = importlib.util.spec_from_file_location(name, DRIVERS / "mpas_mesh_binding.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
@@ -217,7 +218,7 @@ def test_every_registered_row_carries_the_coordination_policy() -> None:
 def test_bind_calls_the_gate_and_records_it() -> None:
     """The gate is wired into bind_mesh, not merely importable."""
 
-    source = (TOOLS / "mpas_mesh_binding.py").read_text(encoding="utf-8")
+    source = (DRIVERS / "mpas_mesh_binding.py").read_text(encoding="utf-8")
     assert "admit_cell_coordination(" in source
     assert 'observed["cell_coordination_admission"]' in source
     assert "_grid_cell_coordination(" in source

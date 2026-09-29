@@ -45,6 +45,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 TOOLS = ROOT / "tools"
+DRIVERS = ROOT / "src" / "hexcore" / "drivers"
 AUDIT_PATH = TOOLS / "audit_nvrtc_reciprocal_rewrite.py"
 
 #: The kernels the rewrite reached, and the divisions each one must keep.
@@ -62,7 +63,7 @@ DIVISIONS_PER_AFFECTED_KERNEL = 2
 # `_REG` in `tools/audit_nvrtc_reciprocal_rewrite.py`. NVRTC 13.0 spells a
 # float32 operand `%f`; NVRTC 13.3 at `compute_120` spells the same operand
 # `%r`, and this row asserted the divisions were GONE when they were there
-# (measured on the proving RTX 5090, 2026-08-27, #373).
+# (measured on the proving RTX 5090, 2026-08-27, the libm-identity finding).
 #
 # The distinction the guard actually rests on survives untouched: a division
 # by a LOADED operand ends in a register, a division by an IMMEDIATE ends in
@@ -169,7 +170,7 @@ def test_no_cuda_translation_unit_divides_by_a_float_literal() -> None:
 def test_the_ptx_reader_sees_a_division_whatever_the_registers_are_called() -> None:
     """Teeth for the reader itself, in both directions and both spellings.
 
-    THE BREAKAGE THIS PREVENTS, measured 2026-08-27 on the proving RTX 5090 (#373):
+    THE BREAKAGE THIS PREVENTS, measured 2026-08-27 on the proving RTX 5090 (the libm-identity finding):
     these patterns spelled a float32 register `%f`, NVRTC 13.3 spells it `%r`
     at `compute_120`, and the whole family went blind on that toolchain -- the
     census reported a SILENT GREEN (no rewrites found because none could be
@@ -235,7 +236,7 @@ def test_the_pin_table_covers_the_files_that_supply_the_pinned_bytes() -> None:
     name = "_test_pin_table_for_nvrtc_reciprocal"
     sys.modules.pop(name, None)
     spec = importlib.util.spec_from_file_location(
-        name, TOOLS / "run_cuda_v841_full_physics_x4.py"
+        name, DRIVERS / "run_cuda_v841_full_physics_x4.py"
     )
     assert spec is not None and spec.loader is not None
     runner = importlib.util.module_from_spec(spec)

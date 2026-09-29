@@ -52,7 +52,7 @@ Two conventions worth knowing before you read one:
 - **A named limit is part of the result.** Receipts in this tree state what
   they did *not* separate — which arm was not run, which card was not
   available, which candidate the evidence does not distinguish. Those
-  sentences are load-bearing and are not hedging.
+  sentences carry the claim and are not hedging.
 
 ## The contracts a receipt is written against
 

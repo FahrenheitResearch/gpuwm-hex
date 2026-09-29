@@ -20,9 +20,14 @@ whose rows can be replaced is a registry where importing a module changes what
 the DEFAULT configuration runs.  The default row here is the frozen lane, and
 :func:`register_backend_row` refuses any name already present -- so no
 optional module, however imported, can rebind ``wsm6_column`` to something
-else.  ``tests/mod/test_mod_seam.py`` measures that the default row's
-module resolution is identical before and after every optional provider is
-imported.
+else, and ``tests/test_physics_backend_rows.py`` measures that the default
+row resolves identically before and after every row provider is loaded.
+
+WHERE FURTHER ROWS COME FROM.  A row whose implementation is not part of this
+distribution is contributed by another installed distribution through the
+``gpuwm_hex.rows`` entry-point group (:data:`ROW_ENTRY_POINT_GROUP`).  The
+table never names a provider: an install with no such distribution resolves
+exactly the frozen row, and one with a provider resolves its rows too.
 
 WHAT A ROW DOES NOT DO.  A row does not admit a run.  Admission is still the
 existing machinery -- :mod:`hexcore.dt_admission` for the timestep and the
@@ -45,6 +50,8 @@ from .errors import ConfigurationRefusal
 __all__ = [
     "DEFAULT_BACKEND",
     "FROZEN_WSM6_COLUMN_ROW",
+    "ROW_ENTRY_POINT_GROUP",
+    "row_provider_failures",
     "PhysicsBackendRow",
     "registered_backend_names",
     "register_backend_row",
@@ -204,7 +211,7 @@ class PhysicsBackendRow:
                     "weighs nothing by cell area and carries no point "
                     f"source; {extras} would be accepted and never read, "
                     "which is configuration the run does not have.  A "
-                    "point source selects a seeded row"
+                    "point source needs a row whose adapter carries one"
                 ),
                 f"a row whose adapter publishes build_column_backend, or no {extras}",
             )
@@ -271,14 +278,33 @@ FROZEN_WSM6_COLUMN_ROW = PhysicsBackendRow(
 
 _ROWS: dict[str, PhysicsBackendRow] = {FROZEN_WSM6_COLUMN_ROW.name: FROZEN_WSM6_COLUMN_ROW}
 
-#: Optional modules that register further rows on import.  A row whose
-#: implementation is not part of the published distribution cannot be declared
-#: here as data -- the data would ship and the implementation would not -- so
-#: the table names the PROVIDER and the provider owns its own row.  Import
-#: failure is not an error: it is what a public install looks like.
-_ROW_PROVIDERS: tuple[str, ...] = ("hexcore.mod",)
+#: The entry-point group through which another installed distribution
+#: contributes rows.  A row whose implementation is not part of this
+#: distribution cannot be declared here as data -- the data would ship and the
+#: implementation would not -- so the provider owns its own row and announces
+#: itself in its own metadata::
+#:
+#:     [project.entry-points."gpuwm_hex.rows"]
+#:     my_rows = "my_package.rows"            # a module that registers on import
+#:     more_rows = "my_package.rows:rows"     # or a callable returning rows
+#:
+#: An install with no entry point in the group is the ordinary public install
+#: and resolves the frozen row only.
+ROW_ENTRY_POINT_GROUP = "gpuwm_hex.rows"
 
 _providers_loaded = False
+
+#: ``(entry point, error)`` for every provider that was declared and did not
+#: load.  Kept so a refusal for an unknown row can say a provider that might
+#: have carried it is broken, rather than implying it was never installed.
+_provider_failures: list[tuple[str, str]] = []
+
+
+def row_provider_failures() -> tuple[tuple[str, str], ...]:
+    """The declared row providers that failed to load, and why."""
+
+    _load_providers()
+    return tuple(_provider_failures)
 
 
 def _load_providers() -> None:
@@ -287,11 +313,16 @@ def _load_providers() -> None:
         return
     # Set first: a provider that imports this module back must not recurse.
     _providers_loaded = True
-    for module in _ROW_PROVIDERS:
+    from importlib.metadata import entry_points
+
+    for point in entry_points(group=ROW_ENTRY_POINT_GROUP):
         try:
-            importlib.import_module(module)
-        except ImportError:
-            continue
+            loaded = point.load()
+            if callable(loaded):
+                for row in loaded() or ():
+                    register_backend_row(row)
+        except Exception as error:  # a declared provider that is broken
+            _provider_failures.append((f"{point.name} = {point.value}", f"{type(error).__name__}: {error}"))
 
 
 def register_backend_row(row: PhysicsBackendRow) -> PhysicsBackendRow:
@@ -318,7 +349,7 @@ def register_backend_row(row: PhysicsBackendRow) -> PhysicsBackendRow:
                 "column-batch seam an existing configuration runs, by import "
                 "order rather than by decision"
             ),
-            "a new row name, or a ruling that retires the registered row",
+            "a new row name, or a decision of record that retires the registered row",
         )
     _ROWS[row.name] = row
     return row
@@ -342,12 +373,19 @@ def resolve_backend(name: str = DEFAULT_BACKEND) -> PhysicsBackendRow:
     row = _ROWS.get(key)
     if row is not None:
         return row
+    broken = ""
+    if _provider_failures:
+        broken = (
+            f"  {len(_provider_failures)} declared row provider(s) in "
+            f"{ROW_ENTRY_POINT_GROUP!r} failed to load: "
+            + "; ".join(f"{name} ({error})" for name, error in _provider_failures)
+        )
     raise ConfigurationRefusal(
         "physics_backend",
         name,
         (
             "no column-physics backend row carries that name in this "
-            f"installation.  Registered: {sorted(_ROWS)}"
+            f"installation.  Registered: {sorted(_ROWS)}{broken}"
         ),
         f"physics_backend in {sorted(_ROWS)}",
     )

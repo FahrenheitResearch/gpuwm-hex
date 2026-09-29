@@ -1,8 +1,8 @@
-"""The #264 instruments' self-validation controls are pinned to live premises.
+"""The per-allocation ledger instruments' self-validation controls are pinned to live premises.
 
-Stale-guard audit #347, finding 6: reservation_probe's positive control was
+Stale-guard audit, finding 6: reservation_probe's positive control was
 pinned to ``gf_gfdrv_stage`` at 7,034.0 MiB -- the pre-cut in-run sum.  The
-#294 Grell-Freitas frame cut shrank that frame to 88/72 B, so the instrument
+Grell-Freitas frame cut shrank that frame to 88/72 B, so the instrument
 declared its own technique invalid (``CONTROLS FAIL``, exit 1) against a
 retired premise, and the sibling image probe never resolved the module that
 now holds the widest launched frame.  These tests pin both instruments to
@@ -56,7 +56,7 @@ def test_reservation_probe_reaches_wsm6_through_the_registry_route() -> None:
 
 def test_reservation_probe_names_its_repin_and_follow_up() -> None:
     source = (LEDGER_TOOLS / "reservation_probe.py").read_text(encoding="utf-8")
-    assert "#294" in source, "the control must cite the frame cut that re-pinned it"
+    assert "Grell-Freitas frame cut" in source, "the control must cite the frame cut that re-pinned it"
     assert "7,216" in source, "the control must cite the post-cut frame it pins"
     assert "named follow-up" in source, (
         "the derived-bound control ships without a hardware run; the run "

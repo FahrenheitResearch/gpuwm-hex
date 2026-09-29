@@ -55,7 +55,7 @@ python tools/device_memory_capacity/process_memory_probe.py \
   --stderr evidence/capacity/candidate-x1-run1/stderr.log \
   --interval-ms 50 \
   -- \
-  python tools/run_cuda_v841_full_physics_x4.py <runner arguments>
+  python src/hexcore/drivers/run_cuda_v841_full_physics_x4.py <runner arguments>
 ```
 
 The sampled process peak is an anchor. Add calls to
@@ -116,7 +116,7 @@ test refuses any arm labelled "of record" there and reads the retired row's
 coefficients out of `device_admission`, so the stale-model-prevention tool
 cannot itself recommend a stale model.
 
-To reproduce the #308 copy-elision accounting as it was landed, pass the arm
+To reproduce the copy-elision accounting as it was landed, pass the arm
 it was computed against instead — `--prior-fixed-mib 9797.8
 --prior-bytes-per-cell 86630`, the 2026-08-20 ledger at pin `629ddb6f0`. They
 are not interchangeable: the frame cut moved the fixed term down 3,501.3 MiB
@@ -155,7 +155,7 @@ entry has this shape (nullable measurements may be omitted until they exist):
       "limit_includes_local_backing_store": false,
       "isolated_card": true,
       "source_commit": "<40 hex characters>",
-      "command": ["python", "tools/run_cuda_v841_full_physics_x4.py"]
+      "command": ["python", "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py"]
     }
   ]
 }

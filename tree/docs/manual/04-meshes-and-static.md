@@ -3,7 +3,7 @@
 ## 4.1 The registered meshes
 
 The port runs **registered** meshes: each entry in the registry
-(`tools/mpas_mesh_binding.py`) declares the mesh's shape, its file digests,
+(`src/hexcore/drivers/mpas_mesh_binding.py`) declares the mesh's shape, its file digests,
 and its admitted timestep, and a forecast binds the named mesh against the
 real files before anything touches the GPU. An unregistered mesh, a wrong
 name, or a swapped file is refused by name — the registry runner's
@@ -14,14 +14,12 @@ meshes, one generated uniform global mesh, twelve generated graded
 (variable-resolution) global meshes, and six limited-area culls. Between
 them they declare five timesteps — 120, 100, 75, 60 and 20 s — each admitted
 against its own file's `dcEdge`. There is no `--list` flag; a wrong `--mesh`
-name prints the whole set, which is how you read it. The registry lives in
-`tools/`, which the wheel does not carry, so this needs `--repo` unless you
-are standing inside a checkout — without it the door refuses about the
-missing checkout and never reaches the registry:
+name prints the whole set, which is how you read it. The registry ships in
+the package (`hexcore/drivers/mpas_mesh_binding.py`), so this works from an
+install:
 
 ```sh
-gpuwm-hex forecast --mesh nope --grid x --static y --init z --out out \
-  --repo <gpuwm-hex-checkout>/tree
+gpuwm-hex forecast --mesh nope --grid x --static y --init z --out out
 ```
 
 ```
@@ -32,7 +30,7 @@ v16.66.195630, v20.80.151649, v4.75.121182, v4.75.123423, v4.75.128019,
 v6.75.112676, v6.75.114257, v6.75.120989, x1.40962, x4.163842.  A row pins its
 grid and static by byte count and SHA-256 and declares the timestep its real
 dcEdge admits; running an unregistered mesh would run an unproved shape at an
-unadmitted timestep.  Register the row in tools/mpas_mesh_binding.py before
+unadmitted timestep.  Register the row in src/hexcore/drivers/mpas_mesh_binding.py before
 running it.
 ```
 
@@ -113,7 +111,7 @@ icosahedral Goldberg grid at the resolution you ask for and builds the
 matching static in the same run, with no native toolchain anywhere in the
 loop. (This door was not present on the published gpuwm 2.5.2 wheel; it
 arrives with the 2.5.3 bundle, well below the floor this distribution's
-declared `gpuwm>=2.7.4,<2.7.5` range requires. The commands below were proven from a `gpuwm` checkout.)
+declared `gpuwm>=2.8.0,<2.8.1` range requires. The commands below were proven from a `gpuwm` checkout.)
 
 **See what a card can hold:**
 
@@ -303,8 +301,7 @@ WPS_GEOG/texture_layer1  -> WPS_GEOG/soilgrids/texture_layer1
 ...and texture_layer2..4, texture_top, texture_bot
 ```
 
-This disagreement is a recorded cross-tool defect
-[`evidence/statics-330-unified-rebuild/RECEIPT.md`] awaiting an engine-side
+This disagreement is a recorded cross-tool defect awaiting an engine-side
 fix; until then the bridge above is the supported layout.
 
 ## 4.5 What a generated mesh is good for today — the exact boundary
@@ -313,8 +310,7 @@ fix; until then the bridge above is the supported layout.
 from `rw_mpas_mesh`, static from `rw_mpas_static`, init from `gpuwm-hex init`
 with no native binary at any stage — and it completed a full-physics
 forecast on an RTX 5070 Ti at `rc 0`, `status "passed"`, with
-`finite: true` in every step's health record
-[`evidence/genmesh-dual-edge-20260824/RECEIPT.md`].
+`finite: true` in every step's health record.
 
 **A graded generated mesh forecasts too.** A graded global mesh comes from
 a JSON spec — a background spacing plus any number of refinement regions
@@ -326,7 +322,7 @@ drained by count-changing defect surgery. All three of the campaign's graded
 spec rows regenerate clean, and `v20.80.151649` regenerates BIT-IDENTICAL to
 its registered bytes — every cell centre, ring and edge length exactly equal
 — so its completed 6 h full-physics forecast describes what the generator
-emits today [`evidence/meshgen-coordination-20260826/`]. Measured across ten
+emits today. Measured across ten
 level runs and four generated meshes (3,374 to 224,210 cells),
 `min(dvEdge/dcEdge)` lands between 0.0406 and 0.1023 — two to five times the
 admission floor, zero edges under 0.04 on any of them.
@@ -377,8 +373,7 @@ refuses to run one, each naming the measurement.
 ## 4.6 Capacity planning by card
 
 **The footprint is not a line in cell count, and you cannot size a mesh with
-a pocket calculator.** It has this shape
-[`evidence/memory-shape-20260827/`]:
+a pocket calculator.** It has this shape:
 
 ```
 peak = core(your card, your configuration)
@@ -395,8 +390,7 @@ term, the RRTMG shortwave column chunk, is sized from the card's resident
 threads and never grows with the mesh at all — 1,745.6 MiB on a 170 SM part,
 872.8 MiB on a 68 or 70 SM part.
 
-Measured anchors on an RTX 5090 (170 SM) at the merged tip
-[`evidence/memory-row-refit-20260826/`]: `x1.40962` (40,962 cells)
+Measured anchors on an RTX 5090 (170 SM) at the merged tip: `x1.40962` (40,962 cells)
 peaked at **8,874 MiB**; `x4.163842` (163,842 cells) at **20,446 MiB**. The
 shaped row reproduces both exactly.
 
@@ -467,7 +461,7 @@ a defect that does not exist and is retired.
   margin, not a flat headroom — so in practice it remains a 32 GiB-card
   configuration: a 24 GiB part running a desktop rarely offers that.  At
   the free memory an idle RTX 5090 actually offered (31,642.6 MiB, measured
-  2026-08-26, `evidence/device-floor-rederive-20260826/`) the shaped model
+  2026-08-26) the shaped model
   carries **266,328 cells**, and the largest mesh this project has
   generated (224,210) admits with room.  Whether such a mesh RUNS is a
   separate question the same preflight answers, and the timestep is no

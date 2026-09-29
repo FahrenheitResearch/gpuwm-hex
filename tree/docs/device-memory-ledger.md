@@ -4,7 +4,7 @@
 >
 > **The account of record is not a line in cell count and is not on this
 > page.** Since 2026-08-27 it is the shaped model in
-> `hexcore.device_admission` (`evidence/memory-shape-20260827/`):
+> `hexcore.device_admission`:
 >
 > ```
 > peak = core(card, configuration)
@@ -61,8 +61,8 @@
 > improvement. Read the whole document in the past tense.
 >
 > **One apparent contradiction, resolved, because it will otherwise be
-> re-discovered as a defect.** `evidence/gf-pin-move-measured-20260824/`'s
-> VERDICT-LEDGER reports `ysu_column` as the widest local frame in BOTH the
+> re-discovered as a defect.** The 2026-08-24 GF pin-move measurement's
+> verdict ledger reports `ysu_column` as the widest local frame in BOTH the
 > old and the new arm, and a local-frame reservation delta of 0.0 MiB. That
 > does not contradict this document — it is exactly the instrument limitation
 > section 5 of this page documents in advance: a post-run `gc.get_objects()`
@@ -84,13 +84,12 @@ the shaped model reproduces both exactly; what is retired is the two-point
 line drawn through them, computable at
 `device_admission.RETIRED_AFFINE_ROW_20260826`. Past tense throughout.)*
 
-Ruled 2026-08-26: the 08-25 row below was measured at hex
+Decided 2026-08-26: the 08-25 row below was measured at hex
 **`7fe514b`** and then quoted at every later tree. This section is the
-named follow-up from the 08-26 floor re-proof, run: one #264 session, both
+named follow-up from the 08-26 floor re-proof, run: one per-allocation ledger session, both
 published meshes, same card, same engine pin `26daaab7e`, same protocol
 (6 steps x 120 s full physics, peak = this process's `nvidia-smi` row), at
-the merged tip **`2009db7`**. Raw ledgers and the drive script:
-`evidence/memory-row-refit-20260826/node2/`.
+the merged tip **`2009db7`**.
 
 | mesh | cells | peak at `7fe514b` | peak at `2009db7` | delta |
 | --- | --- | --- | --- | --- |
@@ -128,7 +127,7 @@ slope re-borrowed from this tip: 64,795 cells, `x1.40962` admitted with
 2,244 MiB to spare). It is still a capability a bare default run on that
 card no longer reaches, and it is recorded here as one.
 
-> **[Corrected 2026-08-27, ledger #366.]** That remedy did not exist.
+> **[Corrected 2026-08-27, the borrowed-row defect.]** That remedy did not exist.
 > `CARD_TIER_ROWS` is now a retired alias for
 > `RETIRED_CARD_TIER_ROWS_20260826`, and when this paragraph was written
 > **nothing read it**: `forecast_door._resolve_model` returned the 170 SM row
@@ -141,8 +140,8 @@ card no longer reaches, and it is recorded here as one.
 > the driver's multiprocessor count at decision time, default-on. On that
 > card's own shaped row (core **1,239.7 MiB**, margin **884.0 MiB**)
 > `x1.40962` needs **6,566.0 MiB** and `v15.150.38857` **6,372.1 MiB** against
-> 9,097.0 MiB free — both ADMITTED, confirmed on the real RTX 3080
-> (`evidence/memory-shape-20260827/ON-CARD-366.json`). The capability this
+> 9,097.0 MiB free — both ADMITTED, confirmed on the real RTX 3080.
+> The capability this
 > paragraph recorded as lost is fixed, not worked around.
 
 **What the re-fit did NOT fix.** The row's one graded-mesh point,
@@ -154,13 +153,13 @@ point measured sits above the line through them, and the re-fit ISOLATED
 that residue rather than removing it — this row is exact on both uniform
 meshes, so the excess is now attributable to the mesh shape instead of being
 tangled with a stale fixed term. At most 11 MiB of it is the whole-device
-sampling convention (measured side by side in this lane's x4 arm).
-**CLOSED 2026-08-27, and the answer was not the mesh shape.** The #264 arm
-above ran (`evidence/four-swaths-20260827/ledger-365.json`): the SAME graded
+sampling convention (measured side by side in this measurement's x4 arm).
+**CLOSED 2026-08-27, and the answer was not the mesh shape.** The per-allocation ledger arm
+above ran: the SAME graded
 mesh at this row's own 6-step protocol measures **19,255.25 MiB against a
 19,297.8 MiB prediction — the row OVER-predicts it by 0.22 %** — and a
 whole-device sampler running beside the probe agreed to 0.75 MiB, so neither
-mesh shape nor sampling convention explains the +2.80 %. Ledger #365 is
+mesh shape nor sampling convention explains the +2.80 %. The placed-mesh footprint spread is
 answered: a graded mesh is not more expensive per cell, and its peak-instant
 site census is identical to the uniform mesh's scaled by cell count.
 
@@ -170,21 +169,19 @@ returns" was installed for a defect that turned out not to exist. The flat
 512 MiB headroom is retired too, for a different and real reason: it named
 no breakage and it failed by 96 MiB on `v6.75.112676`. The margin is now
 priced from the card and names what it absorbs —
-`hexcore.device_admission.ShapedFootprintModel.margin_terms`,
-`evidence/memory-shape-20260827/`.
+`hexcore.device_admission.ShapedFootprintModel.margin_terms`.
 
 ## 2026-08-25 — the converged-stack arm (RTX 5090, 170 SM) — SUPERSEDED 2026-08-26
 
-The seam pin converged with the engine release line (#335): hex
+The seam pin converged with the engine release line: hex
 **`7fe514b`** + engine **`26daaab7e`** (`pin/mpas-port-arwen-seam-v4`,
 the seam-converge merge into the engine release line), which brings
-the #310 device-sized radiation chunk, the release line's frame-cut
+the device-sized radiation chunk, the release line's frame-cut
 wave, and the refl10cm/q2 history stream into one stack. Measured
 2026-08-25 (UTC 16:46–16:52Z) on an **RTX 5090
-(32,607 MiB, 170 SM)**, the #264 instrument
+(32,607 MiB, 170 SM)**, the per-allocation ledger instrument
 (`tools/device_memory_ledger/hex_ledger_probe.py`), 6 steps × 120 s
-full physics, peak = this process's `nvidia-smi` row. Raw ledgers and
-the drive script: `evidence/pin-move-335-20260825/node2/`.
+full physics, peak = this process's `nvidia-smi` row.
 
 | mesh | cells | peak (process nvidia-smi) |
 | --- | --- | --- |
@@ -197,21 +194,20 @@ is computable at `device_admission.RETIRED_ROW_20260825`. Read this
 section in the past tense.)*
 Against the superseded 170 SM row (`0d04db712`, 2026-08-24: 6,296.5 MiB
 + 93,474 B/cell; x1 9,948, x4 20,902) the fixed term falls
-**1,957.4 MiB** (#310 narrows the LW chunk on a 170 SM part; the frame
+**1,957.4 MiB** (device-sized radiation chunk narrows the LW chunk on a 170 SM part; the frame
 wave shrinks the local-memory reservation — widest launched frame is now
 `wsm6_column` 7,216 B, predicted reservation upper bound 1,797.0 MiB)
 and the slope rises **10,222 B/cell** (the refl10cm/q2 history
 publication and the release line's seam-file evolution ride per-cell).
 Net: x1 −1,558 MiB, x4 −360 MiB. x1.40962 fits a 12 GiB budget with
 3,898 MiB of headroom; x4.163842 remains in practice a 32 GiB-card
-configuration under the RE-DERIVED `NATIVE_DEVICE_FLOOR` (ruled
-2026-08-25: the floor is now this row plus 512 MiB headroom —
+configuration under the RE-DERIVED `NATIVE_DEVICE_FLOOR` (2026-08-25: the floor is now this row plus 512 MiB headroom —
 20.6 GiB at x4 — through `hexcore.device_admission`; the 24 GiB
 assertion is retired, see the 2026-08-25 per-card section below). The
 fixed term is per-card: none of this transfers to smaller parts, whose
 rows are measured, never derived.
 
-Same-session corruption check on this no-ECC part: the #327 restart
+Same-session corruption check on this no-ECC part: the step-16 restart divergence
 gate ran first on the same card and stack — two independent processes
 (uninterrupted parent, fresh-process restart worker) produced
 byte-identical history (`118332d5…` both), which is the dual-run byte
@@ -219,9 +215,9 @@ comparison this node's hardware history requires.
 
 ## 2026-08-26 — the floor re-proved, and the row's first out-of-sample point
 
-Ruled 2026-08-26; evidence `evidence/device-floor-rederive-20260826/`.
+Re-derived 2026-08-26.
 The re-proof found no new value to derive — the constant has been the measured row since 08-25 —
-and found the tree's CITATIONS stale instead: the graded-mesh lane branched
+and found the tree's CITATIONS stale instead: the graded-mesh work branched
 from a pre-08-25 base, measured its capacity boundaries against the retired
 proxy on hardware, and merged those conclusions beside the re-derived floor.
 Three registry rows and STATE.md section 6 described a retired constant as
@@ -233,8 +229,8 @@ Measured on the RTX 5090 (free 31,642.6 MiB at the reading):
 
 | leg | measurement |
 | --- | --- |
-| `v15.60.224210` (224,210 cells) | door preflight **ADMITTED** on memory: 26,511.7 MiB predicted + 512 headroom against 31,642.6 free. The retired proxy demanded 32.84 GiB — above the card's total either way it is read. Still refused by the 75 s timestep (#358), and the preflight now reports BOTH |
-| `v20.80.151649`, 1 h full physics | rc **0**, 30/30 steps, `memory_admission.minimum` **20,812,141,738** — the shared sum, 19.38 GiB. The same gate at the graded lane's base, same mesh and card and day, demanded the retired proxy's 22.21 GiB |
+| `v15.60.224210` (224,210 cells) | door preflight **ADMITTED** on memory: 26,511.7 MiB predicted + 512 headroom against 31,642.6 free. The retired proxy demanded 32.84 GiB — above the card's total either way it is read. Still refused by the 75 s timestep, and the preflight now reports BOTH |
+| `v20.80.151649`, 1 h full physics | rc **0**, 30/30 steps, `memory_admission.minimum` **20,812,141,738** — the shared sum, 19.38 GiB. The same gate at the graded-mesh work's base, same mesh and card and day, demanded the retired proxy's 22.21 GiB |
 | cells admitted, 32 GiB part | 210,952 → **270,915** |
 
 **The row's first out-of-sample point, and it is not a clean confirmation.**
@@ -242,17 +238,17 @@ Measured on the RTX 5090 (free 31,642.6 MiB at the reading):
 shape it was never fitted on. Predicted 19,336.0 MiB, measured **19,838.0 MiB
 (+2.60 %)**, steady for the last 50 s of the run — inside its own 19,847.7 MiB
 requirement by **9.7 MiB**, entirely on the shared headroom. The same mesh
-measured 19,226 MiB at the graded lane's base earlier the same day, so the
+measured 19,226 MiB at the graded-mesh work's base earlier the same day, so the
 merged tip costs **+612 MiB (+3.2 %)** on this mesh against the tree the row
 was fitted at (`7fe514b`). **NAMED FOLLOW-UP: re-fit the of-record row at the
-merged tip** — one #264 session, both published meshes, 170 SM card. Until it
+merged tip** — one per-allocation ledger session, both published meshes, 170 SM card. Until it
 runs, the fixed term is a `7fe514b` number quoted at a later tree and the
 error direction is under-prediction.
 
 > **[Corrected 2026-08-27 — the follow-up ran and the sign reversed.]** The
-> re-fit is the 2026-08-26 section at the top of this page, and the #264 arm on
-> the graded mesh itself ran in the four-swaths lane
-> (`evidence/four-swaths-20260827/ledger-365.json`): the SAME mesh at the row's
+> re-fit is the 2026-08-26 section at the top of this page, and the per-allocation ledger arm on
+> the graded mesh itself ran with the four-swaths measurement: the SAME
+> mesh at the row's
 > own 6-step protocol measures **19,255.25 MiB against 19,297.8 predicted — the
 > row OVER-predicts it by 0.22 %**, and a whole-device sampler beside the probe
 > agreed to 0.75 MiB. So the error direction was not under-prediction and the
@@ -265,7 +261,7 @@ error direction is under-prediction.
 
 ## 2026-08-25 — per-card rows at the converged stack, and the floor re-derived
 
-The `NATIVE_DEVICE_FLOOR` re-derivation (ruled 2026-08-25) made the
+The `NATIVE_DEVICE_FLOOR` re-derivation (2026-08-25) made the
 of-record row above THE
 admission gate: every free-memory decision — forecast door, `--preflight`,
 the binding's per-mesh floor, the driver's `MIN_FREE_DEVICE_BYTES` — is
@@ -275,9 +271,8 @@ the binding's per-mesh floor, the driver's `MIN_FREE_DEVICE_BYTES` — is
 admitted x1.40962 at 6,144 MiB free against its measured 8,390 MiB peak.
 `FLOOR_DERIVATION` in that module is the machine-readable derivation.
 
-Two per-card #264 rows were measured the same day at the converged stack
-(hex `5252421` + engine `26daaab7e`), raw ledgers and receipts in
-`evidence/l6-capacity-20260825/`:
+Two per-card per-allocation ledger rows were measured the same day at the converged stack
+(hex `5252421` + engine `26daaab7e`):
 
 | card | mesh | peak | row |
 | --- | --- | --- | --- |
@@ -306,34 +301,32 @@ What the re-derivation changed on real cards, measured at decision time:
 the 3080 (free 9,097.0 MiB) went from 25,672 admitted cells on the
 superseded door row to 42,934 on the of-record row and **63,659 on its own
 measured row** — x1.40962 is now ADMITTED on the 10 GiB desktop card
-(predicted 8,389.9 + 512 vs 9,097.0 free, `preflight_passed`, receipt in
-the evidence dir) where the superseded row refused it at 9,948.0; u96.64002
-still refuses there by 33.9 MiB on the card's own row, by name. Node-1
-(free 15,880 MiB) went 101,762 → 111,524 → **123,796** cells, and its u96
+(predicted 8,389.9 + 512 vs 9,097.0 free, `preflight_passed`) where the superseded row refused it at 9,948.0; u96.64002
+still refuses there by 33.9 MiB on the card's own row, by name. The 16 GiB
+card (free 15,880 MiB) went 101,762 → 111,524 → **123,796** cells, and its u96
 leg ran to rc 0 under the new floor — admitted-and-completes, on hardware.
 
 ## 2026-08-24 — the merged-tip arm (RTX 5070 Ti, 70 SM)
 
 The 08-24 pin-move campaign left one open row: the integration tip
-carries both the GF frame cut AND the #308 copy-elision merge, and no
+carries both the GF frame cut AND the copy-elision merge, and no
 ledger had run on that combination. This section is that measurement.
 It is a NEW dated arm, not a revision of anything below; the 2026-08-20
 content stays untouched as the pre-cut record.
 
 Measured 2026-08-24 (UTC 2026-08-25T04:33–04:58Z) on an **RTX 5070 Ti
 (16,303 MiB, 70 SM)**, hex tree **`9a87d27`** (the merged
-the port's integration branch tip), engine pin **`0d04db712`**, the #264
+the port's integration branch tip), engine pin **`0d04db712`**, the per-allocation ledger
 instrument (`tools/device_memory_ledger/hex_ledger_probe.py`, selftest
 rc 0), 6 steps × 120 s full physics, peak = this process's `nvidia-smi`
-row. Raw readings and the drive scripts:
-`evidence/merged-tip-ledger-20260824/`.
+row.
 
 | arm | mesh | cells | peak MiB | peak phase | pool MiB | non-pool MiB |
 |---|---|---:|---:|---|---:|---:|
 | merged tip | `x1.40962` | 40,962 | **6,724.0** | after_step_1 | 5,414.0 | 1,310.0 |
 | merged tip | `u96.64002` | 64,002 | **9,344.0** | after_step_6 | 8,126.3 | 1,217.7 |
-| + #310 narrowing | `x1.40962` | 40,962 | **5,604.0** | after_step_2 | 4,274.3 | 1,329.7 |
-| + #310 narrowing | `u96.64002` | 64,002 | **8,664.0** | after_step_6 | 7,386.6 | 1,277.4 |
+| + device-sized radiation chunk narrowing | `x1.40962` | 40,962 | **5,604.0** | after_step_2 | 4,274.3 | 1,329.7 |
+| + device-sized radiation chunk narrowing | `u96.64002` | 64,002 | **8,664.0** | after_step_6 | 7,386.6 | 1,277.4 |
 
 Two-mesh affine fit at the merged tip, THIS CARD: 2,066.0 MiB +
 119,239 B/cell — with the caveat that the two peaks land at different
@@ -341,16 +334,16 @@ instants (x1 in step 1's radiation; u96 at the step-6 radiation +
 history coincidence), so the pair does not separate card constant from
 slope cleanly. Quote the per-mesh peaks. **The fixed term is per-card:
 nothing here moves the 170 SM model of record (6,296.5 MiB +
-93,474 B/cell at `0d04db712`, pre-#308), and the merged tip on that
+93,474 B/cell at `0d04db712`, before the copy-elision merge), and the merged tip on that
 card class remains NOT MEASURED.**
 
-> **[Superseded 2026-08-25, stale-guard audit #347 finding 10.]** The
+> **[Superseded 2026-08-25, stale-guard audit finding 10.]** The
 > bolded sentence above dated: the 170 SM model of record is now the
 > converged-stack row (4,339.1 MiB + 103,696 B/cell, the top section of
 > this document), and the merged-and-converged tip on the 170 SM card
 > WAS measured 2026-08-25 — that converged row IS it. This card's own
 > per-card row was also re-measured at the converged stack the same day
-> (1,774.0 MiB + 115,143 B/cell, `evidence/l6-capacity-20260825/node1/`).
+> (1,774.0 MiB + 115,143 B/cell).
 > The paragraph is kept as the 08-24 record it is.
 
 What sits at the peak: **2,832.8 MiB of RRTMG/McICA chunk transients,
@@ -359,7 +352,7 @@ workspace this document's tier-2 section identified (`rrtmg_sw.py`
 spcvmc workspace 1,745.6 MiB and friends), priced by
 `legacy_radiation_vram_bytes` at 2,832.4 MiB for SW 2048 / LW 4096.
 
-**#310 took it** (engine commit `1a665e3fc`): the chunk width now defaults
+**the device-sized radiation chunk took it** (engine commit `1a665e3fc`): the chunk width now defaults
 to the smallest 256-multiple saturating the device's resident threads,
 capped at the old constants.
 On this 70 SM part that is SW 1024 / LW 768: x1 releases 1,120.0 MiB
@@ -373,11 +366,10 @@ ran there.
 
 **12 GiB, on this card, measured:** x1.40962 6,724.0 → 5,604.0 MiB and
 u96.64002 9,344.0 → 8,664.0 MiB. Both meshes fit a 12 GiB budget at the
-merged tip with ≥ 2.9 GiB headroom (≥ 3.5 GiB with #310). `x4.163842`
+merged tip with ≥ 2.9 GiB headroom (≥ 3.5 GiB with the device-sized radiation chunk). `x4.163842`
 was not attempted — its 24 GiB admission floor exceeds the card.
 *(That 24 GiB floor was the asserted constant in force on 08-24; it was
-re-derived 2026-08-25 to the measured 20.6 GiB —
-`evidence/l6-capacity-20260825/` — which still exceeds this 16 GiB
+re-derived 2026-08-25 to the measured 20.6 GiB, which still exceeds this 16 GiB
 card, so the non-attempt stands.)*
 
 ---
@@ -505,8 +497,8 @@ tendency sets (`tendencies`, `pbl_tendencies`, `radiation_tendencies`,
 WSM6 scratch set (`mpas_column_batch.py:372`) and the seam's `_in`/`_out`
 mirrors (`mpas_column_batch.py:552-562`).
 
-All 385 arrays are in `evidence/device-memory-ledger-264/LEDGER-TABLE.json`
-under `resident_arrays`, with dtype, x4 shape, B/cell and site.
+The ledger records all 385 arrays under `resident_arrays`, with dtype, x4
+shape, B/cell and site.
 
 ### Tier 2 — transient, 47,728 B/cell (the largest slope contributor)
 
@@ -560,12 +552,12 @@ directions before any number here was believed:
 |---|---|
 | `kernel_reservation.py` | 512 MiB array → hook, pool and `nvidia-smi` all move by 512 MiB; a view moves nothing; an 8,192 B local frame reserves 1,784.0 MiB by `cudaMemGetInfo` **and** 1,784.0 MiB by this process's `nvidia-smi` row; a zero-local kernel reserves 0; a second launch reserves 0 |
 | `reservation_probe.py` | positive control `gf_gfdrv_stage` standalone = 7,034.0 MiB = the sum of the three in-run increments; negative control (zero-local kernel) = 0.0 MiB; reverse-order control drives `rlw_rtrn_march` to 0.0 MiB |
-| non-perturbation | traced vs untraced x1 run differ in 1 of 1,935 receipt leaf fields, and that field is `memory_admission/free_bytes` (free VRAM at admission, moved by other lanes on the card) |
+| non-perturbation | traced vs untraced x1 run differ in 1 of 1,935 receipt leaf fields, and that field is `memory_admission/free_bytes` (free VRAM at admission, moved by other processes on the card) |
 
 Two traps this instrument had to survive, both of which silently produce
 wrong ledgers:
 
-1. **`cudaMemGetInfo` is device-wide.** On a shared card a sibling lane's
+1. **`cudaMemGetInfo` is device-wide.** On a shared card another process's
    allocation lands inside any window measured that way; one contended run
    here reported a 7,052 MiB radiation delta and a *negative* surface-layer
    delta. Every number in this ledger comes from the per-process row instead.

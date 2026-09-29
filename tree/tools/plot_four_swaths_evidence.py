@@ -285,7 +285,7 @@ def w_bands(rows, out: Path) -> None:
     import matplotlib.pyplot as plt
 
     figure, axes = plt.subplots(figsize=(11.5, 5.6))
-    drew = False
+    plotted = False
     # Two slots can share a threat class, and therefore a colour. The second
     # one gets a dashed line so the pair stays distinguishable.
     seen: dict[str, int] = {}
@@ -303,8 +303,8 @@ def w_bands(rows, out: Path) -> None:
         axes.plot(hours, means, marker="o", ms=4, ls=style,
                   color=CLASS_COLOURS.get(row["threat"], "#333333"),
                   label=f"{row['slot']} {CLASS_LABELS.get(row['threat'], row['threat'])}")
-        drew = True
-    if not drew:
+        plotted = True
+    if not plotted:
         plt.close(figure)
         return
     control = None

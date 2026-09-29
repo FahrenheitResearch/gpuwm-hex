@@ -1,4 +1,4 @@
-"""CPU/no-assets gates for native-free initialization and timestep admission #305."""
+"""CPU/no-assets gates for native-free initialization and timestep admission."""
 from __future__ import annotations
 
 from argparse import Namespace
@@ -234,12 +234,13 @@ def test_vertical_modes_are_explicit_and_mutually_exclusive() -> None:
 # x4 frozen no-op self-check compares two digests that can never be equal.
 # ---------------------------------------------------------------------------
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
+DRIVERS = Path(__file__).resolve().parents[1] / "src" / "hexcore" / "drivers"
 
 
 def _load_tool(key: str, filename: str) -> object:
     name = f"_test_305_{key}"
     sys.modules.pop(name, None)
-    spec = importlib.util.spec_from_file_location(name, TOOLS / filename)
+    spec = importlib.util.spec_from_file_location(name, (DRIVERS if (DRIVERS / filename).is_file() else TOOLS) / filename)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module

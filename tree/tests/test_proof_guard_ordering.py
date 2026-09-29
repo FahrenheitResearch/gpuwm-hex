@@ -1,4 +1,4 @@
-"""#232: every tool verifies the source pins BEFORE the checkout guard.
+"""The pins-before-guard ordering: every tool verifies the source pins BEFORE the checkout guard.
 
 ``verify_arwen_checkout_git`` gates on ``ARWEN_SOURCE_MANIFEST``, which
 ``arwen_source_manifest()`` imports lazily from
@@ -9,7 +9,7 @@ module can hand the guard a manifest that admits the edited seam, and the
 receipt then records a checkout as "unchanged" on the strength of a hash
 table the run never verified.
 
-The #228 redesign applied the pins-then-guard ordering to the F001 proof's
+The proof-guard redesign applied the pins-then-guard ordering to the F001 proof's
 ``main`` and restart worker only.  These tests pin the ordering as a
 property of every tool in the tree, so a new tool cannot reintroduce the
 inversion, and prove it at runtime on a real secondary tool.
@@ -27,6 +27,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
+DRIVERS = ROOT / "src" / "hexcore" / "drivers"
 
 PINS = "require_frozen_execution_sources"
 GUARD = "verify_arwen_checkout_git"
@@ -83,7 +84,12 @@ def _first_call_lines(scope: ast.AST) -> tuple[int | None, int | None]:
 
 
 def _tool_sources() -> list[Path]:
-    return sorted(path for path in TOOLS.rglob("*.py") if "__pycache__" not in path.parts)
+    return sorted(
+        path
+        for root in (TOOLS, DRIVERS)
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts
+    )
 
 
 def _ordering_offenders() -> list[str]:

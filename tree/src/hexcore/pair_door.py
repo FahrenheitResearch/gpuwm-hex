@@ -55,12 +55,12 @@ import datetime as _dt
 import hashlib
 import json
 from pathlib import Path
-import platform
 import subprocess
 import sys
 import time
 from typing import Any, Callable, Mapping, Sequence
 
+from .host_identity import host_record
 from .errors import MpasPortError
 from .forecast_door import add_forecast_arguments, default_scratch, history_files
 
@@ -729,7 +729,7 @@ def run_pair(
         "created_utc": _dt.datetime.now(_dt.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         ),
-        "host": platform.node(),
+        "host": host_record(),
         "pair_out": str(request.pair_out),
         "authored_argv": list(request.authored_argv),
         "source_table": {

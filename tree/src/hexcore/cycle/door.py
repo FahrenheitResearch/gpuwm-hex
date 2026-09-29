@@ -72,7 +72,11 @@ def _config(arguments: argparse.Namespace) -> CascadeConfig:
         ),
         coarse_history=Path(_require(arguments.coarse_history, "--coarse-history", "the cascade detects in a coarse forecast this project produced and drives its boundaries from the same one; with none there is nothing to place a swath from")),
         coarse_parent_grid=Path(_require(arguments.coarse_parent_grid, "--coarse-parent-grid", "rw_mpas_lbc reads the coarse parent's own grid to build the boundary series")),
-        gpuwm_checkout=Path(_require(arguments.gpuwm_checkout, "--gpuwm-checkout", "the cascade drives the forecast lane, whose proof harness verifies a gpuwm GIT WORKING TREE and records its HEAD, tree and dirty paths into every receipt; an install carries the pinned bytes and no commit, so it cannot name what it executed")),
+        # Optional since 0.3.2: the forecast runs on the installed engine
+        # when none is named, and records it by version and RECORD digest.
+        gpuwm_checkout=(
+            None if arguments.gpuwm_checkout is None else Path(arguments.gpuwm_checkout)
+        ),
         repo=repo,
         mesh_exe=None if arguments.mesh_exe is None else Path(arguments.mesh_exe),
         lbc_exe=None if arguments.lbc_exe is None else Path(arguments.lbc_exe),

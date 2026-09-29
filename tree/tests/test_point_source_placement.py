@@ -1,17 +1,16 @@
-"""The point-source placement instrument: the table it writes, the census it takes, the line it places.
+"""The tracer release-line instrument: the table it writes and the line it places.
 
 Everything here runs on a CPU-only box and starts no forecast.  A synthetic
 leg is written by hand -- a 41 x 41 patch of cells on a 0.02-degree
-latitude/longitude lattice, seven levels, two valid times -- with cloud water
-at sub-zero temperatures in ONE north-south strip and nowhere else, and a
-uniform westerly wind.  The tool is run over it exactly as a user runs it.
+latitude/longitude lattice, seven levels, two valid times -- with a uniform
+westerly wind.  The tool is run over it exactly as a user runs it.
 
 WHY THE TABLE NUMBERS ARE ASSERTED OUTRIGHT.  The table is what the engine
 reads; an epoch off by a day, a pass gap off by a minute or an ``on`` flag
 on the wrong waypoint changes the injection without any error.  The first
-epoch asserted below is the first row of the 2026-09-02 3.75 km proof's own
-table (``303289200.0`` for 2026-08-12 07:00Z), so the arithmetic here is
-pinned to the table that was proven to respond.
+epoch asserted below (``303289200.0`` for 2026-08-12 07:00Z) was checked
+against a table the engine read and released from, so the arithmetic here
+is pinned to one the engine is known to accept.
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ tool = _load()
 # --------------------------------------------------------------------------
 
 PROOF_RELEASE = dt.datetime(2026, 8, 12, 7, 0, 0)
-PROOF_FIRST_EPOCH = 303289200.0  # the 3.75 km proof's first row, 2026-08-12 07:00:00Z
+PROOF_FIRST_EPOCH = 303289200.0  # a reference table's first row, 2026-08-12 07:00:00Z
 
 
 def test_the_epoch_is_the_engines_2017_epoch() -> None:
@@ -54,7 +53,7 @@ def test_the_epoch_is_the_engines_2017_epoch() -> None:
     assert tool.epoch_seconds(tool.EPOCH) == 0.0
 
 
-def test_the_table_rows_carry_the_proven_pass_structure() -> None:
+def test_the_table_rows_carry_the_pass_structure() -> None:
     rows = tool.table_rows(43.55, -84.25, 5000.0, PROOF_RELEASE)
     assert len(rows) == 15
     epochs = [row[0] for row in rows]
@@ -127,16 +126,13 @@ def test_the_table_command_writes_the_file_and_its_placement_record(tmp_path: Pa
 
 
 # --------------------------------------------------------------------------
-# a synthetic leg: one supercooled strip, a westerly wind
+# a synthetic leg: a uniform westerly wind
 # --------------------------------------------------------------------------
 
 N = 41
 LEVELS = 7
 LAT0, LON0, STEP = 34.6, -97.4, 0.02
-CENTER = (35.0, -97.0)
-STRIP_LON = -96.9
-STRIP_LAT = (34.8, 35.2)
-WARM_THETA, COLD_THETA = 280.0, 265.0  # pressure is P0, so T = theta
+TARGET = (35.0, -96.9)
 U, V = 10.0, 0.0
 
 
@@ -146,12 +142,7 @@ def _lattice():
     return lat, lon
 
 
-def _strip(lat, lon):
-    return ((numpy.abs(lon - STRIP_LON) <= 0.03 + 1e-9)
-            & (lat >= STRIP_LAT[0] - 1e-9) & (lat <= STRIP_LAT[1] + 1e-9))
-
-
-def _write_leg(root: Path):
+def _write_leg(root: Path, *, with_wind: bool = True):
     lat, lon = _lattice()
     cells = lat.size
     grid = root / "grid.nc"
@@ -167,112 +158,78 @@ def _write_leg(root: Path):
         z[:] = numpy.tile(1000.0 * numpy.arange(LEVELS + 1), (cells, 1))
     out = root / "out"
     out.mkdir()
-    strip = _strip(lat, lon)
     for stamp in ("2026-09-10_19.30.00", "2026-09-10_20.00.00"):
         path = out / f"cuda-history.{stamp}.nc"
         with Dataset(str(path), "w", format="NETCDF4") as ds:
             ds.createDimension("Time", None)
             ds.createDimension("nCells", cells)
             ds.createDimension("nVertLevels", LEVELS)
-            theta = numpy.full((cells, LEVELS), WARM_THETA)
-            theta[:, 5:] = COLD_THETA
-            qc = numpy.zeros((cells, LEVELS))
-            qc[strip, 5:] = 2.0e-4
+
             def var(name, values):
                 variable = ds.createVariable(name, "f4", ("Time", "nCells", "nVertLevels"))
                 variable[0, :, :] = values
-            var("qc", qc)
-            var("theta", theta)
-            var("pressure", numpy.full((cells, LEVELS), tool.P0))
-            var("u_zonal", numpy.full((cells, LEVELS), U))
-            var("v_meridional", numpy.full((cells, LEVELS), V))
-    return grid, init, out, int(strip.sum())
+
+            var("theta", numpy.full((cells, LEVELS), 280.0))
+            if with_wind:
+                var("u_zonal", numpy.full((cells, LEVELS), U))
+                var("v_meridional", numpy.full((cells, LEVELS), V))
+    return grid, init, out
 
 
-def test_the_census_counts_the_strip_and_reads_the_wind(tmp_path: Path, capsys) -> None:
-    grid, init, out, strip_cells = _write_leg(tmp_path)
-    assert strip_cells == 63  # three lattice columns by twenty-one rows
-    report = tmp_path / "census.json"
-    rc = tool.main(["census", "--leg-out", str(out), "--grid", str(grid), "--init", str(init),
-                    "--center", str(CENTER[0]), str(CENTER[1]), "--radius-km", "100",
-                    "--json", str(report)])
-    assert rc == 0
-    rows = json.loads(report.read_text())
-    assert [row["frame"] for row in rows] == ["2026-09-10_19.30.00", "2026-09-10_20.00.00"]
-    for row in rows:
-        assert row["slw_cells"] == 2 * strip_cells  # two cold levels in every strip cell
-        assert row["slw_cols"] == strip_cells
-        assert row["qc_cols"] == strip_cells
-        assert row["T_min"] == pytest.approx(COLD_THETA - 273.15, abs=1e-3)
-        assert row["wlon"] == pytest.approx(STRIP_LON, abs=1e-6)
-        assert row["wlat"] == pytest.approx(35.0, abs=1e-6)
-        assert row["wz"] == pytest.approx(6000.0)  # levels 5 and 6 at 5,500 and 6,500 m
-        assert row["u"] == pytest.approx(U)
-        assert row["v"] == pytest.approx(V)
-    printed = capsys.readouterr().out
-    assert "core cells within 100 km" in printed
-
-
-def test_the_placement_finds_the_strip_and_shifts_the_line_upwind(tmp_path: Path) -> None:
-    grid, init, out, _ = _write_leg(tmp_path)
+def test_the_placement_shifts_the_line_upwind_of_the_target(tmp_path: Path) -> None:
+    grid, init, out = _write_leg(tmp_path)
     report = tmp_path / "placement.json"
     rc = tool.main(["place", "--leg-out", str(out), "--grid", str(grid), "--init", str(init),
-                    "--center", str(CENTER[0]), str(CENTER[1]),
+                    "--target", str(TARGET[0]), str(TARGET[1]), "--alt-m", "6000",
                     "--frames", "2026-09-10_19.30.00,2026-09-10_20.00.00",
                     "--lead-min", "30", "--json", str(report)])
     assert rc == 0
     result = json.loads(report.read_text())
-    target = result["target_segment"]
-    assert abs(target["lon"] - STRIP_LON) <= 0.05
-    assert abs(target["lat0"] - STRIP_LAT[0]) <= 0.1
-    assert target["alt_m_weighted"] == 6000.0
+    target = result["target"]
     assert target["u"] == pytest.approx(U)
     assert target["v"] == pytest.approx(V)
-    assert target["T_wtd_C"] == pytest.approx(COLD_THETA - 273.15, abs=1e-3)
+    assert target["z_level_m"] == pytest.approx(5500.0)  # the level nearest 6,000 m
     line = result["line"]
-    assert line["alt_source"] == "qc-weighted"
     assert line["alt_m"] == 6000.0
-    expected_dlon = tool.upwind_shift(target["lat0"] + 0.2, U, V, 1800.0)[1]
-    assert line["lon"] == pytest.approx(target["lon"] + expected_dlon, abs=0.006)
-    assert line["lat0"] == pytest.approx(target["lat0"], abs=1e-6)
+    expected_dlon = tool.upwind_shift(TARGET[0], U, V, 1800.0)[1]
+    assert expected_dlon < 0  # a westerly: upwind is west
+    assert line["lon"] == pytest.approx(TARGET[1] + expected_dlon, abs=0.006)
+    assert line["lat0"] + 0.2 == pytest.approx(TARGET[0], abs=1e-6)  # centred on the target
     assert line["lat1"] == pytest.approx(line["lat0"] + 0.4, abs=1e-6)
-    # the line sits 0.2 deg west of the strip, in clear air; the target is in the strip
     for frame in result["check_line"].values():
-        assert frame["slw_frac"] == 0.0
         assert frame["u"] == pytest.approx(U)
-    for frame in result["check_target"].values():
-        assert frame["slw_frac"] == 1.0
-        assert frame["T_max"] < 0.0
+        assert frame["carry_km"] == pytest.approx(U * 1800.0 / 1000.0)
     assert result["result_sentence"].startswith("a model result of the control leg")
 
 
-def test_the_placement_can_be_told_a_colder_level(tmp_path: Path) -> None:
-    grid, init, out, _ = _write_leg(tmp_path)
-    report = tmp_path / "placement.json"
-    tool.main(["place", "--leg-out", str(out), "--grid", str(grid), "--init", str(init),
-               "--center", str(CENTER[0]), str(CENTER[1]),
-               "--frames", "2026-09-10_19.30.00", "--alt-m", "6500", "--json", str(report)])
-    result = json.loads(report.read_text())
-    assert result["line"]["alt_source"] == "explicit --alt-m"
-    assert result["line"]["alt_m"] == 6500.0
-    profile = result["target_profile"][0]
-    assert len(profile["slw_cells_per_level"]) == LEVELS
-    assert profile["slw_cells_per_level"][:5] == [0, 0, 0, 0, 0]
-    assert profile["slw_cells_per_level"][5] > 0 and profile["slw_cells_per_level"][6] > 0
-
-
-def test_the_placement_refuses_a_leg_with_nothing_to_seed(tmp_path: Path) -> None:
-    grid, init, out, _ = _write_leg(tmp_path)
-    with pytest.raises(SystemExit, match="nothing to place"):
+def test_the_placement_refuses_a_frame_the_leg_did_not_write(tmp_path: Path) -> None:
+    grid, init, out = _write_leg(tmp_path)
+    with pytest.raises(SystemExit, match="frames not under"):
         tool.main(["place", "--leg-out", str(out), "--grid", str(grid), "--init", str(init),
-                   "--center", str(CENTER[0]), str(CENTER[1]),
-                   "--frames", "2026-09-10_19.30.00", "--alt-band", "0", "4000",
-                   "--json", str(tmp_path / "none.json")])
+                   "--target", "35.0", "-96.9", "--alt-m", "6000",
+                   "--frames", "2026-09-10_21.00.00", "--json", str(tmp_path / "none.json")])
+
+
+def test_the_placement_refuses_a_leg_without_wind(tmp_path: Path) -> None:
+    grid, init, out = _write_leg(tmp_path, with_wind=False)
+    with pytest.raises(SystemExit, match="carries no u_zonal"):
+        tool.main(["place", "--leg-out", str(out), "--grid", str(grid), "--init", str(init),
+                   "--target", "35.0", "-96.9", "--alt-m", "6000",
+                   "--frames", "2026-09-10_19.30.00", "--json", str(tmp_path / "none.json")])
+
+
+def test_the_tool_carries_no_targeting_criterion() -> None:
+    """Where the target sits is the user's decision; the public tool encodes
+    no microphysical criterion for choosing it."""
+
+    source = TOOL.read_text().lower()
+    for word in ("supercooled", "seed", "census", "qc_min"):
+        assert word not in source, word
 
 
 def test_the_module_imports_without_the_scientific_stack_being_touched() -> None:
-    # census and place import numpy and netCDF4 inside themselves; the module
-    # itself and the table command are stdlib only.
+    # place imports numpy and netCDF4 inside itself; the module itself and
+    # the table command are stdlib only.
     source = TOOL.read_text()
     header = source.split("# the table (stdlib only")[0]
     assert "import numpy" not in header

@@ -496,13 +496,13 @@ def test_the_door_threads_one_cadence_decision_into_the_driver():
     assert '"--pbl-cadence", request.pbl_cadence,' in door
     assert "pbl_cadence=request.pbl_cadence," in door
 
-    binding = (root / "tools" / "mpas_mesh_binding.py").read_text(
+    binding = (root / "src" / "hexcore" / "drivers" / "mpas_mesh_binding.py").read_text(
         encoding="utf-8"
     )
     assert "forecast.PBL_CADENCE_DECISION = dict(pbl_decision)" in binding
     assert '"PBL_CADENCE_DECISION",' in binding
 
-    runner = (root / "tools" / "run_cuda_v841_forecast.py").read_text(
+    runner = (root / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py").read_text(
         encoding="utf-8"
     )
     assert "One decision, " in runner
@@ -522,7 +522,7 @@ def test_the_driver_receipt_proves_the_cadence_that_ran():
     if str(tools) not in sys.path:
         sys.path.insert(0, str(tools))
     spec = importlib.util.spec_from_file_location(
-        "_test_cadence_forecast_tool", tools / "run_cuda_v841_forecast.py"
+        "_test_cadence_forecast_tool", tools.parent / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py"
     )
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

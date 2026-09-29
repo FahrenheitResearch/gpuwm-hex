@@ -11,7 +11,7 @@ assets a user must supply. This page is the repository-level orientation: what
 this project is, what it is pinned to, and what it is judged by.
 
 **Install:** `pip install gpuwm-hex`. The engine range it declares
-(`gpuwm>=2.7.3,<2.7.4`, stated once in [`tree/pyproject.toml`](tree/pyproject.toml)
+(`gpuwm>=2.8.0,<2.8.1`, stated once in [`tree/pyproject.toml`](tree/pyproject.toml)
 and derived from a measured table rather than typed) is a hard floor and a hard
 ceiling, and pip resolves it for you. `tree/README.md` carries the full matrix.
 
@@ -34,7 +34,7 @@ Two seams cross the boundary, and neither is a source dependency:
 
 | seam | what crosses | how it refuses |
 | --- | --- | --- |
-| **Python** | the `gpuwm` distribution, `>=2.5.8,<2.5.9`, plus a `gpuwm` source checkout at the pinned commit for the forecast lane | 16 source files pinned by SHA-256; a moved byte refuses by name before a device is touched |
+| **Python** | the `gpuwm` distribution, `>=2.8.0,<2.8.1` (the forecast runs on the installed engine; a git clone at the pinned tag is optional) | 16 source files pinned by SHA-256; a moved byte refuses by name before a device is touched |
 | **Rust binaries** | `rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_static`, `rw_mpas_lbc`, built in `gpuwm`'s `tools/rustwx` workspace and published in its bridge bundle from v2.5.8 | each carries an ABI marker and a `GPUWM_BRIDGE_SOURCE_REV` stamp, so a stale binary is detectable rather than silently wrong |
 
 Mesh generation and the `gpuwm mesh` door stay in `gpuwm`. The `rw-mpas` crate
@@ -82,9 +82,7 @@ acceptable because MPAS is no longer the referee; it changes referee.
 
 The obs-skill verification **has now run** — four full-physics forecasts on the
 163,842-cell mesh scored against Stage-IV precipitation, MRMS reflectivity and
-ASOS surface reports, 2026-08-25, recorded in
-receipt `tree/evidence/obs-referee-283/` (see
-[`tree/evidence/EVIDENCE.md`](tree/evidence/EVIDENCE.md)) with the
+ASOS surface reports, 2026-08-25, with the
 verdict for each divergence in
 [`tree/docs/declared-divergences.md`](tree/docs/declared-divergences.md). It
 reaches two of the three. The theta drift is not one of them: rain gauges and
@@ -96,7 +94,7 @@ that would settle it is still open work.
 ## The pin
 
 `tree/src/hexcore/cuda_arwen_physics_v841.py` pins sixteen `gpuwm` source
-files by SHA-256, and `tree/tools/run_cuda_v841_full_physics_x4.py` names the
+files by SHA-256, and `tree/src/hexcore/drivers/run_cuda_v841_full_physics_x4.py` names the
 `gpuwm` commit they were taken from:
 
 ```
@@ -122,7 +120,7 @@ All sixteen hash-match at that commit, and at no other ref checked. Measured
 | `pin/mpas-port-arwen-seam` (`629ddb6f0`) | 7 / 16 |
 
 The anchor is the *reachability of that object*. A commit that survives only as
-the tip of one `gpuwm` lane branch is one branch deletion away from being
+the tip of one `gpuwm` development branch is one branch deletion away from being
 unreachable — at which point the sixteen pins could never be verified again and
 every proof built on them would become unfalsifiable. Every pin the port has
 ever executed is tag-anchored in `gpuwm` — `pin/mpas-port-arwen-seam` through

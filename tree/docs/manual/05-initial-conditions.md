@@ -24,8 +24,7 @@ to end on x1.40962 against the native golden: the mint is
 schema-complete (all 134 native variables, 0 missing), 75 carried fields
 bit-identical, the constructed vertical within millimetres of the native
 one (`zgrid` max 3.9 mm over a 30 km column), and the produced init
-starts the dycore
-[`evidence/native-free-proof-20260824/RECEIPT.md`]. The constructed
+starts the dycore. The constructed
 vertical is not the native vertical byte for byte; the quantified deltas
 live in that receipt.
 

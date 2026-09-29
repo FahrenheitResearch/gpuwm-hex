@@ -183,7 +183,7 @@ def window_receipt(
 
     WHY THIS EXISTS AND WHAT IT DOES NOT CLAIM.  In an operational cascade the
     parent re-runs every cycle from a fresh analysis, and cycle N's detection
-    reads cycle N's parent forecast.  This lane has ONE parent integration, so
+    reads cycle N's parent forecast.  The cascade has ONE parent integration, so
     a cycle's view of it is that integration WINDOWED -- the frames from this
     cycle's valid time forward, re-based so hour zero is this cycle's hour
     zero.  That is a faithful model of what a cycle sees and it is NOT the
@@ -213,7 +213,7 @@ def window_receipt(
         "what_this_is": (
             "One cycle's view of a parent forecast: the frames from this "
             "cycle's valid time forward, with their own recorded digests, "
-            "re-based so step 0 is this cycle's hour 0.  This lane runs ONE "
+            "re-based so step 0 is this cycle's hour 0.  The cascade runs ONE "
             "parent integration and windows it per cycle rather than "
             "re-running the parent from a fresh analysis each cycle, which is "
             "what an operational cascade would do.  The difference is that "
@@ -255,7 +255,7 @@ class CascadeConfig:
     parent_history: Path | None
     coarse_history: Path
     coarse_parent_grid: Path
-    gpuwm_checkout: Path
+    gpuwm_checkout: Path | None
     repo: Path
     mesh_exe: Path | None = None
     lbc_exe: Path | None = None
@@ -315,8 +315,10 @@ def _door(config: CascadeConfig, *arguments: Any) -> list[str]:
 
 
 def _tool_env(config: CascadeConfig, extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    # The subprocesses import the hexcore THIS process runs -- a checkout's
+    # src/ or site-packages -- so every step of a cycle executes one copy.
     env = {
-        "PYTHONPATH": str(Path(config.repo) / "src"),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
         "PYTHONDONTWRITEBYTECODE": "1",
     }
     if extra:
@@ -414,7 +416,7 @@ def run_contract_deck(
     """
 
     argv = [
-        config.python, str(Path(config.repo) / "tools" / "run_cuda_regional_contract.py"),
+        config.python, "-m", "hexcore.drivers.run_cuda_regional_contract",
         "--grid", str(grid), "--init", str(init), "--lbc-dir", str(lbc_dir),
         "--class-id", config.class_id, "--mesh-row", mesh_row,
         "--start-time", _stamp(start),
@@ -474,7 +476,8 @@ def run_fine_forecast(
         "--hours", repr(float(config.fine_hours)),
         "--history-every-minutes", str(int(config.history_every_minutes)),
         "--out", out, "--scratch", scratch, "--receipt", receipt,
-        "--repo", config.repo, "--gpuwm-checkout", config.gpuwm_checkout,
+        *(() if config.gpuwm_checkout is None
+          else ("--gpuwm-checkout", config.gpuwm_checkout)),
         "--case-label", label,
     )
     started = time.perf_counter()

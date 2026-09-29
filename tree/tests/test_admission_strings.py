@@ -1,6 +1,6 @@
 """Refusal and marker text computes from the admission surface.
 
-Stale-guard audit #347, finding 9: the bigcard tier's refusal strings in
+Stale-guard audit, finding 9: the bigcard tier's refusal strings in
 ``tests/conftest.py`` and the marker/comment text in ``pyproject.toml``
 restated the retired 26.4 GiB figure (and the superseded 08-24 footprint
 row) after the constant itself moved to the computed ~20.6 GiB floor.  A

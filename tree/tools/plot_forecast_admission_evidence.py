@@ -35,7 +35,7 @@ from hexcore.forecast_door import (  # noqa: E402
 # the card -- not a flat constant every card shares.
 HEADROOM_MIB = FOOTPRINT_MODEL.margin_bytes() / MIB
 
-# Registered rows, from tools/mpas_mesh_binding.py.  Named here rather than
+# Registered rows, from src/hexcore/drivers/mpas_mesh_binding.py.  Named here rather than
 # imported because importing the registry pulls netCDF4 and numpy for a
 # chart that needs two integers per row.
 MESHES = [

@@ -105,18 +105,18 @@ TARGET_EDGES = 491_520
 TARGET_VERTICES = 327_680
 # FROZEN CLOSED-CASE PROOF CONSTANTS — the dt derivation below is a
 # RETIRED METHOD, kept as the record of the runs it made (adjudicated
-# 2026-08-25, stale-guard audit #347 unknowns).  This lane derives dt from
-# ``nominalMinDc`` (6 s per nominal km -> 360 s), and #300 later measured
+# 2026-08-25, stale-guard audit unknowns).  This lane derives dt from
+# ``nominalMinDc`` (6 s per nominal km -> 360 s), and the timestep measurement later measured
 # nominalMinDc 10.5% / 23.6% / 39.7% HIGH as a length on three meshes --
-# the unsafe direction.  The live rule (tools/mpas_mesh_binding.py, the
+# the unsafe direction.  The live rule (src/hexcore/drivers/mpas_mesh_binding.py, the
 # versioned Courant policy: 125 m/s, 0.90) admits dt against the file's
 # real ``dcEdge`` and never nominalMinDc.  Whether this lane's 360 s
 # would survive that policy is NOT MEASURED: at the uniform-mesh bias
 # (10.5%) the policy cap is ~391 s and 360 s passes; at the worst
 # recorded bias (39.7%) the cap is ~309 s and 360 s fails.  Settling it
 # needs one CPU read of min(dcEdge) from the pinned x1.163842 grid, and
-# that file is absent from every reachable fleet box (either proving card,
-# node-4 full-disk searched 2026-08-25; node-3 unreachable), so the tool
+# that file is absent from every reachable machine (either proving card;
+# full-disk searches 2026-08-25, one machine unreachable), so the tool
 # cannot pass its own input pins today either.  If the mesh is ever
 # re-fetched, the read is the named follow-up; until then these constants
 # are the receipt-bearing record of the closed 2026-03-26 evidence

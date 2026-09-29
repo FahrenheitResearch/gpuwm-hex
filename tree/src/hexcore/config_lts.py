@@ -15,7 +15,7 @@ native.  This is a PERFORMANCE feature and opt-in is the correct shape for it;
 defect.
 
 ``config_v841.py`` is one of the exact-byte pinned execution sources
-(``tools/run_cuda_v841_full_physics_x4.py::EXECUTION_SOURCE_PINS``), so these
+(``src/hexcore/drivers/run_cuda_v841_full_physics_x4.py::EXECUTION_SOURCE_PINS``), so these
 fields live in a sibling subclass in this unpinned module instead.  The
 parent's ``validate()`` runs unchanged through a reconstructed parent
 instance, which keeps every pinned knob exactly as declared -- including

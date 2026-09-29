@@ -20,11 +20,8 @@ reflectivity and ASOS surface reports, every archive byte decoded by the
 shipped Rust doors. Three ran the full 24 h; the ERA5 case refused its own step
 691 and truncated at 23 h, which is recorded below and in the receipt rather
 than smoothed over.
-The scorecard, the per-case metric records and the run receipt are in
-receipt `../evidence/obs-referee-283/` (see
-receipt `../evidence/EVIDENCE.md`), and that
-directory's `RECEIPT.md` carries the chain and the SHA-256 of every instrument
-in it. Two of the four cases are the divergence cases themselves; the two
+The run receipt carries the chain and the SHA-256 of every instrument in
+it. Two of the four cases are the divergence cases themselves; the two
 controls the manifest had left `pending` are now selected against a measured
 screen of the observation archive and pinned, with the screen's rule and its
 numbers in [`obs-referee.md`](obs-referee.md).
@@ -36,7 +33,7 @@ precipitation is scored against Stage-IV, NCEP's hourly multi-sensor analysis,
 through its own shipped door. Reflectivity is still MRMS.
 
 What each divergence's referee now says is in its own section below. The open
-half of #283 is closed as far as MRMS/ASOS can close it, and where they cannot
+half of the observation-referee work is closed as far as MRMS/ASOS can close it, and where they cannot
 reach, the reason is named rather than left blank.
 
 ## The measurement behind all three
@@ -56,13 +53,13 @@ is no receipt directory, no card and no run commit for them anywhere in the
 tree -- which is the opposite of how the obs-referee numbers below are
 recorded, and the gap is worth naming rather than papering over. What can be
 established is a ceiling: the commit that introduced them pinned engine
-`629ddb6f0`, so the run happened at or before that pin. Nine engine pin moves
+`629ddb6f0`, so the run happened at or before that pin. Ten engine pin moves
 have landed since -- `0d04db712` (2026-08-24), `26daaab7e` (2026-08-25),
 `659962929` (2026-08-28, gpuwm 2.5.8), `7e34a48` (2026-08-31, gpuwm
 2.6.0), `df5f34c5c` (2026-09-01, gpuwm 2.6.1), `636ab1b4b`
 (2026-09-02, gpuwm 2.6.3), `d60b883e7` (2026-09-02, gpuwm 2.6.4),
-`a7785421e` (2026-09-13, gpuwm 2.7.3) and `ed957997f` (2026-09-15, gpuwm
-2.7.4).
+`a7785421e` (2026-09-13, gpuwm 2.7.3), `ed957997f` (2026-09-15, gpuwm
+2.7.4) and `0164ae0f2` (2026-09-29, gpuwm 2.8.0).
 
 The 2.5.8 move crosses the executed seam and **has been measured**, in
 the strongest form available short of a re-run: a four-arm byte A/B on one
@@ -70,8 +67,7 @@ RTX 5090, old pin against new pin, x4.163842, 30 composite steps, no tolerance
 anywhere. The atmosphere half of the per-step fingerprint is identical at all
 31 steps, all 198 backend seam arrays are identical at every step, and 0 of
 138 history variables differ; the only differences are the pin strings and the
-digest rolled up over them
-(receipt `../evidence/seam-258-ab-20260828/`).
+digest rolled up over them.
 That is one mesh, one case and one hour, and it is a byte comparison rather
 than a physics claim.
 
@@ -80,7 +76,7 @@ The 2026-08-31 move crosses the executed seam too
 RRTMG is the prime suspect for the drift below), and it carries its own
 one-hour byte arm: the x4 frozen-source proof re-run at that pin wrote an
 F001 history byte-identical to the 2.5.8 proof's -- one SHA-256, two
-engines (receipt `evidence/repin-260-20260831/x4-proof/`).  One mesh, one
+engines.  One mesh, one
 case, one hour, same caveat as above.
 
 The 2026-09-01 move (gpuwm 2.6.1) and the 2026-09-02 move (gpuwm 2.6.3)
@@ -88,16 +84,14 @@ both cross the executed seam at its centre -- the seam's own batch driver
 `gpuwm/core/mpas_column_batch.py` gains restart schema v2 and the P3
 transport at 2.6.1, and the aerosol-aware Thompson species row at 2.6.3 --
 and each carries its own one-hour byte arm.  The 2.6.1 x4 proof wrote all
-four snapshots byte-identical to the 2.6.0 proof's
-(`../evidence/repin-261-20260901/x4-proof/`); the 2.6.3 move's arm was not
-run separately, because the 2.6.4 arm below covers it by inclusion
-(`../evidence/repin-263-20260902/x4-proof/SKIPPED.md`).  One mesh, one case,
+four snapshots byte-identical to the 2.6.0 proof's; the 2.6.3 move's arm was not
+run separately, because the 2.6.4 arm below covers it by inclusion.  One mesh, one case,
 one hour, same caveat.
 
 The 2026-09-02 move to gpuwm 2.6.4, three hours after the 2.6.3 one,
 crosses the executed seam more widely than any move since 2.5.8: six of
 the sixteen pinned files moved between the two published wheels, measured
-wheel against wheel (`../evidence/repin-264-20260902/wheel-pair-263-264.txt`)
+wheel against wheel
 -- the phase-one driver `gpuwm/core/physics.py` (the cumulus adapter
 contract grew a result type and a column-tendency coupler for a third
 cumulus scheme), the Grell-Freitas adapter `gpuwm/core/gf.py` (a
@@ -108,15 +102,14 @@ entry points kept byte-identical resource counts and the GF parity suites
 still grade at max_ulp 0), the kernel loader, the config loader and the
 restart identity table.  The column batch and the contract document did
 not move.  Its one-hour byte arm is the x4 frozen-source proof re-run at
-the 2.6.4 pins (`../evidence/repin-264-20260902/x4-proof/`): all four
+the 2.6.4 pins: all four
 snapshots (F000, F030, F001 and the restarted F001) byte-identical to the
 2.6.1 proof's, so one F001 SHA-256 now spans 2.5.8, 2.6.0, 2.6.1 and 2.6.4,
 and the GF lift is measured byte-neutral THROUGH THIS SEAM at that scope.
 One mesh, one case, one hour, same caveat.
 
 The published 2.6.5 (2026-09-02, ninety minutes after 2.6.4) moved none of
-the sixteen pinned files, measured wheel against wheel
-(`../evidence/repin-265-20260902/wheel-pair-264-265.txt`), so it is
+the sixteen pinned files, measured wheel against wheel, so it is
 admitted by the range without a pin move and the 2.6.4 arm covers it.
 
 The 2026-09-13 move to gpuwm 2.7.3 crosses the executed seam more widely
@@ -167,6 +160,35 @@ is byte-identical to 2.7.3 on all 500 arrays of that profile
 That the manifest does not reach the boundary-layer kernel is a named
 follow-up; it is not a claim this page makes.
 
+The 2026-09-29 move to gpuwm 2.8.0 moved eight of the sixteen pinned
+files between the published 2.7.4 and 2.8.0 wheels, measured wheel against
+wheel (`../verification/engine-verdicts/repin-280-20260929.json`):
+`gpuwm/config.py`, `gpuwm/core/gf.py` and `gpuwm/core/kernels/gf.cu`
+(comments only in the two Grell-Freitas files), `gpuwm/core/kernels/__init__.py`
+(a compile notice around the module compile), `gpuwm/core/microphysics.py`
+(the classic Thompson and NSSL paths, which the port's WSM6 backend never
+runs), `gpuwm/core/physics.py`, `gpuwm/core/rrtmg_legacy.py` (ozone routing
+names, MYNN cloud radii and the shortwave chunk width) and
+`gpuwm/io/restart.py`.  The column batch, the seam document and the Noah-MP
+files are byte-identical, the composed glacier unit included, and the
+engine's accepted-scheme tuples read identical from the two installs.  The
+move is measured byte-neutral through the seam at the same scopes as the
+2.7.4 move.  The seam-level A/B
+(`../verification/engine-verdicts/seam-ab-{convective,capped}-2.7.4-vs-2.8.0.json`)
+is 500 of 500 arrays byte-identical on both profiles and both arms under
+the two published engines, on an RTX 5090.  A 10-minute forecast on a
+generated 937.5 m point cull (`q0.9375.120.12795.n45.43w119.07`, 12,795
+cells, 55 levels, 120 steps of 5 s, HRRR 2026-01-23 22Z init and hourly
+boundaries, the same card) wrote both history frames byte-identical under
+this release on gpuwm 2.8.0 and under the 2.7.4-pinned tree on gpuwm 2.7.4
+(22:00Z `81fbc736...`, 22:10Z `aad66b5c...`), 51.6 s and 51.2 s of
+integration.  The cull's own contract deck on the 2.8.0 install is 8 of 8
+decks bitwise against the v8.4.1 CPU authority, 22 of 22 regional kernels
+covered, dual run identical, at the same regional kernel-set digest
+`8a716f28...`.  The x4 F001 byte chain is not re-run at this pin, as at
+2.7.3 and 2.7.4.  Nothing is declared for this move, because nothing
+moved at any scope measured.
+
 The 2026-09-15 move to gpuwm 2.7.4 is the narrowest since 2.6.5: two of
 the sixteen pinned files moved between the published 2.7.3 and 2.7.4
 wheels, measured wheel against wheel
@@ -188,10 +210,10 @@ covers.  The seam-level A/B (`../tools/measure_engine_seam_ab.py`; receipts
 eight columns, forty levels, twenty 120 s steps, WSM6, YSU, Noah-MP and
 legacy RRTMG, Grell-Freitas on one arm and off on the other) is 500 of
 500 arrays byte-identical on both profiles and both arms under the two
-published engines, on node-1's RTX 5070 Ti and again on node-2's RTX 5090.
+published engines, on an RTX 5070 Ti and again on an RTX 5090.
 The one-hour point-cull forecast (`q0.9375.120.43884.n41.95w94.79`,
 43,884 cells, 55 levels, 720 steps of 5 s, HRRR 2026-09-13 15Z init and
-hourly boundaries, node-2's RTX 5090 with no other process on the card)
+hourly boundaries, an RTX 5090 with no other process on the card)
 under gpuwm 2.7.4 wrote both history frames byte-identical to the frames
 of record under 2.7.3 (15Z `85cb8196...`, 16Z `4ed8001f...`), at
 0.2617 s per step after the first (median typical step 0.2453 s,
@@ -214,8 +236,7 @@ default WSM6 path declared byte-unchanged), with `gpuwm/config.py` and
 `docs/mpas-seam.md` moving beside it.  Its arm is the same one-hour byte
 arm: the x4 proof re-run at that pin wrote all four snapshots -- F000,
 F030, F001 and the restarted F001 -- byte-identical to the 2.6.0 proof's,
-so one F001 SHA-256 now spans three engines (receipt
-`evidence/repin-261-20260901/x4-proof/`).  Same scope, same caveat.  The
+so one F001 SHA-256 now spans three engines.  Same scope, same caveat.  The
 two EARLIEST pin moves have no arm at all, and no magnitude above has been
 re-measured over 24 h since the original run. **Whether any of the three moved across those pins is
 NOT MEASURED.** Read them as pre-2026-08-20 numbers until somebody re-runs
@@ -249,7 +270,7 @@ claim `upper-band-theta-drift-cause` as `UNRESOLVED` under the manifest's
 `outside_primary_scope` rule, with the reason carried in the scorecard: MRMS
 and ASOS do not observe model theta above level 45. That is the boundary
 holding, not a gap in the run — the run has no authority here and says so.
-Choosing the profile reference is not an agent's call, and this lane did not
+Choosing the profile reference is not an automated decision, and this work did not
 make it.
 
 ## 2. Convective-to-explicit precipitation repartition
@@ -270,7 +291,7 @@ occurrences of `dicycle` and zero of `tau_ecmwf`; it carries Fritsch-Chappell
 `AA0/1200s` closure members the port does not; it runs `c0=.002` against the
 port's temperature-scaled `c0=.004`; its shallow scheme does not precipitate
 while the port's folds `prets` into `pratec`. The seam is **not** the gap:
-task #231 closed seam-level non-parity (the four auxiliary forcing lanes,
+The seam non-parity closure closed seam-level non-parity (the four auxiliary forcing lanes,
 shallow-on, per-cell `dx` all reach the scheme the way native feeds them).
 Closing the generation gap means porting native's `cup_gf`/`cup_gf_sh`
 bodies — a program, not a seam edit — and whether it *should* close is
@@ -363,8 +384,7 @@ observed** with 8 matches at a median **110.9 km** displacement. An object
 surplus points the same direction as the declared condensate surplus, on one
 case; the point-CSI values pay the documented 22 km-box-vs-0.01° resolution
 cost and should not be read alone. The other three cases' bundles predate the
-field and re-run mechanically. Evidence:
-`tree/evidence/history-refl-q2-20260825/`.
+field and re-run mechanically.
 
 **Status: the precipitation-extremum half is measured and is not decisive at
 this resolution.** The port's 99.9th-percentile hourly rate against Stage-IV's,
@@ -454,7 +474,7 @@ Every full-physics run receipt and every history file carries:
   pointing here.
 
 Receipts stopped carrying this as a `*_blocker` when parity was retired as a
-goal (ruling of 2026-08-20): a blocker names work that must happen before
+goal (2026-08-20): a blocker names work that must happen before
 shipping, and this is not that — it is a property of the product, declared so
 a user deciding whether to trust a number has it before the run, not after.
 
@@ -472,7 +492,7 @@ way from the deficit. Three things would move the rest.
    station reports. What remains of this item is mechanical: re-run the
    other three cases so their bundles carry the fields too.
 2. **A profile referee for (1)** — radiosondes or a provenance-pinned analysis
-   profile. Choosing the reference is not an automated decision and this lane
+   profile. Choosing the reference is not an automated decision and this work
    did not make it.
 3. **Any GF-lane change re-measures all three**, (3) explicitly only after (2).
    The re-measurement now has a standing target rather than an empty column:
@@ -488,4 +508,3 @@ refused the same step 691 at 82,800 s with the same one-step `qv_max`
 doubling (0.0314 → 0.0678 kg/kg). The truncation is a property of the case
 and configuration, not of the GF pin move, and the 24 h divergence numbers
 for this case remain 23 h numbers at both pins.
-`tree/evidence/history-refl-q2-20260825/RECEIPT.md` carries the receipt.

@@ -40,7 +40,7 @@ WHAT THIS PROGRAM MUST NEVER TOUCH, and does not:
   a named engine commit.  The engine is a separate repository and did not
   change; an engine pin that appears to need moving means the port is wrong,
   not the pin.
-* ``FROZEN_BATCH_CROSS_PIN`` in ``hexcore.mod.manifest`` -- engine files too.
+* a provider row's cross-pin of engine files -- engine files too.
 * ``_GPUWM_STARTUP_CLOSURE_PINS`` and the ``gpuwm_sources`` / ``gpuwm_receipt``
   blocks of the ftz authority pins -- engine again.
 * the ``recorded`` half of ``SOURCE_DRIFT_SINCE_CAMPAIGN`` -- the bytes an
@@ -180,14 +180,14 @@ def _pins_by_declared_path(
 
 
 def table_execution_source_pins() -> list[Drift]:
-    """``tools/run_cuda_v841_full_physics_x4.py::EXECUTION_SOURCE_PINS``.
+    """``src/hexcore/drivers/run_cuda_v841_full_physics_x4.py::EXECUTION_SOURCE_PINS``.
 
     Twenty-three execution boundaries of the x4 full-physics proof.
     ``require_frozen_execution_sources`` refuses the whole run on any
     mismatch, before a device is touched.
     """
 
-    path = TREE / "tools" / "run_cuda_v841_full_physics_x4.py"
+    path = TREE / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
     node = module_assignment(parse(path), "EXECUTION_SOURCE_PINS")
     return _pins_by_declared_path("EXECUTION_SOURCE_PINS", path, node, _string_key)
 
@@ -432,43 +432,43 @@ RESTATED_CONTRACT_DIGESTS: tuple[tuple[str, str | None, str, str], ...] = (
         "CUDA_GWDO_V841_KERNEL_SHA256",
     ),
     (
-        "tools/run_cuda_v841_full_physics_x4.py",
+        "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py",
         "KNOWN_CONTRACT_PINS",
         "prep_contract_sha256",
         "CUDA_PHYSICS_PREP_V841_CONTRACT_SHA256",
     ),
     (
-        "tools/run_cuda_v841_full_physics_x4.py",
+        "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py",
         "KNOWN_CONTRACT_PINS",
         "prep_kernel_sha256",
         "CUDA_PHYSICS_PREP_V841_KERNEL_SHA256",
     ),
     (
-        "tools/run_cuda_v841_full_physics_x4.py",
+        "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py",
         "KNOWN_CONTRACT_PINS",
         "gwdo_contract_sha256",
         "CUDA_GWDO_V841_CONTRACT_SHA256",
     ),
     (
-        "tools/run_cuda_v841_full_physics_x4.py",
+        "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py",
         "KNOWN_CONTRACT_PINS",
         "gwdo_kernel_sha256",
         "CUDA_GWDO_V841_KERNEL_SHA256",
     ),
     (
-        "tools/run_cuda_v841_full_physics_x4.py",
+        "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py",
         "KNOWN_CONTRACT_PINS",
         "coupling_contract_sha256",
         "CUDA_PHYSICS_V841_CONTRACT_SHA256",
     ),
     (
-        "tools/run_cuda_v841_full_physics_x4.py",
+        "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py",
         "KNOWN_CONTRACT_PINS",
         "coupling_kernel_sha256",
         "CUDA_PHYSICS_V841_KERNEL_SHA256",
     ),
     (
-        "tools/run_cuda_v841_full_physics_x4.py",
+        "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py",
         "KNOWN_CONTRACT_PINS",
         "adapter_contract_sha256",
         "CUDA_ARWEN_PHYSICS_V841_CONTRACT_SHA256",
@@ -577,7 +577,7 @@ def gated_file_list() -> list[str]:
     -- the check prints ``MISSING FROM ASSEMBLY`` per line and reports no hit.
     """
 
-    runner = parse(TREE / "tools" / "run_cuda_v841_full_physics_x4.py")
+    runner = parse(TREE / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py")
     pins = ast.literal_eval(module_assignment(runner, "EXECUTION_SOURCE_PINS"))
     admission = parse(
         TREE / "src" / "hexcore" / "cuda_backend" / "regional_admission.py"

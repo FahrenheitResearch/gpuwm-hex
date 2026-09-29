@@ -10,7 +10,7 @@ execution sources, so the rate-class launches cannot be written into
 ``_advance_dynamics_subcycle_v841`` where the acoustic loop lives, and copying
 that 320-line method into a subclass would fork the dycore for a performance
 option.  Instead this module rebinds three call targets at runtime and leaves
-every pinned byte where it is -- the same mechanism ``tools/mpas_mesh_binding.py``
+every pinned byte where it is -- the same mechanism ``src/hexcore/drivers/mpas_mesh_binding.py``
 already uses to retarget the pinned proof module without editing it.  The pin
 is over file bytes; ``require_frozen_execution_sources()`` still passes, and the
 gates below check that it does.

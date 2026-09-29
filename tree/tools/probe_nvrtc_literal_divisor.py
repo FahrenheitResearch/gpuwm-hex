@@ -181,7 +181,7 @@ def _device_record() -> dict[str, Any]:
         "nvrtc_get_version": list(nvrtc.getVersion()),
         "cuda_runtime_version": int(runtime.runtimeGetVersion()),
         "cuda_driver_version": int(runtime.driverGetVersion()),
-        "host": platform.node(),
+        "host": __import__("hexcore.host_identity", fromlist=["host_record"]).host_record(),
         "platform": platform.platform(),
     }
     try:

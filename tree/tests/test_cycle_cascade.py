@@ -151,7 +151,7 @@ def bundle(tmp_path: Path) -> dict[str, Path]:
 
 
 # ---------------------------------------------------------------------------
-# the delayed-start seam (#360)
+# the delayed-start seam
 # ---------------------------------------------------------------------------
 def test_a_mid_window_state_lands_on_the_right_cells(bundle, tmp_path):
     """The transplant, checked value by value against the parent it came from.
@@ -257,7 +257,7 @@ def test_a_frame_from_another_mesh_refuses_by_name(bundle, tmp_path):
 
 
 def test_the_history_stream_carries_no_valid_time_and_that_is_reported(bundle):
-    """#360, as a measurement rather than an assumption.
+    """The delayed-start seam, as a measurement rather than an assumption.
 
     The port's history stream is a PRODUCT stream: no ``xtime``.  The reader
     returns ``None`` so a caller states the time it is composing for instead

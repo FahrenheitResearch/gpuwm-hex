@@ -36,7 +36,7 @@ def _grid(path: Path, cells: int, edges: int, *, zone: int = 0) -> Path:
 
 
 class Binding:
-    """A stand-in for ``tools.mpas_mesh_binding.MeshBinding``: records its kwargs."""
+    """A stand-in for ``hexcore.drivers.mpas_mesh_binding.MeshBinding``: records its kwargs."""
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -174,7 +174,7 @@ def test_a_document_of_another_schema_is_refused(tmp_path: Path) -> None:
 
 
 def test_the_registry_module_applies_runtime_rows_where_it_builds_the_table() -> None:
-    text = (ROOT / "tools" / "mpas_mesh_binding.py").read_text(encoding="utf-8")
+    text = (ROOT / "src" / "hexcore" / "drivers" / "mpas_mesh_binding.py").read_text(encoding="utf-8")
     assert "mesh_rows.apply_rows(MESH_BINDINGS, MeshBinding)" in text
     # Before the cascade rows, so a cascade may cull a generated parent.
     assert text.index("mesh_rows.apply_rows") < text.index("cascade_row.apply_rows")

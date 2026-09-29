@@ -186,7 +186,7 @@ STATIC = EngineSpec(
 #: used to be resolved by ``hexcore.cycle.chain`` alone, through one
 #: environment variable and PATH, which is exactly the shape that made
 #: the init door refuse on a box where ``gpuwm fetch-bridges`` had already
-#: staged the file: the 2.7.3 and 2.7.4 bundles carry ``rw_mpas_lbc`` beside the
+#: staged the file: the 2.7.3 to 2.8.0 bundles carry ``rw_mpas_lbc`` beside the
 #: other four, and the ladder reads it from there.
 LBC = EngineSpec(
     name="rw_mpas_lbc",
@@ -412,6 +412,27 @@ def _usable(path: Path) -> bool:
     return os.access(path, os.X_OK)
 
 
+def _not_executable(path: Path) -> bool:
+    return os.name == "posix" and not os.access(path, os.X_OK)
+
+
+_CHMOD_MARK = "; run: chmod +x "
+
+
+def _not_executable_text(where: str, path: Path) -> str:
+    return (
+        f"{where} {path}, which exists but is not executable (pip does not "
+        f"preserve executable bits on package data){_CHMOD_MARK}{path}"
+    )
+
+
+def chmod_remedy(source: str) -> str | None:
+    """The chmod a :func:`locate` gap names, or ``None`` for any other gap."""
+
+    _, mark, path = source.partition(_CHMOD_MARK)
+    return f"chmod +x {path}" if mark else None
+
+
 def _refuse_not_executable(spec: EngineSpec, path: Path) -> None:
     raise EngineRefusal(
         f"{spec.subject} at {path} exists but is not executable.  pip does "
@@ -471,6 +492,12 @@ def locate(spec: EngineSpec) -> tuple[Path | None, str]:
 
     The read-only form :mod:`hexcore.doctor` reports through, so the
     report can name every gap at once instead of stopping at the first.
+    It answers the way :func:`resolve` does, rung for rung: a file that is
+    present and not executable is a gap, not a find.  THE BREAKAGE THIS
+    PREVENTS, measured on a pip install of 0.3.1: the engine wheel's
+    bridges arrived mode 664, ``doctor`` reported every one of them found
+    while the door refused the same file as not executable, so the one
+    command meant to name every gap at once named none.
     """
 
     for name in (*spec.env_names, spec.gpuwm_env):
@@ -479,12 +506,18 @@ def locate(spec: EngineSpec) -> tuple[Path | None, str]:
             continue
         candidate = Path(value).expanduser()
         if candidate.is_file():
+            if _not_executable(candidate):
+                return None, _not_executable_text(f"${name} names", candidate)
             return candidate, f"${name}"
         return None, f"${name} names a missing file: {candidate}"
 
     for candidate in gpuwm_candidates(spec):
         candidate = Path(candidate).expanduser()
         if candidate.is_file():
+            if _not_executable(candidate):
+                return None, _not_executable_text(
+                    "gpuwm's bridge directories hold", candidate
+                )
             return candidate.resolve(), "gpuwm's bridge directories"
 
     found = shutil.which(spec.name)
@@ -504,6 +537,7 @@ __all__ = [
     "USER_BRIDGE_DIR",
     "EngineRefusal",
     "EngineSpec",
+    "chmod_remedy",
     "executable_name",
     "gpuwm_bundles",
     "gpuwm_candidates",

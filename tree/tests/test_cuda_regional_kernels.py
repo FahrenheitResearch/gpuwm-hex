@@ -73,7 +73,7 @@ def test_no_literal_float_divisor_anywhere_in_the_source():
     the contract deck is the only reason it was caught.  A literal divisor
     reintroduces exactly that defect, so the guard is a grep.
 
-    Since then the boundary has been located (#355,
+    Since then the boundary has been located (the NVRTC reciprocal-rewrite defect,
     ``tests/test_nvrtc_reciprocal_rewrite.py``): the rewrite is a property of
     the TARGET, not of one card or one CuPy build -- NVRTC divides for every
     target up to ``compute_90`` and multiplies by the reciprocal from

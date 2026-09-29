@@ -559,7 +559,7 @@ def integration_plan(dt_seconds: float, mesh: str, hours: float = 6.0) -> dict[s
         "steps": steps,
         "arms": 2,
         "procedure": [
-            "1. register the row's dt in tools/mpas_mesh_binding.MESH_BINDINGS "
+            "1. register the row's dt in hexcore.drivers.mpas_mesh_binding.MESH_BINDINGS "
             "(table work; the row must already pass Courant, dual-edge and "
             "radiation-cadence admission)",
             "2. run arm A THROUGH THE CANDIDATE MINT, because the config "

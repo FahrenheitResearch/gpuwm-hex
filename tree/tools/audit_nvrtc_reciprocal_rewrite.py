@@ -21,7 +21,6 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
-import platform
 import re
 import struct
 import sys
@@ -47,7 +46,7 @@ ABOVE_BOUNDARY_ARCH = "120"
 
 # A PTX virtual register, whatever this NVRTC calls one.
 #
-# THE BREAKAGE THIS PREVENTS, measured 2026-08-27 on the proving RTX 5090 (#373).
+# THE BREAKAGE THIS PREVENTS, measured 2026-08-27 on the proving RTX 5090 (the libm-identity finding).
 # These patterns used to spell the register `%f\d+`, which is what NVRTC
 # 13.0 emits for a float32 operand.  **NVRTC 13.3 targeting `compute_120`
 # names the same registers `%r`**, so on that toolchain the census matched
@@ -300,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             "cuda_runtime_version": int(runtime.runtimeGetVersion()),
             "cuda_driver_version": int(runtime.driverGetVersion()),
             "options": list(SHIPPED_OPTIONS),
-            "host": platform.node(),
+            "host": __import__("hexcore.host_identity", fromlist=["host_record"]).host_record(),
         },
         "total_rewritten_sites": total,
         "cuda_bearing_modules_not_censused": uncovered,

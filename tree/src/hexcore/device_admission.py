@@ -3,7 +3,7 @@
 Every "will this mesh fit this card?" decision in the project answers from
 this module: the forecast door's ``--preflight`` verdict, the door's real-run
 admission, and the driver's own floor (``MIN_FREE_DEVICE_BYTES``, rebound per
-mesh by ``tools/mpas_mesh_binding.py``) all call :func:`required_free_bytes`
+mesh by ``src/hexcore/drivers/mpas_mesh_binding.py``) all call :func:`required_free_bytes`
 with the same model, so they agree to the byte -- and therefore to the cell.
 Before this module existed the door predicted from a measured affine row
 while the driver held a separate linear floor scaled from an asserted 24 GiB
@@ -26,7 +26,7 @@ form was refuted by measurement, not by argument:
   concentric culls by 1.2-1.9 GiB: 4,440 -> 15,755 cells (3.5x) moved the
   measured peak only 5,552 -> 7,728 MiB (1.39x).
 
-The per-allocation ledger (#264, ``tools/device_memory_ledger/``) says why,
+The per-allocation ledger (``tools/device_memory_ledger/``) says why,
 and the arithmetic below reproduces its measured block sizes exactly.  The
 process footprint is
 
@@ -53,7 +53,7 @@ them as if it were per-cell.  That is where 2,167 B of the retired row's
 98,748 B/cell slope came from, and it is why the retired row over-predicts
 every small mesh and every limited-area cull.
 
-MEASURED PROOF THE TILE ARITHMETIC IS THE RIGHT ARITHMETIC.  The #264 ledger
+MEASURED PROOF THE TILE ARITHMETIC IS THE RIGHT ARITHMETIC.  The per-allocation ledger
 records each site's largest single allocation at both meshes.  Every site in
 the model scales exactly 4.00x with the 4x cell count EXCEPT three, and the
 formulas above reproduce all three to the byte:
@@ -98,7 +98,7 @@ carries a margin with two named, measured components and no padding:
 
 Nothing else is in the margin.  If a term is not measured it is not here.
 
-PER-CARD ROWS, AND WHY #366 WAS A DEFECT.
+PER-CARD ROWS, AND WHY ONE SHARED ROW WAS A DEFECT.
 -----------------------------------------
 
 The retired module carried :data:`CARD_TIER_ROWS` and **nothing ever read
@@ -106,7 +106,7 @@ it**: ``forecast_door._resolve_model`` returned the 170 SM row unless the
 user typed ``--device-fixed-mib`` and ``--device-bytes-per-cell`` by hand.
 So the 10 GiB desktop was priced with a 32 GiB card's fixed term and refused
 ``x1.40962`` and ``v15.150.38857`` -- two meshes it had been MEASURED running
-with 2,244 MiB to spare.  That is ledger #366.  The door now reads the card's
+with 2,244 MiB to spare.  That is the borrowed-row defect.  The door now reads the card's
 multiprocessor count at decision time and selects or derives its row, so a
 card that was never measured still gets its own arithmetic.
 
@@ -132,7 +132,7 @@ STATED LIMITS, ON PAGE ONE OF THE MODULE.
 
 * The limited-area core is an ENVELOPE, not a fit: the per-allocation
   instrument has never been run on a regional mesh, so the core is the
-  largest residue over five whole-device forecast-door samples.  One #264
+  largest residue over five whole-device forecast-door samples.  One per-allocation ledger
   arm on a cull replaces it.
 * The 16 GiB and 10 GiB cores were measured at hex ``5252421``, not at the
   merged tip, and carry :data:`PIN_RESTATEMENT_BYTES` for it.
@@ -245,7 +245,7 @@ def card_profile_from_attributes(
 
     The door calls this with what the driver reports right now.  A card this
     project has never seen gets a real profile rather than a default, which
-    is the whole point of #366's fix.
+    is the whole point of the borrowed-row defect's fix.
     """
 
     sms = attributes.get("MultiProcessorCount")
@@ -290,7 +290,7 @@ class TiledWorkspace:
 
     Grell-Freitas and YSU both moved their column arrays out of the CUDA
     per-thread local frame and into a global workspace sized to the threads
-    in flight (the #335 frame cut).  A local frame is priced by CUDA at the
+    in flight (the local-frame cut).  A local frame is priced by CUDA at the
     card's WHOLE resident-thread capacity; a workspace is priced at the tile.
     That is why these terms exist at all, and why they are card-scaled.
 
@@ -354,7 +354,7 @@ GRELL_FREITAS_WORKSPACE = TiledWorkspace(
     provenance=(
         "engine constants GFWS_SLOT_COUNT_COL=90, GFWS_SLOT_COUNT_DRV=36, "
         "GF_BLOCK=64, GF_TILE_BLOCKS_PER_SM=4, _GF_KMAX_DEFAULT=40.  "
-        "Verified against the #264 merged-tip ledger: 1,262.0 MiB at 40,962 "
+        "Verified against the merged-tip per-allocation ledger: 1,262.0 MiB at 40,962 "
         "cells and 1,338.8 MiB at 163,842 on the 170 SM card, ratio 1.06, "
         "which is 680/641 blocks and not 4.00"
     ),
@@ -374,7 +374,7 @@ YSU_WORKSPACE = TiledWorkspace(
     site="gpuwm/core/physics_inventory.py::ysu_workspace_floats via ysu_tile_columns",
     provenance=(
         "engine constants YSUWS_SLOTS=18, YSU_BLOCK=32, "
-        "YSU_TILE_BLOCKS_PER_SM=16.  Verified against the #264 merged-tip "
+        "YSU_TILE_BLOCKS_PER_SM=16.  Verified against the per-allocation ledger merged-tip "
         "ledger: 157.6 MiB at 40,962 cells and 334.7 MiB at 163,842 on the "
         "170 SM card, ratio 2.12, which is 2,720/1,281 blocks and not 4.00"
     ),
@@ -408,7 +408,7 @@ def radiation_chunk_columns(
 ) -> int:
     """Columns per radiation chunk on this card -- ``batch_column_chunk``.
 
-    The engine's own narrowing (#310): the smallest multiple of ``quantum``
+    The engine's own narrowing (the device-sized radiation chunk): the smallest multiple of ``quantum``
     whose launch covers the card's resident threads, clamped to the ceiling.
     Restated here rather than imported because this module must price a
     footprint on a box with no CUDA lane; the test asserts the two agree.
@@ -434,7 +434,7 @@ def shortwave_workspace_bytes(
     ``cp.zeros((nc * NGPTSW, SPCVMC_WK_ARRAYS * nl1), float32)`` at
     ``gpuwm/core/rrtmg_sw.py``, where ``nc`` is the chunk width and
     ``nl1 = nlayers + 1 = levels + 2``.  At 2,048 columns and 55 levels that
-    is exactly 1,830,420,480 B = 1,745.6 MiB, which is the block the #264
+    is exactly 1,830,420,480 B = 1,745.6 MiB, which is the block the per-allocation ledger
     ledger records as the largest single allocation live at the 40,962-cell
     global peak -- **identical at 163,842 cells**.
 
@@ -640,7 +640,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
         "configuration": "global",
         "measured": True,
         "provenance": (
-            "two-point fit on the #264 per-allocation ledger session measured "
+            "two-point fit on the per-allocation ledger session measured "
             "2026-08-26 on the proving RTX 5090 (170 SM) at the merged tip, "
             "hex 2009db7 + engine 26daaab7e: x1.40962 peaked 8,874.0 MiB and "
             "x4.163842 20,446.0 MiB, both by this process's nvidia-smi row.  "
@@ -648,7 +648,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
             "the fit, which is the whole difference from the retired affine "
             "row: 2,167 B/cell of that row's slope was GF and YSU tile growth "
             "between a mesh below both knees and a mesh above both.  "
-            "evidence/memory-row-refit-20260826/node2/"
+            "evidence/memory-row-refit-20260826/"
         ),
     },
     "global/70sm": {
@@ -658,7 +658,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
         "configuration": "global",
         "measured": True,
         "provenance": (
-            "two-point fit on the #264 ledger session measured 2026-08-25 on "
+            "two-point fit on the per-allocation ledger session measured 2026-08-25 on "
             "the proving RTX 5070 Ti (70 SM) at hex 5252421 + engine "
             "26daaab7e: x1.40962 peaked 6,272.0 MiB and u96.64002 8,802.0 MiB.  "
             "NOT MEASURED AT THE MERGED TIP -- the core carries "
@@ -667,9 +667,9 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
             "CAVEAT CARRIED FROM THE 08-24 FIT ON THIS CARD: the two peaks "
             "land at different instants and the pair separates core from slope "
             "imperfectly, which is why this row's slope is 19 % above the 170 "
-            "SM card's over a lever arm one fifth as long.  One #264 arm at "
+            "SM card's over a lever arm one fifth as long.  One per-allocation ledger arm at "
             "the tip on a third mesh replaces it.  "
-            "evidence/l6-capacity-20260825/node1/"
+            "evidence/l6-capacity-20260825/ (the 70 SM card's run)"
         ),
     },
     "global/68sm": {
@@ -679,7 +679,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
         "configuration": "global",
         "measured": True,
         "provenance": (
-            "single-point core from the #264 ledger row measured 2026-08-25 on "
+            "single-point core from the per-allocation ledger row measured 2026-08-25 on "
             "the desktop RTX 3080 (68 SM, sm_86, WDDM) at hex 5252421 + engine "
             "26daaab7e: x1.40962 peaked 6,340.5 MiB device-view.  WDDM "
             "publishes no per-process row, so that figure INCLUDES the "
@@ -716,7 +716,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
             "retired affine row over-predicted every cull by 1.2-1.9 GiB.  "
             "Slope BORROWED from the global 170 SM row: four of the five "
             "points are flat to within 228 MiB across a 1.98x cell count, so "
-            "these five cannot determine a slope.  ONE #264 ledger arm on a "
+            "these five cannot determine a slope.  ONE per-allocation ledger arm on a "
             "cull replaces this whole row.  evidence/nest-ratio-20260827/"
         ),
     },
@@ -753,7 +753,7 @@ def model_for_card(
     """The footprint row for this card and configuration.
 
     Measured if this card has been measured; DERIVED, and labelled so,
-    otherwise.  This is the function ledger #366 was open for: the retired
+    otherwise.  This is the function the borrowed-row defect was open for: the retired
     module had per-card rows and no caller, so a 10 GiB desktop was priced
     with a 32 GiB card's fixed term and refused two meshes it had been
     measured running.
@@ -815,7 +815,7 @@ def model_for_card(
         measured=False,
         derived_from=reference_key,
         provenance=(
-            f"DERIVED, NOT MEASURED: no #264 ledger arm exists for "
+            f"DERIVED, NOT MEASURED: no per-allocation ledger arm exists for "
             f"{card.multiprocessors} SM on the {configuration} configuration, "
             f"so this row rescales the {reference_key} core by the two "
             "mechanisms that are known and measured to scale with the card -- "
@@ -827,7 +827,7 @@ def model_for_card(
             "measurement, this derivation over-predicts by 182.7 MiB on the "
             "70 SM part and 490.8 MiB on the 68 SM part -- conservative on "
             "both, which is the direction a gate needs.  Slope is the "
-            "reference's: the slope is a property of the build.  One #264 arm "
+            "reference's: the slope is a property of the build.  One per-allocation ledger arm "
             "on this card replaces this row"
         ),
     )
@@ -871,7 +871,7 @@ def native_device_floor_bytes() -> int:
 class FootprintModel:
     """A RETIRED affine row: fixed term plus a per-cell slope.
 
-    This is the shape ledger #365/#366 retired on 2026-08-27.  It survives
+    This is the shape the footprint-spread and borrowed-row defects retired on 2026-08-27.  It survives
     only so the before arm of a comparison has one home -- see
     :func:`retired_affine_row_floor_bytes`.  It is not a gate and must never
     become one.
@@ -934,8 +934,8 @@ RETIRED_ROW_20260825 = FootprintModel(
     provenance=(
         "RETIRED 2026-08-26.  Measured 2026-08-25 on the proving RTX 5090 "
         "(170 SM) at the converged seam pin, hex 7fe514b + engine 26daaab7e, "
-        "both published meshes in one #264 ledger session; "
-        "evidence/pin-move-335-20260825/node2/.  Superseded by the merged-tip "
+        "both published meshes in one per-allocation ledger session; "
+        "evidence/pin-move-335-20260825/.  Superseded by the merged-tip "
         "re-fit at hex 2009db7 -- the same two meshes on the same card "
         "measured 8,874.0 / 20,446.0 MiB there against this row's "
         "8,390.0 / 20,542.0"
@@ -968,7 +968,7 @@ RETIRED_AFFINE_ROW_20260826 = FootprintModel(
     provenance=(
         "RETIRED 2026-08-27.  Measured 2026-08-26 on the proving RTX 5090 "
         "(170 SM) at the merged tip, hex 2009db7 + engine 26daaab7e, both "
-        "published meshes in one #264 ledger session -- the same session this "
+        "published meshes in one per-allocation ledger session -- the same session this "
         "module's global/170sm core is fitted from.  Retired for SHAPE, not "
         "for provenance: five placed-mesh forecast-door runs spanned "
         "+3.89 % to -6.76 % against it, one mesh with 15,343 more cells "
@@ -999,7 +999,7 @@ def retired_affine_row_floor_bytes(cells: int) -> int:
 
 #: The per-card tier table the shaped rows retired.  It was correct data with
 #: no caller: ``forecast_door._resolve_model`` never read it, which is ledger
-#: #366.  Kept computable so the before arm of the #366 table has one home;
+#: the borrowed-row defect.  Kept computable so the before arm of the borrowed-row defect table has one home;
 #: :func:`tier_model` still builds the affine model each row described.
 RETIRED_CARD_TIER_ROWS_20260826: Mapping[str, Mapping[str, Any]] = MappingProxyType(
     {
@@ -1010,7 +1010,7 @@ RETIRED_CARD_TIER_ROWS_20260826: Mapping[str, Mapping[str, Any]] = MappingProxyT
                 "measured": True,
                 "fixed_mib": 5016.5,
                 "bytes_per_cell": 98_748.0,
-                "basis": "two-point #264 fit at the merged tip, 2026-08-26",
+                "basis": "two-point per-allocation ledger fit at the merged tip, 2026-08-26",
             }
         ),
         "16gib-70sm": MappingProxyType(
@@ -1020,7 +1020,7 @@ RETIRED_CARD_TIER_ROWS_20260826: Mapping[str, Mapping[str, Any]] = MappingProxyT
                 "measured": True,
                 "fixed_mib": 1774.0,
                 "bytes_per_cell": 115_143.0,
-                "basis": "two-point #264 fit at hex 5252421, 2026-08-25",
+                "basis": "two-point per-allocation ledger fit at hex 5252421, 2026-08-25",
             }
         ),
         "10gib-68sm": MappingProxyType(
@@ -1031,7 +1031,7 @@ RETIRED_CARD_TIER_ROWS_20260826: Mapping[str, Mapping[str, Any]] = MappingProxyT
                 "fixed_mib": 2483.0,
                 "bytes_per_cell": 98_748.0,
                 "basis": (
-                    "single-point #264 row at hex 5252421, 2026-08-25, slope "
+                    "single-point per-allocation ledger row at hex 5252421, 2026-08-25, slope "
                     "borrowed.  RETIRED ALSO FOR A SECOND DEFECT: the "
                     "6,340.5 MiB device-view peak it was derived from includes "
                     "the desktop's 1,142.5 MiB baseline, and the door compares "
@@ -1099,8 +1099,8 @@ FLOOR_DERIVATION: Mapping[str, Any] = MappingProxyType(
             "the tiled physics workspaces came OUT of the fixed term and OUT "
             "of the slope and became their own term.  Grell-Freitas and YSU "
             "size a global device workspace to min(cells, SMs x blocks/SM x "
-            "block) after the #335 local-frame cut, and RRTMG sizes its column "
-            "chunk from the card's resident threads after #310.  Both fit "
+            "block) after the local-frame cut, and RRTMG sizes its column "
+            "chunk from the card's resident threads after the device-sized radiation chunk.  Both fit "
             "meshes straddle the GF knee (43,520 cells) and the YSU knee "
             "(87,040) on the 170 SM card, so the affine fit charged 2,167 "
             "B/cell of tile growth as per-cell and put the saturated remainder "
@@ -1113,7 +1113,7 @@ FLOOR_DERIVATION: Mapping[str, Any] = MappingProxyType(
             "ysu_x4_mib": 334.69,
             "shortwave_spcvmc_bytes_170sm": 1_830_420_480,
             "note": (
-                "the three sites the #264 ledger records as NOT scaling 4.00x "
+                "the three sites the per-allocation ledger records as NOT scaling 4.00x "
                 "with a 4x mesh, and the only three; the formulas in this "
                 "module reproduce all three from card constants alone"
             ),
@@ -1135,7 +1135,7 @@ FLOOR_DERIVATION: Mapping[str, Any] = MappingProxyType(
             "limited_area_core_is_an_envelope": (
                 "the per-allocation instrument has never run on a regional "
                 "mesh; the core is the largest of five whole-device residues "
-                "and over-predicts four of them by up to 1,337 MiB.  ONE #264 "
+                "and over-predicts four of them by up to 1,337 MiB.  ONE per-allocation ledger "
                 "arm on a cull replaces it"
             ),
             "four_swath_spread_not_separated": (
@@ -1144,14 +1144,14 @@ FLOOR_DERIVATION: Mapping[str, Any] = MappingProxyType(
                 "shortwave block, measured at 1,707.2 MiB in the "
                 "construction-diagnostic A/B -- but NO A/B on those four "
                 "meshes has been run, so the attribution is inference.  The "
-                "settling arm is one #264 ledger run per swath mesh with the "
+                "settling arm is one per-allocation ledger run per swath mesh with the "
                 "pool high-water and the peak-instant site census recorded"
             ),
             "70sm_slope": (
                 "115,143 B/cell against the 170 SM card's 96,582 over a lever "
                 "arm one fifth as long, same engine pin.  Probably a "
                 "short-baseline artefact and treated as the card's own row "
-                "because a gate must not under-predict; one #264 arm on a "
+                "because a gate must not under-predict; one per-allocation ledger arm on a "
                 "third mesh settles it"
             ),
             "nz_dependence": (

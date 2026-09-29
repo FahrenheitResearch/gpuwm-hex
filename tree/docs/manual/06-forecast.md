@@ -12,7 +12,6 @@ gpuwm-hex forecast \
   --start-time 2026-08-12_06:00:00 \
   --hours 1.0 --history-every-minutes 30 \
   --out work/fc-01 \
-  --gpuwm-checkout <gpuwm-checkout> \
   --case-label quickstart
 ```
 
@@ -22,36 +21,34 @@ device memory measured at that moment, runs the integration, and writes
 history frames plus one run receipt into `--out`. On success its last line
 is the render command for what it just produced.
 
-**It needs the gpuwm-hex source checkout**, and says so by name if it does
-not have one. The drivers live in `tree/tools/`, outside the wheel,
-because they verify their own executing modules by SHA-256 before CUDA is
-touched. Run the door from inside a checkout, or pass
-`--repo <gpuwm-hex-checkout>/tree`.
+**It runs from the wheel.** The drivers ship inside the package
+(`hexcore/drivers/`) and verify their own executing modules by SHA-256
+before CUDA is touched; because they load from the package that executes,
+the copy verified is the copy launched. Through 0.3.1 they lived in the
+repository's `tools/`, outside the wheel, and the door refused every install
+by name; `--repo` is still accepted for older scripts, reported, and not
+used.
+Measured 2026-09-26 from a wheel built from this tree and installed with pip
+into a clean virtualenv, run from a directory outside any checkout: the
+contract deck on a 937.5 m point cull (13,227 cells) passed in 126 s, and a
+10-minute forecast on it ran 120 steps of 5 s in 50.0 s of integration, 73 s
+at the door, on a shared RTX 5090, its receipt naming the installed engine.
 
-**It needs a `gpuwm` git checkout too**, passed as `--gpuwm-checkout`. The
-port pins the engine's physics seam by the SHA-256 of sixteen individual
-gpuwm source files; the run verifies all sixteen at launch and refuses any
-mismatch by name. It also reads the checkout's **git state** and writes
-HEAD, tree and dirty paths into every receipt and every history file, so
-the seam source it executed can be named by commit and a reader can see
-whether anything was uncommitted. That second half is why it is a clone and
-not the installed distribution: an install carries the bytes and no commit,
-and `site-packages` is not a git working tree, which the driver refuses by
-name.
+**The physics seam is the installed `gpuwm`.** The port pins the engine's
+physics seam by the SHA-256 of sixteen individual gpuwm source files; the
+run verifies all sixteen at launch and refuses any mismatch by name. With
+no `--gpuwm-checkout` it verifies the installed distribution (every engine
+from 2.5.8 carries all sixteen in `site-packages`) and writes its version,
+the SHA-256 of pip's `RECORD` and its `direct_url` into every receipt and
+every history file, so the seam source it executed is named. Pass a gpuwm
+**git clone** at the pinned tag as `--gpuwm-checkout` and the receipt names
+it by HEAD, tree and dirty paths instead; a dirty pinned file refuses. A
+directory that is neither (an unpacked tarball, a copied `site-packages`) is
+refused by name, because it names neither a commit nor a record. Through
+0.3.1 the clone was mandatory, only for that commit, which kept the forecast
+out of reach of a plain install.
 
-**Which reason is live, because it changed.** Through engine 2.5.7 the pin
-named `docs/mpas-seam.md`, a repository document no wheel placed in
-`site-packages`, so an installed gpuwm satisfied pip and could not satisfy
-the pin at all. gpuwm 2.5.8 ships that document inside the wheel at the
-manifest's own key. Measured 2026-08-28 against a virtualenv holding only
-the published wheels, all sixteen pinned paths resolve from `site-packages`
-and `gpuwm-hex doctor` reports `16 of 16 pinned files are in this install
-and all 16 match`. Only the provenance half survives (README, *The engine
-pin*), and retiring it is a named follow-up rather than something that has
-already happened. Both doors were run against that install to establish it:
-receipt `evidence/checkout-reason-20260828/`.
-
-Beyond those two: a **registered mesh pair** (chapter 4), an **init** for
+Beyond the install: a **registered mesh pair** (chapter 4), an **init** for
 it (chapter 5), and **device memory for the mesh** — which the door now
 decides for you rather than leaving you to discover mid-run (6.2).
 
@@ -79,9 +76,9 @@ Notable flags:
   a cache tree inside a directory you are about to hand to the renderer
   publishes temporaries as products.
 
-Under the door, unchanged: `tools/run_cuda_v841_forecast.py` is the
+Under the door, unchanged: `src/hexcore/drivers/run_cuda_v841_forecast.py` is the
 arbitrary-case driver whose `execute_forecast` is the integration loop,
-and `tools/mpas_mesh_binding.py` is the registry it binds through. Both
+and `src/hexcore/drivers/mpas_mesh_binding.py` is the registry it binds through. Both
 remain runnable directly, and
 `tools/run_cuda_v841_forecast_mesh.py --selftest` still validates the mesh
 binding in both directions — the correct bind must pass and a wrong name,
@@ -97,8 +94,7 @@ ADMISSION mesh=x1.40962 cells=40,962 card=68 SM row=measured global predicted=5,
 ```
 
 That is an RTX 3080 answering **on its own row, with no flags** — the card,
-its 68 multiprocessors and its 9,097.0 MiB free all read from the driver
-[`evidence/memory-shape-20260827/ON-CARD-366.json`]. The door reads the
+its 68 multiprocessors and its 9,097.0 MiB free all read from the driver. The door reads the
 card's multiprocessor count from the driver at the moment of the decision
 and selects or derives that card's row; free memory is measured at the same
 moment, because the memory your desktop is already holding is part of the
@@ -110,7 +106,7 @@ card.
 term unless you passed `--device-fixed-mib` and `--device-bytes-per-cell`
 yourself, so a 10 GiB desktop refused `x1.40962` and `v15.150.38857` — two
 meshes it had been measured running with 2,244 MiB to spare. That was
-ledger #366 and it is fixed; the flags survive for a card whose own ledger
+the borrowed-row defect and it is fixed; the flags survive for a card whose own ledger
 you have run and want to override with.
 
 **What the footprint model is.** Not a line in cell count. Chapter 4.6 has
@@ -180,7 +176,7 @@ architecture below that floor runs only if it holds its own anchor — a
 measured contract receipt and a frozen-authority anchor taken on real
 hardware of that architecture
 (`src/hexcore/cuda_backend/arch_admission.py`). **sm_86 holds one**
-(2026-08-25, a 10 GiB RTX 3080; `evidence/sm86-tier-20260825/`), which is
+(2026-08-25, a 10 GiB RTX 3080), which is
 why the quickstart's preflight prints `ARCHITECTURE sm=sm_86 -> admitted`
 and why a full-physics limited-area forecast runs on that card (6.8). An
 architecture holding no anchor is refused by name before a single
@@ -304,22 +300,29 @@ and the discipline's receipt gains `fused_restoration_launches` beside
 
 What the step still pays for on the host, with the reason: one read of
 the dycore's validation flag before publication, the two preparation
-flags (each raises with the offending field), the physics seam's
-transaction snapshot (the engine copies every persisted seam array to
-the host each step so a refused step can roll back; that is engine code
-under the sixteen-file pin and moves with the engine re-pin, not here),
-and the radiation call's host round trip inside the engine's legacy RRTMG.
+flags (each raises with the offending field), and the radiation call's
+host round trip inside the engine's legacy RRTMG.
+
+The physics seam's rollback export is no longer one of them. Before phase
+one of every step the adapter used to copy every persisted seam array to
+the host (447 MB and 192 copies a step on the point cull, about 24 ms of
+the host blocked) so that a refused step could be rolled back. Only
+`--stop-on-refusal` ever reads that export: it keeps the last committed
+state and writes its frame. So the forecast takes the export only under
+`--stop-on-refusal`; without it a refused step ends the run as it always
+did, and the receipt says the seam was retired rather than restored
+(`physics_rollback` in the driver receipt, `transaction_rollback` in every
+step receipt). No output byte depends on it.
 
 ## 6.5 Restarting a run — what exists and what does not
 
 **What is proven:** checkpoint/restart with bitwise-identical continuation
 is a property of the port, established in the full-physics proof harness
-(`tools/run_cuda_v841_full_physics_x4.py`): a host checkpoint is taken
+(`src/hexcore/drivers/run_cuda_v841_full_physics_x4.py`): a host checkpoint is taken
 mid-run in a fresh process, restored, and the restarted history file
 matches the uninterrupted run's byte for byte. The checkpoint schema is
 versioned (v3 — it additionally carries GF's per-step advective-forcing
-pair, whose omission was found and closed by exactly this gate;
-[`evidence/restart-step16-327/`], CHANGELOG). A pre-v3 checkpoint is
+pair, whose omission was found and closed by exactly this gate; CHANGELOG). A pre-v3 checkpoint is
 refused by name instead of resuming wrong.
 
 **What does not exist in 0.2.0:** a user-facing resume flag on the
@@ -356,14 +359,14 @@ were verified on hardware:
 - On a **quasi-uniform** mesh every column lands in one class and the
   option is inert: the run above (x1.40962, `--local-timestep`) produced
   history **byte-identical** to the default run, re-verified for this
-  manual on the proving node [`evidence/local-timestep/gate1-x1.40962-bit-identity.json`].
+  manual on the proving node.
 - On the published variable-resolution mesh **the option does not pay**:
   measured one model hour, x4.163842, dry lane, RTX 5070 Ti — 1.268 s/step
   default against 1.283 s/step with the option, 0.988x. The acoustic loop
   is 23.5 % of a model step and this mesh admits a 23.0 % acoustic saving,
   so the whole-step ceiling is 1.057x before bookkeeping, and the released
   `(1,3,6)` schedule caps the feature at 1.16x even in the
-  every-column-coarse limit [`evidence/local-timestep/speed-qv-*.json`].
+  every-column-coarse limit.
 
 - On a **limited-area cull** the option is inert: every driven boundary
   cell is held at rate 1 and on the culls `mesh-plan` and `cull` make that
@@ -385,8 +388,7 @@ corruption screen still works.
 
 The stronger per-class whole-step form was measured to a no-go on current
 hardware (projected 1.254x on the one mesh big enough to profit, a
-slowdown on small steep meshes) —
-[`evidence/local-timestep/fullstep-projection.json`] and the README carry
+slowdown on small steep meshes); the README carries
 the full measurement; `tools/probe_lts_fullstep_projection.py` is the
 instrument to re-run if meshes an order of magnitude larger become real.
 
@@ -408,7 +410,6 @@ the pinned bytes rather than editing the pin.
 > gpuwm 2.5.7: the `rw_mpas_mesh` that `gpuwm fetch-bridges` staged had no
 > `--cull-parent` (it dropped the flag silently and then asked for `--spec`),
 > and `rw_mpas_lbc` was in no published bundle and no published source.
-> Receipt: `evidence/userwalk-20260827/RECEIPT.md`, a record of 2.5.7.
 >
 > The engine published 2.5.8, which this distribution now requires. Measured
 > 2026-08-28 against the published artefacts: `gpuwm fetch-bridges` on a 2.5.8
@@ -434,7 +435,7 @@ the forecast. Everything else on the command line is unchanged.
 **The physics is the whole stack, not a dycore with one tracer** — WSM6 +
 Grell-Freitas + YSU + YSU-GWDO + revised-MO + NoahMP + cloud fraction +
 legacy RRTMG, the same set the global lane runs. Measured on a 10 GiB
-RTX 3080 [`evidence/regional-physics-20260826/RECEIPT.md`]: six hours on an
+RTX 3080: six hours on an
 11,020-cell cull, **1,080 of 1,080 steps**, 13 history frames, median
 0.271 s/step, peak **6,224 MiB**, and 343 rendered products across seven
 frames.
@@ -464,8 +465,7 @@ carry the decision into the next cycle. `gpuwm-hex cycle plan` answers what
 it would do with no device opened and nothing cut. `docs/cycle-door.md` is
 the page for it; this section is what a forecast reader needs.
 
-Measured over two cycles on one real case
-[`evidence/cycling-loop-20260827/RECEIPT.md`]: corridors at dt 20 s under
+Measured over two cycles on one real case: corridors at dt 20 s under
 an anchored configuration class, both **1,080 of 1,080 steps**, and a
 **delayed start** — a cycle beginning mid-window takes the parent's state
 at the hour the swath wanted instead of integrating the fine grid from
@@ -528,3 +528,37 @@ the point mesh, per-step cost and 1 h field differences — is in
 the same five per cent per step and every one moves the one-hour forecast
 well past the 2.6.5 to 2.7.3 seam movement, so none qualified as the
 default and the weld stays.
+
+
+## 6.11 Forecast presets: `--preset reference` and `--preset fast`
+
+A preset is a row of `hexcore.forecast_preset`, and the door turns it into
+the knobs above. Two rows ship:
+
+- `reference`, the default: the proven configuration (legacy RRTMG,
+  Noah-MP, revised MO and YSU, the surface layer, Noah-MP and YSU called
+  every step);
+- `fast`: the same schemes, with the surface/PBL stack held for up to 30 s
+  between calls (six steps at dt 5 s; the weld where dt is 20 s or longer,
+  so no mesh is refused for a cadence its timestep does not divide).
+
+```sh
+gpuwm-hex forecast --mesh <row> --grid ... --static ... --init ...   --start-time ... --hours 3 --out <dir> --preset fast
+```
+
+An explicit `--pbl-cadence` wins over the row, and the run receipt says
+which decided (`configuration.preset` and `pbl_cadence_source` in
+`forecast-receipt.json`). A row that declared a radiation, land-surface,
+surface-layer or PBL scheme other than the one the engine's column seam
+builds would be refused by name: the seam takes none of them as an
+argument, so such a row would run the engine's suite under its own name.
+
+**Why `fast` is not the default.** Graded against MRMS reflectivity,
+Stage-IV hourly precipitation and ASOS on four 3 h HRRR-driven forecasts of
+the 937.5 m point cull, it took about 6 per cent less time per step and
+scored the same on reflectivity and precipitation thresholds, and it
+forecast 10 m wind worse on all four cases and 2 m dewpoint and temperature
+worse on three. Use it when time matters more than the near-surface
+forecast. The measurement is in
+[`docs/hex-point-hrrr.md`](../hex-point-hrrr.md), the forecast presets
+section.

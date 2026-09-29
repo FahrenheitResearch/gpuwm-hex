@@ -58,7 +58,7 @@ weather field in Python.
 
 ## 7.3 The delivered layout
 
-PNGs are filed at render time into the ruled tree, never flat:
+PNGs are filed at render time into a fixed tree, never flat:
 
 ```
 <out>/<domain-token>/<product>/<valid-day>/<engine-filename>.png

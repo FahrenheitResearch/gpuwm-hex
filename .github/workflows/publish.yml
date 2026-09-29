@@ -6,7 +6,7 @@ name: publish
 # is a human act performed deliberately on a specific tag.  Nothing here fires
 # on a push or on a tag alone.
 #
-# THE FILENAME IS LOAD-BEARING.  A PyPI trusted publisher binds four things --
+# THE FILENAME IS PART OF THE BINDING.  A PyPI trusted publisher binds four things --
 # owner, repository, workflow FILENAME and environment name -- and the token
 # PyPI issues is scoped to exactly that tuple:
 #

@@ -5,8 +5,8 @@ Three families of pin live here.
 **The shape is the evidence.**  ``FOOTPRINT_MODEL`` is no longer a line in
 cell count.  It is a card-scaled core, plus the Grell-Freitas and YSU column
 workspaces charged at ``min(cells, tile(card))``, plus a per-cell term.  Every
-part of that claim is checked against the ARTIFACT: the raw #264 ledger JSONs
-in ``evidence/memory-row-refit-20260826/node2/`` carry both the per-process
+part of that claim is checked against the ARTIFACT: the raw per-allocation ledger JSONs
+in ``evidence/memory-row-refit-20260826/`` carry both the per-process
 peaks the row is fitted from AND the measured size of each workspace block, so
 the tiled arithmetic is re-derived here rather than asserted.  A constant that
 drifts from the evidence it cites -- which is exactly how the door shipped a
@@ -44,10 +44,37 @@ from hexcore import forecast_door as door
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
-EVIDENCE = ROOT / "evidence" / "memory-row-refit-20260826" / "node2"
+DRIVERS = ROOT / "src" / "hexcore" / "drivers"
+
+
+def _proving_run(folder: Path, probe: str) -> Path:
+    """The one run directory under an evidence ``folder`` that holds ``probe``.
+
+    Each folder keeps the run of the proving card in a directory of its own;
+    the tests find it by the file they read.  More than one candidate is a
+    refusal rather than a pick, so a second run can never be read in place of
+    the one the row was fitted from.  With no candidate (a tree that carries
+    no receipts) the folder itself is returned and the reads below find
+    nothing, exactly as before.
+    """
+
+    if not folder.is_dir():
+        return folder
+    found = [path for path in sorted(folder.iterdir()) if (path / probe).exists()]
+    assert len(found) <= 1, f"{folder} holds more than one run with {probe}: {found}"
+    return found[0] if found else folder
+
+
+EVIDENCE = _proving_run(
+    ROOT / "evidence" / "memory-row-refit-20260826", "gateB-x1/ledger-x1.json"
+)
 REFIT_RECORD = ROOT / "evidence" / "memory-row-refit-20260826" / "REFIT.json"
-PRIOR_EVIDENCE = ROOT / "evidence" / "pin-move-335-20260825" / "node2"
-REDERIVE_EVIDENCE = ROOT / "evidence" / "device-floor-rederive-20260826" / "node2"
+PRIOR_EVIDENCE = _proving_run(
+    ROOT / "evidence" / "pin-move-335-20260825", "gateB-x1/ledger-x1.json"
+)
+REDERIVE_EVIDENCE = _proving_run(
+    ROOT / "evidence" / "device-floor-rederive-20260826", "R1-forecast"
+)
 SWATHS_EVIDENCE = ROOT / "evidence" / "four-swaths-20260827"
 
 MIB = 1024**2
@@ -61,7 +88,7 @@ X4_TAG = "x4"
 
 
 def _load_tool(name: str, filename: str) -> object:
-    spec = importlib.util.spec_from_file_location(name, TOOLS / filename)
+    spec = importlib.util.spec_from_file_location(name, (DRIVERS if (DRIVERS / filename).is_file() else TOOLS) / filename)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
@@ -101,7 +128,7 @@ def _ledger_peak_mib(tag: str, evidence: Path | None = None) -> float:
 
 
 def _ledger_block_bytes(tag: str, path_tail: str, evidence: Path | None = None) -> int:
-    """The largest single allocation the #264 ledger recorded at one source file.
+    """The largest single allocation the per-allocation ledger recorded at one source file.
 
     The ledger keys sites by absolute path on the measuring box, so the match
     is on the trailing package-relative segment.  Taking the largest
@@ -132,13 +159,13 @@ def _refit_record() -> dict:
 
 
 def _desktop_3080_record() -> dict:
-    """The 10 GiB desktop's row in the re-fit record -- ledger #366's card."""
+    """The 10 GiB desktop's row in the re-fit record -- the borrowed-row defect's card."""
 
     cards = _refit_record()["cards"]
     matches = [row for name, row in cards.items() if "3080" in name]
     assert len(matches) == 1, (
         "the re-fit record no longer carries exactly one RTX 3080 row; ledger "
-        "#366's before/after cannot be computed from the evidence"
+        "the borrowed-row defect's before/after cannot be computed from the evidence"
     )
     return matches[0]
 
@@ -149,7 +176,7 @@ def _desktop_3080_record() -> dict:
 def test_the_shipped_row_reproduces_the_raw_merged_tip_peaks(receipts) -> None:
     """THE BREAKAGE: a coefficient that drifts from the ledger it names.
 
-    The row claims to reproduce the two measured peaks in the #264 session it
+    The row claims to reproduce the two measured peaks in the per-allocation ledger session it
     cites.  Read both peaks out of the raw ledgers and require the model to
     land on them, so the claim is checkable rather than asserted.
     """
@@ -208,7 +235,7 @@ def test_the_tiled_workspace_arithmetic_is_the_ledgers_own_block_sizes(
 
     The tiled terms are the whole difference between this model and the
     retired line, so they must be the blocks the instrument actually recorded,
-    not a residual named after a kernel.  The #264 ledger stores each site's
+    not a residual named after a kernel.  The per-allocation ledger stores each site's
     largest single allocation at both meshes; the module's formulas are card
     constants only and must land on those numbers.
     """
@@ -231,7 +258,7 @@ def test_the_tiled_workspace_arithmetic_is_the_ledgers_own_block_sizes(
 def test_the_tiled_terms_do_not_scale_with_the_mesh(receipts) -> None:
     """The point of the whole shape, stated as a number.
 
-    Every other site in the #264 ledger scales 4.00x with a 4x cell count.
+    Every other site in the per-allocation ledger scales 4.00x with a 4x cell count.
     These two do not, because both meshes straddle the tile knees, and that is
     why a line through the two peaks is the wrong function.  THE BREAKAGE: a
     future edit that quietly makes these terms proportional to cells restores
@@ -356,11 +383,11 @@ def test_the_door_reexports_the_surface_unchanged() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ledger #366: a card gets its own row, and a card nobody measured gets
+# the borrowed-row defect: a card gets its own row, and a card nobody measured gets
 # arithmetic that says it is derived
 # ---------------------------------------------------------------------------
 def test_a_small_card_gets_its_own_row_not_the_reference_cards() -> None:
-    """THE BREAKAGE, as it happened (#366): the door returned the 170 SM row
+    """THE BREAKAGE, as it happened (the borrowed-row defect): the door returned the 170 SM row
     whenever the user did not type two numbers, so a 10 GiB desktop was priced
     with a 32 GiB card's fixed term."""
 
@@ -369,12 +396,12 @@ def test_a_small_card_gets_its_own_row_not_the_reference_cards() -> None:
     assert small.card is not reference.card
     assert small.core_bytes < 0.5 * reference.core_bytes, (
         "the small card's core is no longer distinguishable from the "
-        "reference card's, which is the #366 defect returning"
+        "reference card's, which is the borrowed-row defect returning"
     )
 
 
 def test_the_small_card_admits_the_meshes_its_own_measurement_ran(receipts) -> None:
-    """Ledger #366 as a before/after, computed from both surfaces.
+    """The borrowed-row defect as a before/after, computed from both surfaces.
 
     The re-fit record names the two registered meshes the retired row refused
     on the desktop RTX 3080 and the free memory that card actually offered.
@@ -385,7 +412,7 @@ def test_the_small_card_admits_the_meshes_its_own_measurement_ran(receipts) -> N
     desktop = _desktop_3080_record()
     free_bytes = int(desktop["free_mib"] * MIB)
     flipped = desktop["registered_meshes_that_flip"]
-    assert flipped, "the re-fit record no longer names the meshes #366 was about"
+    assert flipped, "the re-fit record no longer names the meshes the borrowed-row defect was about"
 
     model = surface.model_for_card(surface.KNOWN_CARDS["10gib-68sm"])
     for mesh, row in flipped.items():
@@ -396,7 +423,7 @@ def test_the_small_card_admits_the_meshes_its_own_measurement_ran(receipts) -> N
         )
         assert surface.retired_affine_row_floor_bytes(cells) > free_bytes, (
             f"{mesh}: the retired affine row no longer refuses this mesh, so "
-            "the before arm of #366 has stopped being the before arm"
+            "the before arm of the borrowed-row defect has stopped being the before arm"
         )
 
 
@@ -851,7 +878,7 @@ def test_the_retired_arm_is_never_wired_into_an_admission_decision() -> None:
 
 
 def test_the_retired_tier_table_is_never_read_in_an_admission_path() -> None:
-    """Ledger #366 in one line: the tier table was correct data with no caller.
+    """The borrowed-row defect in one line: the tier table was correct data with no caller.
 
     THE BREAKAGE if it gains one now: the tier table is keyed by a card's
     NAMEPLATE MEMORY, and the footprint's card-scaled terms are priced from
@@ -977,7 +1004,7 @@ def test_the_twelve_gib_tier_row_is_labeled_derived_not_measured() -> None:
 def test_every_retired_tier_row_states_its_basis_and_says_it_is_retired() -> None:
     """THE BREAKAGE: a retired table read as a live one.
 
-    The tier rows are still computable so the before arm of ledger #366 has a
+    The tier rows are still computable so the before arm of the borrowed-row defect has a
     home, but every model they build must announce its retirement in the
     provenance every consumer prints, and every row must still say what it was
     read from.
@@ -1113,7 +1140,7 @@ def test_the_floor_derivation_states_what_is_open() -> None:
 
 
 # ---------------------------------------------------------------------------
-# the points the model was NOT fitted to: the #365 answer, measured
+# the points the model was NOT fitted to: the footprint-spread answer, measured
 # ---------------------------------------------------------------------------
 def _r1_record() -> tuple[int, float]:
     """``(cells, peak_mib)`` for the 30-step graded run, from raw artifacts.
@@ -1140,10 +1167,10 @@ def _r1_record() -> tuple[int, float]:
 def test_the_new_margin_covers_the_graded_point_the_retired_row_overran(
     receipts,
 ) -> None:
-    """The #365 answer, both arms, from the artifacts.
+    """The footprint-spread answer, both arms, from the artifacts.
 
     The graded mesh ``v20.80.151649`` was measured twice: once for 30 door
-    steps (19,838 MiB) and once at the six-step #264 probe protocol
+    steps (19,838 MiB) and once at the six-step per-allocation ledger probe protocol
     (19,255.25 MiB).  The retired affine row plus its flat 512 MiB headroom
     did NOT cover the longer run -- that is the recorded overrun.  The shaped
     model's margin must cover both, because the concrete breakage is a card

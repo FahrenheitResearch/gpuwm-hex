@@ -1,4 +1,4 @@
-"""The #228 proof-guard redesign: manifest-anchored checkout guard and
+"""The proof-guard redesign: manifest-anchored checkout guard and
 masked-content authority digests.
 
 Leg 1: ``verify_arwen_checkout_git`` verifies the sixteen-file
@@ -28,7 +28,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = ROOT / "tools" / "run_cuda_v841_full_physics_x4.py"
+RUNNER_PATH = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
 
 #: Names the gpuwm object store this box holds.  Set it and the store MUST
 #: hold ``ARWEN_BUILD_COMMIT``; there is no falling back to a skip.
@@ -324,9 +324,10 @@ def test_a_path_that_is_not_a_git_tree_refuses_by_name(tmp_path: Path) -> None:
     a bare ``CalledProcessError`` and exit status 128: no breakage named, no
     remedy, and a user who had done exactly what the door asked.
 
-    The guard is right to refuse -- HEAD, tree and dirty paths go into every
-    receipt so the executed source can be named by commit, and an install has
-    no commit -- so it stays, and it now says that.
+    Since 0.3.2 the INSTALLED engine is admitted and named by its version
+    and pip's RECORD digest (the next test).  Any other directory without a
+    git working tree -- an unpacked tarball, a copied site-packages -- names
+    neither a commit nor a record, so it is still refused, by name.
     """
 
     runner = _load_runner()
@@ -337,14 +338,59 @@ def test_a_path_that_is_not_a_git_tree_refuses_by_name(tmp_path: Path) -> None:
         runner.verify_arwen_checkout_git(plain)
 
     text = str(error.value)
-    assert "not a git working tree" in text
-    assert "named by commit" in text, "the breakage the guard prevents"
+    assert "neither a gpuwm git working tree nor the gpuwm" in text
+    assert "RECORD digest" in text, "what an install is named by instead"
     assert "--gpuwm-checkout" in text, "the remedy"
     assert "no wheel" not in text, (
         "the retired reason: through engine 2.5.7 the pin named a path no "
         "wheel carried.  At 2.5.8 all sixteen resolve from an install, so a "
         "refusal that gives that reason names a breakage that is closed"
     )
+
+
+def test_the_installed_engine_is_admitted_and_named_by_its_record(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """THE BREAKAGE THIS CLOSES: through 0.3.1 the installed engine, whose
+    sixteen seam files all resolve from site-packages, was refused here with
+    "not a git working tree", so the forecast could not run from an install
+    without a gpuwm clone.  The install root is now admitted, gated by the
+    same sixteen digests, and recorded by version and RECORD digest."""
+
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    from hexcore import engine_pin
+
+    runner = _load_runner()
+    installed = engine_pin.installed_root()
+    if installed is None:
+        pytest.skip("no gpuwm installed in this interpreter")
+    try:
+        dist = distribution(engine_pin.DISTRIBUTION)
+    except PackageNotFoundError:  # pragma: no cover
+        pytest.skip("gpuwm is importable but carries no distribution metadata")
+    probe = subprocess.run(
+        ["git", "-C", str(installed), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+    )
+    if probe.returncode == 0:
+        pytest.skip("gpuwm is installed from a git tree here; the git route applies")
+    monkeypatch.setattr(runner, "checkout_manifest_for", lambda root: {})
+
+    record = runner.verify_arwen_checkout_git(Path(installed))
+    assert record["kind"] == "installed"
+    assert record["head"] is None and record["tree"] is None
+    named = record["installed_distribution"]
+    assert named["version"] == dist.version
+    assert len(named["record_sha256"]) == 64
+    assert runner.verify_arwen_checkout_git(Path(installed)) == record, (
+        "two reads of one install name it identically"
+    )
+
+    # Only the root this interpreter imports gpuwm from is an install.
+    elsewhere = tmp_path / "copied-site-packages"
+    elsewhere.mkdir()
+    assert runner.installed_engine_provenance(elsewhere) is None
 
 
 def test_head_and_tree_are_provenance_not_gates() -> None:
@@ -498,14 +544,38 @@ def test_retired_whole_file_digests_are_gone_from_the_execution_path() -> None:
 # ---------------------------------------------------------------------------
 # Leg 3 (2026-09-13): the checkout guard follows an ADMITTED engine's row.
 #
-# THE BREAKAGE THIS PREVENTS, measured on weather-node-1: the frozen row's
-# ``--preflight`` on the admitted ``2.7.3+soma.1`` engine refused at
+# THE BREAKAGE THIS PREVENTS, measured 2026-09-13: the frozen row's
+# ``--preflight`` on an admitted private engine refused at
 # ``verify_arwen_checkout_git`` with ``gpuwm/core/physics.py does not match
 # the proven manifest`` while the adapter, the forecast door and ``doctor``
 # all admitted the same tree -- the guard read the public sixteen
 # unconditionally.  The guard now asks ``engine_pin.inspect_seam`` which row
 # the tree's bytes are, exactly as the other three surfaces do.
 # ---------------------------------------------------------------------------
+
+
+def _synthetic_row(engine_pin, monkeypatch):
+    """An admitted row that differs from the public pin in one file.
+
+    The published table is empty (a row names a build that is not public),
+    so the guard is exercised on a row of the same shape, installed for the
+    test only.
+    """
+
+    manifest = dict(engine_pin.seam_manifest())
+    moved = sorted(manifest)[0]
+    manifest[moved] = "a" * 64
+    row = engine_pin.AdmittedEngine(
+        version=f"{engine_pin.wanted_version()}+local.1",
+        base=engine_pin.wanted_version(),
+        build_commit="9" * 40,
+        digests=tuple(sorted(manifest.items())),
+        glacier_composed_tu_sha256="7" * 64,
+        moved_from_base=(moved,),
+        artifacts=(("gpuwm-local.whl", "0" * 64),),
+    )
+    monkeypatch.setattr(engine_pin, "ADMITTED_ENGINES", (row,))
+    return row
 
 
 def _inspection(engine_pin, root: Path, row):
@@ -523,10 +593,8 @@ def _inspection(engine_pin, root: Path, row):
 def test_checkout_manifest_follows_an_admitted_engines_row(monkeypatch) -> None:
     from hexcore import engine_pin
 
-    if not engine_pin.ADMITTED_ENGINES:
-        pytest.skip("no admitted engine row to follow")
     runner = _load_runner()
-    row = engine_pin.ADMITTED_ENGINES[0]
+    row = _synthetic_row(engine_pin, monkeypatch)
     root = Path("/an/admitted/engine/tree")
     seen: list[Path] = []
 
@@ -571,10 +639,8 @@ def test_checkout_manifest_is_the_public_pin_when_the_version_is_misdeclared(mon
 
     from hexcore import engine_pin
 
-    if not engine_pin.ADMITTED_ENGINES:
-        pytest.skip("no admitted engine row to misdeclare")
     runner = _load_runner()
-    row = engine_pin.ADMITTED_ENGINES[0]
+    row = _synthetic_row(engine_pin, monkeypatch)
     root = Path("/an/admitted/engine/tree/relabelled")
 
     def fake_inspect(tree):

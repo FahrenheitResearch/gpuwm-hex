@@ -407,7 +407,7 @@ def test_the_run_refuses_two_sources_for_one_convection_decision():
     tools = Path(__file__).resolve().parents[1] / "tools"
     if str(tools) not in sys.path:
         sys.path.insert(0, str(tools))
-    source = (tools / "run_cuda_v841_forecast.py").read_text(encoding="utf-8")
+    source = (tools.parent / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py").read_text(encoding="utf-8")
     assert 'decision.get("requested") != convection' in source
     assert "One decision, one " in source
     # And the door hands the SAME string to the bind and to the driver.
@@ -471,7 +471,7 @@ def test_every_registered_row_gets_the_scheme_its_own_spacing_selects():
     if str(tools) not in sys.path:
         sys.path.insert(0, str(tools))
     spec = importlib.util.spec_from_file_location(
-        "_test_mesh_binding_convection", tools / "mpas_mesh_binding.py"
+        "_test_mesh_binding_convection", tools.parent / "src" / "hexcore" / "drivers" / "mpas_mesh_binding.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

@@ -234,7 +234,7 @@ def edge_dc_squared_over_twelve(
     float32 on a Windows/numpy 2.2.6 desktop.  ``test_vertical_vectorized_
     equivalence`` holds this against the element-wise scalar expression.
 
-    SEPARATE FINDING, NOW MEASURED (#373, 2026-08-27): the scalar answer
+    SEPARATE FINDING, NOW MEASURED (the libm-identity finding, 2026-08-27): the scalar answer
     itself is the libm's, so the same source produces different ``zb``/``zb3``
     bits on different C libraries.  This function reproduces the artifact of
     record; it does NOT make that artifact platform-independent, and the

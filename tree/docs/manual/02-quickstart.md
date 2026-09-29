@@ -8,7 +8,7 @@ it is that run's output, except where a block is marked as a *form* — the
 shape of a line rather than a captured one. The card transcripts in 2.6 come
 from a second machine, a 10 GiB RTX 3080; their `ADMISSION` lines are
 re-derived on the model the door decides with today, from that card's own
-driver reading [`evidence/memory-shape-20260827/ON-CARD-366.json`], because
+driver reading, because
 the model the original run printed has since been retired (6.2).
 
 The true shape of the journey: the wheel installs in one command; the
@@ -33,30 +33,28 @@ individual gpuwm source files by SHA-256. A bare install reached an engine the
 pin refused, and the forecast door refused at launch with a digest mismatch
 that named neither the version that works nor the fact that pip chose it.
 
-The declaration now carries a bounded range — `gpuwm>=2.7.4,<2.7.5` — so pip
+The declaration now carries a bounded range, `gpuwm>=2.8.0,<2.8.1`, so pip
 resolves the engine that works and refuses the one that does not. Three things
 follow that are worth knowing rather than discovering:
 
-- **2.7.4 is the only published engine that matches**, re-measured
-  2026-09-15 against every published 2.5.x, 2.6.x and 2.7.x release. The
-  range is one version wide because one version qualifies. (2.7.3, the
-  whole range the previous candidate admitted, fails the re-pinned manifest
-  by two files, `gpuwm/config.py` and `gpuwm/core/microphysics.py`; 2.6.4
-  and 2.6.5 fail it by eleven; 2.7.0, 2.7.1 and 2.7.2 fail it by eight.)
+- **2.8.0 is the only published engine that matches**, re-measured
+  2026-09-29 against every published 2.5.x, 2.6.x, 2.7.x and 2.8.x release.
+  The range is one version wide because one version qualifies. (2.7.4, the
+  whole range the previous release admitted, fails the re-pinned manifest
+  by eight files; 2.7.5 fails it by seven, 2.7.6 and 2.7.7 by six.)
 - **A newer gpuwm will not be resolved either.** The ceiling sits at the
   first engine this port has not measured against the manifest, so a future
-  2.7.5 is excluded exactly as 2.7.3 is. That is deliberate: an unmeasured
+  2.8.1 is excluded exactly as 2.7.4 is. That is deliberate: an unmeasured
   engine is what produced the defect, and the ceiling has earned its keep
-  twice — for the two days between the 2.7.4 publish and this candidate an
-  install of the previous one kept resolving 2.7.3, and for the ten days
-  between the 2.7.0 publish and 0.3.0 an install of 0.2.3 kept resolving
-  2.6.5 rather than a 2.7 engine its manifest refused.
+  three times: while 0.3.1 pinned 2.7.4, the engine published 2.7.5,
+  2.7.6, 2.7.7 and 2.8.0 and an install of 0.3.1 kept resolving 2.7.4; the
+  same held for 0.3.0 over 2.7.4 and for 0.2.3 over the 2.7 line.
 - **If you already have a different gpuwm in the environment**, `gpuwm-hex
   doctor` compares the installed engine's bytes against the pin and names
   both the version it found and the version to install. It is a byte check,
   not a version check, and it runs by default. On a conforming install it
-  reads `gpuwm 2.7.4: 16 of 16 pinned files are in this install and all 16
-  match` (measured 2026-09-15 against the published 2.7.4 wheel, in a fresh
+  reads `gpuwm 2.8.0: 16 of 16 pinned files are in this install and all 16
+  match` (measured 2026-09-29 against the published 2.8.0 wheel, in a fresh
   virtualenv holding only the published wheels).
 
 Then add the CUDA lane:
@@ -158,7 +156,7 @@ gpuwm you have: the transcript above was taken against the published gpuwm
 2.5.2 wheel, whose bundle carries `rw_wrfbatch` and **not** `rw_mpas_init`
 or `rw_mpas_convert` — which is exactly the shortfall the doctor reports
 there. The four MPAS bridge binaries enter the bundle at gpuwm 2.5.3, and
-this distribution's declared range is `gpuwm>=2.7.4,<2.7.5` (the floor is
+this distribution's declared range is `gpuwm>=2.8.0,<2.8.1` (the floor is
 far past 2.5.3, for the seam bytes the port pins): a conforming install cannot
 land on the engine that transcript was taken from. Doctor
 asks the gpuwm you actually have what its bundle declares, so it never sends
@@ -241,7 +239,7 @@ what came out:
 | `x1.40962.grid.nc` | `x1.40962.tar.gz` | 56,039,332 | `9a9e1909a755dac209462ceb0bfffd77ac1b37503169568b7f296707ee612bb9` |
 | `x1.40962.static.nc` | `x1.40962_static.tar.gz` | 94,766,584 | `cf1a47d4168327f06a8403555d6ed8b2fe1aff7f8b916bb7f6a754c34a10ac82` |
 
-Both match `tools/mpas_mesh_binding.py` exactly, so the forecast door's byte
+Both match `src/hexcore/drivers/mpas_mesh_binding.py` exactly, so the forecast door's byte
 check passes on what the published downloads give you. That is a fact about
 those archives, not a fetch path: gpuwm-hex still fetches nothing.
 
@@ -307,11 +305,9 @@ about a minute.
 ## 2.6 Ask the card first
 
 The forecast lane is the one step whose answer depends on your hardware, so
-ask before you spend anything on it. **Both checkouts below are required and
-neither is optional**: `--repo` is your gpuwm-hex checkout (the drivers are
-not in the wheel) and `--gpuwm-checkout` is a gpuwm checkout at **`v2.7.4`**,
-the tag whose bytes the seam pin matches (2.1). Leave `--repo` off and the
-door refuses before it reads anything else.
+ask before you spend anything on it. It runs on what you installed: the
+drivers ship in the wheel and the physics seam is the installed `gpuwm`
+(2.1), so no checkout of either project is needed.
 
 ```sh
 gpuwm-hex forecast --preflight \
@@ -321,23 +317,19 @@ gpuwm-hex forecast --preflight \
   --init    work/x1.40962.init.nc \
   --init-source "GFS 2026-08-12 06Z" \
   --hours 1.0 --history-every-minutes 30 \
-  --out work/fc-01 \
-  --repo <gpuwm-hex-checkout>/tree \
-  --gpuwm-checkout <gpuwm-checkout-at-v2.7.4>
+  --out work/fc-01
 ```
 
-`--gpuwm-checkout` must be a **git clone**, not an unpacked release tarball
-and not the installed distribution: the driver asks it
-`git rev-parse --show-toplevel`, because it writes that checkout's HEAD, tree
-and dirty paths into every receipt so the seam source it executed can be named
-by commit. A tarball or a `site-packages` directory is refused by name, saying
-that. (Before 2026-08-28 the same case exited 128 and surfaced as a raw
-`CalledProcessError` the door itself labelled a driver defect.)
+Through 0.3.1 this command also needed `--repo <gpuwm-hex-checkout>/tree`
+(the drivers were not in the wheel) and `--gpuwm-checkout` (a gpuwm git
+clone, only so receipts could name a commit). Both flags are still
+accepted: `--repo` is reported and ignored, and a clone passed as
+`--gpuwm-checkout` is recorded by commit instead of by the install's
+version and `RECORD` digest.
 
 On a card that holds the mesh, preflight binds it, admits it, runs the
 driver's own source-pin and host checks, and exits 0. This transcript is
-from a 10 GiB RTX 3080 with a desktop session on it, run 2026-08-25
-[`evidence/l6-capacity-20260825/desktop3080/`]; the `ADMISSION` line is the
+from a 10 GiB RTX 3080 with a desktop session on it, run 2026-08-25; the `ADMISSION` line is the
 one the door prints for that card and that free reading today:
 
 ```
@@ -374,21 +366,11 @@ device-properties queries; a missing input is *reported* alongside the card
 verdict rather than hiding it. Chapter 6.2 explains the model it decides
 with.
 
-Two more things the forecast lane needs, both stated here rather than
-discovered mid-launch:
-
-- **the gpuwm-hex source checkout** — the drivers live in `tree/tools/`,
-  outside the wheel, and verify their own executing modules by SHA-256
-  before CUDA is touched. Run the door from inside a checkout, or pass
-  `--repo <gpuwm-hex-checkout>/tree`;
-- **a `gpuwm` git checkout at the pinned commit** — `--gpuwm-checkout`. The
-  run verifies the sixteen pinned files by SHA-256 at launch and refuses a
-  mismatch naming the file and both digests; it also records the checkout's
-  HEAD, tree and dirty paths into every receipt, which is why it is a git
-  clone and not the installed distribution. The pin itself is satisfiable
-  from an install at 2.5.8 — all sixteen pinned paths resolve from
-  `site-packages` there, measured 2026-08-28 — so what the checkout supplies
-  now is provenance, not a missing file.
+What the run checks before CUDA is touched, stated here rather than
+discovered mid-launch: the sixteen pinned `gpuwm` seam files are verified by
+SHA-256 against the pin and a mismatch is refused naming the file and both
+digests, and the drivers verify their own executing modules the same way.
+Both read the installed copies, which are the copies that execute.
 
 ## 2.7 First forecast
 
@@ -404,8 +386,6 @@ gpuwm-hex forecast \
   --start-time 2026-08-12_06:00:00 \
   --hours 1.0 --history-every-minutes 30 \
   --out work/fc-01 \
-  --repo <gpuwm-hex-checkout>/tree \
-  --gpuwm-checkout <gpuwm-checkout-at-v2.7.4> \
   --case-label quickstart
 ```
 

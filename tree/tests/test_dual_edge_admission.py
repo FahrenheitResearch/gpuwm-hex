@@ -30,13 +30,14 @@ from hexcore.dual_edge_admission import (
 )
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
+DRIVERS = Path(__file__).resolve().parents[1] / "src" / "hexcore" / "drivers"
 
 
 def _load_binding() -> object:
     name = "_test_dual_edge_mesh_binding"
     sys.modules.pop(name, None)
     spec = importlib.util.spec_from_file_location(
-        name, TOOLS / "mpas_mesh_binding.py"
+        name, DRIVERS / "mpas_mesh_binding.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

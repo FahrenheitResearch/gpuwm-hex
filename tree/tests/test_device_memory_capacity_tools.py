@@ -206,7 +206,7 @@ def test_copy_elision_accounting_matches_x4_geometry() -> None:
 
 
 def test_copy_elision_of_record_arm_is_the_admission_surface_row() -> None:
-    """Stale-guard audit #347, finding 7: the stale-model-prevention tool's
+    """Stale-guard audit, finding 7: the stale-model-prevention tool's
     own "of record" instruction went stale -- it directed new questions at
     the superseded 6,296.5 + 93,474 row after the converged row landed.
     The refusal text and ``device_admission.FLOOR_DERIVATION`` must quote

@@ -108,7 +108,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
             "DIGEST, and the two rows in regional_admission were re-minted "
             "onto the surviving spelling in the same commit, so the same "
             "arrays still resolve the same row.  Moved a third time by the "
-            "provenance scrub, 2026-08-27 (#377): three comment and "
+            "provenance scrub, 2026-08-27: three comment and "
             "docstring lines naming a person and a machine were rewritten "
             "so that the public assembly stops having to move bytes that "
             "sit under a digest pin.  Measured inert rather than asserted: "
@@ -163,7 +163,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
         "recorded": "e74d345e3a2e02fe6887840e7ad3a8166ea302082e6a505d138c5293fef69a43",
         "current": "e0bb6ffc57126fa73cb068de348d01d6390721fc1e0c93400eb8e7c889edc015",
         "why": (
-            "provenance scrub, 2026-08-27 (#377): ONE line of the module "
+            "provenance scrub, 2026-08-27: ONE line of the module "
             "docstring named the machine the native v8.4.1 sources were "
             "transcribed against.  The line now names the rig by its role "
             "rather than by its host, and every source path, file and line "
@@ -205,7 +205,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "tools/run_cuda_regional_forecast.py": {
         "recorded": "0829a0d11501388c974f267d85f42adea39e762884948b36304d6d4f8ed64167",
-        "current": "ac5d4da78a57ecd53e379dda0092e7a021cc7f03ad9bb33153e879f2d1b2fef7",
+        "current": "042b5c57fe3fd4d36b51fce9b05c6735cadbfb57d69ca0ae9cd5d9f7f5fcc2e0",
         "why": (
             "swath-as-lam lane, 2026-08-27: the instrument grew named "
             "--grid/--init/--lbc-dir/--start-time/--dt/--len-disp paths and a "
@@ -552,7 +552,7 @@ def test_the_attribution_count_did_not_move_across_the_nvrtc_fix(receipts):
     """A count that did not move is a cause that is still open.
 
     The kinetic-energy divergence was a candidate for the NVRTC reciprocal
-    defect.  It is not: the count is identical before and after, and #355's
+    defect.  It is not: the count is identical before and after, and the NVRTC reciprocal-rewrite defect's
     own census reports no rewritten site left anywhere in the port.  Pinning
     the number here stops a later lane from quietly adopting the fix as its
     explanation.

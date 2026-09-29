@@ -43,17 +43,16 @@ global case.
 
 ## What it can do
 
-Measured, not promised (receipts in the README and under `evidence/`):
+Measured, not promised (the README states each measurement):
 
 - 24-hour global forecasts on one card, deterministic across dual runs.
 - Full-physics limited-area forecasts cut out of a global case with the
   `cull` door and driven at their boundary: six hours, 1,080 of 1,080
-  steps on an 11,020-cell cut, a 6,224 MiB footprint on a 10 GiB card
-  [`evidence/regional-physics-20260826/`].
+  steps on an 11,020-cell cut, a 6,224 MiB footprint on a 10 GiB card.
 - Weather followed across forecast cycles: `swath` places fine grids from
   a coarse run's own fields, `cycle` cuts, forces and integrates them —
   two real cycles ran back to back, both fine forecasts completing
-  1,080 of 1,080 steps [`evidence/cycling-loop-20260827/`].
+  1,080 of 1,080 steps.
 - Initial conditions built from a WPS intermediate file (GFS, ERA5, or
   whatever you drive with) without running any native Fortran tool; a
   native-built "capsule" is an explicit compatibility mode, not a
@@ -74,12 +73,11 @@ Measured, not promised (receipts in the README and under `evidence/`):
   trusting a number.
 - **No multi-GPU.** Two-node execution is built and proven bitwise
   partition-invariant, but it is not part of this release.
-- **Forecasting needs two checkouts.** `gpuwm-hex forecast` is a shipped
-  door — and `cycle run` drives it — but it refuses by name without a
-  `gpuwm-hex` checkout for the drivers and a `gpuwm` **git** checkout at
-  the pinned commit, the second for receipt provenance rather than for the
-  seam bytes (chapter 6 states exactly why). The doors around it run from
-  the wheel.
+- **Forecasting runs from the wheel.** Since 0.3.2 `gpuwm-hex forecast`
+  needs no checkout of either project: its drivers ship in the package and
+  the physics seam is the installed `gpuwm`, named in every receipt by
+  version and `RECORD` digest (chapter 6.1). `cycle run` still needs a
+  gpuwm-hex checkout for its per-cycle contract deck (chapter 6.9).
 - **No data fetching.** gpuwm-hex ships no meshes, no static files, no
   meteorological data, and has no download command for them. Chapter 2 states
   plainly where each asset comes from.
@@ -95,7 +93,7 @@ Measured, not promised (receipts in the README and under `evidence/`):
 
 | | |
 | --- | --- |
-| GPU | Any CUDA device for the doors. For forecasts, memory is set by mesh size *and* by the card, and the two do not combine into a line: the footprint is a per-card core, plus two physics column workspaces charged at `min(cells, tile)`, plus a per-cell term (chapter 4). Measured at the merged tip on an RTX 5090, 2026-08-26 [`evidence/memory-row-refit-20260826/node2/`]: the 40,962-cell global mesh peaked at **8,874 MiB** (fits a 12 GiB card); the 163,842-cell mesh peaked at **20,446 MiB** and admits at the measured floor — the prediction plus that card's own margin, about 21.7 GiB free at x4, computed by `hexcore.device_admission` — so it remains in practice a 32 GiB-card configuration. The core is a property of the card, and the door reads the card at the moment of the decision. |
+| GPU | Any CUDA device for the doors. For forecasts, memory is set by mesh size *and* by the card, and the two do not combine into a line: the footprint is a per-card core, plus two physics column workspaces charged at `min(cells, tile)`, plus a per-cell term (chapter 4). Measured at the merged tip on an RTX 5090, 2026-08-26: the 40,962-cell global mesh peaked at **8,874 MiB** (fits a 12 GiB card); the 163,842-cell mesh peaked at **20,446 MiB** and admits at the measured floor — the prediction plus that card's own margin, about 21.7 GiB free at x4, computed by `hexcore.device_admission` — so it remains in practice a 32 GiB-card configuration. The core is a property of the card, and the door reads the card at the moment of the decision. |
 | CPU/RAM | Modest. The doors are I/O-bound; the model state lives on the device. |
 | Disk | Meshes, initial conditions, and history files are hundreds of MB to a few GB each. The optional byte-pinned test assets are about 6.9 GiB. |
 | OS | Linux or Windows. Python 3.11 or newer. |

@@ -68,7 +68,7 @@ ROOT = proof.ROOT
 
 SCHEMA = "mpas-port.cuda-v841-2gpu-forecast/v1"
 RECEIPT_NAME = "cuda-v841-2gpu-receipt.json"
-DERIVED_FROM = "tools/run_cuda_v841_forecast.py"
+DERIVED_FROM = "src/hexcore/drivers/run_cuda_v841_forecast.py"
 DT_SECONDS = forecast.DT_SECONDS
 # K=3, not the design's K=2: the measured step-1 divergence localized to the
 # cut (analyze_step_divergence) -- the APVM pv_edge chain consumed at ring-1
@@ -606,7 +606,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
     )
     # Pool caps: turn a mid-run regression into a clean OOM abort (design D5).
     #
-    # PREMISE UNVERIFIED AT THE CONVERGED PIN (stale-guard audit #347,
+    # PREMISE UNVERIFIED AT THE CONVERGED PIN (stale-guard audit,
     # recorded 2026-08-25).  This tool runs as two RANKS, one CUDA device
     # per box (no fleet box carries two devices), and the cap below --
     # min(82% of the card, 26 GiB) -- was chosen for the whole-mesh x4

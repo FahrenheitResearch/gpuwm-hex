@@ -31,7 +31,7 @@ fi
 
 TAG=showcase-c
 echo "$(stamp) sim C start" >> "$LOG"
-"$PY" tools/run_cuda_v841_forecast.py \
+"$PY" src/hexcore/drivers/run_cuda_v841_forecast.py \
   --init "$INIT" \
   --init-source 'ERA5 2025-03-14 12Z (CDS reanalysis-era5-pressure-levels + reanalysis-era5-single-levels)' \
   --start-time 2025-03-14_12:00:00 \

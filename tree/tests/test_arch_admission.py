@@ -269,7 +269,7 @@ def test_json_receipt_paths_are_relative(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# the FTZ guard-cost timing ceiling is per-architecture (audit #347, finding 8)
+# the FTZ guard-cost timing ceiling is per-architecture (stale-guard audit, finding 8)
 # ---------------------------------------------------------------------------
 def test_performance_ceiling_registry_carries_both_admitted_architectures():
     """The single global 1.25x ceiling was calibrated when sm_120 was the

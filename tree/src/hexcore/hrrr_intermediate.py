@@ -515,7 +515,7 @@ def _engine_pieces(row: SourceRow) -> dict[str, Any]:
     except ImportError as error:
         raise IntermediateRefusal(
             f"the engine's ingest is not importable ({error}); this door drives "
-            f"gpuwm 2.7.4's own decoder, loader and interpolation operator and "
+            f"the engine's own decoder, loader and interpolation operator and "
             f"has no road without them"
         ) from error
     needed = {
@@ -532,7 +532,7 @@ def _engine_pieces(row: SourceRow) -> dict[str, Any]:
     if missing:
         raise IntermediateRefusal(
             f"the installed engine's ingest does not expose {missing}; this "
-            f"road is pinned to the operator gpuwm 2.7.4 ships and refuses to "
+            f"road drives the operator the engine ships and refuses to "
             f"substitute one of its own"
         )
     return needed

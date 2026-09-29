@@ -23,6 +23,22 @@ refusal a user hit and the documentation they read named different engines.
 Every step is transactional:
 the Arwen boundary state is exported before phase one, and an abort or any
 adapter failure rebuilds a fresh seam and restores that boundary snapshot.
+
+The export is the ROLLBACK, and a caller that will never use a rollback may
+decline it (``rollback_snapshot=False``).  The export copies every persisted
+seam array to the host before every phase one: 447 MB and 192 device-to-host
+copies a step on a 43,884-cell mesh, about 24 ms of the host blocked per
+step (the 2026-09-13 forecast-step profile).  What reads it is a refused
+step: the seam is rebuilt from it so the run can keep the last committed
+state.  The forecast keeps that state only under ``--stop-on-refusal``,
+where it writes the last committed frame; otherwise a refused step ends the
+run and the restored seam is never read again.  A checkpoint does not read
+it either: :meth:`restart_state` exports the seam at the committed boundary
+itself.  An unarmed transaction that fails retires the seam instead of
+restoring it (phase ``rollback_not_armed``): nothing is published, the
+original error propagates, and every later step refuses.  The default is
+armed, so every caller that does not say otherwise, the proof harness
+among them, is unchanged.
 """
 
 from __future__ import annotations
@@ -69,7 +85,7 @@ from .cuda_physics_v841 import (
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "ed957997fc1a11d3b6350badc69fccfc55c363b0"
+ARWEN_BUILD_COMMIT = "0164ae0f2d707fa176c9c2f120dca61f9f15e485"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
@@ -89,19 +105,19 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45"
         ),
         "gpuwm/core/physics.py": (
-            "898b694bcbad9d0bd981c4e3e958138dd99d084a12a9550b3431a2cc43ae57ce"
+            "6b09d387289df5a7c35833f251507d1e63c19a1552982c27a37ba6a8c2885978"
         ),
         "gpuwm/core/microphysics.py": (
-            "b0d457a48bdc141d6703c7b5aa39faa32a83de1a007c7daae8c9cf9f67676559"
+            "b91785e6d5930152e635c60366bb4d9fd7d1fa861b950f53ab9f26a5775ddbc6"
         ),
         "gpuwm/core/gf.py": (
-            "ccbfe07c056768ee6fda9ae369c6f97352fa3d243201c4cfaf1290f7242c750f"
+            "2d25a568d466f14fbe95596b07a000fb77723bdf9de17d2feb463cd702cc06b2"
         ),
         "gpuwm/core/kernels/gf.cu": (
-            "334c55ab764732be73d94504d54cb60ad7ca8bf12dbca879d7b3fc3f869d4386"
+            "2ca7ac7bbeb01627ddeff8819b103c07081b6962125fb68d8f688627370184d6"
         ),
         "gpuwm/core/rrtmg_legacy.py": (
-            "8951ce770e10f823d964a4f4564cc9f8989035a7fb9d3fc1448b73f6816bc928"
+            "8d2c083609bf9167584b85e6302ffbbd624193301b056e044921cb9eef9fa7e4"
         ),
         "gpuwm/core/noahmp_runtime.py": (
             "990780ab87764481c463b1fa2f8c988cd9538e0833dc390203d2a0396fee66bc"
@@ -116,7 +132,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "fcdc097d20f9d0453086bae5ba1007f015d4eca2ac21b39db10a59f15cff26c5"
         ),
         "gpuwm/core/kernels/__init__.py": (
-            "5c738347bc273d8e961618138a1bdd1ae296ec7cc75f3d557b43b13bc21e8937"
+            "0476405bd30aeb3b8cbed90358941b6fb5512ec11e22150528269c600d744e18"
         ),
         "gpuwm/core/kernels/noahmp_leaves.cu": (
             "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497"
@@ -125,10 +141,10 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6a200773433a257f562f38d3e32cff13555acea1a4ce8267054b60914a6b5219"
         ),
         "gpuwm/config.py": (
-            "c3384bb578ca92aad8c846aec18c4f14855f358927a4a96563df97a5ae5260c6"
+            "404e11278d855d45de578dcb726ef4ba1514cfe2bb60016a3d6dd8858e2ab894"
         ),
         "gpuwm/io/restart.py": (
-            "1990efeee7e314799359d555310f7db304abf9b89d6bd575c77a2da4f988c30e"
+            "bf813d1e1a896968f6ecc3a11d9b07771073b06cb835d92fdddd2c3f7efe14f8"
         ),
         "docs/mpas-seam.md": (
             "5cd6934ef8b4f3dabfb7fa2e621ceab309836875a6669319323451ea717f9035"
@@ -743,6 +759,20 @@ def pin_arwen_physics_v841(checkout: str | Path) -> Mapping[str, Any]:
     )
 
 
+#: What an open transaction holds in place of the boundary export when the
+#: backend was built with ``rollback_snapshot=False``.  Not ``None``: ``None``
+#: means "no transaction is open", and every phase guard below reads it so.
+_ROLLBACK_NOT_ARMED: Mapping[str, Any] = MappingProxyType({"rollback": "not armed"})
+
+#: The receipt text an unarmed failure leaves, so the refusal a user reads
+#: says why no boundary came back.
+_ROLLBACK_NOT_ARMED_TEXT = (
+    "no boundary export was taken for this step (rollback_snapshot=False), so "
+    "the seam holds the refused step's partial state and is retired; nothing "
+    "was published and every later step refuses"
+)
+
+
 def _snapshot_nbytes(value: Any) -> int:
     if isinstance(value, np.ndarray):
         return int(value.nbytes)
@@ -789,9 +819,12 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         gwdo_static: CudaYsuGwdoStaticV841 | None = None,
         gwdo_kernel_cache: KernelCache | None = None,
         arwen_checkout: str | Path | None = None,
+        rollback_snapshot: bool = True,
     ) -> None:
         if not isinstance(constructor, SealedArwenConstructorV841) or constructor._seal is not _CONSTRUCTOR_SEAL:
             raise TypeError("constructor must be SealedArwenConstructorV841.from_mapping")
+        if not isinstance(rollback_snapshot, bool):
+            raise TypeError("rollback_snapshot must be a bool")
         if not isinstance(prep_geometry, CudaMpasToPhysGeometryV841):
             raise TypeError("prep_geometry must be sealed v8.4.1 MPAS preparation geometry")
         prep_geometry.validate()
@@ -816,6 +849,7 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         self._gwdo_kernel_cache = gwdo_kernel_cache
         self._factory = factory
         self._arwen_root = root
+        self._rollback_snapshot = rollback_snapshot
         self._seam = self._new_seam()
         self._phase = "boundary"
         self._boundary_snapshot: Mapping[str, Any] | None = None
@@ -957,6 +991,14 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 "policy": "MPAS explicitly declines the ARW RK replay",
             },
             "gwdo": {"enabled": self._gwdo_static is not None},
+            "transaction_rollback": {
+                "armed": self._rollback_snapshot,
+                "boundary_export": (
+                    "every step, before phase one"
+                    if self._rollback_snapshot
+                    else "not taken; a refused step retires the seam"
+                ),
+            },
             "limitations": list(_LIMITATIONS),
             "nonclaims": [
                 "no claim of separate EOS cloud-pressure routing inside frozen Arwen v2",
@@ -995,7 +1037,30 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         if int(output.step_index) != int(self._seam.step_index):
             raise ValueError("Arwen held-output step index changed during phase one")
 
+    def _rollback_receipt(self, prior: Mapping[str, Any], armed_text: str) -> dict[str, Any]:
+        """The receipt a failed transaction leaves, armed or not."""
+
+        if self._phase == "rollback_not_armed":
+            return {
+                **prior,
+                "phase": "rollback_not_armed",
+                "rollback": _ROLLBACK_NOT_ARMED_TEXT,
+            }
+        return {**prior, "phase": "automatic_rollback", "rollback": armed_text}
+
     def _restore_boundary(self, snapshot: Mapping[str, Any]) -> None:
+        if snapshot is _ROLLBACK_NOT_ARMED:
+            # Nothing to restore from.  The seam has run part of the refused
+            # step, so it is retired rather than reused: the phase below is
+            # not "boundary", and begin_step refuses anything but "boundary".
+            self._phase = "rollback_not_armed"
+            self._boundary_snapshot = None
+            self._step_start = None
+            self._candidate_scalar_target = None
+            self._candidate_scalar_backup = None
+            self._pending_gwdo_result = None
+            self._pending_refl10cm = None
+            return
         try:
             fresh = self._new_seam()
             fresh.restore_state(snapshot)
@@ -1084,6 +1149,8 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         the first step only: native's own tend_physics starts at zero.
         """
 
+        if self._phase == "rollback_not_armed":
+            raise RuntimeError(f"begin_step refused: {_ROLLBACK_NOT_ARMED_TEXT}")
         if self._phase != "boundary":
             raise RuntimeError("begin_step requires a clean step boundary")
         _scalar_names(scalar_names)
@@ -1096,7 +1163,11 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 "Arwen and MPAS clocks differ at begin_step: "
                 f"{self._seam.elapsed_seconds} != {start}"
             )
-        snapshot = self._seam.export_state()
+        snapshot = (
+            self._seam.export_state()
+            if self._rollback_snapshot
+            else _ROLLBACK_NOT_ARMED
+        )
         self._boundary_snapshot = snapshot
         self._step_start = start
         snapshot_bytes = _snapshot_nbytes(snapshot)
@@ -1250,7 +1321,10 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             }
             return raw
         except Exception:
+            prior = self._last_receipt
             self._restore_boundary(snapshot)
+            if self._phase == "rollback_not_armed":
+                self._last_receipt = self._rollback_receipt(prior, "")
             raise
 
     def _private_radii(self, radius_names: Sequence[str]) -> dict[str, Any]:
@@ -1308,11 +1382,9 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         except Exception:
             prior = self._last_receipt
             self._restore_boundary(snapshot)
-            self._last_receipt = {
-                **prior,
-                "phase": "automatic_rollback",
-                "rollback": "pre-phase-two validation refused; boundary restored",
-            }
+            self._last_receipt = self._rollback_receipt(
+                prior, "pre-phase-two validation refused; boundary restored"
+            )
             raise
         cp = __import__("cupy")
         # WSM6 receives zero-copy scalar aliases.  This device backup is the
@@ -1448,11 +1520,9 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 scalar_restore_error = error
             prior = self._last_receipt
             self._restore_boundary(snapshot)
-            self._last_receipt = {
-                **prior,
-                "phase": "automatic_rollback",
-                "rollback": "phase-two execution refused; candidate and boundary restored",
-            }
+            self._last_receipt = self._rollback_receipt(
+                prior, "phase-two execution refused; candidate and boundary restored"
+            )
             if scalar_restore_error is not None:
                 raise RuntimeError(
                     "failed to restore unpublished MPAS candidate scalars"
@@ -1476,11 +1546,14 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                 scalar_restore_error = error
         prior = self._last_receipt
         self._restore_boundary(snapshot)
-        self._last_receipt = {
-            **prior,
-            "phase": "rolled_back",
-            "rollback": "fresh frozen Arwen v2 seam reconstructed from boundary export",
-        }
+        if self._phase == "rollback_not_armed":
+            self._last_receipt = self._rollback_receipt(prior, "")
+        else:
+            self._last_receipt = {
+                **prior,
+                "phase": "rolled_back",
+                "rollback": "fresh frozen Arwen v2 seam reconstructed from boundary export",
+            }
         if scalar_restore_error is not None:
             raise RuntimeError(
                 "Arwen rolled back but unpublished MPAS scalar restoration failed"

@@ -37,11 +37,11 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.3.1", (
-        "0.3.1 is the declared cut: the release forced by gpuwm 2.7.4 (its "
-        "pin window excludes every earlier engine, 2.7.3 included), carrying "
-        "the performance campaign on the point cull; moving it is a release "
-        "decision, not an edit"
+    assert declared == "0.3.2", (
+        "0.3.2 is the declared cut: the release forced by gpuwm 2.8.0 (its "
+        "pin window excludes every earlier engine, 2.7.4 included), carrying "
+        "the forecast from an install; moving it is a release decision, not "
+        "an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")
@@ -592,10 +592,8 @@ def test_the_internal_working_brief_does_not_travel() -> None:
         )
     for relative in _MUST_NOT_TRAVEL:
         assert relative not in packed, (
-            f"{relative} is in the sdist.  Internal working material carries "
-            "a private LAN address, a home-directory path, the maintainer's "
-            "name against the machines he owns, and the existence of a "
-            "second private effort.  An sdist on PyPI cannot be recalled"
+            f"{relative} is in the sdist.  It is internal working material, "
+            "not a user document, and an sdist on PyPI cannot be recalled"
         )
     leaked = sorted(name for name in packed if "release-checklist" in name)
     assert leaked == [], (
@@ -606,8 +604,8 @@ def test_the_internal_working_brief_does_not_travel() -> None:
     )
 
 
-#: The two directories the sibling column-physics provider occupies, in the
-#: spelling the sdist template reports.  A PREFIX match, never a substring
+#: The two `mod` directories the packaging holds out, in the spelling the
+#: sdist template reports.  A PREFIX match, never a substring
 #: match: the directory is now named ``mod``, and ``"mod" in name`` is true of
 #: half this tree ("model", "module", "modified").  The old spelling of this
 #: gate matched a substring, which only worked because the substring happened
@@ -625,7 +623,6 @@ def test_the_sibling_seam_reaches_neither_half_of_the_sdist() -> None:
         if name.replace("\\", "/").startswith(_PRIVATE_PROVIDER_PREFIXES)
     )
     assert leaked == [], (
-        f"the sibling column-physics seam is in the sdist: {leaked}.  Those "
-        "files carry a private branch name, a commit that resolves on one "
-        "machine, and the SHA-256 of files nobody outside it can obtain"
+        f"a held-out `mod` directory is in the sdist: {leaked}.  It is not "
+        "part of this distribution, and an sdist on PyPI cannot be recalled"
     )

@@ -1,9 +1,9 @@
 """Where a declared source path actually lives in THIS interpreter.
 
-Ledger #379.  Two gates in this program digest the port's own modules by
+The wheel-reach defect.  Two gates in this program digest the port's own modules by
 name -- the regional kernel set in
 :mod:`hexcore.cuda_backend.regional_admission`, and the 23-module frozen
-execution set in ``tools/run_cuda_v841_full_physics_x4.py``.  Both spell
+execution set in ``src/hexcore/drivers/run_cuda_v841_full_physics_x4.py``.  Both spell
 their members the way the repository does, ``src/hexcore/<module>.py``,
 and both used to resolve that spelling by walking up from a file and
 assuming a checkout underneath.

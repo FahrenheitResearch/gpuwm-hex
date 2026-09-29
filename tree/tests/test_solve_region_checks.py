@@ -212,7 +212,7 @@ def test_the_check_kernels_do_no_arithmetic_on_the_values():
 
 
 def test_the_health_gate_reads_once():
-    source = (ROOT / "tools" / "run_cuda_v841_forecast.py").read_text(encoding="utf-8")
+    source = (ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py").read_text(encoding="utf-8")
     body = _between(source, "def step_health_gate(", "\nclass BoundaryFingerprintWriter")
     for reduction in ("cp.min(", "cp.max(", "cp.argmax(", "cp.abs("):
         assert reduction not in body, reduction

@@ -37,7 +37,7 @@ TARGETS = [
     ("gpuwm.core.rrtmg_lw", "_gpu_module", (), None),
     ("gpuwm.core.rrtmg_mcica", "_mcica_gpu_module", (), None),
     ("gpuwm.core.gf", "_gf_module", (55,), "gf_gfdrv_stage"),
-    # Added 2026-08-25 (stale-guard audit #347, finding 6): the #294 frame
+    # Added 2026-08-25 (stale-guard audit, finding 6): the Grell-Freitas frame
     # cut moved the widest LAUNCHED local frame from gf_gfdrv_stage
     # (29,264 B, retired to 88/72 B) to wsm6_column (7,216 B -- STATE.md
     # section 5).  wsm6 builds through the kernels registry rather than a

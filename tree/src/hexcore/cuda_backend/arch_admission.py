@@ -91,7 +91,7 @@ ADMITTED_BELOW_FLOOR: Mapping[tuple[int, int], ArchAnchor] = MappingProxyType(
 #: (``cuda_ftz.run_normalized_fallback_performance_control``), beside the
 #: admission registry because the two answer the same question -- what is
 #: proven on THIS architecture -- and drift apart when kept in different
-#: files.  Made per-architecture 2026-08-25 (stale-guard audit #347,
+#: files.  Made per-architecture 2026-08-25 (stale-guard audit,
 #: finding 8): the single global 1.25 was calibrated when sm_120 was the
 #: only architecture and hard-refused the newly admitted sm_86 tier on a
 #: timing-only deviation while bitwise identity held.  Timings are

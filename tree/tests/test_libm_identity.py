@@ -1,4 +1,4 @@
-"""#373: a float32 digest belongs to a C library, and now it says so.
+"""The libm-identity finding: a float32 digest belongs to a C library, and now it says so.
 
 These tests hold the instrument that identifies a libm by its own answer
 rather than by a version string, and they validate it in BOTH directions --
@@ -161,7 +161,7 @@ def test_the_correctly_rounded_control_is_the_portable_one() -> None:
     by_hand = (x.astype(np.float64) * x.astype(np.float64)).astype(np.float32)
     assert square.tobytes() == by_hand.tobytes(), (
         "np.square is no longer a single correctly-rounded multiply, so the "
-        "portable alternative named in #373 is not portable any more"
+        "portable alternative named in the libm-identity finding is not portable any more"
     )
 
 

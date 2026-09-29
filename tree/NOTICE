@@ -11,7 +11,11 @@ MPAS-Atmosphere (LANL / UCAR)
 
 gpuwm-hex reimplements the dynamical core of MPAS-Atmosphere (Model for
 Prediction Across Scales) version 8.4.1 for CUDA devices, with pinned
-source-line citations. MPAS-Atmosphere is developed by the Los Alamos
+source-line citations. The earlier v8.2.3 lane it grew from is still
+carried and selectable, and the standalone Fortran oracles under
+tools/mpas_operator_oracle/ and tools/mpas_step_oracle/ transcribe loop
+bodies of MPAS-Atmosphere v8.2.3 (cited by file and line in each source);
+those transcriptions are MPAS-derived portions under the same terms. MPAS-Atmosphere is developed by the Los Alamos
 National Laboratory and the University Corporation for Atmospheric
 Research / National Center for Atmospheric Research, and is distributed
 under the BSD-3-Clause terms reproduced at the end of this section. Those
@@ -49,7 +53,17 @@ physics_mmm/bl_gwdo.F90, the Kim/YSU orographic gravity-wave-drag and
 flow-blocking scheme from NCAR/MMM. Those files are cited by path and line
 in the module that reimplements them. No source from either upstream is
 copied into this distribution; the citations record what the CUDA operator
-was written against.
+was written against. WRF itself is a public-domain work of NCAR/MMM; this
+distribution states that lineage here rather than relying on the engine's
+NOTICE to carry it.
+
+The longitude arithmetic in src/hexcore/mesh.py
+(_grid_rotate_convert_xl_longitude and reconcile_grid_rotate_longitudes)
+reproduces the convert_xl formula of MPAS-Tools grid_rotate.f90, pinned by
+source digest in that module, so that a rotated mesh's stored longitudes
+can be checked to the producer's own rounding. MPAS-Tools is distributed
+by LANS under the same BSD-3-Clause terms as MPAS-Atmosphere, reproduced
+below; no MPAS-Tools source file is copied into this distribution.
 
 MPAS-Atmosphere license text, retained in full:
 

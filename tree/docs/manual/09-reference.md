@@ -10,7 +10,7 @@
 | `gpuwm-hex oracle-gate --grid G --static S --fixtures DIR` | replay the source-extracted Fortran M1 fixtures against a mesh | a source checkout's oracle fixtures |
 | `gpuwm-hex cull --parent-grid G --parent-static S --parent-init I --region R` | cut a limited-area grid, static and init out of a global case; `init` refuses a regional grid by name, so this is how a limited-area case gets an init at all | `rw_mpas_mesh`, the global triple, one region row |
 | `gpuwm-hex init ...` | build initial conditions (chapter 5) | `rw_mpas_init`, met file, mesh pair, capsule |
-| `gpuwm-hex forecast ...` | run the model on a registered mesh (chapter 6); `--preflight` answers "will it fit?" without integrating | a CUDA device with room for the mesh, a gpuwm-hex checkout, a `gpuwm` source checkout at the pinned commit, mesh pair, init |
+| `gpuwm-hex forecast ...` | run the model on a registered mesh (chapter 6); `--preflight` answers "will it fit?" without integrating | a CUDA device with room for the mesh, the pinned `gpuwm` installed, mesh pair, init |
 | `gpuwm-hex swath {plan,metrics,explain}` | place fine grids from a coarse forecast's own fields, print the armed threat rows, explain why each candidate was taken or declined; `plan` prices every admitted swath through a real `rw_mpas_mesh --dry-run` unless `--no-size` | CPU only; a coarse forecast or its run receipt, `rw_mpas_mesh` to price |
 | `gpuwm-hex cycle {plan,run}` | follow weather across cycles ([`docs/cycle-door.md`](../cycle-door.md)): `plan` says what each cycle would place and opens no device, `run` does cull → mid-window init → boundaries → forecast → render | `plan`: the parent case and `rw_mpas_mesh`. `run`: everything `forecast` needs |
 | `gpuwm-hex render ...` | history → product PNGs (chapter 7) | `rw_mpas_convert`, `rw_wrfbatch` |
@@ -18,11 +18,11 @@
 | `gpuwm fetch-bridges` | stage the engine's published binary bundle into `~/.gpuwm/bridges` | network |
 | `gpuwm fetch-geog --root DIR [--list]` | stage / inventory the WPS_GEOG archive | network, ~28 GiB unpacked |
 
-Under the forecast door (same checkout, chapter 6):
+Under the forecast door (chapter 6):
 `tools/run_cuda_v841_forecast_mesh.py` (registered-mesh runner, with
-`--verify-only` and `--selftest`), `tools/run_cuda_v841_forecast.py` (the
+`--verify-only` and `--selftest`), `src/hexcore/drivers/run_cuda_v841_forecast.py` (the
 arbitrary-case driver whose `execute_forecast` the door drives),
-`tools/run_cuda_v841_full_physics_x4.py` (the sealed proof harness: native
+`src/hexcore/drivers/run_cuda_v841_full_physics_x4.py` (the sealed proof harness: native
 comparison, checkpoint/restart proof),
 `tools/device_memory_ledger/hex_ledger_probe.py` (the per-allocation
 device-memory ledger a footprint row is fitted from).
@@ -70,7 +70,7 @@ device contact; `GPUWM_WPS_GEOG` names the geog root for `gpuwm mesh`.
 
 ## 9.3 The mesh registry
 
-`tools/mpas_mesh_binding.py` — one entry per runnable mesh: name, declared
+`src/hexcore/drivers/mpas_mesh_binding.py` — one entry per runnable mesh: name, declared
 `nCells`/`nEdges`, exact grid/static byte counts and SHA-256 digests, static
 provenance, nominal spacing (compared FP32-bit-exactly against the static's
 declaration), and the declared `dt_seconds`. Adding a mesh is adding a
@@ -112,20 +112,12 @@ limit and diverge there.
 | `--receipt-json` bind receipt | registered-mesh runner | the mesh binding: names, digests, admitted dt, fingerprints |
 | `demo.receipt.json` / static receipt | `gpuwm mesh` | generation parameters, gates applied, output digests |
 
-Measurement campaigns are committed under `evidence/`; the ones this manual
-cites most: `evidence/memory-shape-20260827/` (the device-footprint model of
-record — the shape, its named margin, and seventeen measured peaks scored
-against it; it supersedes the affine rows of
-`evidence/gf-pin-move-measured-20260824/` and
-`evidence/memory-row-refit-20260826/`), `evidence/nest-ratio-20260827/` (the
-five concentric culls the limited-area core is an envelope over),
-`evidence/dt-anchors-20260826/` and `evidence/convection-off-20260826/` (the
-timestep anchors), `evidence/cycling-loop-20260827/` (two cycles of the
-loop, end to end), `evidence/local-timestep/` (LTS gates, speed and
-conservation), `evidence/restart-step16-327/` (restart bitwise identity),
-`evidence/statics-330-unified-rebuild/` (unified static writer, generated
-mesh status, native-free init status), `evidence/init-door/` and
-`evidence/obs-referee-283/`.
+The measurements this manual quotes are stated where they are quoted: the
+device-footprint model (chapter 4, `docs/device-memory-ledger.md`), the
+timestep anchors and the convection threshold (chapter 6), the cycling loop
+(6.9, `docs/cycle-door.md`), local time stepping (6.6,
+`docs/local-timestep-lam.md`), restart identity (6.5) and the observation
+referee (`docs/obs-referee.md`).
 
 ## 9.5 The test battery
 
@@ -147,13 +139,13 @@ by omission.
 - Distribution and command: `gpuwm-hex`. Import namespace: `hexcore`,
   renamed from `mpas_port` at 0.2.0 and settled there (README, *The import
   namespace*). There is no alias shim.
-- Engine range: `gpuwm>=2.7.4,<2.7.5` is what pip enforces — a bounded
+- Engine range: `gpuwm>=2.8.0,<2.8.1` is what pip enforces, a bounded
   range, derived from a measured table in `hexcore.engine_pin` rather than
   typed. The floor is where it is for one reason and it is the strictest
-  one: 2.7.4 is the only published engine whose bytes match the
-  sixteen-file Arwen seam manifest, re-measured 2026-09-15 against every
-  published 2.5.x, 2.6.x and 2.7.x release
-  (`verification/engine-verdicts/repin-274-20260915.json`, written by
+  one: 2.8.0 is the only published engine whose bytes match the
+  sixteen-file Arwen seam manifest, re-measured 2026-09-29 against every
+  published 2.5.x, 2.6.x, 2.7.x and 2.8.x release
+  (`verification/engine-verdicts/repin-280-20260929.json`, written by
   `tools/measure_engine_verdicts.py`). It clears, incidentally, the bundle rows that put the MPAS bridge
   binaries (`rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`,
   `rw_mpas_static`, `rw_mpas_lbc`) within reach of `gpuwm fetch-bridges`;
@@ -161,7 +153,7 @@ by omission.
   drives one. The CEILING is exclusive and sits at the first engine not
   measured usable, so an engine that has not been compared against the
   manifest is never resolved onto — including ones not published yet. An
-  engine that is NOT on PyPI (a local version such as `2.7.4+x.1`, which
+  engine that is NOT on PyPI (a local version such as `2.8.0+x.1`, which
   the range already resolves) is admitted only by a measured row of its
   own in `hexcore.engine_pin.ADMITTED_ENGINES`, written by the same
   instrument's `--admit` from the engine's wheels and source tree and
@@ -169,11 +161,11 @@ by omission.
   seam check, the door, `doctor` and the adapter accept that row's bytes
   under that version and refuse everything else by name. The
   forecast lane's real wall is stricter still: the sixteen-file seam
-  manifest, plus a *git* checkout at the pinned commit for receipt
-  provenance (chapter 6.1). `gpuwm-hex doctor` compares the installed
-  engine's bytes against the manifest and names the version it found; since
-  2.5.8 all sixteen pinned paths resolve from the install, so the checkout
-  is owed for the commit rather than for a file.
+  manifest, checked against the installed engine (or a clone passed as
+  `--gpuwm-checkout`) at launch (chapter 6.1). `gpuwm-hex doctor` compares
+  the installed engine's bytes against the manifest and names the version
+  it found; since 2.5.8 all sixteen pinned paths resolve from the install,
+  and since 0.3.2 the forecast runs on it with no clone.
 - Licence: Apache-2.0, with the MPAS-Atmosphere BSD-3-Clause notice
   travelling in `NOTICE`. This is not the version available from LANS and
   UCAR, and neither they nor their contributors endorse it.

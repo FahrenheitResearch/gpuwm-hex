@@ -88,7 +88,7 @@ def _shipped_or_skip(relative: str) -> Path:
 
     The three writers and their destinations live under `tree/evidence/`,
     which the public assembly ships only `EVIDENCE.md` of.  A tree that does
-    not carry the file cannot have it checked from here, and #378 closed
+    not carry the file cannot have it checked from here, and the evidence-reach fix closed
     exactly this shape thirty times over: a direct read fires a red CI on
     the public release commit while the private tree, which carries the
     evidence, keeps the gate real.  Measured on the 0.2.1 assembly's own

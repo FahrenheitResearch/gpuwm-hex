@@ -99,7 +99,7 @@ def build_scorecard(
         "scientific_reason": scientific_reason,
         "default_on_decision": "DO_NOT_ENABLE",
         "default_on_reason": (
-            "This lane forbids automatic default promotion. Real measured evidence, "
+            "The scorecard forbids automatic default promotion. Real measured evidence, "
             "all guardrails, and explicit owner acceptance are required."
         ),
         "owner_acceptance_required": True,

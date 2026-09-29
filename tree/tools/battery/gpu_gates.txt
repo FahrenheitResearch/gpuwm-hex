@@ -28,7 +28,7 @@ tests/test_device_capacity.py
 # column batch on the same P3 columns, byte-compared.  Needs any CUDA
 # device (8 columns, 20 levels -- fits everything) AND
 # HEXCORE_AB_ARWEN_ROOT naming a gpuwm SOURCE CHECKOUT at or above the
-# 2.6.1 line (the P3 transport, microphysics_scheme="p3"; the pinned 2.7.4
+# 2.6.1 line (the P3 transport, microphysics_scheme="p3"; the pinned 2.8.0
 # carries it); without the variable the
 # suite skips by name rather than grading whatever gpuwm sys.path holds.
 tests/test_p3_seam_ab.py
@@ -40,15 +40,15 @@ tests/test_p3_seam_ab.py
 # minutes, they write receipts, and their verdict is the receipt.
 #
 # The full-physics F001 endpoint proof.  Needs the tier-2 assets AND a 32 GiB
-# card AND a gpuwm SOURCE CHECKOUT at the pinned commit (see below).
+# card AND the pinned gpuwm engine, installed or a git clone (see below).
 #
-#   python tools/run_cuda_v841_full_physics_x4.py \
+#   python src/hexcore/drivers/run_cuda_v841_full_physics_x4.py \
 #       --arwen-checkout <gpuwm checkout> --cache-root <scratch> --output <receipt.json>
 #
 # The arbitrary-case forecast driver.  Same checkout requirement; mesh and
 # static default to the tier-2 authority pair and can be pointed elsewhere.
 #
-#   python tools/run_cuda_v841_forecast.py \
+#   python src/hexcore/drivers/run_cuda_v841_forecast.py \
 #       --init <init.nc> --init-source '<provenance sentence>' \
 #       --hours 24 --history-every-minutes 60 \
 #       --arwen-checkout <gpuwm checkout> --cache-root <scratch> --output <receipt.json>
@@ -57,26 +57,13 @@ tests/test_p3_seam_ab.py
 #   manifest and the authorities WITHOUT touching a device, which makes it a
 #   useful tier-2 gate on a box with the assets and no big card.
 #
-# THE CHECKOUT REQUIREMENT, stated once so it is not rediscovered -- AND
-# RESTATED 2026-08-28, because its old reason died and this file was written
-# in the voice of a settled fact so nobody would re-check it.
-#
-# What this file used to say: one of the sixteen pinned paths is
-# docs/mpas-seam.md, a repository document gpuwm's packaging never places in
-# site-packages, so an installed wheel CANNOT satisfy the pin no matter its
-# version.  That was true through engine 2.5.7 and is false at 2.5.8, which
-# ships the document inside the wheel at the manifest's own key.  Measured
-# 2026-08-28 in a virtualenv holding only the published wheels:
-# engine_pin.inspect_seam over the INSTALL root returns checked=16,
-# matched=16, moved=(), absent=().
-#
-# The requirement stands anyway, for a reason that is not the bytes:
-# verify_arwen_checkout_git records the checkout's HEAD, tree and dirty paths
-# into every receipt and every history file, so the executed seam source can
-# be named by commit.  An install carries the bytes and no commit, and
-# site-packages is not a git working tree -- measured the same day, the guard
-# refuses one by name.  These harnesses therefore need a gpuwm GIT CHECKOUT
-# at the pinned commit, which is why neither is a console script.
+# THE SEAM SOURCE.  These harnesses run on the installed engine or on a
+# gpuwm git clone passed as --arwen-checkout.  Since engine 2.5.8 all
+# sixteen pinned paths resolve from site-packages, and
+# verify_arwen_checkout_git records an install by its version and pip's
+# RECORD digest where it records a clone by HEAD, tree and dirty paths, so
+# the executed seam source is named either way.  Any other directory (an
+# unpacked tarball, a copied site-packages) is refused by name.
 tests/test_species_row.py
 tests/test_moist_coefficients_species_row.py
 tests/test_prep_species_row.py

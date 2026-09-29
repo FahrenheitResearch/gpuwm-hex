@@ -8,7 +8,7 @@ throwing the first twelve hours away.  On the 1.35x cut of the 4.6 km cascade
 that is 6 h of fine forecast spent on an atmosphere nobody placed a grid for,
 per cycle, per swath, and it grows with every hour of lead.
 
-THE SEAM THAT MADE IT IMPOSSIBLE, and it is backlog #360.  The parent's own
+THE SEAM THAT MADE IT IMPOSSIBLE, and it is the delayed-start seam.  The parent's own
 history stream is a PRODUCT stream, not a restart stream.  Measured on a real
 121,182-cell parent frame: it publishes ``theta``, ``rho``, ``qv``, the five
 hydrometeors, ``normal_u``, ``w``, ``pressure``, the surface fields and the
@@ -235,7 +235,7 @@ def parent_index_map(
 def frame_valid_time(path: Path) -> datetime | None:
     """The valid time a history frame declares, or ``None`` if it declares none.
 
-    THE SEAM, MEASURED (#360): the port's history stream carries no ``xtime``
+    THE SEAM, MEASURED: the port's history stream carries no ``xtime``
     variable.  It is a product stream and its valid time lives in its file
     NAME and in the run receipt beside it.  This reads the variable when a
     stream grows one and returns ``None`` otherwise, so the caller states the

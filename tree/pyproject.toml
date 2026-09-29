@@ -38,7 +38,7 @@ name = "gpuwm-hex"
 # partition-invariant, but it has no door, no demo, and no re-proof at the
 # current engine pin, so it is not what a version number should be sold on.
 # Numbers are not reserved here any more.  A minor bump names what shipped.
-version = "0.3.1"
+version = "0.3.2"
 description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.1 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -104,24 +104,20 @@ license-files = ["LICENSE", "NOTICE"]
 # 16" survived here even in the edit that called it out.  Read the counts off
 # `engine_pin.PUBLISHED_ENGINES`, which is machine-written.
 #
-# THE FLOOR IS 2.7.4 AND THE RANGE ADMITS NOTHING ELSE (re-measured
-# 2026-09-15, verification/engine-verdicts/repin-274-20260915.json).  The
-# engine published 2.7.4 on 2026-09-13; measured against the manifest the
-# 0.3.0 candidate carried (premeasure-274-20260915.json) it fails by two
-# files, `gpuwm/config.py` and `gpuwm/core/microphysics.py`, and the other
-# fourteen are byte-identical between the published 2.7.3 and 2.7.4 wheels,
-# so the `<2.7.4` ceiling held installs on 2.7.3 for the two days between
-# the 2.7.4 publish and this re-pin.  This port then re-pinned its manifest
-# to the published 2.7.4 wheel's bytes; because the `moved` column is
-# measured AGAINST the manifest, 2.7.3 now fails it by those two files and
-# every earlier engine fails it by exactly the count it failed the 2.7.3
-# manifest by (the two files were already in every one of their lists:
-# 2.6.x by eleven, 2.7.0 through 2.7.2 by eight).  The ceiling now sits at
-# 2.7.5, the first engine nobody has measured.  The range is one version
-# wide because one version carries the pinned bytes, and for no other
-# reason: if it were yanked, `engine_pin` raises EnginePinError rather than
-# loosening the bound, because widening it means measuring something that
-# passes.
+# THE FLOOR IS 2.8.0 AND THE RANGE ADMITS NOTHING ELSE (re-measured
+# 2026-09-29, verification/engine-verdicts/repin-280-20260929.json).  The
+# engine published 2.7.5, 2.7.6, 2.7.7 and 2.8.0 while this port pinned
+# 2.7.4; measured against that manifest (premeasure-280-20260929.json) all
+# four fail, 2.8.0 by eight files, so the `<2.7.5` ceiling held installs on
+# 2.7.4 until this re-pin.  This port then re-pinned its manifest to the
+# published 2.8.0 wheel's bytes (tag 0164ae0f, which agrees with all three
+# platform wheels); because the `moved` column is measured AGAINST the
+# manifest, 2.7.4 now fails it by those eight and every earlier engine by
+# the count the table records.  The ceiling now sits at 2.8.1, the first
+# engine nobody has measured.  The range is one version wide because one
+# version carries the pinned bytes, and for no other reason: if it were
+# yanked, `engine_pin` raises EnginePinError rather than loosening the
+# bound, because widening it means measuring something that passes.
 #
 # Two earlier findings are kept in the table and no longer reach the floor,
 # since 2.5.5 and 2.5.6 now fail on bytes before either applies: 2.5.5 is a
@@ -154,15 +150,15 @@ license-files = ["LICENSE", "NOTICE"]
 # against a clean PyPI install of 2.5.8, `engine_pin.inspect_seam` reports
 # checked=16, matched=16, moved=(), absent=().  The two front doors (init,
 # render) never needed a checkout -- they import no gpuwm and drive Rust
-# binaries instead.  RETIRING THE CHECKOUT REQUIREMENT IS NOT DONE HERE:
-# `engine_pin.remedy()`, the door's refusal text and README still tell a user
-# to clone, and that sweep belongs with the forecast door, not the pin.  This
-# comment records the measurement so the next reader does not repeat it.
+# binaries instead.  0.3.2 retired the checkout requirement on that
+# measurement: the forecast door defaults to the installed engine and
+# `engine_pin.remedy()` names the pip line, with a clone only as the option
+# that makes receipts name a commit.
 dependencies = [
     "numpy>=2.0",
     "netCDF4>=1.6",
     "scipy>=1.11",
-    "gpuwm>=2.7.4,<2.7.5",
+    "gpuwm>=2.8.0,<2.8.1",
 ]
 # Search terms, which is what a keyword is: the words somebody types into
 # PyPI when they are looking for this kind of thing.  `MPAS` is here as a
@@ -220,7 +216,7 @@ Repository = "https://github.com/FahrenheitResearch/gpuwm-hex"
 gpu-cu12 = ["cupy-cuda12x[ctk]>=14.0"]
 gpu-cu13 = ["cupy-cuda13x[ctk]>=14.0"]
 #
-# THE ALIAS FOLLOWS THE RUNTIME FLOOR, and did not before.  Ledger #379.
+# THE ALIAS FOLLOWS THE RUNTIME FLOOR, and did not before.  The wheel-reach defect.
 # `hexcore.cuda_backend.runtime.require_cuda` refuses any CUDA runtime
 # below 13000 and EVERY GPU door in this port goes through it, so the CUDA-13
 # wheel is the only one this distribution can execute on.  While this alias
@@ -276,7 +272,7 @@ dev = ["pytest>=8.0", "setuptools>=77"]
 #
 # It was never cheap, which is why it took a ruling rather than a tidy-up:
 # this tree pins its OWN files by path and by SHA-256 -- the frozen execution
-# set in tools/run_cuda_v841_full_physics_x4.py, the regional kernel set in
+# set in src/hexcore/drivers/run_cuda_v841_full_physics_x4.py, the regional kernel set in
 # hexcore.cuda_backend.regional_admission, and the proof-guard fixtures -- so
 # moving the directory moves every pinned path AND every pinned digest,
 # including the digest of the module holding the table.  Re-deriving those
@@ -292,23 +288,18 @@ dev = ["pytest>=8.0", "setuptools>=77"]
 # with no fetch path, and nothing between the user and a mid-run CuPy death
 # told them their card was too small.  Since then the footprint became a
 # measured row -- 5,016.5 MiB + 98,748 B/cell at the merged tip
-# (evidence/memory-row-refit-20260826/node2/; the 40,962-cell global mesh
+# (evidence/memory-row-refit-20260826/; the 40,962-cell global mesh
 # peaks at 8,874 MiB, inside a 12 GiB card) -- the registry made mesh+static
 # explicit table work, and `hexcore.forecast_door` answers admission from
 # `hexcore.device_admission` (the ONE surface) and refuses BEFORE a run
 # starts rather than after it dies.  The row of record lives in that module
 # and its test, never in this comment: quote the surface, not this text.
 #
-# What has NOT changed, and is a named refusal rather than a silent failure:
-# the lane still needs the gpuwm-hex SOURCE CHECKOUT (the drivers live in
-# tools/, outside this wheel, because they verify their own executing modules
-# by SHA-256) and a gpuwm GIT CHECKOUT at the pinned commit.  The SECOND
-# reason moved at 2.5.8 and the text moved with it: it is no longer a pinned
-# path the wheel cannot reach (all sixteen resolve from site-packages there,
-# see the dependency note above) but provenance -- the proof harness writes
-# the checkout's HEAD, tree and dirty paths into every receipt so the
-# executed bytes can be named by commit, and an install has no commit.  The
-# door names both by name, and `gpuwm-hex doctor` reports the same two gaps.
+# Since 0.3.2 the forecast runs from this wheel alone.  Its drivers ship in
+# the package (hexcore/drivers/), so no gpuwm-hex checkout is needed, and the
+# seam defaults to the installed gpuwm, whose sixteen pinned files all
+# resolve from site-packages; the run names an install by its version and
+# pip's RECORD digest where it names a gpuwm clone by its commit.
 gpuwm-hex = "hexcore.cli:main"
 
 [tool.setuptools.packages.find]
@@ -320,22 +311,10 @@ where = ["src"]
 # the directory name to be a valid identifier.  There is no sibling under
 # src/ today; the anchor is what keeps that true when one appears.
 include = ["hexcore", "hexcore.*"]
-# ...and one anchored EXCLUSION, applied after the include.
-#
-# `hexcore.mod` is the sibling column-physics backend: a second adapter
-# and a second source manifest that pin a seam living on a private branch
-# with no remote, on one machine.  Nothing about it may reach a published
-# artefact -- not the adapter, not the manifest, not the digests it pins.
-# A directory is the unit setuptools can exclude (there is no way to drop a
-# single MODULE from a package), which is why that lane is a subpackage
-# rather than two files beside the rest of the port.
-#
-# THE BREAKAGE THIS PREVENTS: a wheel or an sdist carrying the pin of a
-# private branch -- its branch name, its commit, and the SHA-256 of files
-# nobody outside this machine can obtain -- published to PyPI, where it
-# cannot be recalled. `tests/mod/test_mod_seam.py` runs the real
-# discovery against this declaration and fails if the exclusion stops
-# working.
+# ...and one anchored EXCLUSION, applied after the include: a `mod`
+# subpackage is never part of this distribution.  Further physics-backend
+# rows come from other distributions through the `gpuwm_hex.rows` entry-point
+# group (hexcore.physics_backend_admission), not from a subpackage here.
 exclude = ["hexcore.mod", "hexcore.mod.*"]
 
 [tool.setuptools.package-data]

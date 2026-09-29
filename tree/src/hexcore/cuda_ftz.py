@@ -64,7 +64,7 @@ V841_DISABLED_RECORDS_SHA256 = (
 PERFORMANCE_CONTROL_SCHEMA = "mpas-port.cuda-ftz-normalized-performance/v1"
 #: The proven-floor (sm_120) row of the per-architecture ceiling registry,
 #: kept under its historical name because archived sm_120 receipts and
-#: consumers bind it.  Per-architecture resolution (stale-guard audit #347,
+#: consumers bind it.  Per-architecture resolution (stale-guard audit,
 #: finding 8) lives in ``cuda_backend.arch_admission``: the validation and
 #: measurement paths below resolve the ceiling from the receipt fingerprint
 #: or the live device, and an architecture with no registered ceiling is
@@ -972,7 +972,7 @@ def build_mpas_ftz_binding(
         raise FtzContractError(
             "MPAS remaining-kernel fallback/mutation dispositions are false"
         )
-    # The ceiling is the ARCHITECTURE's registered row (audit #347,
+    # The ceiling is the ARCHITECTURE's registered row (stale-guard audit,
     # finding 8): 1.25 on sm_120, the recorded-deviation row on sm_86, a
     # named refusal for anything unregistered.
     declared_ceiling = _resolved_performance_ceiling(

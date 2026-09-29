@@ -1,6 +1,6 @@
 """Which C library produced a float32 artifact, measured rather than declared.
 
-THE BREAKAGE THIS PREVENTS, measured 2026-08-27 (#373).  The registered
+THE BREAKAGE THIS PREVENTS, measured 2026-08-27 (the libm-identity finding).  The registered
 vertical artifact carries ``dcEdge**2/12`` as numpy's SCALAR power, which calls
 the platform ``powf``.  ``powf`` is not required to be correctly rounded, and
 the two C libraries this program runs on do not round it the same way.  On the
@@ -120,7 +120,7 @@ KNOWN_SCALAR_POW_LIBMS: dict[str, dict[str, str]] = {
         "measured_date": "2026-08-27",
         "note": (
             "the library the registered vertical artifact of record was minted "
-            "on: evidence/parent-regen-20260827/node2/run-s01/"
+            "on: evidence/parent-regen-20260827/, run s01, "
             "s01.vertical.nc.receipt.json"
         ),
     },

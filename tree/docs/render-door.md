@@ -49,7 +49,7 @@ engine build.
 
 ## Delivered layout
 
-PNGs are filed at render time into the ruled tree, never flat:
+PNGs are filed at render time into a fixed tree, never flat:
 
 ```
 <--out>/<domain-token>/<product>/<valid-day>/<engine-filename>.png
@@ -102,7 +102,7 @@ Every refusal names the concrete breakage and the remedy:
   whatever *is* renderable and never refuse.
 * **Scratch inside the delivered tree** — see above.
 
-An honest engine `SKIPPED` (under `--products all`) is relayed per frame
+A genuine engine `SKIPPED` (under `--products all`) is relayed per frame
 and recorded in the manifest; only `FAILED` fails the run.
 
 ## Exit codes

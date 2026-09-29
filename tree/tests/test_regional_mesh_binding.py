@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
+DRIVERS = Path(__file__).resolve().parents[1] / "src" / "hexcore" / "drivers"
 
 REFERENCE_DIR_VARIABLE = "GPUWM_HEX_REGIONAL_REFERENCE_DIR"
 
@@ -28,7 +29,7 @@ REFERENCE_DIR_VARIABLE = "GPUWM_HEX_REGIONAL_REFERENCE_DIR"
 def _load_binding() -> object:
     name = "_test_regional_mesh_binding_module"
     sys.modules.pop(name, None)
-    spec = importlib.util.spec_from_file_location(name, TOOLS / "mpas_mesh_binding.py")
+    spec = importlib.util.spec_from_file_location(name, DRIVERS / "mpas_mesh_binding.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module

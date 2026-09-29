@@ -28,17 +28,14 @@ kept with the receipts.
 |---|---|
 | intermediate writer | `met_intermediate`, exe sha256 `b8546fa940004759...`, from the `gpuwm` grid-uniformity work that reached its 2.5.0 release line. This build refuses projected/Gaussian grids by name and carries type-151 ordinal soil; the pre-existing build silently minted Lambert grids as uniform lat-lon and is retired. |
 | init door + engine | `gpuwm-hex init`, native-free road, at this tree; engine `rw_mpas_init` sha256 `00321d208371147b...`. The exe digests are the instrument identity — a rebuild that moves them is a different instrument. |
-| mesh/static pair | `x1.40962` — grid sha256 `9a9e1909a755...` (56,039,332 B), static sha256 `cf1a47d41683...` (94,766,584 B), byte-verified against the registry pins in `tools/mpas_mesh_binding.py`. The #330 unified-writer re-registration landed for `v15.150.38857` only; x1.40962's registration is unchanged, so these rows ride the current registration (which carries the known antipodal-GWD-band statics defect — a constant of every row, not a source variable). `v15` is excluded: it has a pre-existing step-0 FloatingPointError with any static (bisected upstream, not statics- or source-related). |
+| mesh/static pair | `x1.40962` — grid sha256 `9a9e1909a755...` (56,039,332 B), static sha256 `cf1a47d41683...` (94,766,584 B), byte-verified against the registry pins in `src/hexcore/drivers/mpas_mesh_binding.py`. The unified static writer unified-writer re-registration landed for `v15.150.38857` only; x1.40962's registration is unchanged, so these rows ride the current registration (which carries the known antipodal-GWD-band statics defect — a constant of every row, not a source variable). `v15` is excluded: it has a pre-existing step-0 FloatingPointError with any static (bisected upstream, not statics- or source-related). |
 | forecast | `tools/run_cuda_v841_forecast_mesh.py --mesh x1.40962`, dt 120 s, 5 composite steps, 2 history frames, `--stop-on-refusal`, arwen checkout pinned 0d04db71, the proving node (RTX 5070 Ti) |
-| vertical | `verification/vertical-specs/tc55-v1.json` (native 55-level tc contract) for every row — the vertical is held constant so the rows vary the SOURCE only.  Capsule mode remains the proven lineage for the x4 native pin (acid test of record, receipt `evidence/init-door/`, 2026-08-20); at x1 the only green road is native-free, because the sole existing x1 capsule predates the schema-completion work and lacks the init carriers the forecast driver demands. |
+| vertical | `verification/vertical-specs/tc55-v1.json` (native 55-level tc contract) for every row — the vertical is held constant so the rows vary the SOURCE only.  Capsule mode remains the proven lineage for the x4 native pin (acid test of record, 2026-08-20); at x1 the only green road is native-free, because the sole existing x1 capsule predates the schema-completion work and lacks the init carriers the forecast driver demands. |
 
-Per-leg receipts are named `evidence/source-matrix/<source>/` (init
-provenance, vertical receipt, mesh-bind receipt, forecast receipt), with one
-met_intermediate receipt or verbatim refusal per source beside them. Those
-receipt files are not carried in this repository — see
-receipt `../evidence/EVIDENCE.md` for why, and for how to
-ask for a specific one. Every verdict quoted in the tables below is reproduced
-verbatim here, so the table is readable without them.
+Each leg wrote an init provenance, a vertical receipt, a mesh-bind receipt
+and a forecast receipt, with one met_intermediate receipt or verbatim refusal
+per source. Every verdict quoted in the tables below is reproduced verbatim
+here, so the table is readable on its own.
 
 The one authored table this matrix required, `Vtable.ECMWF-OD.rw`, is in
 the repository at `vtables/Vtable.ECMWF-OD.rw`. It is a repository asset

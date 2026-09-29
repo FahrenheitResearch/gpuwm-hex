@@ -32,7 +32,6 @@ import datetime as _dt
 import hashlib
 import json
 import os
-import platform
 import re
 import shutil
 import struct
@@ -387,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     document = {
         "schema": "mpas-port.nvrtc-reciprocal-effect/v1",
         "generated": _dt.datetime.now().isoformat(timespec="seconds"),
-        "host": platform.node(),
+        "host": __import__("hexcore.host_identity", fromlist=["host_record"]).host_record(),
         "device": {
             "name": device_name,
             "sm": f"sm_{properties['major']}{properties['minor']}",

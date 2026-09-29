@@ -33,11 +33,11 @@ from hexcore.partition_assets_v841 import (  # noqa: E402
 )
 
 # The per-partition memory sanity line answers from the ONE admission
-# surface (rerouted 2026-08-25, stale-guard audit #347 finding 5): the
+# surface (rerouted 2026-08-25, stale-guard audit finding 5): the
 # retired 22 GiB whole-mesh constant scaled linearly with no fixed term,
 # the shape the L6 floor re-derivation retired.  The projection below is
 # the measured converged row applied to the largest partition's local cell
-# count -- a DECLARED DERIVATION (no 2-GPU #264 row exists at the
+# count -- a DECLARED DERIVATION (no 2-GPU per-allocation ledger row exists at the
 # converged pin), printed with that label.
 from hexcore.device_admission import (  # noqa: E402
     MIB,

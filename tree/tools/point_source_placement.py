@@ -1,69 +1,55 @@
 #!/usr/bin/env python3
-"""Place a point-source table inside a control leg's OWN supercooled liquid.
+"""Place a tracer release line upwind of a chosen target, in a leg's own wind.
 
-WHY THIS FILE EXISTS.  A seeded pair (``gpuwm-hex pair`` with ``--source-table``)
-answers "what did the model do differently when this table was applied?", and
-the answer is exactly zero whenever the table's release line sits in air the
-model holds no supercooled liquid in.  That happened twice on 2026-09-02: the
-first 3.75 km placement went to a reflectivity cluster the model kept dry
-(every weather-field difference 0.0), and the 937.5 m global run released into
-warm cumulus because the core held no supercooled liquid in the window.  Both
-pairs ran, closed their ledgers and taught nothing about the response.  The
-placement that DID respond was authored from the control leg's own cloud
-census -- inside the supercooled water and upwind of it, so the wind carried
-the plume through.  This tool is that census and that placement as one
-program, so the next pair does not re-derive it in a shell loop.
+WHY THIS FILE EXISTS.  A paired run (``gpuwm-hex pair`` with
+``--source-table``) runs one forecast twice, a control leg and a treatment
+leg that is the same request plus a point-source table, and answers "what
+did the model do differently when this tracer was released?".  A release the
+model's own wind never carries over the region the question is about gives a
+treatment leg that differs from its control nowhere that matters, and the
+pair teaches nothing.  This tool reads the control leg's own wind at a
+target the user names and places the release line upwind of it, so the
+plume arrives when and where the question is asked.  How the target is
+chosen is the user's decision and is not encoded here.
 
 WHAT IT READS.  The history frames of a finished leg (``cuda-history.*.nc``,
-the forecast door's own output: ``qc``, ``theta``, ``pressure``, ``u_zonal``,
-``v_meridional``), the grid (``latCell``, ``lonCell``) and the init
-(``zgrid``, the converter's only source of heights).  A cell is SUPERCOOLED
-LIQUID when it holds cloud water above ``QC_MIN`` at a temperature below 0 C.
+the forecast door's own output: ``u_zonal``, ``v_meridional``), the grid
+(``latCell``, ``lonCell``) and the init (``zgrid``, the converter's only
+source of heights).
 
-THREE COMMANDS.
-
-``census``
-    Per frame, inside ``--radius-km`` of the core centre: how many cells and
-    columns hold supercooled liquid, the temperature and height bands, the
-    qc-weighted centroid and the qc-weighted wind there.  The screening
-    answer: is there anything to seed, and when.
+TWO COMMANDS.
 
 ``place``
-    Bins the supercooled cells of the named frames (inside ``--alt-band``)
-    into 0.05-degree columns and scores every north-south segment of
-    ``LINE_LENGTH_DEG`` by the cells it and its two neighbouring columns hold;
-    the densest segment within ``--max-km`` of the centre is the TARGET.  The
-    line altitude is the qc-weighted height of the supercooled water in that
-    segment (or ``--alt-m``, when the per-level profile the command prints
-    argues for a colder level), the wind is the qc-weighted wind there, and
-    the line is the target shifted UPWIND by ``--lead-min`` of that wind.  The
-    placed line and the target are then CHECKED against every frame at that
-    altitude: supercooled fraction along the line, temperature range, wind.
+    For ``--target LAT LON`` at ``--alt-m`` metres: the wind at the nearest
+    cell and level, averaged over the named frames; the line is the target
+    shifted UPWIND by ``--lead-min`` of that wind, with the target centred
+    on it north to south.  The placed line is then read against every frame
+    at that altitude: the wind along it, and how far that wind carries a
+    release in the lead time.
 
 ``table``
-    Writes the table for one explicit line in the proven pass structure:
-    three north-south passes along one longitude, five waypoints 180 s apart
-    (0.1-degree steps, about 44 km), the last waypoint of each pass ``on=0``,
-    passes 21 minutes apart, ``--rate`` particles per second, 54 minutes from
-    ``--release``.  Epoch seconds count from 2017-01-01T00:00Z, the engine's
-    own point-source epoch.
+    Writes the table for one explicit line in a fixed pass structure: three
+    north-south passes along one longitude, five waypoints 180 s apart
+    (0.1-degree steps, about 44 km), the last waypoint of each pass
+    ``on=0``, passes 21 minutes apart, ``--rate`` particles per second, 54
+    minutes from ``--release``.  Epoch seconds count from 2017-01-01T00:00Z,
+    the engine's own point-source epoch.
 
-Everything ``census`` and ``place`` report is a MODEL RESULT of the control
-leg: what this model held in these frames.  It is not a measurement of the
+Everything ``place`` reports is a MODEL RESULT of the control leg: what this
+model's wind was in these frames.  It is not a measurement of the
 atmosphere.  The table this tool writes is a SYNTHETIC release line authored
 for a paired experiment; no real programme, operator or operation is
 represented, and the file says so on its first lines.
 
 Usage::
 
-    python tools/point_source_placement.py census --leg-out OUT --grid G --init I [--json F]
-    python tools/point_source_placement.py place  --leg-out OUT --grid G --init I \\
-        --frames STAMP,STAMP[,...] --json F [--alt-m Z] [--lead-min 30]
-    python tools/point_source_placement.py table  --lat0 L --lon LON --alt-m Z \\
+    python tools/point_source_placement.py place --leg-out OUT --grid G --init I \\
+        --target LAT LON --alt-m Z --frames STAMP[,STAMP...] --json F [--lead-min 30]
+    python tools/point_source_placement.py table --lat0 L --lon LON --alt-m Z \\
         --release YYYY-MM-DD_HH:MM:SS --out TABLE.txt [--note TEXT ...]
 
-numpy and netCDF4 are imported inside ``census`` and ``place`` only, so
-``table`` and ``--help`` work on a box with no scientific stack.
+numpy and netCDF4 are imported inside ``place`` only, so ``table`` and
+``--help`` work on a box with no scientific stack.
 """
 
 from __future__ import annotations
@@ -81,7 +67,6 @@ __all__ = [
     "EPOCH",
     "LINE_LENGTH_DEG",
     "PASS_GAP_SECONDS",
-    "QC_MIN",
     "RATE_DEFAULT",
     "WAYPOINT_GAP_SECONDS",
     "build_parser",
@@ -95,10 +80,7 @@ __all__ = [
 #: The point-source epoch: the engine counts release seconds from here.
 EPOCH = _dt.datetime(2017, 1, 1)
 
-#: Cloud water above this is cloud; below it is the scheme's own residue.
-QC_MIN = 1.0e-6
-
-#: The proven pass structure (the 2026-09-02 3.75 km pair, run 2).
+#: The pass structure the ``table`` command writes.
 LINE_LENGTH_DEG = 0.4
 WAYPOINTS = 5
 WAYPOINT_GAP_SECONDS = 180.0
@@ -106,7 +88,6 @@ PASS_GAP_SECONDS = 21 * 60.0
 PASSES = 3
 RATE_DEFAULT = 8.5e13
 
-RD, CP, P0 = 287.0, 1004.5, 1.0e5
 EARTH_RADIUS_KM = 6371.229
 METRES_PER_DEGREE = 111_000.0
 
@@ -124,7 +105,7 @@ def epoch_seconds(when: _dt.datetime) -> float:
 
 def table_rows(lat0: float, lon: float, alt_m: float, release: _dt.datetime,
                rate: float = RATE_DEFAULT) -> list[tuple[float, float, float, float, int, float, int]]:
-    """The fifteen waypoints of the proven pass structure, in release order.
+    """The fifteen waypoints of the pass structure, in release order.
 
     Pass 1 runs south to north from ``lat0``, pass 2 north to south, pass 3
     south to north again; the fifth waypoint of every pass carries ``on=0``
@@ -214,206 +195,87 @@ class _Leg:
         if not self.frames:
             raise SystemExit("no %s*.nc under %s" % (HISTORY_PREFIX, leg_out))
 
-    def read(self, path: str):
-        """qc, T [K], u, v as (nCells, nVertLevels) arrays; u and v None when absent."""
+    def wind(self, path: str):
+        """u and v as (nCells, nVertLevels) arrays."""
         import netCDF4
         with netCDF4.Dataset(path) as ds:
-            qc = _cell_major(ds.variables["qc"])
-            theta = _cell_major(ds.variables["theta"])
-            pressure = _cell_major(ds.variables["pressure"])
-            u = _cell_major(ds.variables["u_zonal"]) if "u_zonal" in ds.variables else None
-            v = _cell_major(ds.variables["v_meridional"]) if "v_meridional" in ds.variables else None
-        temperature = theta * (pressure / P0) ** (RD / CP)
-        return qc, temperature, u, v
+            missing = [n for n in ("u_zonal", "v_meridional") if n not in ds.variables]
+            if missing:
+                raise SystemExit("%s carries no %s; the placement reads the leg's own wind"
+                                 % (path, ", ".join(missing)))
+            return _cell_major(ds.variables["u_zonal"]), _cell_major(ds.variables["v_meridional"])
 
-
-# --------------------------------------------------------------------------
-# census
-# --------------------------------------------------------------------------
-
-def run_census(args: argparse.Namespace) -> int:
-    import numpy as np
-    leg = _Leg(args.leg_out, args.grid, args.init)
-    clat, clon = args.center
-    core = _haversine_km(leg.lat, leg.lon, clat, clon) <= args.radius_km
-    print("core cells within %.0f km of %.3f %.3f: %d of %d"
-          % (args.radius_km, clat, clon, int(core.sum()), core.size))
-    print("frame | slw cells | slw cols | qc_max slw | T range C | z 10-90% m | "
-          "slw-wtd lat lon z | u v at wtd | tot qc cols")
-    rows = []
-    for path in leg.frames:
-        qc, T, u, v = leg.read(path)
-        label = _frame_label(path)
-        slw = (qc > QC_MIN) & (T < 273.15) & core[:, None]
-        anyqc = (qc > QC_MIN) & core[:, None]
-        row: dict[str, Any] = {
-            "frame": label, "slw_cells": int(slw.sum()),
-            "slw_cols": int(slw.any(axis=1).sum()), "qc_cols": int(anyqc.any(axis=1).sum()),
-        }
-        if slw.any():
-            # the frames store qc as float32; the weights are summed in float64 so
-            # the centroid does not carry the float32 accumulation's 1e-7
-            w = qc[slw].astype(np.float64)
-            z = leg.zmid[slw]
-            t = T[slw] - 273.15
-            ci, _ = np.nonzero(slw)
-            row.update(
-                qc_max=float(w.max()), T_min=float(t.min()), T_max=float(t.max()),
-                z10=float(np.percentile(z, 10)), z90=float(np.percentile(z, 90)),
-                wlat=float(np.sum(w * leg.lat[ci]) / w.sum()),
-                wlon=float(np.sum(w * leg.lon[ci]) / w.sum()),
-                wz=float(np.sum(w * z) / w.sum()),
-            )
-            if u is not None and v is not None:
-                row.update(u=float(np.sum(w * u[slw]) / w.sum()),
-                           v=float(np.sum(w * v[slw]) / w.sum()))
-            print("%s | %9d | %8d | %.2e | %6.1f..%5.1f | %6.0f-%6.0f | %8.3f %9.3f %6.0f | "
-                  "%5.1f %5.1f | %d" % (
-                      label, row["slw_cells"], row["slw_cols"], row["qc_max"], row["T_min"],
-                      row["T_max"], row["z10"], row["z90"], row["wlat"], row["wlon"], row["wz"],
-                      row.get("u", float("nan")), row.get("v", float("nan")), row["qc_cols"]))
-        else:
-            print("%s | %9d | %8d |    none  |            |             |"
-                  "                        |            | %d" % (label, 0, 0, row["qc_cols"]))
-        rows.append(row)
-    if args.json:
-        with open(args.json, "w") as handle:
-            json.dump(rows, handle, indent=1)
-    return 0
+    def nearest(self, lat: float, lon: float, alt_m: float) -> tuple[int, int]:
+        import numpy as np
+        cell = int(np.argmin(_haversine_km(self.lat, self.lon, lat, lon)))
+        level = int(np.argmin(np.abs(self.zmid[cell] - alt_m)))
+        return cell, level
 
 
 # --------------------------------------------------------------------------
 # place
 # --------------------------------------------------------------------------
 
-def _check_line(leg: _Leg, data: dict, lat_a: float, lat_b: float, lon_c: float,
-                alt_m: float) -> dict[str, dict[str, float]]:
-    """The nearest cell to each of 21 points along the line, at the level nearest alt_m."""
+def _check_line(leg: _Leg, winds: dict, lat_a: float, lat_b: float, lon_c: float,
+                alt_m: float, lead_seconds: float) -> dict[str, dict[str, float]]:
+    """The wind at 21 points along the line, per frame, and how far it carries a release."""
     import numpy as np
     points = np.linspace(lat_a, lat_b, 21)
-    cells = np.array([int(np.argmin(_haversine_km(leg.lat, leg.lon, la, lon_c))) for la in points])
-    levels = np.array([int(np.argmin(np.abs(leg.zmid[c] - alt_m))) for c in cells])
+    picks = [leg.nearest(float(la), lon_c, alt_m) for la in points]
+    cells = np.array([c for c, _ in picks])
+    levels = np.array([k for _, k in picks])
     out = {}
-    for label in sorted(data):
-        qc, T, u, v = data[label]
-        q = qc[cells, levels]
-        t = T[cells, levels] - 273.15
-        slw = (q > QC_MIN) & (t < 0)
-        row = {"slw_frac": float(slw.mean()), "cloud_frac": float((q > QC_MIN).mean()),
-               "T_min": float(t.min()), "T_max": float(t.max()), "qc_max": float(q.max()),
-               "z_level_m": float(leg.zmid[cells, levels].mean())}
-        if u is not None and v is not None:
-            row["u"] = float(u[cells, levels].mean())
-            row["v"] = float(v[cells, levels].mean())
-        out[label] = row
+    for label in sorted(winds):
+        u, v = winds[label]
+        uu = u[cells, levels].astype(np.float64)
+        vv = v[cells, levels].astype(np.float64)
+        speed = np.hypot(uu, vv)
+        out[label] = {"u": float(uu.mean()), "v": float(vv.mean()),
+                      "speed_min": float(speed.min()), "speed_max": float(speed.max()),
+                      "carry_km": float(speed.mean() * lead_seconds / 1000.0),
+                      "z_level_m": float(leg.zmid[cells, levels].mean())}
     return out
 
 
 def run_place(args: argparse.Namespace) -> int:
     import numpy as np
     leg = _Leg(args.leg_out, args.grid, args.init)
-    clat, clon = args.center
     wanted = [s for s in args.frames.split(",") if s]
-    data = {}
-    for path in leg.frames:
-        data[_frame_label(path)] = leg.read(path)
-    missing = [s for s in wanted if s not in data]
+    by_label = {_frame_label(path): path for path in leg.frames}
+    missing = [s for s in wanted if s not in by_label]
     if missing:
         raise SystemExit("frames not under %s: %s (have %s)" % (
-            args.leg_out, ", ".join(missing), ", ".join(sorted(data))))
-    zlo, zhi = args.alt_band
-    band = (leg.zmid >= zlo) & (leg.zmid <= zhi)
-
-    # (1) score every candidate segment on the placement frames
-    bins_lat = np.arange(clat - 1.5, clat + 1.5 + 1e-9, 0.05)
-    bins_lon = np.arange(clon - 1.5, clon + 1.5 + 1e-9, 0.05)
-    hist = np.zeros((len(bins_lat) - 1, len(bins_lon) - 1))
-    for label in wanted:
-        qc, T, _, _ = data[label]
-        ci, _ = np.nonzero((qc > QC_MIN) & (T < 273.15) & band)
-        h, _, _ = np.histogram2d(leg.lat[ci], leg.lon[ci], bins=[bins_lat, bins_lon])
-        hist += h
-    nlat = int(round(LINE_LENGTH_DEG / 0.05))
-    best = None
-    for j in range(1, hist.shape[1] - 1):
-        column = hist[:, j - 1:j + 2].sum(axis=1)
-        for i in range(0, hist.shape[0] - nlat):
-            lat0 = float(bins_lat[i])
-            lonc = float(bins_lon[j] + 0.025)
-            if _haversine_km(lat0 + LINE_LENGTH_DEG / 2, lonc, clat, clon) > args.max_km:
-                continue
-            score = float(column[i:i + nlat + 1].sum())
-            if best is None or score > best[0]:
-                best = (score, round(lat0, 3), round(lonc, 3))
-    if best is None or best[0] <= 0:
-        raise SystemExit("no supercooled liquid in %s within %.0f km of %.3f %.3f between "
-                         "%.0f and %.0f m: nothing to place" % (
-                             args.frames, args.max_km, clat, clon, zlo, zhi))
-    score, lat0, lonc = best
-    lat1 = round(lat0 + LINE_LENGTH_DEG, 3)
-
-    # (2) altitude, wind and temperature of the supercooled water in the target
-    segment = ((leg.lat >= lat0 - 0.05) & (leg.lat <= lat1 + 0.05)
-               & (np.abs(leg.lon - lonc) <= 0.075))
-    wsum = zs = us = vs = ts = 0.0
-    profile = []
-    for label in wanted:
-        qc, T, u, v = data[label]
-        slw = (qc > QC_MIN) & (T < 273.15) & band & segment[:, None]
-        w = qc[slw].astype(np.float64)
-        wsum += float(w.sum())
-        zs += float((w * leg.zmid[slw]).sum())
-        ts += float((w * (T[slw] - 273.15)).sum())
-        if u is not None and v is not None:
-            us += float((w * u[slw]).sum())
-            vs += float((w * v[slw]).sum())
-        per_level = ((qc > QC_MIN) & (T < 273.15) & segment[:, None]).sum(axis=0)
-        profile.append({"frame": label, "slw_cells_per_level": [int(n) for n in per_level],
-                        "z_mean_m": [float(z) for z in leg.zmid[segment].mean(axis=0)],
-                        "T_mean_C": [float(t) for t in (T[segment].mean(axis=0) - 273.15)]})
-    weighted_alt = float(round(zs / wsum / 100.0) * 100.0)
-    alt = float(args.alt_m) if args.alt_m is not None else weighted_alt
-    uu, vv, tw = us / wsum, vs / wsum, ts / wsum
+            args.leg_out, ", ".join(missing), ", ".join(sorted(by_label))))
+    winds = {label: leg.wind(path) for label, path in by_label.items()}
+    lat_t, lon_t = args.target
+    cell, level = leg.nearest(lat_t, lon_t, args.alt_m)
+    u_t = float(np.mean([winds[s][0][cell, level] for s in wanted]))
+    v_t = float(np.mean([winds[s][1][cell, level] for s in wanted]))
     lead = args.lead_min * 60.0
-    dlat, dlon = upwind_shift(lat0 + LINE_LENGTH_DEG / 2, uu, vv, lead)
-    line_lon = round(lonc + dlon, 2)
-    line_lat0 = round(lat0 + dlat, 3)
+    dlat, dlon = upwind_shift(lat_t, u_t, v_t, lead)
+    line_lon = round(lon_t + dlon, 2)
+    line_lat0 = round(lat_t + dlat - LINE_LENGTH_DEG / 2, 3)
     line_lat1 = round(line_lat0 + LINE_LENGTH_DEG, 3)
-
     result = {
-        "placement_frames": wanted, "alt_band_m": [zlo, zhi],
-        "segment_score_slw_cells": score,
-        "target_segment": {"lat0": lat0, "lat1": lat1, "lon": lonc, "alt_m_weighted": weighted_alt,
-                           "T_wtd_C": tw, "u": uu, "v": vv},
-        "target_profile": profile,
+        "placement_frames": wanted,
+        "target": {"lat": lat_t, "lon": lon_t, "alt_m": float(args.alt_m),
+                   "cell": cell, "level": level, "z_level_m": float(leg.zmid[cell, level]),
+                   "u": u_t, "v": v_t},
         "lead_min": args.lead_min,
-        "line": {"lat0": line_lat0, "lat1": line_lat1, "lon": line_lon, "alt_m": alt,
-                 "alt_source": "explicit --alt-m" if args.alt_m is not None else "qc-weighted"},
-        "check_line": _check_line(leg, data, line_lat0, line_lat1, line_lon, alt),
-        "check_target": _check_line(leg, data, lat0, lat1, lonc, alt),
+        "line": {"lat0": line_lat0, "lat1": line_lat1, "lon": line_lon, "alt_m": float(args.alt_m)},
+        "check_line": _check_line(leg, winds, line_lat0, line_lat1, line_lon, args.alt_m, lead),
         "result_sentence": "a model result of the control leg, not evidence about the atmosphere",
     }
     with open(args.json, "w") as handle:
         json.dump(result, handle, indent=1)
-    print("target segment: %.3f-%.3f N at %.3f E, qc-weighted alt %.0f m, T_wtd %.1f C, "
-          "wind u %.1f v %.1f (score %.0f SLW cells)" % (lat0, lat1, lonc, weighted_alt, tw, uu, vv, score))
-    print("target profile (level: z_mean T_mean slw cells per placement frame)")
-    n_levels = len(profile[0]["z_mean_m"])
-    for k in range(n_levels):
-        if not (zlo - 500 <= profile[0]["z_mean_m"][k] <= zhi + 500):
-            continue
-        print("  k%02d %6.0f m %6.1f C  %s" % (
-            k, profile[0]["z_mean_m"][k], profile[0]["T_mean_C"][k],
-            "  ".join("%4d" % p["slw_cells_per_level"][k] for p in profile)))
-    print("line (%.0f min upwind): %.3f-%.3f N at %.2f E, alt %.0f m (%s)" % (
-        args.lead_min, line_lat0, line_lat1, line_lon, alt, result["line"]["alt_source"]))
-    for name in ("check_line", "check_target"):
-        print(name)
-        for label, row in result[name].items():
-            print("  %s slw %.2f cloud %.2f T %5.1f..%5.1f qc_max %.2e u %.1f v %.1f z %.0f" % (
-                label, row["slw_frac"], row["cloud_frac"], row["T_min"], row["T_max"],
-                row["qc_max"], row.get("u", float("nan")), row.get("v", float("nan")),
-                row["z_level_m"]))
+    print("target %.3f %.3f at %.0f m (cell %d, level %d): wind u %.1f v %.1f over %s"
+          % (lat_t, lon_t, args.alt_m, cell, level, u_t, v_t, ",".join(wanted)))
+    print("line (%.0f min upwind): %.3f-%.3f N at %.2f E, alt %.0f m" % (
+        args.lead_min, line_lat0, line_lat1, line_lon, args.alt_m))
+    for label, row in result["check_line"].items():
+        print("  %s u %.1f v %.1f speed %.1f..%.1f carries %.0f km in %.0f min z %.0f" % (
+            label, row["u"], row["v"], row["speed_min"], row["speed_max"],
+            row["carry_km"], args.lead_min, row["z_level_m"]))
     return 0
 
 
@@ -444,39 +306,25 @@ def run_table(args: argparse.Namespace) -> int:
 # CLI
 # --------------------------------------------------------------------------
 
-def _leg_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--leg-out", required=True, metavar="DIR",
-                        help="the leg output tree holding cuda-history.*.nc")
-    parser.add_argument("--grid", required=True, metavar="GRID.nc")
-    parser.add_argument("--init", required=True, metavar="INIT.nc")
-    parser.add_argument("--center", nargs=2, type=float, default=(35.0, -97.0),
-                        metavar=("LAT", "LON"), help="the fine core centre")
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    census = sub.add_parser("census", help="supercooled-liquid census of a leg, per frame")
-    _leg_arguments(census)
-    census.add_argument("--radius-km", type=float, default=100.0)
-    census.add_argument("--json", default=None, metavar="FILE")
-    census.set_defaults(run=run_census)
-
-    place = sub.add_parser("place", help="find the densest supercooled segment and shift it upwind")
-    _leg_arguments(place)
+    place = sub.add_parser("place", help="place a release line upwind of a target, in the leg's own wind")
+    place.add_argument("--leg-out", required=True, metavar="DIR",
+                       help="the leg output tree holding cuda-history.*.nc")
+    place.add_argument("--grid", required=True, metavar="GRID.nc")
+    place.add_argument("--init", required=True, metavar="INIT.nc")
+    place.add_argument("--target", nargs=2, type=float, required=True, metavar=("LAT", "LON"),
+                       help="where the plume should arrive")
+    place.add_argument("--alt-m", type=float, required=True,
+                       help="release altitude (m MSL); the wind is read at the nearest level")
     place.add_argument("--frames", required=True, metavar="STAMP,STAMP",
-                       help="frame stamps (as in cuda-history.<STAMP>.nc) the plume should arrive in")
-    place.add_argument("--max-km", type=float, default=60.0,
-                       help="the target segment centre stays within this of the core centre")
-    place.add_argument("--alt-band", nargs=2, type=float, default=(4500.0, 8000.0),
-                       metavar=("LO", "HI"), help="heights (m) the scan counts supercooled water in")
+                       help="frame stamps (as in cuda-history.<STAMP>.nc) whose wind is averaged")
     place.add_argument("--lead-min", type=float, default=30.0,
                        help="minutes of the target wind the line is shifted upwind by")
-    place.add_argument("--alt-m", type=float, default=None,
-                       help="release altitude (m MSL); default the qc-weighted height of the target")
     place.add_argument("--json", required=True, metavar="FILE")
     place.set_defaults(run=run_place)
 

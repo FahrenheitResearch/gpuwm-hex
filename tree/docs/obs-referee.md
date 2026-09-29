@@ -184,7 +184,7 @@ PYTHONPATH=src python tools/run_obs_referee.py validate \
 OBS_REFEREE_DATA_ROOT=/absolute/case-root \
 PYTHONPATH=src python tools/run_obs_referee.py run \
   verification/manifests/obs-referee-283.production.json \
-  --output /absolute/evidence/obs-referee-283-real
+  --output /absolute/out/obs-referee-real
 ```
 
 `not-measured` writes an explicit unrun record instead, with no fabricated
@@ -193,7 +193,7 @@ values, for the case where the artifacts do not exist:
 ```bash
 PYTHONPATH=src python tools/run_obs_referee.py not-measured \
   verification/manifests/obs-referee-283.production.json \
-  --output evidence/obs-referee-283 \
+  --output out/obs-referee \
   --reason "why nothing could be measured"
 ```
 

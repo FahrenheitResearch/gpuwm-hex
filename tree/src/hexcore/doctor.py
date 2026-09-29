@@ -13,17 +13,11 @@ The things that do the work do not:
   driver actually serves, so this module reads it and says;
 * the meshes and their static fields are external assets with no fetch
   path in this distribution;
-* the forecast lane runs inside a frozen proof harness that reads the
-  gpuwm checkout's GIT state -- HEAD, tree and dirty paths go into every
-  receipt -- so it needs a gpuwm git working tree on top of the installed
-  distribution.  That reason is not the old one and the difference
-  matters: until engine 2.5.7 the sixteen-file seam pin named
-  ``docs/mpas-seam.md``, which no wheel placed in site-packages, so an
-  install could not satisfy the pin at all.  2.5.8 ships that document
-  inside the wheel at the manifest's own key and all sixteen now resolve
-  from site-packages (measured 2026-08-28 against the wheel PyPI serves:
-  checked=16, matched=16, moved=(), absent=()).  What is left is
-  provenance, not a missing file.
+* the forecast runs on the installed gpuwm's sixteen pinned seam files,
+  which every engine from 2.5.8 carries in site-packages (measured
+  2026-08-28 against the wheel PyPI serves: checked=16, matched=16,
+  moved=(), absent=()); an older engine lacks ``docs/mpas-seam.md`` and
+  cannot satisfy the pin on its own.
 
 Every one of those is a place a fresh install meets a wall.  This module
 exists so the wall has a sign on it: each gap prints THE command that
@@ -41,7 +35,7 @@ Required means: a door this distribution advertises cannot open, or the
 install itself is wrong.  The three Python dependencies and the three
 engines are required in the first sense; an installed gpuwm whose seam
 bytes are not the ones this port pins is required in the second, and that
-clause is new.  CuPy, the gpuwm git checkout and the mesh assets are
+clause is new.  CuPy, the seam-source note and the mesh assets are
 reported and do not fail the process, because a user who only wants the
 render door should not be told the install is broken by the absence of a
 mesh.
@@ -663,7 +657,7 @@ def check_physics_seam() -> list[Finding]:
 
 
 def _check_checkout_reach() -> Finding:
-    """WHY the forecast lane still wants a gpuwm checkout, read off this install.
+    """Whether the installed gpuwm can serve as the forecast's seam source.
 
     THE BREAKAGE THIS SHAPE PREVENTS, measured 2026-08-28 on a virtualenv
     holding only the published 2.5.8 wheels: this finding was a CONSTANT
@@ -675,18 +669,15 @@ def _check_checkout_reach() -> Finding:
     outlives the defect it was written for, so this one is DERIVED from the
     same inspection the line above it prints.
 
-    What survives the engine's packaging fix is the driver's own
-    ``verify_arwen_checkout_git``: it records the checkout's HEAD, tree and
-    dirty paths into every receipt so the executed bytes can be named by
-    commit.  ``site-packages`` is not a git working tree and has no commit,
-    which is a REAL obstacle and not prose -- measured the same day, that
-    guard refuses an install root at ``git rev-parse --show-toplevel``.
-    Retiring it is a named follow-up, not a doc edit.
+    Since 0.3.2 the driver's ``verify_arwen_checkout_git`` names an
+    install by its version and pip's RECORD digest where it names a clone by
+    its commit, so an install that carries all sixteen paths IS the seam
+    source and no clone is asked for.
     """
 
     from . import engine_pin
 
-    subject = "gpuwm git checkout (the forecast lane only)"
+    subject = "gpuwm seam source (the forecast only)"
     tail = (
         "  The init and render doors need neither: they import no gpuwm and "
         "drive Rust binaries instead."
@@ -710,10 +701,9 @@ def _check_checkout_reach() -> Finding:
                 f"{count} of the {total} pinned paths "
                 f"{'is' if count == 1 else 'are'} not in this install "
                 f"({missing}), so the installed distribution "
-                "cannot satisfy the seam pin on its own.  The forecast lane "
-                f"needs a gpuwm source checkout at v{wanted}, which also "
-                "supplies the git state the run's proof harness records into "
-                "every receipt." + tail
+                "cannot satisfy the seam pin on its own.  Install gpuwm "
+                f"{wanted}, or pass a git clone of gpuwm at v{wanted} as "
+                "--gpuwm-checkout." + tail
             ),
             evidence={"absent": list(absent), "wanted": wanted},
         )
@@ -721,13 +711,11 @@ def _check_checkout_reach() -> Finding:
         subject=subject,
         status=INFO,
         detail=(
-            f"all {total} pinned paths resolve from this install, so the seam "
-            "pin no longer needs a source checkout.  The forecast lane still "
-            "asks for one, for a different reason: its proof harness records "
-            "the checkout's HEAD, tree and dirty paths into every receipt, "
-            "and an installed distribution has no commit, so a run driven "
-            "from site-packages could not name the bytes it executed.  Pass "
-            f"a git clone of gpuwm at v{wanted} as --gpuwm-checkout." + tail
+            f"all {total} pinned paths resolve from this install, so the "
+            "forecast runs on it with no --gpuwm-checkout and its receipts "
+            "name the install by version and pip's RECORD digest.  A git "
+            f"clone of gpuwm at v{wanted} passed as --gpuwm-checkout is "
+            "named by commit instead." + tail
         ),
         evidence={"absent": [], "wanted": wanted},
     )
@@ -782,7 +770,7 @@ def check_engines() -> list[Finding]:
                     f"{source}.  Without it {spec.what_breaks}.  "
                     f"Looked at: {engines.resolution_order(spec)}"
                 ),
-                remedy=engines.remedy(spec),
+                remedy=engines.chmod_remedy(source) or engines.remedy(spec),
                 required=True,
                 evidence={"resolution_order": engines.resolution_order(spec)},
             )

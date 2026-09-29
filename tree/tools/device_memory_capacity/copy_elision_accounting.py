@@ -43,7 +43,7 @@ fail loudly -- it produced a plausible fit verdict that was wrong, and exited
 0. Naming the model is what makes the answer readable. (And the same drift
 then bit this very text: until 2026-08-25 the "of record" arm below still
 named the 08-24 row after the converged row superseded it -- stale-guard
-audit #347, finding 7. A test now pins the of-record arm to
+audit, finding 7. A test now pins the of-record arm to
 device_admission.FLOOR_DERIVATION so the two cannot disagree again.)
 
 THERE IS NO AFFINE ROW OF RECORD ANY MORE, AND THIS TOOL CANNOT ASK THE
@@ -65,8 +65,8 @@ THE HISTORICAL MODELS. Pick by the arm you are reproducing:
   retired     --prior-fixed-mib 5016.5  --prior-bytes-per-cell 98748
   2026-08-27
               measured 2026-08-26, merged tip (hex 2009db7 + engine
-              26daaab7e), 170 SM card, both published meshes in one #264
-              session; evidence/memory-row-refit-20260826/node2/.
+              26daaab7e), 170 SM card, both published meshes in one per-allocation ledger
+              session; evidence/memory-row-refit-20260826/.
               RETIRED FOR SHAPE, not for provenance: it did not cover six of
               seventeen recorded runs and was 1,104 MiB short on a
               limited-area cull.  Computable at
@@ -76,7 +76,7 @@ THE HISTORICAL MODELS. Pick by the arm you are reproducing:
   (historical)
               measured 2026-08-25, converged seam pin (hex 7fe514b +
               engine 26daaab7e), 170 SM card
-              evidence/pin-move-335-20260825/node2/
+              evidence/pin-move-335-20260825/
               PASS THESE only to reproduce an 08-25-era projection against
               the arm it was actually computed against.  This one is the
               cautionary case: it was a good measurement of a tree that had
@@ -95,7 +95,7 @@ THE HISTORICAL MODELS. Pick by the arm you are reproducing:
   (historical)
               measured 2026-08-20, Arwen seam pin 629ddb6f0, PRE frame cut
               docs/device-memory-ledger.md (superseded as a current account)
-              PASS THESE to reproduce the #308 copy-elision accounting as it
+              PASS THESE to reproduce the copy-elision accounting as it
               was landed, against the arm it was actually computed against.
 
 Whichever pair you pass is written into the report's prior_gap block, so the

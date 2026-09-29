@@ -159,7 +159,6 @@ def _namespace(tmp_path: Path, **overrides) -> argparse.Namespace:
             "--history-every-minutes", "30",
             "--out", str(tmp_path / "out"),
             "--gpuwm-checkout", str(checkout),
-            "--repo", str(door.PROJECT_ROOT or tmp_path),
         ]
     )
     for key, value in overrides.items():
@@ -198,7 +197,7 @@ def test_defaults_are_the_pinned_configuration() -> None:
     assert arguments.local_timestep is False
     # None means "the model's own margin", which is the default now: the
     # margin is priced from the card, so a flat default would be one card's
-    # number handed to every other card -- the shape of ledger #366.
+    # number handed to every other card -- the shape of the borrowed-row defect.
     assert arguments.headroom_mib is None
     assert arguments.device_fixed_mib is None
     assert arguments.device_bytes_per_cell is None
@@ -288,14 +287,13 @@ def test_a_missing_gpuwm_checkout_names_the_pin_it_satisfies(
 
     message = _refusal(_namespace(tmp_path, gpuwm_checkout=tmp_path / "nope"))
     assert "--gpuwm-checkout" in message
-    assert "git" in message.lower(), (
-        "the requirement is a git working tree; naming only 'a checkout' "
-        "leaves a user free to unpack a tarball and meet exit status 128"
+    assert "git clone" in message.lower(), (
+        "a named tree is a git clone; naming only 'a checkout' leaves a user "
+        "free to unpack a tarball, which names no commit"
     )
-    assert "sixteen" in message, "the refusal names what the checkout satisfies"
-    assert "named by commit" in message, (
-        "the concrete breakage: an install carries the pinned bytes and no "
-        "commit, so its receipt could provenance nothing"
+    assert "sixteen" in message, "the refusal names what the tree supplies"
+    assert "installed engine" in message, (
+        "since 0.3.2 the flag is optional: the remedy names the default"
     )
     assert "no wheel" not in message, "the retired reason must not come back"
 
@@ -501,7 +499,7 @@ def test_when_no_registered_mesh_fits_the_refusal_says_so_with_the_number() -> N
     # The refusal must name THIS card's core, not "the fixed term": a card
     # is refused by its own arithmetic now, and a sentence that quotes a
     # shared constant is how a 32 GiB card's number ends up explaining a
-    # 10 GiB card's refusal (ledger #366).
+    # 10 GiB card's refusal (the borrowed-row defect).
     assert "this card's own core" in message
 
 
@@ -734,17 +732,24 @@ def test_preflight_collects_missing_inputs_instead_of_stopping_at_the_first(
     # A user asking "will this run on my card?" has often not built the init
     # yet.  If a missing init stopped the answer, the card question -- the
     # one no file fixes -- could not be asked until every file existed.
+    from hexcore import engine_pin
+
     arguments = _namespace(
         tmp_path,
         preflight=True,
         init=tmp_path / "absent.init.nc",
         gpuwm_checkout=None,
     )
-    request = door.resolve_request(arguments, registry=_registry())
+    original = engine_pin.installed_root
+    engine_pin.installed_root = lambda: None  # no engine in this interpreter
+    try:
+        request = door.resolve_request(arguments, registry=_registry())
+    finally:
+        engine_pin.installed_root = original
     assert request.inputs_present is False
     joined = " | ".join(request.input_problems)
     assert "--init" in joined
-    assert "--gpuwm-checkout" in joined
+    assert "no gpuwm is installed" in joined
     # and the request is still complete enough to decide the card question
     assert request.cells == X1_CELLS
 
@@ -770,14 +775,11 @@ def test_preflight_does_not_demand_a_fresh_output_directory(tmp_path: Path) -> N
 # the registry the door resolves through is the checkout's own
 # ---------------------------------------------------------------------------
 def test_the_registry_comes_from_the_mesh_binding_module() -> None:
-    repo = door.PROJECT_ROOT
-    if repo is None:  # pragma: no cover - only outside a checkout
-        pytest.skip("not a source checkout; the registry lives in tools/")
-    registry = door.load_registry(repo)
+    registry = door.load_registry()
     # The oracle is the binding module itself, not a restated list: a frozen
     # set here would refuse every mesh the registry legitimately gains.
     binding = door._load_module(
-        "mpas_mesh_binding_oracle", Path(repo) / "tools" / "mpas_mesh_binding.py"
+        "mpas_mesh_binding_oracle", door.DRIVERS_DIR / "mpas_mesh_binding.py"
     )
     assert set(registry) == set(binding.MESH_BINDINGS)
     for name, row in binding.MESH_BINDINGS.items():
@@ -786,39 +788,75 @@ def test_the_registry_comes_from_the_mesh_binding_module() -> None:
     assert registry["x1.40962"].cells == X1_CELLS
 
 
-def test_a_repo_without_tools_is_refused_by_name(tmp_path: Path) -> None:
-    with pytest.raises(door.ForecastDoorRefusal) as caught:
-        door.resolve_repo(tmp_path)
-    message = str(caught.value)
-    assert str(tmp_path) in message
-    assert "checkout" in message
-
-
-def test_a_wheel_install_honors_the_run_from_inside_gesture(
-    monkeypatch: pytest.MonkeyPatch,
+def test_the_drivers_ship_in_the_package_and_need_no_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    """The refusal and quickstart 2.6 both promise two roads: pass
-    ``--repo``, OR run the door from inside a checkout.  From an installed
-    wheel ``PROJECT_ROOT`` is ``None`` (the package's own ancestry is
-    site-packages), so the second road must resolve through the working
-    directory or the sentence is a promise the door does not keep.  The
-    0.1.1 fresh-install walk met exactly that: ``cd <checkout>/tree`` and
-    the door still refused, with the init door happily working beside it.
-    """
+    """THE BREAKAGE THIS PREVENTS: through 0.3.1 the drivers lived in the
+    repository's ``tools/``, which the wheel does not carry, so on every
+    install the door refused with "needs the gpuwm-hex SOURCE CHECKOUT".
+    The drivers now load from the package that is executing, wherever the
+    process stands, and ``--repo`` is accepted, reported and not used."""
 
-    repo = door.PROJECT_ROOT
-    if repo is None:  # pragma: no cover - only outside a checkout
-        pytest.skip("not a source checkout; nothing to stand inside")
+    import hexcore
+
+    package = Path(hexcore.__file__).resolve().parent
+    assert door.DRIVERS_DIR == package / "drivers"
+    for name in ("run_cuda_v841_full_physics_x4.py", "run_cuda_v841_forecast.py",
+                 "mpas_mesh_binding.py"):
+        assert (door.DRIVERS_DIR / name).is_file(), name
+
     monkeypatch.setattr(door, "PROJECT_ROOT", None)  # the wheel shape
+    monkeypatch.chdir(tmp_path)  # standing nowhere near a checkout
+    assert door.resolve_repo(None) == door.DRIVERS_DIR
+    assert capsys.readouterr().err == ""
 
-    monkeypatch.chdir(repo)  # inside tree/ itself
-    assert door.resolve_repo(None) == repo
+    assert door.resolve_repo(tmp_path) == door.DRIVERS_DIR
+    note = capsys.readouterr().err
+    assert f"--repo {tmp_path} is not used" in note
 
-    monkeypatch.chdir(repo / "tools")  # deeper inside the checkout
-    assert door.resolve_repo(None) == repo
 
-    monkeypatch.chdir(repo.parent)  # the repo root above tree/
-    assert door.resolve_repo(None) == repo
+def test_a_damaged_install_names_the_missing_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(door, "DRIVERS_DIR", tmp_path)
+    with pytest.raises(door.ForecastDoorRefusal) as caught:
+        door.resolve_repo(None)
+    message = str(caught.value)
+    assert "run_cuda_v841_forecast.py" in message
+    assert "Reinstall gpuwm-hex" in message
+
+
+def test_the_seam_tree_defaults_to_the_installed_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--gpuwm-checkout`` is optional: with none given the door checks the
+    installed engine's sixteen seam files, and with no engine installed it
+    refuses naming the pip line rather than a clone."""
+
+    from hexcore import engine_pin
+
+    (tmp_path / "a").mkdir()
+    arguments = _namespace(tmp_path / "a", gpuwm_checkout=None)
+    monkeypatch.setattr(engine_pin, "installed_root", lambda: None)
+    with pytest.raises(door.ForecastDoorRefusal) as caught:
+        door.resolve_request(arguments, registry=_registry())
+    message = str(caught.value)
+    assert "no gpuwm is installed" in message
+    assert "pip install" in message
+
+    seen: list[Path] = []
+    (tmp_path / "b").mkdir()
+    monkeypatch.setattr(engine_pin, "installed_root", lambda: tmp_path / "b" / "gpuwm")
+    monkeypatch.setattr(
+        door, "backend_pin_problem",
+        lambda row, checkout: seen.append(checkout) or None,
+    )
+    arguments = _namespace(tmp_path / "b", gpuwm_checkout=None)
+    try:
+        door.resolve_request(arguments, registry=_registry())
+    except door.ForecastDoorRefusal:
+        pass  # later checks on the stand-in files may refuse; the seam tree is what is asserted
+    assert seen and seen[0] == tmp_path / "b" / "gpuwm"
 
 
 # ---------------------------------------------------------------------------
@@ -922,24 +960,26 @@ def test_a_source_table_on_the_frozen_row_refuses_as_never_read(tmp_path):
 def _provider_row_name() -> str:
     """A PROVIDER row's name, read off the registry rather than spelled here.
 
-    This file ships in the public tree and the provider does not, so the
+    This file ships in the public tree and no provider does, so a
     provider's own vocabulary must not be a byte of this file: the row is
-    found through the module that owns it (its P3 row, the one these tests
-    always exercised).  Skips by name where no provider is installed,
-    exactly as the tests that use it did already.
+    whichever non-default row the installed providers registered.  Skips by
+    name where no provider is installed.
     """
 
-    pytest.importorskip("hexcore.mod")
     from hexcore import physics_backend_admission as admission
 
     names = sorted(
         name
-        for name, row in admission.backend_rows().items()
-        if row.adapter_module.startswith("hexcore.mod")
+        for name in admission.backend_rows()
+        if name != admission.DEFAULT_BACKEND
     )
-    assert names, "the provider is importable but registered no row"
-    p3 = [name for name in names if name.endswith("_p3")]
-    return (p3 or names)[0]
+    if not names:
+        pytest.skip(
+            "no row provider is installed (entry-point group "
+            f"{admission.ROW_ENTRY_POINT_GROUP!r}); the public install resolves "
+            "the frozen row only"
+        )
+    return names[0]
 
 
 def test_a_provider_row_is_pinned_by_its_own_adapter_at_the_door(tmp_path):

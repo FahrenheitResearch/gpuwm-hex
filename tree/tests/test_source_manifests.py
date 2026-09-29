@@ -61,7 +61,7 @@ def test_port_source_files_has_no_repeated_row(partstream) -> None:
 
 def test_execution_source_pins_all_exist() -> None:
     runner = _load(
-        ROOT / "tools" / "run_cuda_v841_full_physics_x4.py",
+        ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py",
         "_test_manifest_run_cuda_v841_full_physics_x4",
     )
     assert _missing(runner.EXECUTION_SOURCE_PINS) == []

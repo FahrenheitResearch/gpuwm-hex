@@ -1,7 +1,7 @@
 """Runtime mesh rows: a generated mesh registers itself from its own bytes.
 
 THE BLOCKER THIS REMOVES.  ``gpuwm-hex forecast`` resolves ``--mesh``
-against ``tools/mpas_mesh_binding.MESH_BINDINGS`` and refuses a name it
+against ``hexcore.drivers.mpas_mesh_binding.MESH_BINDINGS`` and refuses a name it
 does not hold.  Every row in that file was typed by a person after the mesh
 existed.  ``gpuwm-hex mesh-plan --point`` generates a mesh at a point nobody
 typed a row for -- the whole point of the door is that the point is
@@ -44,7 +44,7 @@ WHAT THIS MODULE REFUSES, by name:
 * a file that is not a ``gpuwm-hex.mesh-rows/v1`` document.
 
 Rows are supplied through a FILE, like cascade rows, because the forecast
-door runs the driver in another process.  ``tools/mpas_mesh_binding``
+door runs the driver in another process.  ``hexcore.drivers.mpas_mesh_binding``
 applies them where it builds ``MESH_BINDINGS`` -- before the cascade rows,
 so a cascade may cull a generated parent -- and the door's by-path
 re-execution of that module picks them up as the first copy did.  The file

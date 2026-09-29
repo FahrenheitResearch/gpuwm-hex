@@ -1,4 +1,4 @@
-"""Ledger #379: an installed wheel must reach its own shipped modules.
+"""The wheel-reach defect: an installed wheel must reach its own shipped modules.
 
 Two gates in this program digest the port's modules by name, and both used
 to resolve those names by assuming a source checkout under the file doing
@@ -60,7 +60,7 @@ def test_a_name_outside_the_package_is_refused_rather_than_guessed():
     """
 
     with pytest.raises(shipped_sources.DeclaredSourceError, match="declared source"):
-        shipped_sources.resolve("tools/run_cuda_v841_forecast.py")
+        shipped_sources.resolve("tools/run_cuda_v841_forecast_mesh.py")
 
 
 def test_an_explicit_root_still_means_that_tree(tmp_path):
@@ -251,7 +251,7 @@ def test_the_frozen_execution_set_reads_the_executing_package():
     told to assemble.
     """
 
-    driver = ROOT / "tools" / "run_cuda_v841_full_physics_x4.py"
+    driver = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
     source = driver.read_text(encoding="utf-8")
     assert "shipped_sources.resolve(relative)" in source, (
         "the frozen execution set is resolving against a checkout again"
@@ -276,7 +276,7 @@ def _declaration() -> dict:
 
 
 def test_the_gpu_alias_installs_a_cupy_the_runtime_floor_admits():
-    """The durable form of ledger #379's second defect.
+    """The durable form of the wheel-reach defect's second defect.
 
     ``pip install "gpuwm-hex[gpu]"`` -- the obvious spelling -- used to
     resolve to ``gpu-cu12``, and every GPU door in this port refuses a CUDA

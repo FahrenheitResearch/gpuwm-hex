@@ -304,11 +304,12 @@ def test_extras_given_on_the_command_line_replace_the_discovered_list(
     assert f"{TOKENS[0]}_colmax_{EXTRA_SCALAR}.png" not in _pngs(out)
 
 
-def _give_the_control_leg_the_banks(pair_out: Path, *, scalar_peak: float) -> None:
+def _give_the_control_leg_the_tracer_fields(pair_out: Path, *, scalar_peak: float) -> None:
     """Add the two extras to every CONTROL frame: zero, or one cell at a peak.
 
-    The shape a seeded row run with no point-source table produces: the
-    banks exist on both legs and only the treatment leg's are non-zero.
+    The shape a treatment row run with no point-source table produces: the
+    tracer fields exist on both legs and only the treatment leg's are
+    non-zero.
     """
 
     for path in sorted((pair_out / "control" / "out").glob("*.nc")):
@@ -332,7 +333,7 @@ def test_an_extra_the_control_leg_carries_at_zero_is_captioned_as_measured(
 ) -> None:
     """The caption reads the control frame instead of asserting absence."""
 
-    _give_the_control_leg_the_banks(pair, scalar_peak=0.0)
+    _give_the_control_leg_the_tracer_fields(pair, scalar_peak=0.0)
     out = tmp_path / "g"
     result = gallery.build_gallery(
         pair_out=pair, out=out, frames=1,
@@ -354,7 +355,7 @@ def test_an_extra_the_control_leg_carries_at_zero_is_captioned_as_measured(
 def test_an_extra_the_control_leg_carries_non_zero_states_its_peak(
     pair: Path, tmp_path: Path
 ) -> None:
-    _give_the_control_leg_the_banks(pair, scalar_peak=0.25)
+    _give_the_control_leg_the_tracer_fields(pair, scalar_peak=0.25)
     out = tmp_path / "g"
     result = gallery.build_gallery(
         pair_out=pair, out=out, frames=1, extras=[EXTRA_SCALAR]

@@ -2,7 +2,7 @@
 """Fork-equivalence gate for the derived MPAS-A v8.4.1 CUDA forecast driver.
 
 QUESTION: did forking the sealed proof harness into
-``tools/run_cuda_v841_forecast.py`` change the model?
+``src/hexcore/drivers/run_cuda_v841_forecast.py`` change the model?
 
 METHOD: run the AUTHORITY init -- the exact file the release proof pinned --
 through the derived driver for 30 steps (1 h) at the proven dt of 120 s, with

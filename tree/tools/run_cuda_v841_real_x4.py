@@ -54,7 +54,7 @@ PREPARATION_METHOD = (
 
 # FROZEN CLOSED-CASE PROOF CONSTANT — deliberately NOT routed through
 # hexcore.device_admission (adjudicated 2026-08-25, stale-guard audit
-# #347 unknowns).  Determination: this runner is the frozen record of the
+# unknowns).  Determination: this runner is the frozen record of the
 # closed one-step dry-dynamics x4 engineering proof, not a live admission
 # path.  Checked against the byte-pinned proof-harness manifest
 # (run_cuda_v841_full_physics_x4.py::EXECUTION_SOURCE_PINS): this tool is

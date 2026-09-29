@@ -112,9 +112,22 @@ def test_the_shipped_table_says_what_the_measurement_said():
 
     Not a re-derivation -- the network instrument is
     ``tools/measure_engine_verdicts.py`` and the JSON behind the shipped
-    table is ``verification/engine-verdicts/repin-274-20260915.json``.  This
+    table is ``verification/engine-verdicts/repin-280-20260929.json``.  This
     is the claim the measurement makes, kept true here so that editing a row
     without re-measuring is caught.
+
+    A NINTH TIME ON 2026-09-29: the engine published 2.7.5, 2.7.6, 2.7.7
+    and 2.8.0, which the 2.7.4 pin's ceiling kept out, and EIGHT manifest
+    files moved between the published 2.7.4 and 2.8.0 wheels
+    (``gpuwm/config.py``, ``gpuwm/core/gf.py``,
+    ``gpuwm/core/kernels/__init__.py``, ``gpuwm/core/kernels/gf.cu``,
+    ``gpuwm/core/microphysics.py``, ``gpuwm/core/physics.py``,
+    ``gpuwm/core/rrtmg_legacy.py``, ``gpuwm/io/restart.py``), the other
+    eight byte-identical, the column batch, the seam document and the
+    composed glacier unit included.  The port re-pinned to the 2.8.0 bytes
+    (tag ``0164ae0f``, which agrees with all three platform wheels), so
+    2.7.4 dropped to "fails the manifest" by those eight.  Exactly one
+    engine is usable, asserted below as the whole list.
 
     AN EIGHTH TIME ON 2026-09-15, the narrowest move yet: the engine
     published 2.7.4 and TWO manifest files moved between the published
@@ -194,34 +207,67 @@ def test_the_shipped_table_says_what_the_measurement_said():
     a failure here.
     """
 
-    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.7.4,<2.7.5"
-    assert engine_pin.gpuwm_floor() == "2.7.4"
-    assert engine_pin.gpuwm_ceiling() == "2.7.5"
+    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.8.0,<2.8.1"
+    assert engine_pin.gpuwm_floor() == "2.8.0"
+    assert engine_pin.gpuwm_ceiling() == "2.8.1"
 
     # EXACTLY ONE published engine is usable.  Asserted as the whole list,
-    # not as a membership test, because "2.7.4 works" would still pass if a
+    # not as a membership test, because "2.8.0 works" would still pass if a
     # stale row below it were left claiming to work too -- and that stale
-    # row is what a resolver would actually pick when the admitted engine
-    # is unavailable.
+    # row is what a resolver would actually pick.
     usable = [row.version for row in engine_pin.PUBLISHED_ENGINES if row.usable]
-    assert usable == ["2.7.4"], (
+    assert usable == ["2.8.0"], (
         "the re-pinned manifest is satisfied by exactly one published "
         f"engine.  Usable: {usable}"
     )
-    assert engine_pin.engine("2.7.4").moved == ()
-    assert engine_pin.engine("2.7.4").on_pypi
-    assert engine_pin.engine("2.7.4").offline_build_road
+    assert engine_pin.engine("2.8.0").moved == ()
+    assert engine_pin.engine("2.8.0").on_pypi
+    assert engine_pin.engine("2.8.0").offline_build_road
 
     # The engine that was the whole range the day before now fails, by the
-    # two files that moved between the published 2.7.3 and 2.7.4 wheels and
-    # by nothing else; and so does every other pre-2.7.4 cut.  Named
+    # eight files that moved between the published 2.7.4 and 2.8.0 wheels
+    # and by nothing else; 2.7.3 fails by the same eight.  Named
     # individually so that a row silently reverting to "matches" is a
     # failure here rather than a wider range.
-    moved_at_274 = ("gpuwm/config.py", "gpuwm/core/microphysics.py")
-    assert engine_pin.engine("2.7.3").moved == moved_at_274
-    assert engine_pin.engine("2.7.3").on_pypi
-    assert engine_pin.engine("2.7.3").offline_build_road
-    assert not engine_pin.engine("2.7.3").usable
+    moved_at_280 = (
+        "gpuwm/config.py",
+        "gpuwm/core/gf.py",
+        "gpuwm/core/kernels/__init__.py",
+        "gpuwm/core/kernels/gf.cu",
+        "gpuwm/core/microphysics.py",
+        "gpuwm/core/physics.py",
+        "gpuwm/core/rrtmg_legacy.py",
+        "gpuwm/io/restart.py",
+    )
+    for version in ("2.7.3", "2.7.4"):
+        row = engine_pin.engine(version)
+        assert row.moved == moved_at_280, version
+        assert row.on_pypi and row.offline_build_road and not row.usable
+    # The three 2.7 patch engines published between the two pins, which the
+    # 2.7.4 pin's ceiling kept out: each carries some of the 2.8.0 bytes
+    # already and fails by the rest.
+    assert engine_pin.engine("2.7.5").moved == (
+        "gpuwm/config.py",
+        "gpuwm/core/kernels/__init__.py",
+        "gpuwm/core/kernels/gf.cu",
+        "gpuwm/core/microphysics.py",
+        "gpuwm/core/physics.py",
+        "gpuwm/core/rrtmg_legacy.py",
+        "gpuwm/io/restart.py",
+    )
+    moved_since_276 = (
+        "gpuwm/config.py",
+        "gpuwm/core/kernels/__init__.py",
+        "gpuwm/core/microphysics.py",
+        "gpuwm/core/physics.py",
+        "gpuwm/core/rrtmg_legacy.py",
+        "gpuwm/io/restart.py",
+    )
+    for version in ("2.7.5", "2.7.6", "2.7.7"):
+        row = engine_pin.engine(version)
+        assert row.on_pypi and row.offline_build_road and not row.usable
+        if version != "2.7.5":
+            assert row.moved == moved_since_276, version
     assert not engine_pin.engine("2.5.7").usable
     assert not engine_pin.engine("2.5.8").usable
     assert not engine_pin.engine("2.6.0").usable
@@ -247,12 +293,13 @@ def test_the_shipped_table_says_what_the_measurement_said():
     # way; a row that differs between them was edited, not measured.
     assert engine_pin.engine("2.6.4").moved == moved_at_273
     # The three earlier 2.7 engines carry the same sixteen bytes as each
-    # other and fail by the eight that moved again at 2.7.3 -- the GF
-    # adapter, its kernel and the Noah-MP libm unit moved at 2.7.0 and did
-    # not move again.
-    moved_at_273_since_270 = (
+    # other and fail by ten: the eight that moved at 2.7.3, plus the GF
+    # adapter and its kernel, which 2.7.0 to 2.7.4 shared and 2.8.0 moved.
+    moved_since_270 = (
         "gpuwm/config.py",
+        "gpuwm/core/gf.py",
         "gpuwm/core/kernels/__init__.py",
+        "gpuwm/core/kernels/gf.cu",
         "gpuwm/core/microphysics.py",
         "gpuwm/core/noahmp_glacier_gpu.py",
         "gpuwm/core/noahmp_kernel_sources.py",
@@ -262,7 +309,7 @@ def test_the_shipped_table_says_what_the_measurement_said():
     )
     for version in ("2.7.0", "2.7.1", "2.7.2"):
         row = engine_pin.engine(version)
-        assert row.moved == moved_at_273_since_270, version
+        assert row.moved == moved_since_270, version
         assert row.on_pypi and row.offline_build_road and not row.usable
     # 2.6.2: the tag whose publish job died.  It fails this manifest by the
     # same eleven files 2.6.5 does, so it is disqualified twice; both
@@ -274,9 +321,9 @@ def test_the_shipped_table_says_what_the_measurement_said():
     assert not tagged_262.on_pypi
     assert not tagged_262.usable
     for row in engine_pin.PUBLISHED_ENGINES:
-        if row.version != "2.7.4":
+        if row.version != "2.8.0":
             assert row.moved, (
-                f"{row.version} claims to satisfy the manifest.  Only 2.7.4 "
+                f"{row.version} claims to satisfy the manifest.  Only 2.8.0 "
                 "does; any other row with an empty moved list means the "
                 "table was patched by hand instead of re-measured"
             )
@@ -296,7 +343,7 @@ def test_the_shipped_table_says_what_the_measurement_said():
 #: a run: the sdist grafts ``verification/`` and holds ``evidence/`` out, so
 #: this gate runs on every published surface instead of skipping there.
 VERDICTS_OF_RECORD = (
-    ROOT / "verification" / "engine-verdicts" / "repin-274-20260915.json"
+    ROOT / "verification" / "engine-verdicts" / "repin-280-20260929.json"
 )
 
 
@@ -326,7 +373,7 @@ def test_the_table_is_the_instruments_output_not_a_transcription():
         "table has no measurement to be rendered from"
     )
     verdicts = json.loads(VERDICTS_OF_RECORD.read_text(encoding="utf-8"))
-    assert verdicts["pin"]["version"] == "2.7.4"
+    assert verdicts["pin"]["version"] == "2.8.0"
     assert verdicts["instrument"] == "tools/measure_engine_verdicts.py"
     measured = {
         row["tag"].lstrip("v"): (
@@ -344,7 +391,7 @@ def test_the_table_is_the_instruments_output_not_a_transcription():
         "PUBLISHED_ENGINES disagrees with the JSON it is supposed to be "
         "rendered from.  Re-splice it: python tools/measure_engine_verdicts.py "
         "--offline --engine-git <arwen clone> --wheel-cache <cache> "
-        "--pin-to 2.7.4 --splice"
+        "--pin-to 2.8.0 --splice"
     )
 
     # The manifest the JSON was measured against is the one the package
@@ -565,7 +612,7 @@ def test_doctor_says_so_rather_than_crashing_when_gpuwm_cannot_be_located(
 # the checkout finding must not contradict the line above it
 # ---------------------------------------------------------------------------
 def _doctor_checkout_finding(findings):
-    return next(f for f in findings if f.subject.startswith("gpuwm git checkout"))
+    return next(f for f in findings if f.subject.startswith("gpuwm seam source"))
 
 
 def test_the_checkout_finding_stops_claiming_the_pin_is_unsatisfiable(
@@ -605,11 +652,11 @@ def test_the_checkout_finding_stops_claiming_the_pin_is_unsatisfiable(
         "when every pinned path is in the install, the finding under the OK "
         "line has to say so; the two lines are read together"
     )
-    assert "HEAD, tree and dirty paths" in checkout.detail, (
-        "a refusal or a requirement stands only if it names the concrete "
-        "breakage it prevents.  What survives at 2.5.8 is receipt "
-        "provenance, and that is what this line must say"
+    assert "no --gpuwm-checkout" in checkout.detail, (
+        "an install that carries every pinned path is the forecast's seam "
+        "source; the line under the OK line must not send the user to clone"
     )
+    assert "RECORD digest" in checkout.detail
 
 
 def test_the_checkout_finding_still_names_a_path_an_older_engine_lacks(
@@ -645,9 +692,8 @@ def test_the_remedy_stops_giving_a_reason_that_is_false_at_the_pinned_engine():
 
     text = engine_pin.remedy()
     assert "no wheel" not in text
-    assert "--gpuwm-checkout" in text
-    assert "provenance" in text
-    assert "HEAD, tree and dirty" in text
+    assert text.splitlines()[0].strip().startswith("pip install")
+    assert "optional" in text and "--gpuwm-checkout" in text
 
 
 # ---------------------------------------------------------------------------
@@ -716,7 +762,7 @@ def test_the_admitted_table_is_the_instruments_output_not_a_transcription():
         )
 
 
-def test_an_admitted_row_rides_the_specifier_and_is_not_a_published_engine():
+def _row_rules_hold(row) -> None:
     """What a row may be.  A local version on a base inside the derived
     range, because the specifier is what pip enforces and the row only
     decides bytes; distinct from the pin (a row that moved nothing would be
@@ -724,38 +770,39 @@ def test_an_admitted_row_rides_the_specifier_and_is_not_a_published_engine():
     which measures PyPI and has no business admitting it."""
 
     floor, ceiling = engine_pin.gpuwm_floor(), engine_pin.gpuwm_ceiling()
-    assert engine_pin.ADMITTED_ENGINES, "the release admits one private engine"
-    for row in engine_pin.ADMITTED_ENGINES:
-        assert "+" in row.version and row.version.split("+", 1)[0] == row.base
-        assert engine_pin._key(floor) <= engine_pin._key(row.base) < engine_pin._key(ceiling)
-        assert row.moved_from_base
-        assert engine_pin.engine(row.version) is None
-        assert engine_pin.admitted_engine(row.version) is row
-        identity = engine_pin.identity_for(row.version)
-        assert identity.admitted and identity.build_commit == row.build_commit
-        assert identity.manifest == row.manifest
+    assert "+" in row.version and row.version.split("+", 1)[0] == row.base
+    assert engine_pin._key(floor) <= engine_pin._key(row.base) < engine_pin._key(ceiling)
+    assert row.moved_from_base
+    assert engine_pin.engine(row.version) is None
+    assert engine_pin.admitted_engine(row.version) is row
+    identity = engine_pin.identity_for(row.version)
+    assert identity.admitted and identity.build_commit == row.build_commit
+    assert identity.manifest == row.manifest
 
-    # The one row this release ships, as measured: five of sixteen paths
-    # differ from the public 2.7.4 bytes and the composed glacier unit does
-    # not, so the Noah-MP compile site is the pin's even though the kernel
-    # loader beside it moved.  The row on the 2.7.3 base is gone with the
-    # range; a row whose base the specifier refuses is refused above.
-    row = engine_pin.admitted_engine("2.7.4+soma.1")
-    assert engine_pin.admitted_engine("2.7.3+soma.1") is None
-    assert row is not None and row.base == "2.7.4"
-    assert row.moved_from_base == (
-        "gpuwm/config.py",
-        "gpuwm/core/kernels/__init__.py",
-        "gpuwm/core/microphysics.py",
-        "gpuwm/core/physics.py",
-        "gpuwm/io/restart.py",
-    )
-    assert row.glacier_composed_tu_sha256 == engine_pin.pinned_engine().glacier_composed_tu_sha256
-    assert engine_pin.pinned_engine().version == "2.7.4"
+
+def test_the_published_distribution_ships_no_admitted_row():
+    """A row names a build that is not public, so the public table is empty
+    and the public pin is the only engine a published install runs on.
+    Whoever builds a private engine writes its row into their own tree with
+    ``--admit``; every rule a row must satisfy is exercised below on a
+    synthetic one."""
+
+    assert engine_pin.ADMITTED_ENGINES == ()
+    assert engine_pin.pinned_engine().version == engine_pin.wanted_version()
     assert not engine_pin.pinned_engine().admitted
+    for row in engine_pin.ADMITTED_ENGINES:  # a private tree's rows, if any
+        _row_rules_hold(row)
 
 
-def _admitted_tree(tmp_path: Path, monkeypatch, version: str = "2.7.4+local.1"):
+def test_an_admitted_row_rides_the_specifier_and_is_not_a_published_engine(
+    tmp_path, monkeypatch
+):
+    _, _, row = _admitted_tree(tmp_path, monkeypatch)
+    _row_rules_hold(row)
+    assert engine_pin.admitted_engine(row.version + ".2") is None
+
+
+def _admitted_tree(tmp_path: Path, monkeypatch, version: str = "2.8.0+local.1"):
     """A fake public checkout, a fake private build of it whose bytes differ
     on one path, and the admitted row measured FROM that build's bytes.
 
@@ -764,7 +811,7 @@ def _admitted_tree(tmp_path: Path, monkeypatch, version: str = "2.7.4+local.1"):
     is a byte or a version string that actually differs.
     """
 
-    root, manifest = _seam_tree(tmp_path, "2.7.4")
+    root, manifest = _seam_tree(tmp_path, "2.8.0")
     private = tmp_path / "gpuwm-private"
     for relative in manifest:
         target = private / relative
@@ -780,7 +827,7 @@ def _admitted_tree(tmp_path: Path, monkeypatch, version: str = "2.7.4+local.1"):
     }
     row = engine_pin.AdmittedEngine(
         version=version,
-        base="2.7.4",
+        base="2.8.0",
         build_commit="9" * 40,
         digests=tuple(sorted(digests.items())),
         glacier_composed_tu_sha256="7" * 64,
@@ -821,17 +868,17 @@ def test_the_same_bytes_under_another_version_string_are_refused_by_name(
 
     _, private, row = _admitted_tree(tmp_path, monkeypatch)
     (private / "pyproject.toml").write_text(
-        '[project]\nname = "gpuwm"\nversion = "2.7.4"\n', encoding="utf-8"
+        '[project]\nname = "gpuwm"\nversion = "2.8.0"\n', encoding="utf-8"
     )
 
     inspection = engine_pin.inspect_seam(private)
-    assert inspection.engine == row.version and inspection.declared == "2.7.4"
+    assert inspection.engine == row.version and inspection.declared == "2.8.0"
     assert inspection.misdeclared and not inspection.accepted
     assert inspection.moved == (), "the bytes ARE the row's; only the name is wrong"
 
     problem = door.seam_pin_problem(private)
     assert problem is not None
-    assert f"gpuwm {row.version}" in problem and "gpuwm 2.7.4" in problem
+    assert f"gpuwm {row.version}" in problem and "gpuwm 2.8.0" in problem
     assert "version string and its bytes together" in problem
 
 
@@ -883,14 +930,14 @@ def test_doctor_refuses_an_install_whose_metadata_disowns_its_bytes(
     _, private, row = _admitted_tree(tmp_path, monkeypatch)
     (private / "pyproject.toml").unlink()
     monkeypatch.setattr(engine_pin, "installed_root", lambda: private)
-    monkeypatch.setattr(engine_pin, "installed_version", lambda: "2.7.4")
-    monkeypatch.setattr(doctor, "_distribution_version", lambda name: "2.7.4")
+    monkeypatch.setattr(engine_pin, "installed_version", lambda: "2.8.0")
+    monkeypatch.setattr(doctor, "_distribution_version", lambda name: "2.8.0")
 
-    assert engine_pin.declared_version(private) == "2.7.4"
+    assert engine_pin.declared_version(private) == "2.8.0"
     findings = doctor.check_physics_seam()
     seam = _doctor_seam_finding(findings)
     assert seam.status == doctor.MISSING and seam.required
-    assert row.version in seam.detail and "2.7.4" in seam.detail
+    assert row.version in seam.detail and "2.8.0" in seam.detail
     assert [f.subject for f in doctor.blocking_gaps(findings)] == [seam.subject]
 
 
@@ -916,7 +963,7 @@ def test_the_adapter_admits_the_row_and_provenances_the_run_by_it(
     assert identity.glacier_composed_tu_sha256 == row.glacier_composed_tu_sha256
 
     (private / "pyproject.toml").write_text(
-        '[project]\nname = "gpuwm"\nversion = "2.7.4"\n', encoding="utf-8"
+        '[project]\nname = "gpuwm"\nversion = "2.8.0"\n', encoding="utf-8"
     )
     with pytest.raises(ValueError, match="version string and its bytes together"):
         adapter._verify_checkout_root(private)
