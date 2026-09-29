@@ -129,8 +129,11 @@ Fifty hybrid levels are carried as level-indexed slabs with the 3-D
 `PRESSURE` beside them (the init engine's model-level branch, the ERA5-ML
 convention), plus the 200100.0 surface level, so `--nfglevels 51
 --nfgsoillevels 4 --use-spechumd yes --extrap-airtemp constant`. Hydrometeors
-are not carried: the init stream has no slot for them, and hour zero has no
-ice (README, limited-area lane).
+are not carried, although the engine's window decodes them: the init stream
+has slots for cloud water and rain (`qc`, `qr`), but the init and boundary
+writers read no hydrometeor record from an intermediate file and write both
+as zero, and it has no slot for cloud ice, snow or graupel, so hour zero has
+no ice (README, limited-area lane).
 
 The source is a ROW (`hexcore.hrrr_intermediate.SOURCE_ROWS`): decoder key,
 loader module, file names, field map, soil nodes, level count. Nothing below

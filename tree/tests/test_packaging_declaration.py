@@ -37,11 +37,10 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.3.2", (
-        "0.3.2 is the declared cut: the release forced by gpuwm 2.8.0 (its "
-        "pin window excludes every earlier engine, 2.7.4 included), carrying "
-        "the forecast from an install; moving it is a release decision, not "
-        "an edit"
+    assert declared == "0.3.3", (
+        "0.3.3 is the declared cut: every NVIDIA architecture NVRTC can "
+        "compile the kernels for runs by default, on the gpuwm 2.8.0 pin; "
+        "moving it is a release decision, not an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")

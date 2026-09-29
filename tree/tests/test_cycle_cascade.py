@@ -26,6 +26,7 @@ if str(ROOT / "tools") not in sys.path:
 from hexcore import cascade_row  # noqa: E402
 from hexcore.cycle import chain, delayed_start  # noqa: E402
 from hexcore.cycle.errors import CycleRefusal, DelayedStartRefusal  # noqa: E402
+from _layout import PACKAGE_DIR
 
 netCDF4 = pytest.importorskip("netCDF4")
 
@@ -480,8 +481,8 @@ def test_the_cascade_knows_nothing_about_any_phenomenon():
     """
 
     offences: list[str] = []
-    surfaces = sorted((ROOT / "src" / "hexcore" / "cycle").glob("*.py"))
-    surfaces.append(ROOT / "src" / "hexcore" / "cascade_row.py")
+    surfaces = sorted((PACKAGE_DIR / "cycle").glob("*.py"))
+    surfaces.append(PACKAGE_DIR / "cascade_row.py")
     for path in surfaces:
         for line, token in _executable_tokens(path.read_text(encoding="utf-8")):
             if FORBIDDEN_TOKENS.search(token):

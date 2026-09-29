@@ -26,6 +26,7 @@ from hexcore.vertical import (
     validate_vertical_grid,
 )
 from hexcore.vertical_spec import VerticalSpec, VerticalSpecError
+from _layout import PACKAGE_DIR
 
 
 class ClosedFourCellMesh:
@@ -234,7 +235,7 @@ def test_vertical_modes_are_explicit_and_mutually_exclusive() -> None:
 # x4 frozen no-op self-check compares two digests that can never be equal.
 # ---------------------------------------------------------------------------
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
-DRIVERS = Path(__file__).resolve().parents[1] / "src" / "hexcore" / "drivers"
+DRIVERS = PACKAGE_DIR / "drivers"
 
 
 def _load_tool(key: str, filename: str) -> object:

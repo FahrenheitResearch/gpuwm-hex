@@ -23,6 +23,7 @@ from hexcore.cuda_regional_forecast_v841 import (
     REGIONAL_GARBAGE_POOL,
     PaddedRegionalHostMesh,
 )
+from _layout import package_path
 
 ROOT = Path(__file__).resolve().parents[1]
 ANCHOR_ROW = "conus-x1.2971"
@@ -848,7 +849,7 @@ def test_inactive_deformation_placeholders_are_named_not_silent():
 def test_the_driver_hook_is_absent_unless_a_regional_runtime_sets_it():
     """Every regional site in cuda_driver is guarded by this attribute."""
 
-    source = (ROOT / "src/hexcore/cuda_driver.py").read_text()
+    source = package_path("src/hexcore/cuda_driver.py").read_text()
     lines = source.splitlines()
     assert "        self.regional_v841: Any | None = None" in lines
     guards = [
@@ -905,7 +906,7 @@ def test_the_driver_hook_is_absent_unless_a_regional_runtime_sets_it():
 def test_the_kernel_cache_observer_is_inert_by_default():
     from hexcore.cuda_backend import runtime
 
-    source = (ROOT / "src/hexcore/cuda_backend/runtime.py").read_text()
+    source = package_path("src/hexcore/cuda_backend/runtime.py").read_text()
     assert "self.post_launch: Any | None = None" in source
     assert "if self.post_launch is None:\n            return kernel" in source
     assert hasattr(runtime, "_PostLaunchKernel")

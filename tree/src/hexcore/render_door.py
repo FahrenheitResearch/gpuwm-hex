@@ -364,8 +364,12 @@ def list_catalog(renderer_exe: Path, wrfout: Path, *, scratch: Path,
     summary = ""
     for line in (result.stdout or "").splitlines():
         if line.startswith("PRODUCT\t"):
+            # Five fields or more, never exactly five. The renderer's row
+            # grew a sixth field (a machine reason code) in gpuwm 2.8.0; a
+            # parser that demanded exactly five dropped every row of that
+            # build and refused every render with "no catalog rows".
             parts = line.split("\t")
-            if len(parts) == 5:
+            if len(parts) >= 5:
                 rows[parts[1]] = (parts[2], parts[3], parts[4])
         elif line.startswith("CATALOG "):
             summary = line[len("CATALOG "):]

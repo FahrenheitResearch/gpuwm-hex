@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from hexcore import shipped_sources  # noqa: E402
 from hexcore.cuda_backend import regional_admission  # noqa: E402
+from _layout import FOLDED, NOT_CARRIED_FOLDED, PACKAGE_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +93,8 @@ def test_the_fix_did_not_move_the_minted_digest():
 def test_the_checkout_route_and_the_package_route_agree_in_a_checkout():
     """Two resolutions, one answer, because they name the same files here."""
 
+    if FOLDED:
+        pytest.skip(NOT_CARRIED_FOLDED)
     assert regional_admission.kernel_set_sha256(ROOT) == (
         regional_admission.kernel_set_sha256()
     )
@@ -251,7 +254,7 @@ def test_the_frozen_execution_set_reads_the_executing_package():
     told to assemble.
     """
 
-    driver = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
+    driver = PACKAGE_DIR / "drivers" / "run_cuda_v841_full_physics_x4.py"
     source = driver.read_text(encoding="utf-8")
     assert "shipped_sources.resolve(relative)" in source, (
         "the frozen execution set is resolving against a checkout again"
@@ -272,6 +275,8 @@ def test_the_frozen_execution_set_reads_the_executing_package():
 # the extras table cannot contradict the runtime floor
 # ---------------------------------------------------------------------------
 def _declaration() -> dict:
+    if FOLDED:
+        pytest.skip(NOT_CARRIED_FOLDED)
     return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 

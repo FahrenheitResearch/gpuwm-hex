@@ -26,6 +26,7 @@ import pytest
 
 from hexcore import dt_admission, forecast_door, forecast_preset
 from hexcore.errors import ConfigurationRefusal
+from _layout import PACKAGE_DIR
 
 
 def test_the_table_names_the_default_first_and_every_row_resolves():
@@ -132,7 +133,7 @@ def test_the_door_resolves_the_row_into_the_one_cadence_knob():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    door = (root / "src" / "hexcore" / "forecast_door.py").read_text(
+    door = (PACKAGE_DIR / "forecast_door.py").read_text(
         encoding="utf-8"
     )
     # The row decides only when the flag is absent, the explicit flag wins,

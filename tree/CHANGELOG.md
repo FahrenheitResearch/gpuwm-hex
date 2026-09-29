@@ -6,6 +6,64 @@ boundary can be drawn between them after the fact. The published release note
 for each shipped version is the summary of record for what that version
 contained. From 0.2.0 forward the file is cut at the release.*
 
+## 0.3.3 (2026-09-29)
+
+Requires gpuwm 2.8.0 (gpuwm>=2.8.0,<2.8.1), as 0.3.2 did.
+
+New:
+- Every NVIDIA architecture NVRTC can compile the kernels for is admitted
+  by default, with no flag: compute capability 7.5 (Turing) and newer on
+  the CUDA 13 toolkit. sm_86 and sm_89 hold anchors, sm_120 is the proven
+  contract floor (anchored, with no pin: the contract was first measured
+  there), and a card of any other architecture runs unanchored and its
+  receipts say so.
+- sm_89 holds an anchor (an RTX 4090, 2026-09-24): the numerical contract
+  measured against sm_120, 123 records identical, with two named
+  deviations: the guard-cost timing control (timing only, 1.274725x
+  against the borrowed 1.25x ceiling, bitwise identity held) and the
+  v8.4.1 four-pass audit (inherited, not measured on the card: it refuses
+  before any device work on every card at that tree, and the
+  release-specific kernels were measured directly). Its own guard-cost
+  ceiling is 1.55. Each anchor row pins its evidence by SHA-256
+  (ArchAnchor.evidence_sha256).
+- The preflight prints one line per card: anchored, with the evidence pin,
+  or unanchored. Every receipt (door, driver, proof harness) records the
+  compute capability and the same status.
+- On an unanchored card the door measures the numeric route before the run
+  in one tiny compile and launch (the FTZ route, the guarded subnormal
+  fallback, the --fmad=false pin, IEEE ordinary arithmetic) and records it.
+- `gpuwm-hex doctor` names the card, its compute capability and its anchor
+  status. An unanchored card is never a gap; the one gap it reports is
+  the forecast door's own refusal, a card NVRTC cannot compile for.
+
+Fixed:
+- An architecture holding no anchor was refused ("holds no
+  per-architecture anchor"), a refusal that named no breakage.
+  `gpuwm-hex forecast` now meets two architecture refusals, each naming
+  one: a card NVRTC cannot compile for, and ordinary arithmetic that is not
+  IEEE.
+- The forecast driver and the x4 proof harness pinned sm_120
+  (required_compute), which refused sm_121 and every newer part. Sixteen
+  tools under tools/ did too and no longer do. The pin stays only on the
+  two FTZ instruments and two tools whose bytes a recorded pin holds,
+  where it refuses only parts newer than sm_120. Two-GPU runs are not a
+  supported path in this release: the two-GPU forecast tool
+  (run_cuda_v841_forecast_2gpu.py) is unchanged and still refuses a card
+  below compute capability 12.0.
+- `gpuwm-hex render` refused every frame with "rw_wrfbatch produced no
+  catalog rows" on gpuwm 2.8.0, whose renderer prints six fields per
+  catalog row. The door reads five or more.
+- The hex tests find the package by its import name, so they hold in any
+  layout the package is installed or folded into.
+- Every forecast's start frame (F000) published q2 as 0 and psfc as
+  100000 Pa in every cell, the physics seam's values before its first call,
+  so the hour-0 2 m dewpoint map was drawn from zero humidity while every
+  later hour was right. The start frame now takes q2 from the start file
+  when the start file carries it, and otherwise from the lowest model level
+  bounded to saturation at the 2 m temperature (a specific-humidity start
+  such as HRRR's leaves the start file's q2 at zero); psfc is the model's
+  own surface pressure. Later frames and the model state are unchanged.
+
 ## 0.3.2 (2026-09-29)
 
 New:

@@ -28,9 +28,10 @@ from hexcore.cuda_regional_forecast_v841 import (
     SELF_MANAGED_GARBAGE_MODULES,
     pad_regional_physics_host,
 )
+from _layout import PACKAGE_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src" / "hexcore"
+SRC = PACKAGE_DIR
 
 
 def _between(source: str, start: str, end: str) -> str:
@@ -39,7 +40,7 @@ def _between(source: str, start: str, end: str) -> str:
 
 def _mesh_binding_module():
     spec = importlib.util.spec_from_file_location(
-        "_regional_physics_mesh_binding", ROOT / "src" / "hexcore" / "drivers" / "mpas_mesh_binding.py"
+        "_regional_physics_mesh_binding", PACKAGE_DIR / "drivers" / "mpas_mesh_binding.py"
     )
     module = importlib.util.module_from_spec(spec)
     sys.modules.setdefault(spec.name, module)
@@ -441,7 +442,7 @@ def test_the_physics_stack_is_constructed_once_for_both_lanes():
     nobody meant to make.
     """
 
-    source = (ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py").read_text(
+    source = (PACKAGE_DIR / "drivers" / "run_cuda_v841_full_physics_x4.py").read_text(
         encoding="utf-8"
     )
     body = _between(
@@ -462,7 +463,7 @@ def test_the_physics_stack_is_constructed_once_for_both_lanes():
 def test_the_step_loop_is_the_same_loop():
     """The boundary is a property of the driver, not a second step loop."""
 
-    forecast = (ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py").read_text(
+    forecast = (PACKAGE_DIR / "drivers" / "run_cuda_v841_forecast.py").read_text(
         encoding="utf-8"
     )
     body = _between(forecast, "def execute_forecast(", "def parse_args(")
@@ -479,7 +480,7 @@ def test_the_step_loop_is_the_same_loop():
 def test_a_history_frame_publishes_the_domain_not_the_allocation():
     """The garbage column is stripped before anything sees a frame."""
 
-    source = (ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py").read_text(
+    source = (PACKAGE_DIR / "drivers" / "run_cuda_v841_full_physics_x4.py").read_text(
         encoding="utf-8"
     )
     capture = _between(source, "def capture_snapshot(", "def _phase_from_receipt(")

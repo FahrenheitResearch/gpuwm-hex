@@ -74,7 +74,7 @@ three measured, physics-shaped ways. They are stated in chapter 3, quantified
 in [`docs/declared-divergences.md`](../declared-divergences.md), and never
 hidden behind an option. Read them before trusting a number.
 
-**Version.** This manual describes gpuwm-hex 0.3.2 with the gpuwm 2.8.0
+**Version.** This manual describes gpuwm-hex 0.3.3 with the gpuwm 2.8.0
 engine. Where a measurement was taken on specific hardware, the card is
 named beside the number.
 

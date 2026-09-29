@@ -40,12 +40,13 @@ import re
 import sys
 
 import pytest
+from _layout import PACKAGE_DIR
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 TOOLS = ROOT / "tools"
-DRIVERS = ROOT / "src" / "hexcore" / "drivers"
+DRIVERS = PACKAGE_DIR / "drivers"
 AUDIT_PATH = TOOLS / "audit_nvrtc_reciprocal_rewrite.py"
 
 #: The kernels the rewrite reached, and the divisions each one must keep.

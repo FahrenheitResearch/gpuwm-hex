@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     from hexcore.cuda_backend import KernelCache, require_cuda
 
     capability = require_cuda(
-        min_compute=(12, 0), required_compute=(12, 0), cache_dir=args.cache_root
+        min_compute=(12, 0), cache_dir=args.cache_root
     )
     import cupy as cp
 

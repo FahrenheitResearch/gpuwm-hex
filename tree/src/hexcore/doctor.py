@@ -11,6 +11,9 @@ The things that do the work do not:
 * the CUDA lane needs the CuPy wheel for CUDA 13 -- the major every GPU
   door here refuses below -- and no pip extra can check what the box's
   driver actually serves, so this module reads it and says;
+* the card itself: every architecture this install's NVRTC compiles for
+  runs, anchored or not, and this module names the card, its compute
+  capability and its anchor status, or the one refusal a card can meet;
 * the meshes and their static fields are external assets with no fetch
   path in this distribution;
 * the forecast runs on the installed gpuwm's sixteen pinned seam files,
@@ -35,8 +38,9 @@ Required means: a door this distribution advertises cannot open, or the
 install itself is wrong.  The three Python dependencies and the three
 engines are required in the first sense; an installed gpuwm whose seam
 bytes are not the ones this port pins is required in the second, and that
-clause is new.  CuPy, the seam-source note and the mesh assets are
-reported and do not fail the process, because a user who only wants the
+clause is new.  CuPy, the card's architecture, the seam-source note and
+the mesh assets are reported and do not fail the process, because a user
+who only wants the
 render door should not be told the install is broken by the absence of a
 mesh.
 
@@ -491,6 +495,179 @@ def check_gpu_runtime() -> list[Finding]:
     ]
 
 
+_ARCHITECTURE_SUBJECT = "GPU architecture (the card and NVRTC)"
+
+
+def _card_probe() -> dict[str, object] | None:
+    """The card's name and compute capability, and NVRTC's target list.
+
+    Read in a short-lived process, for the reason every probe here uses
+    one.  It reads device 0's properties and asks NVRTC which targets it
+    generates code for, through the same function the forecast door asks
+    (``arch_admission.nvrtc_target_archs``).  It compiles nothing and
+    launches nothing.  ``None`` when the probe itself could not run.
+    """
+
+    code = (
+        "import json, sys\n"
+        "out = {}\n"
+        "try:\n"
+        "    import cupy\n"
+        "    out['device_count'] = int(cupy.cuda.runtime.getDeviceCount())\n"
+        "    if out['device_count'] > 0:\n"
+        "        p = cupy.cuda.runtime.getDeviceProperties(0)\n"
+        "        name = p['name']\n"
+        "        if isinstance(name, bytes):\n"
+        "            name = name.decode('utf-8', 'replace')\n"
+        "        out['name'] = str(name)\n"
+        "        out['compute'] = [int(p['major']), int(p['minor'])]\n"
+        "except Exception as error:\n"
+        "    out['error'] = f'{type(error).__name__}: {error}'\n"
+        "if 'compute' in out:\n"
+        "    try:\n"
+        f"        from {__package__}.cuda_backend.arch_admission import nvrtc_target_archs\n"
+        "        out['nvrtc_targets'] = list(nvrtc_target_archs())\n"
+        "    except Exception as error:\n"
+        "        out['nvrtc_error'] = f'{type(error).__name__}: {error}'\n"
+        "sys.stdout.write(json.dumps(out))\n"
+    )
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_PROBE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        document = json.loads((probe.stdout or "").strip() or "{}")
+    except json.JSONDecodeError:
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def check_gpu_architecture() -> list[Finding]:
+    """The card: its name, compute capability and anchor status.
+
+    Every architecture NVRTC can compile the kernels for runs this port by
+    default (:mod:`hexcore.cuda_backend.arch_admission`).  So an unanchored
+    card is never a gap here: it is reported with its status, as the
+    forecast door prints it and every receipt records it.  The one gap is
+    the forecast door's own NVRTC refusal, a card whose target this
+    install's NVRTC does not list (or an NVRTC that cannot be asked at all),
+    because on it no kernel could be built.  A card that cannot be read at
+    all is context, not a gap: the CuPy finding above says why.
+    """
+
+    from .cuda_backend.arch_admission import architecture_status, nvrtc_refusal
+
+    if _no_local_gpu():
+        return [
+            Finding(
+                subject=_ARCHITECTURE_SUBJECT,
+                status=INFO,
+                detail=(
+                    "not read: this box declares that no GPU work happens on "
+                    "it (GPUWM_HEX_NO_LOCAL_GPU / GPUWM_NO_LOCAL_GPU)"
+                ),
+            )
+        ]
+    probe = _card_probe()
+    if probe is None or "compute" not in probe:
+        if probe is None:
+            why = "the card probe could not run"
+        elif probe.get("error"):
+            why = str(probe["error"])
+        else:
+            why = "no CUDA device is visible to this process"
+        return [
+            Finding(
+                subject=_ARCHITECTURE_SUBJECT,
+                status=INFO,
+                detail=f"no card read: {why}",
+                evidence={} if probe is None else dict(probe),
+            )
+        ]
+    compute = (int(probe["compute"][0]), int(probe["compute"][1]))
+    name = str(probe.get("name") or "unnamed device")
+    status = architecture_status(compute)
+    evidence: dict[str, object] = dict(status.as_dict())
+    evidence["name"] = name
+    card = (
+        f"{name}, compute capability {compute[0]}.{compute[1]} ({status.sm})"
+    )
+    floor = cuda_runtime_floor()
+    floor_major = None if floor is None else floor // 1000
+    if "nvrtc_targets" not in probe:
+        error = probe.get("nvrtc_error", "no answer")
+        evidence["nvrtc_error"] = error
+        extra = _GPU_EXTRA_BY_MAJOR.get(floor_major) if floor_major else None
+        remedy = (
+            f"  # NVRTC could not be asked which targets it compiles for, and\n"
+            f"  # every kernel is compiled by NVRTC when the run starts; the\n"
+            f"  # CUDA extra installs CuPy with the NVRTC it loads\n"
+        )
+        if extra:
+            remedy += f'  pip install "{DISTRIBUTION_NAME}[{extra}]"'
+        return [
+            Finding(
+                subject=_ARCHITECTURE_SUBJECT,
+                status=MISSING,
+                detail=(
+                    f"{card}: NVRTC could not be asked which targets it "
+                    f"compiles for ({error}), so no kernel could be built on "
+                    f"this install"
+                ),
+                remedy=remedy.rstrip("\n"),
+                evidence=evidence,
+            )
+        ]
+    targets = tuple(int(value) for value in probe["nvrtc_targets"])
+    evidence["nvrtc_targets"] = [f"compute_{value}" for value in targets]
+    target = compute[0] * 10 + compute[1]
+    if target not in targets:
+        if targets and target > max(targets):
+            newer = f"CUDA {floor_major} " if floor_major else ""
+            remedy = (
+                f"  # this NVRTC generates code up to compute_{max(targets)}, "
+                f"older than the card;\n"
+                f"  # a newer {newer}NVRTC lists compute_{target}\n"
+                f"  pip install --upgrade nvidia-cuda-nvrtc"
+            )
+        else:
+            remedy = (
+                f"  # NOT a pip problem.  The CUDA toolkit this port requires "
+                f"generates no\n"
+                f"  # code for compute_{target}; run the CUDA lane on a card "
+                f"it lists"
+            )
+        return [
+            Finding(
+                subject=_ARCHITECTURE_SUBJECT,
+                status=MISSING,
+                detail=f"{name}: {nvrtc_refusal(compute, targets)}",
+                remedy=remedy,
+                evidence=evidence,
+            )
+        ]
+    detail = f"{card}: admitted, {status.describe()}"
+    if not status.anchored:
+        detail += (
+            "; the forecast door measures the numeric route on this card "
+            "before a run"
+        )
+    return [
+        Finding(
+            subject=_ARCHITECTURE_SUBJECT,
+            status=VERIFIED,
+            detail=detail,
+            evidence=evidence,
+        )
+    ]
+
+
 #: The engine range, DERIVED rather than restated.  ``engine_pin`` computes
 #: it from a table of measured verdicts; the version numbers live there and
 #: nowhere else, because this constant used to be a second copy of a number
@@ -806,6 +983,7 @@ def collect() -> list[Finding]:
     findings.extend(check_python_dependencies())
     findings.extend(check_physics_seam())
     findings.extend(check_gpu_runtime())
+    findings.extend(check_gpu_architecture())
     findings.extend(check_engines())
     findings.extend(check_assets())
     return findings

@@ -329,14 +329,15 @@ version and `RECORD` digest.
 
 On a card that holds the mesh, preflight binds it, admits it, runs the
 driver's own source-pin and host checks, and exits 0. This transcript is
-from a 10 GiB RTX 3080 with a desktop session on it, run 2026-08-25; the `ADMISSION` line is the
-one the door prints for that card and that free reading today:
+from a 10 GiB RTX 3080 with a desktop session on it, run 2026-08-25; the `ADMISSION` and
+`ARCHITECTURE` lines are the ones the door prints for that card and that
+free reading today:
 
 ```
 [mesh-binding] bound x1.40962: nCells=40962, nEdges=122880, dx=120000.0 m, dt=120.0 s
 BIND mesh=x1.40962 rebound=True dt=120.0 s
 ADMISSION mesh=x1.40962 cells=40,962 card=68 SM row=measured global predicted=5,682.0 MiB margin=884.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> admitted
-ARCHITECTURE sm=sm_86 -> admitted (per-architecture anchor of 2026-08-25 (evidence/sm86-tier-20260825/RECEIPT.md))
+ARCHITECTURE sm=sm_86 -> admitted, anchored: the 2026-08-25 anchor (evidence/sm86-tier-20260825/RECEIPT.md, evidence pin 75437c663c9894dc...)
 PREFLIGHT mesh=x1.40962 problems=0 status=preflight_passed
 ```
 

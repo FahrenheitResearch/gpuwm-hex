@@ -22,6 +22,7 @@ from pathlib import Path
 import sys
 
 import pytest
+from _layout import PACKAGE_DIR, package_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +48,7 @@ def partstream() -> object:
 
 
 def _missing(names) -> list[str]:
-    return sorted(name for name in names if not (ROOT / name).is_file())
+    return sorted(name for name in names if not package_path(name).is_file())
 
 
 def test_port_source_files_all_exist(partstream) -> None:
@@ -61,7 +62,7 @@ def test_port_source_files_has_no_repeated_row(partstream) -> None:
 
 def test_execution_source_pins_all_exist() -> None:
     runner = _load(
-        ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py",
+        PACKAGE_DIR / "drivers" / "run_cuda_v841_full_physics_x4.py",
         "_test_manifest_run_cuda_v841_full_physics_x4",
     )
     assert _missing(runner.EXECUTION_SOURCE_PINS) == []

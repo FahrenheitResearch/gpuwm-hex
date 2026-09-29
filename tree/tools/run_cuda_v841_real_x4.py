@@ -1716,7 +1716,6 @@ def _run_one_step(
 
     capability = require_cuda(
         min_compute=(12, 0),
-        required_compute=(12, 0),
         cache_dir=cache_root,
     )
     import cupy as cp

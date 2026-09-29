@@ -41,8 +41,12 @@ finer zonally at mid-latitudes -- the source is not coarsened).  Fifty
 hybrid levels are carried as level-indexed slabs with the 3-D ``PRESSURE``
 field beside them, which is the MPAS convention for model-level first
 guesses (ERA5 ML uses it) and the branch ``rw_mpas_init`` takes when a 3-D
-pressure is present.  Hydrometeors are not carried: the init stream has no
-slot for them, and the README's hour-zero-has-no-ice sentence applies.
+pressure is present.  Hydrometeors are not carried, although the engine's
+window decodes them.  The init stream has slots for cloud water and rain
+(``qc``, ``qr``), but the init and boundary writers read no hydrometeor
+record from an intermediate file and write both as zero; it has no slot for
+cloud ice, snow or graupel, so the README's hour-zero-has-no-ice sentence
+applies.  Carrying them starts in the engine's writers, not in this row.
 
 THE ARBITRARY ACCEPTANCE TEST.  The source is a ROW (:data:`SOURCE_ROWS`):
 the engine decoder key, the loader, the level count, the field map, the
@@ -811,10 +815,12 @@ def build_intermediates(request: IntermediateRequest, *, log: Callable[[str], No
         },
         "files": files,
         "not_carried": ["QC", "QI", "QR", "QS", "QG", "SNOWH", "PMSL"],
-        "why_not_carried": "the init stream has no slot for hydrometeors (hour zero has "
-                           "no ice; README, limited-area lane); the engine's window "
-                           "carries no mean-sea-level pressure and the init does not "
-                           "require one",
+        "why_not_carried": "the init and boundary writers read no hydrometeor record "
+                           "from an intermediate file (the init stream's qc and qr "
+                           "are written as zero) and the init stream has no slot for "
+                           "cloud ice, snow or graupel (hour zero has no ice; README, "
+                           "limited-area lane); the engine's window carries no "
+                           "mean-sea-level pressure and the init does not require one",
     }
     receipt_path = out_dir / "intermediate-receipt.json"
     receipt_path.write_text(

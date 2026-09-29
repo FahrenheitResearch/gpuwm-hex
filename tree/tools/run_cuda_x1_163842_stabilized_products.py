@@ -2784,7 +2784,7 @@ def execute(args: argparse.Namespace) -> int:
         gpuwm_receipt_root=args.gpuwm_probe,
     )
     capability = runner.require_cuda(
-        min_compute=(12, 0), required_compute=(12, 0), cache_dir=cache_root
+        min_compute=(12, 0), cache_dir=cache_root
     )
     started = time.perf_counter()
     kernel_cache = runner.prepare_cuda_kernel_cache(

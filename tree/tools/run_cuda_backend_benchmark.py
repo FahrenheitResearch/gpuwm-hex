@@ -230,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if min(args.gpu_repeats, args.pressure_cpu_repeats, args.velocity_cpu_repeats) < 1:
         raise ValueError("benchmark repeat counts must be positive")
-    capability = require_cuda(required_compute=(12, 0))
+    capability = require_cuda()
     total_started = time.perf_counter()
     (
         oracle, mesh, vertical, terrain, reference, state, saved, truth,

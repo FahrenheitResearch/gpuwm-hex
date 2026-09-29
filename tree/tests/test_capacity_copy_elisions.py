@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from _layout import PACKAGE_DIR
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src" / "hexcore"
+SRC = PACKAGE_DIR
 
 EXPECTED_SOURCE_SHA256 = {
     # Moved by the NVRTC reciprocal-rewrite lane: the flux3/flux4

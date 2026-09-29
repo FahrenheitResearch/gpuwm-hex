@@ -23,11 +23,12 @@ from pathlib import Path
 import sys
 
 import pytest
+from _layout import PACKAGE_DIR
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
-DRIVERS = ROOT / "src" / "hexcore" / "drivers"
+DRIVERS = PACKAGE_DIR / "drivers"
 
 PINS = "require_frozen_execution_sources"
 GUARD = "verify_arwen_checkout_git"

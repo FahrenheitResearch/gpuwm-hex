@@ -226,7 +226,6 @@ def execute(args: argparse.Namespace) -> int:
     cache_root = args.cache_root.expanduser().resolve()
     capability = require_cuda(
         min_compute=(12, 0),
-        required_compute=(12, 0),
         cache_dir=cache_root,
     )
     print("compiling one exact eight-TU executable for both arms", flush=True)

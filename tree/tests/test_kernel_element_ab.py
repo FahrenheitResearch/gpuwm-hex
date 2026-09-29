@@ -99,7 +99,7 @@ def _targets() -> list[tuple[str, str]]:
 def sources() -> dict[str, str]:
     table = {}
     for module_key, (module_name, attribute) in ab.SOURCE_ATTRIBUTES.items():
-        table[module_key] = getattr(importlib.import_module(module_name), attribute)
+        table[module_key] = getattr(ab.import_unit(module_name), attribute)
     return table
 
 

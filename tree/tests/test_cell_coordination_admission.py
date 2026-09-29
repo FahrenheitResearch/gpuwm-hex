@@ -32,9 +32,10 @@ from hexcore.cell_coordination_admission import (
     CellCoordinationPolicy,
     admit_cell_coordination,
 )
+from _layout import PACKAGE_DIR
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
-DRIVERS = Path(__file__).resolve().parents[1] / "src" / "hexcore" / "drivers"
+DRIVERS = PACKAGE_DIR / "drivers"
 
 #: The mesh that completed a 6 h forecast, read from run20.grid.nc.
 V20_HISTOGRAM = {5: 1029, 6: 149603, 7: 1017}

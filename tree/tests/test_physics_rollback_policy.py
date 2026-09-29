@@ -34,10 +34,11 @@ import numpy as np
 import pytest
 
 from hexcore import cuda_arwen_physics_v841 as arwen
+from _layout import PACKAGE_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
-FORECAST_PATH = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py"
+RUNNER_PATH = PACKAGE_DIR / "drivers" / "run_cuda_v841_full_physics_x4.py"
+FORECAST_PATH = PACKAGE_DIR / "drivers" / "run_cuda_v841_forecast.py"
 
 
 def _load_runner():

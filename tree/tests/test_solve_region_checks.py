@@ -39,9 +39,10 @@ from hexcore.cuda_solve_region_v841 import (
     SOLVE_REGION_CUDA_SOURCE,
     SOLVE_REGION_KERNELS,
 )
+from _layout import PACKAGE_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src" / "hexcore"
+SRC = PACKAGE_DIR
 
 
 def _between(source: str, start: str, end: str) -> str:
@@ -121,7 +122,9 @@ def test_a_refusal_is_never_memoised(monkeypatch, tmp_path):
     runtime_module.forget_admissions()
     monkeypatch.setattr(arch_admission, "ADMITTED_BELOW_FLOOR", {})
     counter = {"properties": 0}
-    _fake_cupy(monkeypatch, major=8, minor=6, counter=counter)
+    # sm_61: the one architecture refusal left is a card NVRTC cannot
+    # compile for (the fake lists compute_75 and newer).
+    _fake_cupy(monkeypatch, major=6, minor=1, counter=counter)
     for _ in range(3):
         with pytest.raises(runtime_module.CudaRefusal):
             runtime_module.require_cuda(min_compute=(12, 0), cache_dir=str(tmp_path))
@@ -212,7 +215,7 @@ def test_the_check_kernels_do_no_arithmetic_on_the_values():
 
 
 def test_the_health_gate_reads_once():
-    source = (ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_forecast.py").read_text(encoding="utf-8")
+    source = (PACKAGE_DIR / "drivers" / "run_cuda_v841_forecast.py").read_text(encoding="utf-8")
     body = _between(source, "def step_health_gate(", "\nclass BoundaryFingerprintWriter")
     for reduction in ("cp.min(", "cp.max(", "cp.argmax(", "cp.abs("):
         assert reduction not in body, reduction

@@ -4192,9 +4192,10 @@ def _execute_full_proof(
     from hexcore.cuda_backend import KernelCache, require_cuda
 
 
-    capability = require_cuda(
-        min_compute=(12, 0), required_compute=(12, 0), cache_dir=cache_root
-    )
+    # No sm_120 pin (``required_compute``): it named no breakage.  A card of
+    # another architecture runs the proof and its receipt says whether that
+    # architecture holds an anchor; the frozen digests decide the verdict.
+    capability = require_cuda(min_compute=(12, 0), cache_dir=cache_root)
     import cupy as cp
 
     memory = gpu_memory_admission(cp)
@@ -4404,8 +4405,11 @@ def _execute_full_proof(
             output_root / SNAPSHOT_FILE_NAMES["F001_RESTART"], restart_f001, static
         ),
     }
+    from hexcore.cuda_backend.arch_admission import architecture_status
+
     return {
         "capability": capability.as_dict(),
+        "architecture": architecture_status(capability.compute).as_dict(),
         "arwen_pre_kernel_cache_pin": arwen_pin,
         "memory_admission": memory,
         "source_pins": source_receipt,
@@ -4579,12 +4583,14 @@ def _execute_restart_worker(input_path: Path, output_path: Path) -> int:
 
     pin_arwen_physics_v841(arwen_checkout)
     from hexcore.cuda_backend import KernelCache, require_cuda
+    from hexcore.cuda_backend.arch_admission import architecture_status
 
     cache_root = _plain_absolute(Path(job["cache_root"]), "restart worker cache root")
     cache_root.mkdir(parents=False, exist_ok=False)
-    capability = require_cuda(
-        min_compute=(12, 0), required_compute=(12, 0), cache_dir=cache_root
-    )
+    # No sm_120 pin (``required_compute``): it named no breakage.  A card of
+    # another architecture runs the proof and its receipt says whether that
+    # architecture holds an anchor; the frozen digests decide the verdict.
+    capability = require_cuda(min_compute=(12, 0), cache_dir=cache_root)
     import cupy as cp
 
     memory = gpu_memory_admission(
@@ -4650,6 +4656,7 @@ def _execute_restart_worker(input_path: Path, output_path: Path) -> int:
         "arwen_commit": ARWEN_COMMIT,
         "fresh_process": True,
         "capability": capability.as_dict(),
+        "architecture": architecture_status(capability.compute).as_dict(),
         "memory_admission": memory,
         "restored_f030": restored_f030,
         "restored_gf_forcing": restored_gf_forcing,

@@ -177,8 +177,13 @@ def translation_units() -> Iterator[tuple[str, str, str]]:
 
     import importlib
 
+    import hexcore
+
     def attribute(module_name: str, attribute_name: str) -> Any:
-        module = importlib.import_module(f"hexcore.{module_name}")
+        # Imported under the package's own import name, which a tree that
+        # folds the package in may change.  The module_key strings below are
+        # identities and keep their bytes either way.
+        module = importlib.import_module(f"{hexcore.__name__}.{module_name}")
         return getattr(module, attribute_name)
 
     simple = (

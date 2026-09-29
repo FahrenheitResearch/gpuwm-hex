@@ -100,6 +100,22 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
+
+def import_unit(module_name: str) -> Any:
+    """Import a translation unit named by its identity, ``hexcore.<module>``.
+
+    The identity keeps its bytes wherever the package goes (it is framed into
+    digests); the import uses the package's own import name, which a tree
+    that folds the package in may change.
+    """
+
+    import importlib
+
+    import hexcore
+
+    return importlib.import_module(hexcore.__name__ + module_name[len("hexcore"):])
+
+
 #: module key -> (module path, attribute holding the translation unit)
 SOURCE_ATTRIBUTES: dict[str, tuple[str, str]] = {
     "hexcore.cuda_regional_v841": ("hexcore.cuda_regional_v841", "CUDA_REGIONAL_SOURCE"),
@@ -466,7 +482,7 @@ def dump_sources(path: Path) -> None:
 
     payload = {"__hexcore__": str(Path(hexcore.__file__).resolve())}
     for module_key, (module_name, attribute) in SOURCE_ATTRIBUTES.items():
-        module = importlib.import_module(module_name)
+        module = import_unit(module_name)
         payload[module_key] = getattr(module, attribute)
     path.write_text(json.dumps(payload), encoding="utf-8")
     print(f"wrote {len(payload) - 1} translation units from {payload['__hexcore__']} to {path}")

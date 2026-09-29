@@ -14,6 +14,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from _layout import FOLDED, NOT_CARRIED_FOLDED
+
 ROOT = Path(__file__).resolve().parents[1]
 GIB = 1024**3
 
@@ -56,6 +60,8 @@ def test_conftest_registered_floor_is_the_surface_value() -> None:
 
 
 def test_pyproject_markers_name_the_surface_not_a_number() -> None:
+    if FOLDED:
+        pytest.skip(NOT_CARRIED_FOLDED)
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     for figure in RETIRED_FIGURES:
         assert figure not in text, (

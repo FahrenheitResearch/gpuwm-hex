@@ -22,7 +22,9 @@ in its receipt:
     committed diagnostic surface (38 arrays per capture).
 
 ``q2`` is excluded from the verdict and reported informationally, following the
-restart-proof precedent in ``_snapshot_hash_projection``.
+restart-proof precedent in ``_snapshot_hash_projection``.  So is ``psfc`` in
+the step-0 frame only: the driver completes its start frame from the model's
+own surface pressure where the proof publishes the seam's placeholder.
 
 BITWISE-IDENTICAL is required.  Any mismatch means the fork changed the model
 and must be fixed before any showcase forecast runs.
@@ -51,6 +53,9 @@ AUTHORITY_INIT_SHA256 = proof.AUTHORITY_PINS["init"]["sha256"]
 CHECKPOINT_STEP = proof.CHECKPOINT_STEP
 FULL_STEPS = proof.FULL_STEPS
 SNAPSHOT_LABEL_BY_STEP = {0: "F000", CHECKPOINT_STEP: "F030", FULL_STEPS: "F001"}
+#: Start-frame fields the forecast driver completes
+#: (``run_cuda_v841_forecast.F000_COMPLETED_SURFACE_DIAGNOSTICS``).
+F000_COMPLETED = ("q2", "psfc")
 
 
 def _leaves(value):
@@ -256,7 +261,20 @@ def main(argv=None) -> int:
             for name, value in reference_arrays.items()
             if name != "q2"
         }
-        candidate_projection = snapshot_hashes["projection"].get(str(step), {})
+        candidate_projection = dict(snapshot_hashes["projection"].get(str(step), {}))
+        if step == 0:
+            # The forecast driver completes its start frame's psfc (and q2,
+            # already informational) from the model's own start state, where
+            # the proof publishes the seam's pre-first-call placeholder.  That
+            # is a history-frame difference by design, not a model change, so
+            # it is reported and left out of the verdict; every later frame
+            # still compares both.
+            for name in F000_COMPLETED:
+                if name in candidate_projection or name in reference_projection:
+                    report.setdefault("f000_completed_informational", {})[name] = {
+                        "reference_sha256": reference_projection.pop(name, None),
+                        "candidate_sha256": candidate_projection.pop(name, None),
+                    }
         mismatches = sorted(
             name
             for name in set(reference_projection) | set(candidate_projection)

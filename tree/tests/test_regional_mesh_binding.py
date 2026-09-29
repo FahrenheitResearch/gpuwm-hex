@@ -19,9 +19,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from _layout import PACKAGE_DIR
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
-DRIVERS = Path(__file__).resolve().parents[1] / "src" / "hexcore" / "drivers"
+DRIVERS = PACKAGE_DIR / "drivers"
 
 REFERENCE_DIR_VARIABLE = "GPUWM_HEX_REGIONAL_REFERENCE_DIR"
 

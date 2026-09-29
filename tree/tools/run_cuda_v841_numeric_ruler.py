@@ -2897,7 +2897,6 @@ def run_numeric_ruler(
         raise RuntimeError("numeric grid/static bytes changed before case load")
     capability = require_cuda(
         min_compute=(12, 0),
-        required_compute=(12, 0),
         cache_dir=cache_root / "baseline",
     )
     import cupy as cp

@@ -14,6 +14,7 @@ import re
 
 import pytest
 
+from _layout import package_path
 from hexcore import regional_v841
 from hexcore.cuda_backend import regional_admission
 from hexcore.cuda_regional_v841 import (
@@ -211,7 +212,7 @@ def test_the_class_key_is_measured_from_the_tree_not_declared():
         "update MINTED_KERNEL_SET_SHA256 to " + measured
     )
     for name in regional_admission.REGIONAL_KERNEL_SOURCES:
-        assert (ROOT / name).is_file(), name
+        assert package_path(name).is_file(), name
     for row in regional_admission.ADMITTED_CLASSES.values():
         assert row.key.kernel_set_sha256 == measured, row.class_id
 

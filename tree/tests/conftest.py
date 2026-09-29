@@ -37,12 +37,14 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
 
 import sys
 
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
+
+# The x4 runner in the layout this tree runs in (tests/_layout.py).
+from _layout import RUNNER_PATH  # noqa: E402
 
 from hexcore.device_admission import native_device_floor_bytes
 

@@ -170,20 +170,47 @@ what the door selected. `--headroom-mib` overrides the margin the same
 way; its default is no longer a flat 512 MiB but the model's own two named
 terms, priced from your card.
 
-**Architecture is admission too, and it is a registry rather than one
-number.** The port's numerical contract was proven on sm_120, so an
-architecture below that floor runs only if it holds its own anchor — a
-measured contract receipt and a frozen-authority anchor taken on real
-hardware of that architecture
+**Architecture is admission too, and every NVIDIA architecture NVRTC can
+compile the kernels for is admitted, with no flag.** The kernels are
+compiled by NVRTC for your card when the run starts, and they ask for
+nothing an older card lacks, so the floor is the CUDA 13 toolkit's:
+compute capability 7.5 (Turing) and newer. A card NVRTC cannot compile for
+is refused by name, because no kernel could be built for it. The one other
+architecture refusal is the IEEE check below, on an unanchored card, when
+ordinary arithmetic is not IEEE; nothing else about the architecture
+refuses a run.
+
+What differs between architectures is the evidence behind the numbers. The
+port's numerical contract was first measured on sm_120; an architecture
+holds an **anchor** when the same contract has been measured again on real
+hardware of it, a contract receipt and a frozen-authority anchor, each row
+pinned to its evidence by SHA-256
 (`src/hexcore/cuda_backend/arch_admission.py`). **sm_86 holds one**
-(2026-08-25, a 10 GiB RTX 3080), which is
-why the quickstart's preflight prints `ARCHITECTURE sm=sm_86 -> admitted`
-and why a full-physics limited-area forecast runs on that card (6.8). An
-architecture holding no anchor is refused by name before a single
-allocation, with the roster of the ones that do. `--preflight` answers this
-half from a device-properties read rather than from the driver's CUDA
-import, so it can no longer say `preflight_passed` about a card the run
-then refuses by architecture.
+(2026-08-25, a 10 GiB RTX 3080) and **sm_89 holds one** (2026-09-24, an
+RTX 4090, so the RTX 40 series and the L40S), each with the guard-cost
+ceiling measured on its card (1.75 and 1.55). The preflight prints one line
+saying which it is, with the evidence pin of an anchored row:
+
+```
+ARCHITECTURE sm=sm_89 -> admitted, anchored: the 2026-09-24 anchor (evidence/sm89-tier-20260924/RECEIPT.md, evidence pin 15357eb4d576853f...)
+```
+
+On a card of any other architecture the line reads `admitted, unanchored`,
+and before the run the door measures the numeric route on that card in one
+tiny compile and launch: what the route does with an FP32 subnormal, what
+the port's guarded fallback returns for it, whether `--fmad=false` keeps
+`a*b+c` separately rounded, and whether ordinary FP32 and FP64 arithmetic
+agree with IEEE 754. The line ends with what it found. Only the last check
+refuses, because on such a card every number the run produced would be
+wrong; the others are recorded. Every receipt (the door's, the driver's and
+the proof harness's) records the compute capability and either `anchored`
+or `unanchored`. An anchored row carries its evidence pin; sm_120, the
+proven contract floor where the contract was first measured, is anchored
+and carries no pin. No receipt claims an anchor its architecture does not
+hold, and `gpuwm-hex doctor` names the card, its compute capability and
+the same status before you run. `--preflight` answers this half from a
+device-properties read and NVRTC's own target list, so it and the run
+agree about the architecture.
 
 **`--preflight` answers the whole question.** It runs every check —
 inputs, the mesh bind, the admission decision, and the driver's own
@@ -197,7 +224,7 @@ question is the one no file fixes:
 INPUT MISSING --init names a missing file: .../x1.40962.init.nc.  Build one with `gpuwm-hex init` (chapter 5 of the manual).
 BIND mesh=x1.40962 rebound=True dt=120.0 s
 ADMISSION mesh=x1.40962 cells=40,962 card=68 SM row=measured global predicted=5,682.0 MiB margin=884.0 MiB free=9,097.0 MiB of 10,239.5 MiB -> admitted
-ARCHITECTURE sm=sm_86 -> admitted (per-architecture anchor of 2026-08-25 (evidence/sm86-tier-20260825/RECEIPT.md))
+ARCHITECTURE sm=sm_86 -> admitted, anchored: the 2026-08-25 anchor (evidence/sm86-tier-20260825/RECEIPT.md, evidence pin 75437c663c9894dc...)
 PREFLIGHT mesh=x1.40962 problems=1 status=preflight_refused
 ```
 

@@ -113,6 +113,18 @@ WHAT IS REMOVED, AND WHY (every removal deliberate; guarantees dropped)
      stays as proven; only the number of steps and the capture set move.
      GUARANTEE DROPPED: the proof's three-snapshot schedule and its labels.
 
+WHAT IS ADDED
+  7. THE F000 START-FRAME COMPLETION (:func:`complete_f000_surface_diagnostics`).
+     The proof overlays ``t2``/``u10``/``v10`` from the init onto the seam's
+     pre-first-call placeholders and publishes ``q2`` and ``psfc`` as the
+     placeholders themselves (+0 and 100000 Pa), because the native F000 it
+     is compared against carries the same.  A forecast's start frame is a
+     product, so this driver completes it the way the regional engine writes
+     its own hour 0: ``q2`` from the start file when the start file carries
+     one, otherwise from the lowest model level, and ``psfc`` from the model's
+     own surface pressure.  Every later frame is untouched, and so is the
+     model state.
+
 FORK-EQUIVALENCE GATE.  Because this driver reaches the model through the
 proof module's own functions, a fork defect would show up as a changed
 trajectory.  ``tools/gate_v841_forecast_fork_equivalence.py`` runs THIS driver
@@ -478,6 +490,232 @@ def seed_p_top_expectation(
             "re-derived here, independently recomputed and asserted by the "
             "proof reduction"
         ),
+    }
+
+
+# --------------------------------------------------------------------------
+# F000: the surface diagnostics the first physics call has not made yet
+# --------------------------------------------------------------------------
+#: The start-frame fields this driver completes after the proof's own overlay.
+#:
+#: THE BREAKAGE THIS PREVENTS: every hex forecast's start frame published
+#: ``q2`` as the seam's pre-first-call +0 and ``psfc`` as its pre-first-call
+#: 100000 Pa, so the hour-0 2 m dewpoint map was drawn from zero humidity (a
+#: limited-area forecast's f000 dewpoint map was drawn from Q2 = 0 in every
+#: cell) while every later hour was right.  The regional
+#: engine's own hour 0 carries its start state's T2, Q2, PSFC, U10 and V10;
+#: the proof overlay already gives this frame ``t2``/``u10``/``v10`` from the
+#: start file, and these two complete it.
+F000_COMPLETED_SURFACE_DIAGNOSTICS = ("q2", "psfc")
+
+
+def load_f000_start_humidity(init_path: Path) -> dict[str, Any]:
+    """The start file's own 2 m humidity, when it carries one.
+
+    The init writer diagnoses ``q2`` from the source's 2 m relative humidity
+    (``rh2``).  A source that delivers specific humidity instead -- the
+    ``--use-spechumd yes`` road, which is how ``gpuwm-hex intermediate`` hands
+    HRRR over -- reaches the writer with no ``rh2``, so ``q2`` is written as
+    zero in every cell.  An all-zero ``q2`` is therefore "not carried", not a
+    measurement of bone-dry air, and the start frame falls back to the model's
+    lowest level (:func:`complete_f000_surface_diagnostics`).
+    """
+
+    from netCDF4 import Dataset
+
+    with Dataset(init_path, "r") as dataset:
+        if "q2" not in dataset.variables:
+            return {
+                "carried": False,
+                "q2": None,
+                "reason": "the start file has no q2 variable",
+            }
+        value = proof._read_exact_variable(
+            dataset, "q2", dtype=np.float32, dimensions=("Time", "nCells")
+        )
+    field = np.ascontiguousarray(value[0], dtype=np.float32)
+    carried = bool(np.any(field != np.float32(0.0)))
+    return {
+        "carried": carried,
+        "q2": field if carried else None,
+        "sha256": proof.array_sha256(field),
+        "reason": (
+            "the start file carries q2"
+            if carried
+            else (
+                "the start file's q2 is zero in every cell: the init writer "
+                "diagnoses q2 from the source's 2 m relative humidity, and "
+                "this source delivered none"
+            )
+        ),
+    }
+
+
+def saturation_mixing_ratio(temperature_k: Any, pressure_pa: Any) -> np.ndarray:
+    """Saturation water-vapour mixing ratio over liquid water, kg kg-1.
+
+    The Tetens form (6.112 hPa, 17.27, 35.86 K) the init writer's own ``q2``
+    diagnosis uses, so a ``q2`` bounded here and a ``q2`` the start file
+    carried sit on the same saturation curve.  The vapour pressure is held
+    below 99 % of the air pressure, as the init writer's surface pass holds
+    it, because the denominator crosses zero above that.
+    """
+
+    temperature = np.asarray(temperature_k, dtype=np.float64)
+    pressure = np.asarray(pressure_pa, dtype=np.float64)
+    vapour = 611.2 * np.exp(17.27 * (temperature - 273.16) / (temperature - 35.86))
+    vapour = np.minimum(vapour, 0.99 * pressure)
+    return (0.622 * vapour / (pressure - vapour)).astype(np.float32)
+
+
+def _snapshot_array_record(value: Any) -> dict[str, Any]:
+    """One ``receipt['arrays']`` row, computed as ``proof.capture_snapshot`` does."""
+
+    array = np.asarray(value)
+    return {
+        "dtype": array.dtype.str,
+        "shape": list(array.shape),
+        "sha256": proof.array_sha256(array),
+        "minimum": float(array.min()) if array.size else None,
+        "maximum": float(array.max()) if array.size else None,
+        "nonzero": int(np.count_nonzero(array)),
+        "negative": int(np.count_nonzero(array < 0)) if array.dtype.kind == "f" else 0,
+    }
+
+
+def complete_f000_surface_diagnostics(
+    snapshot: dict[str, Any], start_humidity: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Give the start frame a real ``q2`` and ``psfc``; return what was done.
+
+    ``q2``: the start file's own when it carries one (the analysis 2 m
+    humidity, as the regional engine publishes at its hour 0).  When it does
+    not, the lowest model level's water-vapour mixing ratio, bounded to
+    [0, saturation at the frame's 2 m temperature and surface pressure]: the
+    2 m value a surface layer with no flux yet would give, and the bound keeps
+    the 2 m dewpoint at or below the 2 m temperature.
+
+    ``psfc``: the model's own surface pressure at this frame, the quantity the
+    first physics call receives as ``psfc``.
+
+    Legal only on the step-0 frame and only before any physics call: after
+    one, both fields are the seam's measurements and must not be replaced.
+    The snapshot's ``receipt['arrays']`` rows for both fields are recomputed,
+    so the published digests describe the published bytes.
+    """
+
+    receipt = snapshot["receipt"]
+    if int(receipt.get("step", -1)) != 0:
+        raise ValueError(
+            "the F000 completion applies to the step-0 frame only; on a later "
+            "frame q2 and psfc are the surface layer's own values"
+        )
+    execution = receipt.get("arwen_v2_surface_execution")
+    if not isinstance(execution, Mapping) or execution.get("last_noahmp_census") is not None:
+        raise ValueError(
+            "the F000 completion found a frame the physics has already run on; "
+            "replacing its q2 and psfc would overwrite the seam's measurements"
+        )
+    arrays = snapshot["arrays"]
+    t2 = np.asarray(arrays["t2"])
+    surface_pressure = np.asarray(arrays["surface_pressure"])
+    qv = np.asarray(arrays["qv"])
+    shape = t2.shape
+    if surface_pressure.shape != shape or qv.ndim != 2 or qv.shape[1:] != shape:
+        raise ValueError(
+            f"F000 completion shapes disagree: t2 {t2.shape}, surface_pressure "
+            f"{surface_pressure.shape}, qv {qv.shape}"
+        )
+    # A row whose seam exports neither field publishes it at no frame, so the
+    # start frame gains nothing the later frames lack.
+    completed = tuple(
+        name for name in F000_COMPLETED_SURFACE_DIAGNOSTICS if name in arrays
+    )
+    result: dict[str, Any] = {
+        "scope": "F000 history frame only; the model state is unchanged",
+        "absent_from_this_row": [
+            name for name in F000_COMPLETED_SURFACE_DIAGNOSTICS if name not in completed
+        ],
+    }
+    # q2 first: its placeholder check is the one that can refuse, and a
+    # refusal must leave the frame exactly as the capture produced it.
+    if "q2" in completed:
+        result["q2"] = _complete_f000_q2(arrays, start_humidity, t2, surface_pressure, qv)
+    if "psfc" in completed:
+        psfc_before = np.asarray(arrays["psfc"])
+        psfc = np.array(surface_pressure, dtype=np.float32, copy=True, order="C")
+        arrays["psfc"] = psfc
+        result["psfc"] = {
+            "source": (
+                "surface_pressure (the model's own, as the first physics call "
+                "receives it)"
+            ),
+            "placeholder_minimum": float(psfc_before.min()),
+            "placeholder_maximum": float(psfc_before.max()),
+            "minimum": float(psfc.min()),
+            "maximum": float(psfc.max()),
+            "sha256": proof.array_sha256(psfc),
+        }
+    rows = receipt.get("arrays")
+    if isinstance(rows, dict):
+        for name in completed:
+            rows[name] = _snapshot_array_record(arrays[name])
+    return result
+
+
+def _complete_f000_q2(
+    arrays: dict[str, Any],
+    start_humidity: Mapping[str, Any],
+    t2: np.ndarray,
+    surface_pressure: np.ndarray,
+    qv: np.ndarray,
+) -> dict[str, Any]:
+    shape = t2.shape
+    placeholder = np.ascontiguousarray(np.asarray(arrays["q2"]))
+    if (
+        placeholder.dtype != np.dtype(np.float32)
+        or placeholder.shape != shape
+        or np.any(placeholder.view(np.uint32) != np.uint32(0))
+    ):
+        raise ValueError(
+            "the start frame's q2 is not the seam's exact +0 placeholder, so "
+            "something computed it and the completion would overwrite it"
+        )
+    if start_humidity.get("carried"):
+        q2 = np.array(start_humidity["q2"], dtype=np.float32, copy=True, order="C")
+        if q2.shape != shape:
+            raise ValueError(
+                f"the start file's q2 has shape {q2.shape} and this frame "
+                f"{shape}; it was written for a different mesh"
+            )
+        q2_record = {
+            "source": "start file q2",
+            "start_file_q2_sha256": start_humidity.get("sha256"),
+        }
+    else:
+        lowest = np.asarray(qv[0], dtype=np.float32)
+        ceiling = saturation_mixing_ratio(t2, surface_pressure)
+        q2 = np.ascontiguousarray(
+            np.minimum(np.maximum(lowest, np.float32(0.0)), ceiling), dtype=np.float32
+        )
+        q2_record = {
+            "source": (
+                "lowest model level qv, bounded to [0, saturation at t2 and "
+                "surface_pressure]"
+            ),
+            "why": str(start_humidity.get("reason", "")),
+            "cells_bounded_at_saturation": int(np.count_nonzero(lowest > ceiling)),
+            "cells_floored_at_zero": int(np.count_nonzero(lowest < 0.0)),
+        }
+    if not np.all(np.isfinite(q2)):
+        raise FloatingPointError("the completed F000 q2 is non-finite")
+    arrays["q2"] = q2
+    return {
+        **q2_record,
+        "minimum": float(q2.min()),
+        "mean": float(q2.mean(dtype=np.float64)),
+        "maximum": float(q2.max()),
+        "sha256": proof.array_sha256(q2),
     }
 
 
@@ -1207,6 +1445,7 @@ def prepare_forecast_host(
     f000_surface_diagnostics = proof.load_f000_initialized_surface_diagnostics(
         paths["init"]
     )
+    f000_start_humidity = load_f000_start_humidity(paths["init"])
     (
         constructor_values,
         constructor_receipt,
@@ -1344,6 +1583,7 @@ def prepare_forecast_host(
         "gwdo_host": gwdo_host,
         "mesh_evidence": mesh_evidence,
         "f000_surface_diagnostics": f000_surface_diagnostics,
+        "f000_start_humidity": f000_start_humidity,
         "reconstruction_coefficients": reconstruction_overlay,
         "edge_normal_vectors": edge_normal_overlay,
         "defc": defc,
@@ -1746,9 +1986,11 @@ def execute_forecast(
     # This must precede KernelCache's gpuwm platform-binding construction.
     from hexcore.cuda_backend import KernelCache, require_cuda
 
-    capability = require_cuda(
-        min_compute=(12, 0), required_compute=(12, 0), cache_dir=cache_root
-    )
+    # Any architecture NVRTC can compile the kernels for runs; this call no
+    # longer pins sm_120 (``required_compute``), because that pin named no
+    # breakage.  The receipt records whether the card holds an anchor
+    # (``architecture`` below, hexcore.cuda_backend.arch_admission).
+    capability = require_cuda(min_compute=(12, 0), cache_dir=cache_root)
     import cupy as cp
 
     # ``required_free_bytes`` is the forecast door's own admission sum,
@@ -1849,6 +2091,10 @@ def execute_forecast(
             scalar_names=host["scalar_names"],
             surface_accumulators=host["surface_accumulators"],
         )
+        if step == 0:
+            snapshot["receipt"]["f000_completed_surface_diagnostics"] = (
+                complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"])
+            )
         capture_seconds += time.perf_counter() - mark
         physical_gates[str(step)] = proof.physical_snapshot_gate(
             snapshot,
@@ -2070,8 +2316,11 @@ def execute_forecast(
                 "proof's two-snapshot evolution gate is bound to its own case"
             )
         }
+    from hexcore.cuda_backend.arch_admission import architecture_status
+
     return {
         "capability": capability.as_dict(),
+        "architecture": architecture_status(capability.compute).as_dict(),
         "arwen_pre_kernel_cache_pin": arwen_pin,
         "memory_admission": memory,
         "physics_tier_park": (
@@ -2122,6 +2371,11 @@ def execute_forecast(
             "edge_normal_vectors": host["edge_normal_vectors"],
             "inactive_deformation": host["defc"],
             "case_pin_relaxation": host["case_pin_relaxation"],
+            "f000_start_humidity": {
+                key: value
+                for key, value in host["f000_start_humidity"].items()
+                if key != "q2"
+            },
         },
         "schedule": {
             key: value for key, value in schedule.items() if key != "labels"

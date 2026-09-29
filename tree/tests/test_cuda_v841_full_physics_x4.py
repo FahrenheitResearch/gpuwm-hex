@@ -9,10 +9,11 @@ import sys
 
 import numpy as np
 import pytest
+from _layout import PACKAGE_DIR
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
+RUNNER_PATH = PACKAGE_DIR / "drivers" / "run_cuda_v841_full_physics_x4.py"
 
 
 def _load_runner() -> object:

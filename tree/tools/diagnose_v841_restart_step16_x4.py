@@ -441,7 +441,7 @@ def _build_common(cache_root: Path, arwen_checkout: Path, assets_root: Path | No
     from hexcore.cuda_backend import KernelCache, require_cuda
 
     capability = require_cuda(
-        min_compute=(12, 0), required_compute=(12, 0), cache_dir=cache_root
+        min_compute=(12, 0), cache_dir=cache_root
     )
     import cupy as cp
 

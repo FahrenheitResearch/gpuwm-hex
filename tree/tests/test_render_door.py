@@ -206,6 +206,59 @@ class TestProductCoverage:
         assert "slp" in message
 
 
+class TestCatalogListing:
+    """The door reads the renderer's --list-products rows.
+
+    gpuwm 2.8.0's rw_wrfbatch prints six tab-separated fields per row (a
+    machine reason code after the detail). A parser that demanded exactly
+    five dropped every row and refused every render, so both widths are
+    read here, and a listing with no rows at all still refuses.
+    """
+
+    @staticmethod
+    def _listing(monkeypatch, tmp_path, stdout):
+        from hexcore import render_door
+
+        def fake_run(command, *, log_prefix):
+            class Result:
+                returncode = 0
+                stderr = ""
+
+            Result.stdout = stdout
+            return Result()
+
+        monkeypatch.setattr(render_door, "_run", fake_run)
+        return render_door.list_catalog(
+            Path("rw_wrfbatch"), Path("wrfout_d01"), scratch=tmp_path,
+            heavy=False)
+
+    def test_six_field_rows_of_the_current_renderer_are_read(
+            self, monkeypatch, tmp_path):
+        stdout = (
+            "THEME default\n"
+            "PRODUCT\tslp\tderived\trenderable\tsea-level pressure\t\n"
+            "PRODUCT\t2m_temp_0_24h_max\twindowed\texcluded\twindowed "
+            "accumulations need more than one stored whole-hour frame\t"
+            "windowed-needs-whole-hour-frames\n"
+            "CATALOG total=2 excluded=1 missing-fields=0 renderable=1\n"
+        )
+        rows, summary, _ = self._listing(monkeypatch, tmp_path, stdout)
+        assert rows["slp"] == ("derived", "renderable", "sea-level pressure")
+        assert rows["2m_temp_0_24h_max"][:2] == ("windowed", "excluded")
+        assert summary.endswith("renderable=1")
+
+    def test_five_field_rows_are_still_read(self, monkeypatch, tmp_path):
+        rows, _, _ = self._listing(
+            monkeypatch, tmp_path,
+            "PRODUCT\tslp\tderived\trenderable\tsea-level pressure\n")
+        assert rows == {"slp": ("derived", "renderable",
+                                "sea-level pressure")}
+
+    def test_a_listing_with_no_rows_refuses(self, monkeypatch, tmp_path):
+        with pytest.raises(RenderDoorError, match="no catalog rows"):
+            self._listing(monkeypatch, tmp_path, "THEME default\n")
+
+
 class TestComposeArguments:
     """The compose door's refusals and the command it builds.
 

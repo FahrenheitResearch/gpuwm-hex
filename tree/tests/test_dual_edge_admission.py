@@ -28,9 +28,10 @@ from hexcore.dual_edge_admission import (
     DualEdgePolicy,
     admit_dual_edges,
 )
+from _layout import PACKAGE_DIR
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
-DRIVERS = Path(__file__).resolve().parents[1] / "src" / "hexcore" / "drivers"
+DRIVERS = PACKAGE_DIR / "drivers"
 
 
 def _load_binding() -> object:

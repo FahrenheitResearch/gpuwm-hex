@@ -41,10 +41,11 @@ import pytest
 
 from hexcore import device_admission as surface
 from hexcore import forecast_door as door
+from _layout import PACKAGE_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
-DRIVERS = ROOT / "src" / "hexcore" / "drivers"
+DRIVERS = PACKAGE_DIR / "drivers"
 
 
 def _proving_run(folder: Path, probe: str) -> Path:

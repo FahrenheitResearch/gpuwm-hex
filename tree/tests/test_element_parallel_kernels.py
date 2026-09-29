@@ -30,9 +30,10 @@ from hexcore import (
     cuda_transport,
 )
 from hexcore.cuda_backend import recovery
+from _layout import PACKAGE_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src" / "hexcore"
+SRC = PACKAGE_DIR
 
 #: (translation unit source, loop macro, the kernels re-mapped in it)
 UNITS = {

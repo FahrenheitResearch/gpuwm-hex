@@ -42,10 +42,11 @@ from hexcore.dt_admission import (
     PROVEN_DT_SECONDS,
 )
 from hexcore.errors import ConfigurationRefusal
+from _layout import PACKAGE_DIR
 
 TREE_ROOT = Path(__file__).resolve().parents[1]
 TOOLS = TREE_ROOT / "tools"
-DRIVERS = TREE_ROOT / "src" / "hexcore" / "drivers"
+DRIVERS = PACKAGE_DIR / "drivers"
 
 
 def _load_tool(filename: str, alias: str) -> object:

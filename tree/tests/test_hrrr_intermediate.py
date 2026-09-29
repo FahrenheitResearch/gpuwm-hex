@@ -24,6 +24,7 @@ from hexcore import hrrr_intermediate as hi  # noqa: E402
 from hexcore.cli import build_parser  # noqa: E402
 from hexcore.hrrr_intermediate import IntermediateRefusal, LatLonTarget  # noqa: E402
 from hexcore.wps_intermediate import WpsIntermediateReader, inventory  # noqa: E402
+from _layout import PACKAGE_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +148,7 @@ def test_the_source_table_is_the_only_place_a_source_lives() -> None:
         hi.source_row("rap")
     assert "SOURCE_ROWS" in str(refusal.value)
     # Nothing outside the table names the source.
-    text = (ROOT / "src" / "hexcore" / "hrrr_intermediate.py").read_text(encoding="utf-8")
+    text = (PACKAGE_DIR / "hrrr_intermediate.py").read_text(encoding="utf-8")
     body = text.split("SOURCE_ROWS: Mapping[str, SourceRow] = {", 1)[1].split("\ndef source_row", 1)[1]
     assert '== "hrrr"' not in body and "if row.name" not in body
 

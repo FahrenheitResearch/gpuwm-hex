@@ -26,9 +26,10 @@ import sys
 import numpy as np
 import pytest
 
+from _layout import RUNNER_PATH
+
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = ROOT / "src" / "hexcore" / "drivers" / "run_cuda_v841_full_physics_x4.py"
 
 #: Names the gpuwm object store this box holds.  Set it and the store MUST
 #: hold ``ARWEN_BUILD_COMMIT``; there is no falling back to a skip.

@@ -50,6 +50,32 @@ def _proven_architecture(monkeypatch):
     """
 
     monkeypatch.setattr(door, "read_device_compute", lambda: (12, 0))
+    monkeypatch.setattr(door, "read_nvrtc_targets", lambda: NVRTC_TARGETS)
+    monkeypatch.setattr(door, "probe_numeric_route", _no_probe)
+
+
+#: The targets CUDA 13's NVRTC lists.
+NVRTC_TARGETS = (75, 80, 86, 89, 90, 100, 120, 121)
+
+
+def _no_probe():
+    raise AssertionError("the numeric route is probed only on an unanchored card")
+
+
+def _anchored_route():
+    """What the probe reports on a card whose route is the anchored one."""
+
+    from hexcore.cuda_backend import arch_admission
+
+    expected = arch_admission._expected_bits()
+    sub = expected["subnormal"]
+    record = arch_admission.classify_numeric_route(
+        (0, 0, sub, sub, expected["separately_rounded"],
+         expected["x_times_y"], expected["x_plus_y"]),
+        (expected["dx_times_dy"], expected["dx_plus_dy"], expected["subnormal_in_fp64"]),
+    )
+    record.update(schema=arch_admission.NUMERIC_ROUTE_SCHEMA, dual_run_identical=True)
+    return record
 
 
 @pytest.fixture(autouse=True)
@@ -869,22 +895,32 @@ def test_architecture_at_the_proven_floor_is_admitted(monkeypatch):
     verdict = door.admit_architecture()
     assert verdict["admitted"] is True
     assert verdict["sm"] == "sm_120"
+    assert verdict["anchor_status"] == "anchored"
     assert "proven contract floor" in verdict["basis"]
+    assert "numeric_route" not in verdict
 
 
-def test_unanchored_below_floor_architecture_is_refused_by_name(monkeypatch):
+def test_unanchored_architecture_is_admitted_and_says_so(monkeypatch):
+    """Fixed means default: a card of an architecture holding no anchor runs
+    with no flag, and the record says it is unanchored rather than claiming
+    an anchor.  The numeric route is measured on it and recorded."""
+
     from hexcore.cuda_backend import arch_admission
 
     monkeypatch.setattr(arch_admission, "ADMITTED_BELOW_FLOOR", {})
     monkeypatch.setattr(door, "read_device_compute", lambda: (8, 6))
-    with pytest.raises(door.ForecastDoorRefusal) as caught:
-        door.admit_architecture()
-    message = str(caught.value)
-    assert "sm_86" in message
-    assert "no per-architecture anchor" in message
+    monkeypatch.setattr(door, "probe_numeric_route", _anchored_route)
+    verdict = door.admit_architecture()
+    assert verdict["admitted"] is True
+    assert verdict["sm"] == "sm_86"
+    assert verdict["anchor_status"] == "unanchored"
+    assert verdict["anchor"] is None and verdict["evidence_sha256"] is None
+    assert verdict["basis"].startswith("unanchored:")
+    assert "the same as on the anchored architectures" in verdict["basis"]
+    assert verdict["numeric_route"]["matches_anchored_route"] is True
 
 
-def test_anchored_architecture_is_admitted_with_its_receipt_named(monkeypatch):
+def test_anchored_architecture_is_admitted_with_its_pin_named(monkeypatch):
     from hexcore.cuda_backend import arch_admission
 
     anchor = arch_admission.ArchAnchor(
@@ -894,6 +930,7 @@ def test_anchored_architecture_is_admitted_with_its_receipt_named(monkeypatch):
         contract_receipt="evidence/sm86-tier-20260825/RECEIPT.md",
         authority_anchor="evidence/sm86-tier-20260825/authority",
         basis="test-registered anchor",
+        evidence_sha256="75437c663c9894dc38e6a1b1517709906e08a14c9a56468016aec09a8fa93155",
     )
     monkeypatch.setattr(
         arch_admission, "ADMITTED_BELOW_FLOOR", {(8, 6): anchor}
@@ -902,18 +939,70 @@ def test_anchored_architecture_is_admitted_with_its_receipt_named(monkeypatch):
     verdict = door.admit_architecture()
     assert verdict["admitted"] is True
     assert verdict["sm"] == "sm_86"
+    assert verdict["anchor_status"] == "anchored"
+    assert verdict["evidence_sha256"] == anchor.evidence_sha256
     assert "sm86-tier-20260825" in verdict["basis"]
+    assert "75437c663c9894dc" in verdict["basis"]
 
 
-def test_preflight_reports_the_architecture_refusal(monkeypatch, tmp_path):
-    """Rung 4 of the small-card walk, closed: preflight and the run may no
-    longer disagree about the architecture.  An unanchored card's preflight
-    now carries the same named refusal the run would raise."""
+def test_a_card_nvrtc_cannot_compile_for_is_refused_naming_nvrtc(monkeypatch):
+    monkeypatch.setattr(door, "read_device_compute", lambda: (6, 1))
+    with pytest.raises(door.ForecastDoorRefusal) as caught:
+        door.admit_architecture()
+    message = str(caught.value)
+    assert "sm_61" in message and "compute_75" in message
+    assert "none of them could be built" in message
+    assert "anchor" not in message
+
+
+def test_ordinary_arithmetic_that_is_not_ieee_is_refused_naming_it(monkeypatch):
+    from hexcore.cuda_backend import arch_admission
+
+    def _broken():
+        record = _anchored_route()
+        record["normal_range"] = "differs"
+        return record
+
+    monkeypatch.setattr(arch_admission, "ADMITTED_BELOW_FLOOR", {})
+    monkeypatch.setattr(door, "read_device_compute", lambda: (8, 6))
+    monkeypatch.setattr(door, "probe_numeric_route", _broken)
+    with pytest.raises(door.ForecastDoorRefusal) as caught:
+        door.admit_architecture()
+    assert "IEEE 754" in str(caught.value)
+
+
+def test_preflight_admits_an_unanchored_card_and_its_receipt_says_so(
+    monkeypatch, tmp_path
+):
+    """Rung 4 of the small-card walk stays closed: preflight and the run
+    answer the architecture question the same way.  An unanchored card now
+    passes the architecture half, and the preflight receipt records its
+    compute capability, that it is unanchored and the route measured on it."""
 
     from hexcore.cuda_backend import arch_admission
 
     monkeypatch.setattr(arch_admission, "ADMITTED_BELOW_FLOOR", {})
     monkeypatch.setattr(door, "read_device_compute", lambda: (7, 5))
+    monkeypatch.setattr(door, "probe_numeric_route", _anchored_route)
+    monkeypatch.setattr(
+        door, "measure_device_memory", lambda: (11 * GIB, 12 * GIB)
+    )
+    arguments = _namespace(
+        tmp_path, preflight=True, receipt=tmp_path / "receipt.json"
+    )
+    registry = _registry()
+    request = door.resolve_request(arguments, registry=registry)
+    door._run_preflight(request, registry, started=0.0)
+    receipt = json.loads((tmp_path / "receipt.json").read_text())
+    assert not any("sm_75" in problem for problem in receipt["preflight_problems"])
+    assert receipt["architecture"]["compute_capability"] == "7.5"
+    assert receipt["architecture"]["anchor_status"] == "unanchored"
+    assert receipt["architecture"]["evidence_sha256"] is None
+    assert receipt["architecture"]["numeric_route"]["normal_range"] == "ieee"
+
+
+def test_preflight_reports_the_nvrtc_refusal(monkeypatch, tmp_path):
+    monkeypatch.setattr(door, "read_device_compute", lambda: (6, 1))
     monkeypatch.setattr(
         door, "measure_device_memory", lambda: (11 * GIB, 12 * GIB)
     )
@@ -926,10 +1015,8 @@ def test_preflight_reports_the_architecture_refusal(monkeypatch, tmp_path):
     assert rc == 1
     receipt = json.loads((tmp_path / "receipt.json").read_text())
     problems = receipt["preflight_problems"]
-    assert any("sm_75" in problem for problem in problems)
-    assert any(
-        "no per-architecture anchor" in problem for problem in problems
-    )
+    assert any("sm_61" in problem and "NVRTC" in problem for problem in problems)
+    assert receipt["architecture"] is None
 
 
 # ---------------------------------------------------------------------------

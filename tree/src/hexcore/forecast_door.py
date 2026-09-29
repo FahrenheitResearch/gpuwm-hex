@@ -97,7 +97,9 @@ __all__ = [
     "checkout_root",
     "load_registry",
     "measure_device_memory",
+    "probe_numeric_route",
     "read_device_compute",
+    "read_nvrtc_targets",
     "render_command",
     "require_admitted",
     "resolve_repo",
@@ -470,24 +472,48 @@ def read_device_compute() -> tuple[int, int]:
     return (int(properties["major"]), int(properties["minor"]))
 
 
+def read_nvrtc_targets() -> tuple[int, ...]:
+    """The ``compute_XY`` targets this install's NVRTC compiles for, now."""
+
+    from .cuda_backend.arch_admission import nvrtc_target_archs
+
+    return nvrtc_target_archs()
+
+
+def probe_numeric_route() -> dict[str, Any]:
+    """Measure the numeric route on this card (one tiny compile and launch)."""
+
+    from .cuda_backend.arch_admission import measure_numeric_route
+
+    return dict(measure_numeric_route())
+
+
 def admit_architecture() -> dict[str, Any]:
     """Answer the architecture half of "will this run?" for this card.
 
-    The run's own gate is ``require_cuda`` — per-architecture admission below
-    the proven contract floor — but it lives past the driver's CUDA import,
-    which preflight deliberately never performs.  That is how an sm_86 card
-    once heard ``preflight_passed`` from a door whose real run then refused it
-    by architecture (evidence/small-card-3080-20260824, rung 4).  This check
-    asks the same admission question from a device-properties read alone, so
-    preflight's answer and the run's answer can no longer disagree about the
-    architecture.  Module-level lookup of :func:`read_device_compute` is the
-    test seam.
+    Every architecture NVRTC can compile the kernels for is admitted, the
+    way any other model runs on the card it is given.  The answer says
+    whether the architecture holds an anchor (the numerical contract
+    measured on it, :mod:`hexcore.cuda_backend.arch_admission`) and, for an
+    anchored row, the evidence pin; the receipt records the same.
+
+    What refuses here, each naming its breakage: a card NVRTC cannot compile
+    for (no kernel could be built), NVRTC that cannot be loaded at all (the
+    same), and on an unanchored card, ordinary arithmetic that is not IEEE
+    (every number the run produced would be wrong), which
+    :func:`probe_numeric_route` measures in well under a second.  The same
+    NVRTC question is the run's own gate in ``require_cuda``, so preflight's
+    answer and the run's answer agree (the small-card walk once found them
+    disagreeing, evidence/small-card-3080-20260824, rung 4).
+    Module-level lookup of :func:`read_device_compute`,
+    :func:`read_nvrtc_targets` and :func:`probe_numeric_route` is the test
+    seam.
     """
 
     from .cuda_backend.arch_admission import (
-        PROVEN_COMPUTE,
-        admitted_architecture,
-        below_floor_refusal,
+        architecture_status,
+        nvrtc_refusal,
+        numeric_route_refusal,
     )
 
     try:
@@ -500,24 +526,58 @@ def admit_architecture() -> dict[str, Any]:
             "the architecture half of admission cannot be answered on this "
             "box."
         ) from None
-    record: dict[str, Any] = {
-        "compute_capability": f"{compute[0]}.{compute[1]}",
-        "sm": f"sm_{compute[0]}{compute[1]}",
-    }
-    if tuple(compute) >= PROVEN_COMPUTE:
-        record.update(admitted=True, basis="at or above the proven contract floor")
-        return record
-    anchor = admitted_architecture(compute)
-    if anchor is not None:
-        record.update(
-            admitted=True,
-            basis=(
-                f"per-architecture anchor of {anchor.admitted_on} "
-                f"({anchor.contract_receipt})"
-            ),
+    try:
+        targets = tuple(int(value) for value in read_nvrtc_targets())
+    except Exception as error:  # pragma: no cover - depends on the box
+        # THE BREAKAGE: every kernel is compiled by NVRTC when the run
+        # starts, so an install whose NVRTC cannot be loaded runs nothing.
+        raise _refuse(
+            f"NVRTC could not be asked which architectures it compiles for "
+            f"({error}).  Every kernel this port launches is compiled by "
+            "NVRTC when the run starts, so on this install none could be "
+            "built.  `gpuwm-hex doctor` checks the CUDA wheel set."
+        ) from None
+    if compute[0] * 10 + compute[1] not in targets:
+        # THE BREAKAGE: NVRTC cannot generate code for this card, so no
+        # kernel could be built for it.
+        raise _refuse(nvrtc_refusal(compute, targets))
+    status = architecture_status(compute)
+    record: dict[str, Any] = dict(status.as_dict())
+    record["admitted"] = True
+    record["nvrtc_targets"] = [f"compute_{value}" for value in targets]
+    basis = status.describe()
+    if not status.anchored:
+        try:
+            measurement = probe_numeric_route()
+        except ForecastDoorRefusal:
+            raise
+        except Exception as error:
+            # THE BREAKAGE: the probe is compiled and launched exactly the
+            # way every port kernel is, so a failure here is the run's first
+            # kernel failing.
+            raise _refuse(
+                f"a ten-line kernel compiled and launched the way every "
+                f"kernel of this port is could not run on this "
+                f"{status.sm} card ({type(error).__name__}: {error}); the "
+                "forecast's own kernels would stop the same way."
+            ) from None
+        record["numeric_route"] = measurement
+        refusal = numeric_route_refusal(measurement)
+        if refusal is not None:
+            raise _refuse(f"{status.sm}: {refusal}")
+        basis += (
+            "; numeric route measured on this card: FP32 subnormals "
+            f"{measurement.get('ftz_route')}, guarded fallback "
+            f"{measurement.get('guarded_fallback')}, a*b+c "
+            f"{measurement.get('contraction')}, "
+            + (
+                "the same as on the anchored architectures"
+                if measurement.get("matches_anchored_route")
+                else "NOT the route the anchored architectures measured"
+            )
         )
-        return record
-    raise _refuse(below_floor_refusal(compute, PROVEN_COMPUTE))
+    record["basis"] = basis
+    return record
 
 
 def admit_timestep(
@@ -1543,8 +1603,15 @@ def build_receipt(
     driver_argv: Sequence[str],
     seconds: float,
     status: str,
+    architecture: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The door's own receipt: what ran, on what, and what comes next."""
+    """The door's own receipt: what ran, on what, and what comes next.
+
+    ``architecture`` is :func:`admit_architecture`'s record: the compute
+    capability, whether it holds an anchor and which evidence pin, and on an
+    unanchored card the numeric route measured there.  ``None`` only when
+    the door stopped before asking.
+    """
 
     from . import __version__
 
@@ -1608,6 +1675,7 @@ def build_receipt(
             "stop_on_refusal": request.stop_on_refusal,
         },
         "admission": admission.as_dict() if admission is not None else None,
+        "architecture": None if architecture is None else dict(architecture),
         # ``None`` when the card could not be read at all, which is the one
         # case where the door has no row to report rather than the wrong one.
         "footprint_model": (
@@ -1765,11 +1833,12 @@ def _run_preflight(request: ForecastRequest, registry: Mapping[str, MeshRow],
         problems.append(str(error))
         print(f"ADMISSION NOT MEASURED {error}", flush=True)
 
+    architecture: dict[str, Any] | None = None
     try:
         architecture = admit_architecture()
         print(
-            f"ARCHITECTURE sm={architecture['sm']} -> admitted "
-            f"({architecture['basis']})",
+            f"ARCHITECTURE sm={architecture['sm']} -> admitted, "
+            f"{architecture['basis']}",
             flush=True,
         )
     except ForecastDoorRefusal as error:
@@ -1815,6 +1884,7 @@ def _run_preflight(request: ForecastRequest, registry: Mapping[str, MeshRow],
         request=request, admission=admission, bind_receipt=bind_receipt,
         driver_receipt=driver_receipt, history=[], driver_argv=driver_argv,
         seconds=time.monotonic() - started, status=status,
+        architecture=architecture,
     )
     receipt["preflight_problems"] = problems
     written = _write_receipt(request, receipt)
@@ -1867,8 +1937,8 @@ def run_forecast(arguments: argparse.Namespace) -> int:
     # a kernel compile is spent on a card the run would refuse by name.
     architecture = admit_architecture()
     print(
-        f"ARCHITECTURE sm={architecture['sm']} -> admitted "
-        f"({architecture['basis']})",
+        f"ARCHITECTURE sm={architecture['sm']} -> admitted, "
+        f"{architecture['basis']}",
         flush=True,
     )
 
@@ -1941,6 +2011,7 @@ def run_forecast(arguments: argparse.Namespace) -> int:
         driver_argv=driver_argv,
         seconds=time.monotonic() - started,
         status=status,
+        architecture=architecture,
     )
     written = _write_receipt(request, receipt)
     if written is not None:
