@@ -79,11 +79,12 @@ def test_the_fast_cadence_is_admitted_where_the_welded_timestep_is():
     # The sub-kilometre point cull: dt 5 s, convection off by resolution.
     cadence = forecast_preset.pbl_cadence_request(forecast_preset.FAST_PRESET, 5.0)
     admitted = forecast_door.admit_timestep(
-        "point-cull", 5.0, nominal_dx_m=937.5, pbl_cadence=cadence
+        "point-cull", 5.0, nominal_dx_m=937.5, pbl_cadence=cadence,
+        radiation_seconds=600.0,
     )
-    assert admitted["surface_pbl_seconds"] == 30.0
+    assert admitted["pbl_cadence"]["surface_pbl_seconds"] == 30.0
     assert admitted["pbl_cadence"]["steps_between_calls"] == 6
-    assert admitted["surface_pbl_anchor_derived_from"] == dt_admission.dt_key(5.0, None)
+    assert admitted["anchor"]["row"]["derived_from"] == dt_admission.dt_key(5.0, None)
 
 
 def test_a_row_declaring_a_suite_the_engine_cannot_run_is_refused(monkeypatch):
@@ -138,7 +139,8 @@ def test_the_door_resolves_the_row_into_the_one_cadence_knob():
     )
     # The row decides only when the flag is absent, the explicit flag wins,
     # and both reach the driver through the existing --pbl-cadence argument.
+    # The row is resolved at the RUN's timestep (--dt, or MPAS-A's 6 s per km).
     assert "if explicit_pbl_cadence is None:" in door
-    assert "forecast_preset.pbl_cadence_request(preset, row.dt_seconds)" in door
+    assert "forecast_preset.pbl_cadence_request(preset, dt_seconds)" in door
     assert '"--pbl-cadence", request.pbl_cadence,' in door
     assert '"pbl_cadence_source": request.pbl_cadence_source,' in door

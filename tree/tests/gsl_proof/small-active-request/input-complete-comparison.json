@@ -1,0 +1,239 @@
+{
+  "fields": [
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "conls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "conss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "oa1ls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "oa1ss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "oa2ls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "oa2ss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "oa3ls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "oa3ss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "oa4ls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "oa4ss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "ol1ls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "ol1ss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "ol2ls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "ol2ss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "ol3ls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "ol3ss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "ol4ls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "ol4ss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "var2dls",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 2562,
+      "differing_words": 0,
+      "field": "var2dss",
+      "first_differing_index": null,
+      "max_ulp": 0,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    },
+    {
+      "compared_words": 16,
+      "differing_words": 0,
+      "field": "xtime",
+      "first_differing_index": null,
+      "max_ulp": null,
+      "status": "compared",
+      "step": 0,
+      "stream": "ugwp_oro_data_in",
+      "time": "2023-03-31_12:00:00"
+    }
+  ],
+  "reader": "netCDF stored-type nc_get_vara; CF unpacking disabled",
+  "schema": "mpas-stream-compare-v1",
+  "spread_error": "spread diagnostics are not bound by the deck",
+  "spread_samples": []
+}

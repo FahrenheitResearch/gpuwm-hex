@@ -1,0 +1,53 @@
+--- a/gpuwm/core/kernels/glibc_flt32.cuh
++++ b/gpuwm/core/kernels/glibc_flt32.cuh
+@@ -149,12 +149,14 @@
+ __device__ float gfk_log(float x)
+ {
+     unsigned int ix = __float_as_uint(x);
++    if ((ix & 0x7fffffffu) > 0x7f800000u)
++        return __uint_as_float(ix | 0x00400000u);
+     if (ix == 0x3f800000u) return 0.0f;
+     if (ix - 0x00800000u >= 0x7f800000u - 0x00800000u) {
+         if (ix * 2u == 0u) return __int_as_float(0xff800000);
+         if (ix == 0x7f800000u) return x;
+         if ((ix & 0x80000000u) || ix * 2u >= 0xff000000u)
+-            return __int_as_float(0x7fc00000);
++            return __int_as_float(0xffc00000);
+         ix = __float_as_uint(FMUL(x, 8388608.0f));   /* 0x1p23f */
+         ix -= 23u << 23;
+     }
+@@ -293,6 +295,14 @@
+     unsigned int sign_bias = 0u;
+     unsigned int ix = __float_as_uint(x);
+     unsigned int iy = __float_as_uint(y);
++    unsigned int ax = ix & 0x7fffffffu, ay = iy & 0x7fffffffu;
++    bool xn = ax > 0x7f800000u, yn = ay > 0x7f800000u;
++    if (ay == 0u) return xn && !(ix & 0x00400000u)
++        ? __uint_as_float(ix | 0x00400000u) : 1.0f;
++    if (ix == 0x3f800000u) return yn && !(iy & 0x00400000u)
++        ? __uint_as_float(iy | 0x00400000u) : 1.0f;
++    if (xn && !yn && (ix & 0x80000000u) && gfk_checkint(iy) == 1) return __uint_as_float(ax | 0x00400000u);
++    if (xn || yn) return __uint_as_float((xn ? ix : iy) | 0x00400000u);
+     if (ix - 0x00800000u >= 0x7f800000u - 0x00800000u || gfk_zeroinfnan(iy)) {
+         if (gfk_zeroinfnan(iy)) {
+             if (2u * iy == 0u) return 1.0f;
+@@ -311,7 +321,7 @@
+         }
+         if (ix & 0x80000000u) {
+             int yint = gfk_checkint(iy);
+-            if (yint == 0) return __int_as_float(0x7fc00000);
++            if (yint == 0) return __int_as_float(0xffc00000);
+             if (yint == 1) sign_bias = 1u << (5 + 11);
+             ix &= 0x7fffffffu;
+         }
+--- a/gpuwm/core/kernels/flt32_expf_fma.cuh
++++ b/gpuwm/core/kernels/flt32_expf_fma.cuh
+@@ -23,6 +23,8 @@
+ __device__ float gfk_exp_fma(float x)
+ {
+     unsigned int ix = __float_as_uint(x);
++    if ((ix & 0x7fffffffu) > 0x7f800000u)
++        return __uint_as_float(ix | 0x00400000u);
+     unsigned int abstop = (ix >> 20) & 0x7ffu;
+     if (abstop >= ((__float_as_uint(88.0f)) >> 20)) {
+         if (ix == 0xff800000u) return 0.0f;

@@ -18,7 +18,8 @@ Three modes, and the difference between them is the point:
 
 default
     Goes through :func:`hexcore.cuda_regional_forecast_v841.open_regional_forecast_v841`,
-    which refuses by name unless the configuration holds a registered anchor.
+    which runs the configuration and records on the driver whether it holds
+    a registered anchor (it stopped refusing for a missing one on 2026-10-10).
 
 ``--compare-cpu``
     Runs the v8.4.1 CPU authority (``DryDycoreDriver`` with a
@@ -336,6 +337,22 @@ def main() -> int:
     parser.add_argument("--grid", default=None)
     parser.add_argument("--init", default=None)
     parser.add_argument("--lbc-dir", default=None)
+    parser.add_argument(
+        "--invariant",
+        default=None,
+        metavar="FILE",
+        help="the native invariant stream (RRFS v2 configures one): every "
+             "vertical-grid field it carries is read from it instead of the "
+             "init file, as MPAS-A does when the stream is present",
+    )
+    parser.add_argument(
+        "--file-coupled-diagnostics",
+        action="store_true",
+        help="read pressure_p/pressure_base/exner/rho_p/rtheta_p from the init "
+             "file instead of recomputing them as MPAS-A's cold start does "
+             "(atm_init_coupled_diagnostics); reproduces runs minted before "
+             "the hex-rrfs-envelope fix",
+    )
     parser.add_argument("--start-time", default=None, metavar="YYYY-MM-DD_HH:MM:SS")
     parser.add_argument("--dt", type=float, default=None, metavar="SECONDS")
     parser.add_argument("--len-disp", type=float, default=None, metavar="METRES")
@@ -431,8 +448,10 @@ def main() -> int:
 
     t0 = time.perf_counter()
     mesh = Mesh.from_netcdf(grid, init, validate=False)
+    if args.invariant is not None and args.grid is None:
+        raise SystemExit("--invariant belongs to the named-path route (--grid/--init)")
     vertical = load_mpas_vertical_grid(
-        init, mesh, allow_regional_sentinels=True
+        init, mesh, allow_regional_sentinels=True, invariant_path=args.invariant
     )
     state, reference_state, saved = load_mpas_initial_state(
         init,
@@ -442,6 +461,7 @@ def main() -> int:
         terrain_metrics=vertical.terrain_metrics,
         allow_regional_sentinels=True,
         return_saved_diagnostics=True,
+        cold_start=not args.file_coupled_diagnostics,
     )
     config = dry_reference_config(
         config_dt=120.0 if args.dt is None else args.dt,
@@ -681,6 +701,8 @@ def main() -> int:
         "config_apply_lbcs": bool(config.config_apply_lbcs),
         "grid": str(grid),
         "init": str(init),
+        "invariant": None if args.invariant is None else str(args.invariant),
+        "coupled_diagnostics": "file" if args.file_coupled_diagnostics else "cold-start-recomputed",
         "lbc_paths": lbc_paths,
         "start_time": start_time.strftime(_XTIME),
         "minted_without_anchor_gate": bool(args.mint_anchor),

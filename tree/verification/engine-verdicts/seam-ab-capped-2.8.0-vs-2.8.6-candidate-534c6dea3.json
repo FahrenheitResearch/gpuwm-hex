@@ -1,0 +1,179 @@
+{
+  "a": {
+    "engine_sources": {
+      "gpuwm/core/gf.py": "2d25a568d466f14fbe95596b07a000fb77723bdf9de17d2feb463cd702cc06b2",
+      "gpuwm/core/kernels/gf.cu": "2ca7ac7bbeb01627ddeff8819b103c07081b6962125fb68d8f688627370184d6",
+      "gpuwm/core/kernels/noahmp_driver.cu": "bd555be10ccade5a5bdddcaf4c56b7f4353dae1208fc48a5586fb7ce7d32d643",
+      "gpuwm/core/kernels/noahmp_energy.cu": "4fd4b5a86ec97371e01aac13d2c5e40e40546b64a77c39e6fb674c96be69d209",
+      "gpuwm/core/kernels/rrtmg_sw.cu": "0301818b55046062ef0b89edc1c2ddc85adb361a4bfd03bc278f56c5fb139aef",
+      "gpuwm/core/kernels/sfclay.cu": "1e0687817889897b950b5ae47e0f0cff58f0a97b32e5b65bcf3bf1ce15215f22",
+      "gpuwm/core/kernels/ysu.cu": "251dc8469b13a18a86f8a4a6546ceb9bb7680407a3f4afa03290d1140a48964b",
+      "gpuwm/core/microphysics.py": "b91785e6d5930152e635c60366bb4d9fd7d1fa861b950f53ab9f26a5775ddbc6",
+      "gpuwm/core/mpas_column_batch.py": "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45",
+      "gpuwm/core/noahmp_driver_gpu.py": "3cb0b0d9ca7f0c4a5d2e6b96e2efe7015e3306011750f5cdfc0f224042804699",
+      "gpuwm/core/physics.py": "6b09d387289df5a7c35833f251507d1e63c19a1552982c27a37ba6a8c2885978",
+      "gpuwm/core/rrtmg_legacy.py": "8d2c083609bf9167584b85e6302ffbbd624193301b056e044921cb9eef9fa7e4",
+      "gpuwm/core/rrtmg_legacy_prep.py": "7a96fbba87424b47622909343a6b6cc35897fe2df1dc6d1dc3583b9b1a76c8cb",
+      "gpuwm/core/sfclay.py": "425655beaccd8917041ce4cdefc851365dbfa55e21818d1c4f5e14528c643c3e",
+      "gpuwm/core/ysu.py": "6e140d641c62d5a0cd82b2998020ef135eb7c93bcc73d75bf75ab3efd6a53f95"
+    },
+    "engine_version": "2.8.0",
+    "path": "seam-capped-280-F.npz"
+  },
+  "arms": {
+    "gf": {
+      "arrays_byte_identical": 498,
+      "arrays_compared": 500,
+      "arrays_moved": 2,
+      "by_field": {
+        "phase1/dtheta": {
+          "max_abs_delta": 1.2715463526546955e-07,
+          "max_abs_reference": 0.000432878325227648,
+          "max_rel_delta": 0.00029374220850304696,
+          "steps_moved": 1
+        },
+        "state/theta": {
+          "max_abs_delta": 3.0517578125e-05,
+          "max_abs_reference": 492.0953369140625,
+          "max_rel_delta": 6.201558079451881e-08,
+          "steps_moved": 1
+        }
+      },
+      "call_counts_a": {
+        "cumulus": 20,
+        "cumulus_history": 0,
+        "noah": 20,
+        "radiation": 4,
+        "sfclay": 20,
+        "ysu": 20
+      },
+      "call_counts_b": {
+        "cumulus": 20,
+        "cumulus_history": 0,
+        "noah": 20,
+        "radiation": 4,
+        "sfclay": 20,
+        "ysu": 20
+      },
+      "per_array": {
+        "step20/phase1/dtheta": {
+          "bytes_identical": false,
+          "elements": 320,
+          "max_abs_delta": 1.2715463526546955e-07,
+          "max_abs_reference": 0.000432878325227648,
+          "max_rel_delta": 0.00029374220850304696,
+          "moved": 1,
+          "rms_delta": 7.108160202694549e-09
+        },
+        "step20/state/theta": {
+          "bytes_identical": false,
+          "elements": 320,
+          "max_abs_delta": 3.0517578125e-05,
+          "max_abs_reference": 492.0953369140625,
+          "max_rel_delta": 6.201558079451881e-08,
+          "moved": 1,
+          "rms_delta": 1.7059844799040143e-06
+        }
+      }
+    },
+    "nocu": {
+      "arrays_byte_identical": 498,
+      "arrays_compared": 500,
+      "arrays_moved": 2,
+      "by_field": {
+        "phase1/dtheta": {
+          "max_abs_delta": 1.2715463526546955e-07,
+          "max_abs_reference": 0.000432878325227648,
+          "max_rel_delta": 0.00029374220850304696,
+          "steps_moved": 1
+        },
+        "state/theta": {
+          "max_abs_delta": 3.0517578125e-05,
+          "max_abs_reference": 492.0953369140625,
+          "max_rel_delta": 6.201558079451881e-08,
+          "steps_moved": 1
+        }
+      },
+      "call_counts_a": {
+        "cumulus": 0,
+        "cumulus_history": 0,
+        "noah": 20,
+        "radiation": 4,
+        "sfclay": 20,
+        "ysu": 20
+      },
+      "call_counts_b": {
+        "cumulus": 0,
+        "cumulus_history": 0,
+        "noah": 20,
+        "radiation": 4,
+        "sfclay": 20,
+        "ysu": 20
+      },
+      "per_array": {
+        "step20/phase1/dtheta": {
+          "bytes_identical": false,
+          "elements": 320,
+          "max_abs_delta": 1.2715463526546955e-07,
+          "max_abs_reference": 0.000432878325227648,
+          "max_rel_delta": 0.00029374220850304696,
+          "moved": 1,
+          "rms_delta": 7.108160202694549e-09
+        },
+        "step20/state/theta": {
+          "bytes_identical": false,
+          "elements": 320,
+          "max_abs_delta": 3.0517578125e-05,
+          "max_abs_reference": 492.0953369140625,
+          "max_rel_delta": 6.201558079451881e-08,
+          "moved": 1,
+          "rms_delta": 1.7059844799040143e-06
+        }
+      }
+    }
+  },
+  "b": {
+    "engine_sources": {
+      "gpuwm/core/gf.py": "6b5f0d34e7b9ee92cb3d52d07e2a32c335b81984dcc862e010b2e6a8e6258226",
+      "gpuwm/core/kernels/gf.cu": "ad4148a861c20622a4e7278de970171b649bf400f57c49814e98a9a145547017",
+      "gpuwm/core/kernels/noahmp_driver.cu": "bd555be10ccade5a5bdddcaf4c56b7f4353dae1208fc48a5586fb7ce7d32d643",
+      "gpuwm/core/kernels/noahmp_energy.cu": "4fd4b5a86ec97371e01aac13d2c5e40e40546b64a77c39e6fb674c96be69d209",
+      "gpuwm/core/kernels/rrtmg_sw.cu": "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+      "gpuwm/core/kernels/sfclay.cu": "20526ca8a9c151ab36a620ba198ee1f1072828c23480b6f9d761057c85c28964",
+      "gpuwm/core/kernels/ysu.cu": "41b9a8991fcfa8ac2cb3db0849ae9f866ed01de3d6f6dbb10d55b2ba216e6bc7",
+      "gpuwm/core/microphysics.py": "4223331795670813bec91548ddca2092d3db9b217fce8d22cf592d021aef3ddc",
+      "gpuwm/core/mpas_column_batch.py": "6e66d59176209805bff4f8ed491b115c1155c07f7bc8f2a063a6723232bcce45",
+      "gpuwm/core/noahmp_driver_gpu.py": "3cb0b0d9ca7f0c4a5d2e6b96e2efe7015e3306011750f5cdfc0f224042804699",
+      "gpuwm/core/physics.py": "b4c79a1626aecc0208b390a1a7bdef08e92250abdc4097f79863f6a0a20da882",
+      "gpuwm/core/rrtmg_legacy.py": "6143c06887bf822fe8c7d8a72f2b06c96bce0a3745f9d0e15e238f86ad4cc4a1",
+      "gpuwm/core/rrtmg_legacy_prep.py": "93f230eff3d226539656dd32f955ab077cb17f8ff3ff57dddbc97bb63bd2828e",
+      "gpuwm/core/sfclay.py": "425655beaccd8917041ce4cdefc851365dbfa55e21818d1c4f5e14528c643c3e",
+      "gpuwm/core/ysu.py": "bde629698c989bae0571dec6e1623b430200c62c6cf92e6b51c2d7bc42d75f57"
+    },
+    "engine_version": "2.8.6",
+    "path": "seam-capped-286-F.npz"
+  },
+  "columns": {
+    "dt": 120.0,
+    "dx_m": 25000.0,
+    "ncol": 8,
+    "nz": 40,
+    "p_top_pa": 5000.0,
+    "profile": "capped",
+    "start_time": "2021-06-01T18:00:00",
+    "steps": 20
+  },
+  "engine_sources_moved": [
+    "gpuwm/core/gf.py",
+    "gpuwm/core/kernels/gf.cu",
+    "gpuwm/core/kernels/rrtmg_sw.cu",
+    "gpuwm/core/kernels/sfclay.cu",
+    "gpuwm/core/kernels/ysu.cu",
+    "gpuwm/core/microphysics.py",
+    "gpuwm/core/physics.py",
+    "gpuwm/core/rrtmg_legacy.py",
+    "gpuwm/core/rrtmg_legacy_prep.py",
+    "gpuwm/core/ysu.py"
+  ],
+  "input_sha256": "25d9093b86e7ce04e5322ecce1ab541cd94f43db05e7724be8fabaf992783596"
+}

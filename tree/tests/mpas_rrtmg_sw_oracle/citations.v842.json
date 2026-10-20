@@ -1,0 +1,597 @@
+{
+  "release": "v8.4.2",
+  "pins": [
+    {
+      "citation": "module_mp_thompson_aerosols.F:134-162",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_mp_thompson_aerosols.F",
+      "first_line": 134,
+      "last_line": 162,
+      "window_sha256": "e55bc6c380b7f2feefef67093f282b7db5f42107fa65aae2421a50c23fc031d2",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_mp_thompson_aerosols.F:23-210",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_mp_thompson_aerosols.F",
+      "first_line": 23,
+      "last_line": 210,
+      "window_sha256": "7e9792f867a0fabe3f9c427202a7d7e64549b4b7475b0690dbac1b6850e2bb09",
+      "occurrences": 3
+    },
+    {
+      "citation": "module_ra_rrtmg_lw.F:12308-12444",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_lw.F",
+      "first_line": 12308,
+      "last_line": 12444,
+      "window_sha256": "a1f853b3ea1aa050d6658c72d0401961e6224e4224acb1ed8a8d01211d923188",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_lw.F:12308-12538",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_lw.F",
+      "first_line": 12308,
+      "last_line": 12538,
+      "window_sha256": "c67c5ec527ea6b8f50f8e59eacef3a38457b2382cd511bf3aa9e60ab363d4642",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_lw.F:1751-1818",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_lw.F",
+      "first_line": 1751,
+      "last_line": 1818,
+      "window_sha256": "13fdbfc7511882fa233caa69299fed882f7773c877a511dd2fd3218c69b96139",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_lw.F:1878-1931",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_lw.F",
+      "first_line": 1878,
+      "last_line": 1931,
+      "window_sha256": "3ec78d61a1108f18c1fd5816a2f0aece6bf211e2db546cfda1179a5a54835706",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:10026-10664",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 10026,
+      "last_line": 10664,
+      "window_sha256": "b6d4a79e630e43c4325db020981caf044e7acc5c4906c4c6c52ff1ae776df21f",
+      "occurrences": 3
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:10197-10550",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 10197,
+      "last_line": 10550,
+      "window_sha256": "ae832a7e2e6b2424d9aae727f22a5119efcee0c43ba459fdccd39bab1b7c7925",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:10562-10572",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 10562,
+      "last_line": 10572,
+      "window_sha256": "4350f5009a1f285c0470678aa05210c7f3b1ac098d1ffd61bc3032625f5692ce",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:10600-10635",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 10600,
+      "last_line": 10635,
+      "window_sha256": "2871e2217dffad630cfb9e3afd9eb46a4134ab47204f891eb4c3bc9c84488828",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:1403-2012",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 1403,
+      "last_line": 2012,
+      "window_sha256": "9dfedc871c401f66083aab3815b8eb739ee0cd97515fe0f07ae74906e686be1b",
+      "occurrences": 2
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:1740-1749",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 1740,
+      "last_line": 1749,
+      "window_sha256": "b725882dbefb487909cd92a2990e5dea1b94534ebf50d3150cb1023636a2791c",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:1742-1744",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 1742,
+      "last_line": 1744,
+      "window_sha256": "c476efdca3ffea9b1ce4cb2648fee90375326ed64eef9ecba795fa7122c730ab",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:1753-1755",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 1753,
+      "last_line": 1755,
+      "window_sha256": "0ada01585740334f9a5b1dc04e08c302a0c472f790647345a419fd7067517f40",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:1753-1940",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 1753,
+      "last_line": 1940,
+      "window_sha256": "7055c90d238c5b1b3a26f52631b5bc9de646ab3d4a95ca767f46c1258a5fa6db",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:1775-1940",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 1775,
+      "last_line": 1940,
+      "window_sha256": "c589b056eec70b9f0b403adbe8413fde3ee2fb6a650b9710ef9a7aaaee1b4d05",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:1955-1989",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 1955,
+      "last_line": 1989,
+      "window_sha256": "9bf58fa5c7361612017e2d49fdf57643a87e85d753f38005a5921baeefa4873d",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:2016-2048",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 2016,
+      "last_line": 2048,
+      "window_sha256": "0125da40772a0869d1381ad70b2b8103a8593b27611580d560e14bc6d1509e38",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:2088-2509",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 2088,
+      "last_line": 2509,
+      "window_sha256": "8978d337da5b7f8a810b7abbd2cc5a94744513f409a17ec73838deb7252971b0",
+      "occurrences": 3
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:2209-2213",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 2209,
+      "last_line": 2213,
+      "window_sha256": "3b0997a446d9cc2474ddd5fb85e3ca34494e1c14a4c7e341d37d2e5fbfb08381",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:2231-2255",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 2231,
+      "last_line": 2255,
+      "window_sha256": "24967599a6d6c2ac0ac86cf61d32bfee0b86a988d643eedf7fe1dec08245b86a",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:2499",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 2499,
+      "last_line": 2499,
+      "window_sha256": "49c33498741a362b5fd731d04c37d4bbf5ae89208e670f635bc8101d034cece9",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:2541-2821",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 2541,
+      "last_line": 2821,
+      "window_sha256": "a0924b8b20e592f6e833e9ca238227e0564931c24ad31727942ba0978b88ae01",
+      "occurrences": 5
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:2693-2702",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 2693,
+      "last_line": 2702,
+      "window_sha256": "df649cc391ee5f024d12ff6352592d99220f31c1ce84e2b4169d9324bc051d5e",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:2854-3110",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 2854,
+      "last_line": 3110,
+      "window_sha256": "0f3c4d5421cd42f39c1b3dd963db13c6c3ff6cec8296b891d659254fa27d3f65",
+      "occurrences": 3
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:3113-3167",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 3113,
+      "last_line": 3167,
+      "window_sha256": "0c4f72c83b223c1b3b485088b2afc16d4c56e4769c64dfdcfc15c57853af004b",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:3201-4666",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 3201,
+      "last_line": 4666,
+      "window_sha256": "91b48c15a4c85f37fc6604b7232f419bb8e91440655a556841b2207e90bb3e60",
+      "occurrences": 12
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:4695-4830",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 4695,
+      "last_line": 4830,
+      "window_sha256": "3d292bf890c0e76263dda3ed2ea0af791d417009c0c89b909de01850a279b162",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:4695-5040",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 4695,
+      "last_line": 5040,
+      "window_sha256": "2e6984abd8d67d863f53cbbb2c5974e87694711b0efd773ce266cc056a9f9555",
+      "occurrences": 2
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:4695-6189",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 4695,
+      "last_line": 6189,
+      "window_sha256": "69651ec60145b58a284f970e6964d270eb8f4d861221d0d056a1cba627bed4b9",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:4757-4830",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 4757,
+      "last_line": 4830,
+      "window_sha256": "c95c36e884fbf9b38933644d7e60a1a8a4e187c040f63c43a755ac5e2a0608a7",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:4917-5040",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 4917,
+      "last_line": 5040,
+      "window_sha256": "bc443f2ca2a79561e2e0696e17cc0784a9dfb62df992f323f58bba612b161346",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:5058-5150",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 5058,
+      "last_line": 5150,
+      "window_sha256": "8bf6f2532450df2117f29b5fd82daad559bfda1eb9eb7d2e96765a81e4dc4249",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:5156-6190",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 5156,
+      "last_line": 6190,
+      "window_sha256": "cb204d5a65090beb72f4d2882e977d2bf9f6face6117e7e198901537117e1080",
+      "occurrences": 2
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:6192-8015",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 6192,
+      "last_line": 8015,
+      "window_sha256": "6d993dd476a152048bab31da7f34a436120e658c9829b3ee848d9264d36226ca",
+      "occurrences": 3
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:8046-8170",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 8046,
+      "last_line": 8170,
+      "window_sha256": "ecae1e93416a150c2aae469e7a9d719766d97934e786cac9fa7cc6f06d8ca45e",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:8207-8785",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 8207,
+      "last_line": 8785,
+      "window_sha256": "415c129a7c2a7aa368e2cb7e257e55e09b49fa1c6a7be77b9588f3816b9b1f21",
+      "occurrences": 6
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:8867-9622",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 8867,
+      "last_line": 9622,
+      "window_sha256": "f02a17e745f4c922c53b10926ecd108cc45483f0077edb6cc8e06a88906eb093",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9331-9335",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9331,
+      "last_line": 9335,
+      "window_sha256": "80a493c58930342459a76307ebb6e6652f0e36fd473e979e4b5f171f402b5d77",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9434-9487",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9434,
+      "last_line": 9487,
+      "window_sha256": "73bd2852d29ad167af6a4e24ae0a7944583db4860ecf16e7b7b1279087ceb1a3",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9439-9471",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9439,
+      "last_line": 9471,
+      "window_sha256": "6b4398aad8a519318991f8c6e84acde38f8642f8ed522755cc1220f158693c09",
+      "occurrences": 2
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9457-9462",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9457,
+      "last_line": 9462,
+      "window_sha256": "279a4f0e3eb16e72aaaf1645d19836611efdb0cf4cb7757165d9bde6ae43b3fc",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9473-9481",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9473,
+      "last_line": 9481,
+      "window_sha256": "5a8e885fd61ddebdcab50836d04d1e4b26aa34ef17bc5b330c24900f1ae0115a",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9494-9517",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9494,
+      "last_line": 9517,
+      "window_sha256": "1eb079e5e241f2eb56eededb8a4c321ef450c6b0527fb0bc033e5ef263101d7e",
+      "occurrences": 3
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9531-9554",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9531,
+      "last_line": 9554,
+      "window_sha256": "ff1bf0a7c15335059e38463569fce430a70af7e37841011b079c559ea239c90d",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9625-9649",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9625,
+      "last_line": 9649,
+      "window_sha256": "d35788eb06d8f3226f89ad2c955e68843acbb3b3322c0d6de5efe405f90798da",
+      "occurrences": 2
+    },
+    {
+      "citation": "module_ra_rrtmg_sw.F:9652-10005",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw.F",
+      "first_line": 9652,
+      "last_line": 10005,
+      "window_sha256": "68454f51a23d14aeb3e7a5e738c693ad4da583ef27ac288513c0396d85fd301b",
+      "occurrences": 3
+    },
+    {
+      "citation": "module_ra_rrtmg_sw_aerosols.F:453-607",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw_aerosols.F",
+      "first_line": 453,
+      "last_line": 607,
+      "window_sha256": "f2b4625f57918c87afb0e0421185b871aa87e818c133a338a363e0c5b72740ac",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw_aerosols.F:609-722",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw_aerosols.F",
+      "first_line": 609,
+      "last_line": 722,
+      "window_sha256": "174f7c0a03d8679b29a3b50102f16ddbea375c918322c6552cba76b759bdf39b",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw_aerosols.F:70-451",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw_aerosols.F",
+      "first_line": 70,
+      "last_line": 451,
+      "window_sha256": "7f6a52f2c48800e08ec6bfb31a924a279c8496f249def01623c4ed339c7187a1",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw_aerosols.F:70-921",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw_aerosols.F",
+      "first_line": 70,
+      "last_line": 921,
+      "window_sha256": "8e91e3cc3c2705635e30c9be41ef0a96f14ee0c7613b1dac93aba1d4fa349530",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw_aerosols.F:724-837",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw_aerosols.F",
+      "first_line": 724,
+      "last_line": 837,
+      "window_sha256": "2684f025995a6477ec7b901b53c28db67af64870eb11ede1f93a873fee423558",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_sw_aerosols.F:890-921",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_sw_aerosols.F",
+      "first_line": 890,
+      "last_line": 921,
+      "window_sha256": "76631a89479014f57440040a4559f4a256e19b56461eb1d9de1d2fa85930929c",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_vinterp.F:148-170",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_vinterp.F",
+      "first_line": 148,
+      "last_line": 170,
+      "window_sha256": "5ccd6f3d3c325ea76f35b8c5ce96993f1788041200f1f14c8f6b1d44234f81e8",
+      "occurrences": 1
+    },
+    {
+      "citation": "module_ra_rrtmg_vinterp.F:21-173",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_vinterp.F",
+      "first_line": 21,
+      "last_line": 173,
+      "window_sha256": "05514cd9e987eb3b7ec1074fe86fdd642e1347cbc752925d5b30b876cd0a6b89",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:1009-1050",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 1009,
+      "last_line": 1050,
+      "window_sha256": "a125c74f4130052949e04dd64058aa0252e443c446f90b7bda2df4cd02a987f8",
+      "occurrences": 2
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:355-624",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 355,
+      "last_line": 624,
+      "window_sha256": "913d6941176d5a034ebcd120dc576120fc1d80f821802d92c9d8adee7489f3eb",
+      "occurrences": 2
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:355-794",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 355,
+      "last_line": 794,
+      "window_sha256": "f97a36a5999ce23c447c27df0b3a1cc3c401e114a867d56f86ec080ee26e514c",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:433-439",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 433,
+      "last_line": 439,
+      "window_sha256": "7f27dab2dcb89bc621a607819d4784d64940ecfc783d3a35f4a87197045176c7",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:529-583",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 529,
+      "last_line": 583,
+      "window_sha256": "1c5d3be69bdb2f878148e76e5f1f2746f1aa9a4ddb0a34324c3f63df65c1657f",
+      "occurrences": 2
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:714-794",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 714,
+      "last_line": 794,
+      "window_sha256": "0538a6e03dcdc329006b49e2d3e2d13e85335e6424773c85b3593e1a4bacbca1",
+      "occurrences": 2
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:870-948",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 870,
+      "last_line": 948,
+      "window_sha256": "66612d177a0d2fc06ba55fa9471d403691af351e86cd7ee953428279adcd4964",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:874",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 874,
+      "last_line": 874,
+      "window_sha256": "e710c448d4a8e207f1501ec33f1f93bb5fdc4e4343891d8fc18e15d0dfe0658a",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:874-916",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 874,
+      "last_line": 916,
+      "window_sha256": "574bfa4e466f0679234e485be84ea7c6db043a673436d5c03e9f66db6f25572a",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:874-948",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 874,
+      "last_line": 948,
+      "window_sha256": "7815af7f82146c148557502dc5ec5661e2cca4f1c2e313617061e9ca288ce074",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:899",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 899,
+      "last_line": 899,
+      "window_sha256": "c004d0c1b066c95c793f730938b947fd55f4836f77186f7ef2232a6df1ff8010",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:905-910",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 905,
+      "last_line": 910,
+      "window_sha256": "ce511a4b117954912cb4c423346e2c5439551ed467f6be74d594c3c826008b15",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:911-916",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 911,
+      "last_line": 916,
+      "window_sha256": "6cb9fe1b39439e2e56023694a0ce648846678ae4d5324d9eeec7aaed1229c3e3",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_driver_radiation_sw.F:919-943",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F",
+      "first_line": 919,
+      "last_line": 943,
+      "window_sha256": "819f3c2ddb7a643a672b53e0b5a1498533af71a97af436807ae4a1a800064e33",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_manager.F:28-30",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_manager.F",
+      "first_line": 28,
+      "last_line": 30,
+      "window_sha256": "9f6b9a024ae3569f8175d743f56704db8c5e7f2878843393af7d4e253dbb971e",
+      "occurrences": 1
+    },
+    {
+      "citation": "mpas_atmphys_rrtmg_swinit.F:104-1194",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_rrtmg_swinit.F",
+      "first_line": 104,
+      "last_line": 1194,
+      "window_sha256": "5abde588f300faa82825acb3dfa94371e25695be3fe55daaa41fb9baea2ce28a",
+      "occurrences": 2
+    },
+    {
+      "citation": "mpas_atmphys_rrtmg_swinit.F:70-1194",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_rrtmg_swinit.F",
+      "first_line": 70,
+      "last_line": 1194,
+      "window_sha256": "121f7a8cb85de8b2be2955c4d308e443125d7e344f0650fa2549f284758961f0",
+      "occurrences": 2
+    },
+    {
+      "citation": "mpas_atmphys_vars.F:806-807",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_vars.F",
+      "first_line": 806,
+      "last_line": 807,
+      "window_sha256": "c4c1870eb6c5d1594aee638843c813bae2e446b07b439a5b4d48ce31678c9c3a",
+      "occurrences": 1
+    },
+    {
+      "citation": "src/core_atmosphere/physics/mpas_atmphys_functions.F:156-186",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_functions.F",
+      "first_line": 156,
+      "last_line": 186,
+      "window_sha256": "7b3fc1f7d5702178e1634674bf8c4d0920aa4b191bdd42109c1c3b5bad4b7b88",
+      "occurrences": 1
+    }
+  ]
+}

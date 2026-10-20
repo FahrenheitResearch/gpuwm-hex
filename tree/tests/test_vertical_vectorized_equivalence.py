@@ -3,8 +3,8 @@
 THE BREAKAGE THIS PREVENTS.  ``_laplacian_without_area`` and
 ``build_edge_vertical_metrics`` were cell-major/edge-major Python loops doing
 scalar float arithmetic; measured on the 112,676-cell parent of 2026-08-27 the
-first was 86.2 % of the init stage and the second 7.2 %.  Both are now
-slot-major vector updates.  Reordering floating-point accumulation changes
+first was 86.2 % of the init stage and the second 7.2 %.  Terrain/grid/omega fields now run through the scalar Rust bridge;
+the compatibility neighbor helper uses slot-major vector updates.  Reordering floating-point accumulation changes
 bits, and an init/vertical artifact whose bits move poisons every registered
 digest downstream -- the vertical artifact is the byte-reproducible anchor of
 the parent-regeneration chain.  These tests hold the vector form against the
@@ -19,10 +19,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hexcore.libm_identity import (
-    ARRAY_POW_LEAVES_SCALAR_PATH,
-    scalar_pow_fingerprint,
-)
+from _vertical_rust_fixture import delivered_vertical_engine, vertical_rust_engine
+from _vertical_rust_fixture import requires_hex_vertical
+
 from hexcore.vertical import (
     _laplacian_without_area,
     build_edge_vertical_metrics,
@@ -30,38 +29,6 @@ from hexcore.vertical import (
     edge_dc_squared_over_twelve,
     smooth_terrain,
 )
-
-
-def _skip_if_array_pow_leaves_the_scalar_path() -> None:
-    """The pow-path bitwise legs hold only where ``np.power`` IS the libm.
-
-    MEASURED 2026-08-31, the first day this file ran on a GitHub runner: on
-    AVX-512 silicon numpy dispatches array ``np.power`` to its own SIMD pow
-    kernel, so the vectorized form cannot reproduce the element-wise scalar
-    transcription there -- 36,855 of 200,000 float32 and 8,926 of 200,000
-    float64 values moved on this file's own inputs, while the SAME box's
-    scalar loop still digested the registered glibc row.  That is numpy's
-    dispatch table, not this repository's loops, and no tolerance may widen
-    to cover it; membership in the registry is additive and carries the
-    same-box scalar digest that separates dispatch from a real libm move
-    (``hexcore.libm_identity.ARRAY_POW_LEAVES_SCALAR_PATH``).  An UNKNOWN
-    diverging platform still fails loudly: its fingerprint is not in
-    ``KNOWN_SCALAR_POW_LIBMS`` and ``test_libm_identity`` refuses it before
-    this skip can apply.  Artifacts minted on a registered vector-path box
-    stay governed the ordinary way -- their receipts carry the fingerprint
-    and ``refuse_unless_recorded_libm_matches`` keeps them apart by name.
-    """
-
-    fingerprint = scalar_pow_fingerprint()
-    if fingerprint in ARRAY_POW_LEAVES_SCALAR_PATH:
-        pytest.skip(
-            f"array np.power leaves the scalar libm path on this box "
-            f"(fingerprint {fingerprint}, registered in "
-            f"ARRAY_POW_LEAVES_SCALAR_PATH): numpy's AVX-512 SIMD pow kernel "
-            f"answers 36,855 of 200,000 float32 values away from the scalar "
-            f"transcription, so the bitwise pow-path legs are unverifiable "
-            f"here by numpy's own dispatch, not by this repository's loops"
-        )
 
 
 def _scalar_laplacian(mesh, field, *, skip_zero_center):
@@ -87,7 +54,7 @@ def _scalar_laplacian(mesh, field, *, skip_zero_center):
 
 
 def _scalar_edge_metrics(mesh, vertical, *, theta_adv_order):
-    """The retired scalar zb/zb3 transcription, kept as the referee."""
+    """MPAS v8.4.2 cases.F:3407-3438 expression order; native replay is the referee."""
 
     cells_on_edge = np.asarray(mesh.cellsOnEdge).astype(np.int64, copy=False)
     n_edges = int(cells_on_edge.shape[0])
@@ -114,15 +81,20 @@ def _scalar_edge_metrics(mesh, vertical, *, theta_adv_order):
         if cell2 < 0:
             cell2 = cell1
         assert 0 <= cell1 < n_cells and 0 <= cell2 < n_cells
-        scale1 = dtype.type(dv_edge[edge] / area_cell[cell1])
-        scale2 = dtype.type(dv_edge[edge] / area_cell[cell2])
-        dc2_over_12 = dtype.type(dc_edge[edge] ** 2 / 12.0)
+        dc2 = dtype.type(dc_edge[edge] * dc_edge[edge])
         for level in range(vertical.n_vert_levels):
             z1 = vertical.zgrid[level, cell1]
             z2 = vertical.zgrid[level, cell2]
             z_edge3 = dtype.type(0.0)
             if theta_adv_order == 2:
                 z_edge = dtype.type(0.5) * (z1 + z2)
+                # Native cases.F:3407-3438 leaves z_edge3 unset for order 2.
+                # The pinned strict binary consistently reads REAL4 bits
+                # 0x20202020: receipts/native-order2-word-witness.json records
+                # repeated runs on both hosts at one and two process counts.
+                # Zeroing it repaired native's bug and made this test's old
+                # scalar reference disagree with the measured native output.
+                z_edge3 = dtype.type(np.array([0x20202020], dtype=np.uint32).view(np.float32)[0])
             else:
                 d2_1 = deriv_two[0, 0, edge] * z1
                 d2_2 = deriv_two[0, 1, edge] * z2
@@ -140,13 +112,13 @@ def _scalar_edge_metrics(mesh, vertical, *, theta_adv_order):
                             deriv_two[slot + 1, 1, edge]
                             * vertical.zgrid[level, neighbor]
                         )
-                z_edge = dtype.type(0.5) * (z1 + z2) - dc2_over_12 * (d2_1 + d2_2)
+                z_edge = dtype.type(0.5) * (z1 + z2) - dc2 * (d2_1 + d2_2) / dtype.type(12.0)
                 if theta_adv_order == 3:
-                    z_edge3 = -dc2_over_12 * (d2_1 - d2_2)
-            zb[level, 0, edge] = (z_edge - z1) * scale1
-            zb[level, 1, edge] = (z_edge - z2) * scale2
-            zb3[level, 0, edge] = z_edge3 * scale1
-            zb3[level, 1, edge] = z_edge3 * scale2
+                    z_edge3 = -dc2 * (d2_1 - d2_2) / dtype.type(12.0)
+            zb[level, 0, edge] = (z_edge - z1) * dv_edge[edge] / area_cell[cell1]
+            zb[level, 1, edge] = (z_edge - z2) * dv_edge[edge] / area_cell[cell2]
+            zb3[level, 0, edge] = z_edge3 * dv_edge[edge] / area_cell[cell1]
+            zb3[level, 1, edge] = z_edge3 * dv_edge[edge] / area_cell[cell2]
     return zb, zb3
 
 
@@ -225,30 +197,14 @@ def ragged(request: pytest.FixtureRequest) -> RaggedMesh:
     return RaggedMesh(dtype=request.param)
 
 
-def test_dc_squared_over_twelve_reproduces_the_scalar_power() -> None:
-    """``dcEdge**2/12`` must be numpy's SCALAR answer, not its array square.
-
-    THE BREAKAGE THIS PREVENTS, MEASURED: writing this term as
-    ``float32_array ** 2`` moved 39 ``zb`` and 18,141 ``zb3`` elements of the
-    112,676-cell parent on 2026-08-27, because numpy rewrites the array form to
-    ``np.square`` while the scalar form calls the libm ``powf``.  Every other
-    field stayed bitwise equal, so nothing but this assertion would have caught
-    it before the artifact reached a registered digest.
-    """
-
-    _skip_if_array_pow_leaves_the_scalar_path()
+def test_dc_squared_over_twelve_uses_the_native_integer_power() -> None:
+    """GNU strict MPAS integer power is a multiply, independent of numpy pow."""
     rng = np.random.default_rng(20260827)
     for dtype in (np.float32, np.float64):
         dc = (rng.random(200_000) * 1.0e5 + 1.0).astype(dtype)
-        scalar = np.array(
-            [dtype(dtype(x) ** 2 / 12.0) for x in dc], dtype=dtype
-        )
+        scalar = np.array([dtype(dtype(x) * dtype(x) / dtype(12.0)) for x in dc], dtype=dtype)
         produced = edge_dc_squared_over_twelve(dc, np.dtype(dtype))
-        assert produced.dtype == np.dtype(dtype)
-        assert produced.tobytes() == scalar.tobytes(), (
-            f"{dtype.__name__}: the vectorized dcEdge**2/12 left the scalar "
-            f"answer on {int((produced != scalar).sum())} of {dc.size} values"
-        )
+        assert produced.tobytes() == scalar.tobytes()
 
 
 def test_the_naive_array_square_is_a_real_trap_on_this_build() -> None:
@@ -288,6 +244,7 @@ def test_neighbor_sum_is_bitwise_the_scalar_loop(
     assert produced.tobytes() == reference.tobytes()
 
 
+@requires_hex_vertical
 def test_smoothed_terrain_is_bitwise_the_scalar_loop(ragged: RaggedMesh) -> None:
     result = np.asarray(ragged.ter).copy()
     for _ in range(2):
@@ -299,15 +256,11 @@ def test_smoothed_terrain_is_bitwise_the_scalar_loop(ragged: RaggedMesh) -> None
     assert produced.tobytes() == result.tobytes()
 
 
+@requires_hex_vertical
 @pytest.mark.parametrize("theta_adv_order", [2, 3, 4])
 def test_edge_vertical_metrics_are_bitwise_the_scalar_loop(
     ragged: RaggedMesh, theta_adv_order: int
 ) -> None:
-    if theta_adv_order != 2:
-        # Orders 3 and 4 route through edge_dc_squared_over_twelve, whose
-        # pow path is the registry's subject; order 2 carries no pow and
-        # runs everywhere.
-        _skip_if_array_pow_leaves_the_scalar_path()
     vertical = build_vertical_grid(
         ragged,
         np.asarray(ragged.ter),
@@ -327,6 +280,7 @@ def test_edge_vertical_metrics_are_bitwise_the_scalar_loop(
     assert metrics.zb3.tobytes() == reference_zb3.tobytes()
 
 
+@requires_hex_vertical
 @pytest.mark.parametrize("width", [1, 7, 10_000_000])
 def test_edge_metric_chunking_does_not_move_a_byte(
     ragged: RaggedMesh, monkeypatch: pytest.MonkeyPatch, width: int
@@ -349,6 +303,7 @@ def test_edge_metric_chunking_does_not_move_a_byte(
     assert produced.zb3.tobytes() == reference.zb3.tobytes()
 
 
+@requires_hex_vertical
 def test_absent_endpoint_pair_is_refused_by_edge_index(ragged: RaggedMesh) -> None:
     vertical = build_vertical_grid(
         ragged,

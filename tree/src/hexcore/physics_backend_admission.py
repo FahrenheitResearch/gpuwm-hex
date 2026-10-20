@@ -29,20 +29,22 @@ distribution is contributed by another installed distribution through the
 table never names a provider: an install with no such distribution resolves
 exactly the frozen row, and one with a provider resolves its rows too.
 
-WHAT A ROW DOES NOT DO.  A row does not admit a run.  Admission is still the
-existing machinery -- :mod:`hexcore.dt_admission` for the timestep and the
-physics cadences, :mod:`hexcore.device_admission` for the card,
-:mod:`hexcore.cuda_backend.arch_admission` for the architecture.  A row that
-names an anchor configuration class holding no anchors refuses through
-:meth:`PhysicsBackendRow.require_anchored`, with the remedy named.
+WHAT A ROW DOES NOT DO.  A row does not admit a run.  Admission is the
+existing machinery -- :mod:`hexcore.dt_admission` for the physics cadences,
+:mod:`hexcore.timestep_admission` for stability,
+:mod:`hexcore.device_admission` for the card,
+:mod:`hexcore.cuda_backend.arch_admission` for the architecture.  Whether a
+row's configuration class holds anchors is a record, never a refusal
+(retired 2026-10-10).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib
+import inspect
 from types import MappingProxyType
-from typing import Mapping
+from typing import Any, Mapping
 
 from .errors import ConfigurationRefusal
 
@@ -50,12 +52,16 @@ from .errors import ConfigurationRefusal
 __all__ = [
     "DEFAULT_BACKEND",
     "FROZEN_WSM6_COLUMN_ROW",
+    "IN_TREE_ROWS",
+    "MYNN_RUC_GSL_COLUMN_ROW",
     "ROW_ENTRY_POINT_GROUP",
     "row_provider_failures",
     "PhysicsBackendRow",
     "registered_backend_names",
     "register_backend_row",
+    "register_synthesized_row",
     "resolve_backend",
+    "synthesized_row_names",
 ]
 
 
@@ -130,28 +136,9 @@ class PhysicsBackendRow:
 
         return tuple(self.driven_scalar_names) + tuple(self.appended_scalar_names)
 
-    def require_anchored(self) -> None:
-        """Refuse a row whose configuration class has earned no anchors."""
-
-        if self.anchored:
-            return
-        raise ConfigurationRefusal(
-            "physics_backend",
-            self.name,
-            (
-                f"the {self.name!r} physics backend is a NEW configuration "
-                f"class in the anchor registry ({self.anchor_configuration_class}) "
-                "and that class holds no timestep anchor and no execution "
-                "anchor.  The concrete breakage this prevents: a run would "
-                "integrate an outer step, a physics call cadence and a clock "
-                "that nobody has measured for THIS backend, and would produce "
-                "a receipt with nothing to check it against -- the registered "
-                "anchors were all earned on the frozen WSM6 column backend "
-                "and say nothing about this one.  " + self.unanchored_remedy
-            ),
-            f"a registered anchor for configuration class "
-            f"{self.anchor_configuration_class!r}",
-        )
+    # require_anchored() is RETIRED (2026-10-10): it refused a backend row
+    # whose configuration class held no anchor, and nothing called it.  The
+    # ``anchored`` field is a record a receipt may carry, never a gate.
 
     def build_column_backend(
         self,
@@ -164,6 +151,7 @@ class PhysicsBackendRow:
         checkout: Any = None,
         cell_area_m2: Any = None,
         seam_options: Mapping[str, Any] | None = None,
+        rollback_snapshot: bool | None = None,
     ) -> Any:
         """Construct this row's column-physics backend -- ONE call site for
         every row.
@@ -187,12 +175,19 @@ class PhysicsBackendRow:
             "gwdo_kernel_cache": gwdo_kernel_cache,
         }
         if builder is not None:
+            extra = {}
+            if rollback_snapshot is not None:
+                # Forwarded only to a builder that names the knob: a provider
+                # written before it existed keeps its exact call.
+                if "rollback_snapshot" in inspect.signature(builder).parameters:
+                    extra["rollback_snapshot"] = bool(rollback_snapshot)
             return builder(
                 self,
                 **base,
                 checkout=checkout,
                 cell_area_m2=cell_area_m2,
                 seam_options=seam_options,
+                **extra,
             )
         extras = [
             name
@@ -229,6 +224,9 @@ class PhysicsBackendRow:
                 ),
                 "an adapter module publishing one of the two",
             )
+        if rollback_snapshot is not None:
+            return cls(**base, arwen_checkout=checkout,
+                       rollback_snapshot=bool(rollback_snapshot))
         return cls(**base, arwen_checkout=checkout)
 
     def load_adapter(self):
@@ -276,7 +274,66 @@ FROZEN_WSM6_COLUMN_ROW = PhysicsBackendRow(
 )
 
 
-_ROWS: dict[str, PhysicsBackendRow] = {FROZEN_WSM6_COLUMN_ROW.name: FROZEN_WSM6_COLUMN_ROW}
+#: WOOF's selectable column suite, as a second in-tree row.  Its adapter is
+#: part of this distribution and its batch is the engine's
+#: ``gpuwm.core.mpas_column_suite`` (an engine without that module refuses
+#: the row by name at load).  The profile it builds with -- which scheme
+#: fills each slot -- is the ``mynn-ruc-gsl`` row of
+#: ``data/profiles/physics-suites.v1.json``.  Its species block is
+#: aerosol-aware Thompson's eleven scalars, of which the boundary stream
+#: drives the six masses; the number and aerosol moments ride the transport
+#: and the limiter like every scalar and are left to the physics at the
+#: rings.  It holds no earned anchor yet: the remedy names what earns one.
+MYNN_RUC_GSL_COLUMN_ROW = PhysicsBackendRow(
+    name="mynn_ruc_gsl_column",
+    adapter_module="hexcore.cuda_suite_physics_v841",
+    batch_module="gpuwm.core.mpas_column_suite",
+    batch_entrypoint="run_mpas_column_suite",
+    driven_scalar_names=("qv", "qc", "qr", "qi", "qs", "qg"),
+    appended_scalar_names=("ni", "nr", "nc", "nwfa", "nifa"),
+    anchor_configuration_class="v841-column-suite-mynn-ruc-gsl",
+    anchored=False,
+    unanchored_remedy=(
+        "Earn it with this row's own 1, 2 and 4 card byte identity on a "
+        "registered mesh and a scored forecast against MRMS and ASOS beside "
+        "the frozen row."
+    ),
+)
+
+
+#: Aerosol-aware Thompson (mp=28) on the SAME frozen engine batch and pin
+#: (hexcore.thompson_column).  Anchored by the registry's own rule, as the
+#: P3 row is: anchors key on (dt, cumulus) and the card, not microphysics.
+THOMPSON_AERO_COLUMN_ROW = PhysicsBackendRow(
+    name="thompson_aero_column",
+    adapter_module="hexcore.thompson_column",
+    batch_module="gpuwm.core.mpas_column_batch",
+    batch_entrypoint="run_mpas_column_batch",
+    # The boundary drives the six masses only: an MPAS LBC stream carries
+    # lbc_qv..lbc_qg plus the two aerosols and no ni/nr/nc, and the door
+    # reads the driven block by POSITION, so naming all eleven refuses
+    # ("noncontiguous model species").  The number and aerosol moments ride
+    # the transport and the limiter and are left to the physics at the
+    # rings, exactly as the mynn_ruc_gsl_column row does; the array order
+    # (driven, then appended) is still the engine's eleven.
+    driven_scalar_names=("qv", "qc", "qr", "qi", "qs", "qg"),
+    appended_scalar_names=("ni", "nr", "nc", "nwfa", "nifa"),
+    anchor_configuration_class="v841-arwen-column-thompson-aero",
+    anchored=True,
+    unanchored_remedy="",
+)
+
+
+_ROWS: dict[str, PhysicsBackendRow] = {
+    FROZEN_WSM6_COLUMN_ROW.name: FROZEN_WSM6_COLUMN_ROW,
+    THOMPSON_AERO_COLUMN_ROW.name: THOMPSON_AERO_COLUMN_ROW,
+    MYNN_RUC_GSL_COLUMN_ROW.name: MYNN_RUC_GSL_COLUMN_ROW,
+}
+
+#: The rows this distribution carries itself.  Every other row came from an
+#: installed provider (``gpuwm_hex.rows``); a check that is about providers
+#: reads the difference.
+IN_TREE_ROWS = frozenset(_ROWS)
 
 #: The entry-point group through which another installed distribution
 #: contributes rows.  A row whose implementation is not part of this
@@ -355,6 +412,42 @@ def register_backend_row(row: PhysicsBackendRow) -> PhysicsBackendRow:
     return row
 
 
+#: Rows hexcore.physics_suites derives for a column-suite selection no
+#: profile names.  Kept apart from the registry proper: they are not names a
+#: user selects (the suite and its overrides are), not providers, and never
+#: listed as either; ``resolve_backend`` finds them so the door and the
+#: driver resolve the same derived row.
+_SYNTHESIZED_ROWS: dict[str, PhysicsBackendRow] = {}
+
+
+def register_synthesized_row(row: PhysicsBackendRow) -> PhysicsBackendRow:
+    """Add one derived row; refused if the name is a registered row or was
+    derived before with different content (same rule as the registry)."""
+
+    if not isinstance(row, PhysicsBackendRow):
+        raise TypeError("a backend row must be a PhysicsBackendRow")
+    if row.name in _ROWS:
+        raise ConfigurationRefusal(
+            "physics_backend", row.name,
+            "a derived row may not take a registered row's name; it would "
+            "rebind what that name runs",
+            "a derived row name outside the registry",
+        )
+    existing = _SYNTHESIZED_ROWS.get(row.name)
+    if existing is not None and existing != row:
+        raise ConfigurationRefusal(
+            "physics_backend", row.name,
+            "a derived row of this name exists with other content",
+            "the same derivation, or a new name",
+        )
+    _SYNTHESIZED_ROWS[row.name] = row
+    return row
+
+
+def synthesized_row_names() -> tuple[str, ...]:
+    return tuple(sorted(_SYNTHESIZED_ROWS))
+
+
 def registered_backend_names() -> tuple[str, ...]:
     """Every row this installation can resolve, sorted."""
 
@@ -366,7 +459,7 @@ def resolve_backend(name: str = DEFAULT_BACKEND) -> PhysicsBackendRow:
     """The row a configuration selects, or a refusal naming what exists."""
 
     key = str(name).strip().lower()
-    row = _ROWS.get(key)
+    row = _ROWS.get(key) or _SYNTHESIZED_ROWS.get(key)
     if row is not None:
         return row
     _load_providers()

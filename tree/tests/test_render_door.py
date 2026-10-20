@@ -402,3 +402,268 @@ class TestComposeArguments:
                 f"refusal for {namespace.window}/"
                 f"compose={namespace.compose} did not name the breakage: "
                 f"{caught.value}")
+
+
+class TestNativeResolutionAndNames:
+    """The live hex gallery's two defects, as the door now answers them.
+
+    MEASURED 2026-10-10: a 15 km mesh drawn on 20 km and 28 km grids,
+    headlined ``(d01 20 km)``, filed as ``rustwx_wrf_..._d01-20km_<p>.png``.
+    """
+
+    def test_global_means_the_mesh_spacing_and_the_old_box_keeps_its_name(self):
+        from hexcore.render_door import converter_window
+
+        assert converter_window("global") == "global-mesh"
+        assert converter_window("global-0.25") == "global"
+        assert converter_window("mesh") == "mesh"
+        spec = "region:40,-105,9000,7000,30,60"
+        assert converter_window(spec) == spec
+        with pytest.raises(RenderDoorError, match="not a render window"):
+            converter_window("atlantic")
+
+    def test_window_argument_takes_names_and_specs_only(self):
+        import argparse
+
+        from hexcore.render_door import window_argument
+
+        assert window_argument("global") == "global"
+        assert window_argument("region:85,0,8400,8400") == "region:85,0,8400,8400"
+        with pytest.raises(argparse.ArgumentTypeError, match="region:"):
+            window_argument("lambert-ish")
+
+    def test_names_carry_model_mesh_view_product_and_lead(self):
+        from hexcore.render_door import (
+            default_view, grid_token, lead_token, product_file_name)
+
+        assert grid_token("hex 15 km", "d01-20km") == "hex15km"
+        assert grid_token("hex 60-3 km", "d01-3km") == "hex60-3km"
+        assert grid_token(None, "d01-20km") == "d01-20km"
+        assert lead_token(21600, "x.png") == "f006"
+        assert lead_token(1800, "x.png") == "f000h30m"
+        # Sub-minute histories must not overwrite f000 or each other.
+        assert lead_token(30, "x.png") == "f000h00m30s"
+        assert lead_token(90, "x.png") == "f000h01m30s"
+        assert lead_token(None, "rustwx_wrf_20261010_0z_f012_d01_t2.png") == "f012"
+        assert default_view("global") == "global"
+        assert default_view("global-0.25") == "global"
+        assert default_view("region:40,-105,9000,7000") == "region"
+        assert product_file_name("hex15km", "global", "500mb_height_winds",
+                                 "f006") == "hex15km_global_500mb_height_winds_f006.png"
+
+    def test_a_view_that_would_split_a_path_is_refused(self):
+        from hexcore.render_door import checked_view
+
+        assert checked_view("north-america") == "north-america"
+        for bad in ("North America", "a/b", "", "-x"):
+            with pytest.raises(RenderDoorError, match="--view"):
+                checked_view(bad)
+
+    def test_variables_keyword_is_a_group_not_a_missing_product(self):
+        refuse_uncovered_products("all,variables", {}, Path("h.nc"), [])
+
+    @pytest.mark.parametrize("source_label", [None, "Hex LES | ArWen physics"])
+    def test_a_render_files_native_names_and_carries_georef(
+            self, monkeypatch, tmp_path, source_label):
+        """The door end to end over stand-in engines: what it asks the
+        converter for, and where and under what name each picture lands."""
+
+        import argparse
+        import json
+
+        from hexcore import render_door
+
+        history = tmp_path / "cuda-history.2026-10-10_06.00.00.nc"
+        mesh = tmp_path / "mesh.nc"
+        history.write_bytes(b"h")
+        mesh.write_bytes(b"m")
+        monkeypatch.setattr(render_door, "resolve_convert_exe",
+                            lambda explicit=None: Path("rw_mpas_convert"))
+        monkeypatch.setattr(render_door, "resolve_renderer_exe",
+                            lambda explicit=None: Path("rw_wrfbatch"))
+        monkeypatch.setattr(render_door, "engine_accepts", lambda exe, flag: True)
+        monkeypatch.setattr(render_door, "sha256_file", lambda path: "0" * 64)
+        basemap = tmp_path / "basemap"
+        (basemap / "natural_earth_110m").mkdir(parents=True)
+        (basemap / "natural_earth_110m" / "ne_110m_coastline.shp").write_bytes(b"s")
+        monkeypatch.setenv("RUSTWX_BASEMAP_DIR", str(basemap))
+        seen: dict[str, list[str]] = {}
+        environments: dict[str, dict | None] = {}
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        def fake_run(command, *, log_prefix, env=None):
+            command = [str(part) for part in command]
+            seen[log_prefix] = command
+            environments[log_prefix] = env
+            result = Result()
+            if log_prefix == "CONVERT":
+                frames = Path(command[command.index("--out-dir") + 1])
+                wrfout = frames / "wrfout_d01_2026-10-10_06_00_00"
+                wrfout.write_bytes(b"w")
+                Path(command[command.index("--json") + 1]).write_text(json.dumps({
+                    "grid_label": "hex 15 km",
+                    "frames": [{"output": str(wrfout),
+                                "valid_time": "2026-10-10T06:00:00",
+                                "lead_seconds": 21600,
+                                "absent_wrf_fields": []}]}), encoding="utf-8")
+            elif log_prefix == "CATALOG":
+                result.stdout = ("PRODUCT\t500mb_height_winds\tdirect\t"
+                                 "renderable\tready\t\n")
+            elif log_prefix == "RENDER":
+                raw = Path(command[command.index("--out-dir") + 1])
+                png = raw / ("rustwx_wrf_20261010_0z_f006_hex15km_"
+                             "500mb_height_winds.png")
+                png.write_bytes(b"png")
+                (raw / "render-georef.json").write_text(json.dumps({
+                    "schema": "rustwx.render-georef/v1",
+                    "panels": {png.name: {"projection": "latlon"}},
+                    "without_georeference": []}), encoding="utf-8")
+                result.stdout = f"RENDERED 500mb_height_winds {png}\n"
+            return result
+
+        monkeypatch.setattr(render_door, "_run", fake_run)
+        out = tmp_path / "png"
+        args = argparse.Namespace(
+            history=[str(history)], mesh=str(mesh), init=None, compose=None,
+            compose_base_only=False, out=str(out), scratch=None,
+            products="500mb_height_winds", frames="all", window="global",
+            field_set="full", simulation_start="2026-10-10_00:00:00",
+            size="1600x1000", heavy=False, nc_format="cdf2",
+            keep_scratch=False, convert_exe=None, renderer_exe=None,
+            view=None, model_label="hex", source_label=source_label)
+        assert render_door.run_render(args) == 0
+
+        expected_source = source_label if source_label is not None else "Hex forecast"
+        render = seen["RENDER"]
+        assert render[render.index("--source-label") + 1] == expected_source
+
+        convert = seen["CONVERT"]
+        assert convert[convert.index("--window") + 1] == "global-mesh"
+        assert convert[convert.index("--model-label") + 1] == "hex"
+        filed = (out / "global" / "500mb_height_winds" / "2026-10-10"
+                 / "hex15km_global_500mb_height_winds_f006.png")
+        assert filed.read_bytes() == b"png"
+        assert not list(out.rglob("rustwx_*"))
+        georef = json.loads((out / "global" / "render-georef.json").read_text())
+        assert list(georef["panels"]) == [
+            "500mb_height_winds/2026-10-10/"
+            "hex15km_global_500mb_height_winds_f006.png"]
+        manifest = json.loads(
+            (out / "global" / "render-manifest.json").read_text())
+        assert manifest["frames"][0]["placed"] == [
+            "global/500mb_height_winds/2026-10-10/"
+            "hex15km_global_500mb_height_winds_f006.png"]
+        assert manifest["view"] == "global"
+        assert manifest["grid_label"] == "hex 15 km"
+        assert manifest["source_label"] == expected_source
+        # Both renderer calls are handed the basemap root by name, and the
+        # receipt says which one was drawn from.
+        for stage in ("CATALOG", "RENDER"):
+            assert environments[stage]["RUSTWX_BASEMAP_DIR"] == str(basemap)
+        assert manifest["engine"]["basemap_dir"] == str(basemap)
+
+    def test_a_render_with_no_basemap_geometry_is_refused_before_converting(
+            self, monkeypatch, tmp_path):
+        """A relocated renderer drew 59 maps with no coastline, border or
+        state line and reported every one RENDERED (2026-10-11).  With no
+        Natural Earth set anywhere on the ladder the door refuses by name,
+        and it does so before the converter is launched."""
+
+        import argparse
+
+        from hexcore import engines, render_door
+
+        history = tmp_path / "cuda-history.2026-10-10_06.00.00.nc"
+        mesh = tmp_path / "mesh.nc"
+        history.write_bytes(b"h")
+        mesh.write_bytes(b"m")
+        renderer = tmp_path / "bin" / "rw_wrfbatch"
+        renderer.parent.mkdir()
+        renderer.write_bytes(b"x")
+        monkeypatch.setattr(render_door, "resolve_convert_exe",
+                            lambda explicit=None: Path("rw_mpas_convert"))
+        monkeypatch.setattr(render_door, "resolve_renderer_exe",
+                            lambda explicit=None: renderer)
+        monkeypatch.setattr(render_door, "engine_accepts", lambda exe, flag: True)
+        monkeypatch.delenv("RUSTWX_BASEMAP_DIR", raising=False)
+        monkeypatch.delenv("RUSTWX_ASSETS_DIR", raising=False)
+        monkeypatch.setattr(engines, "USER_BRIDGE_DIR", tmp_path / "bridges")
+        monkeypatch.setattr(render_door, "is_basemap_root", lambda path: False)
+        launched: list[str] = []
+        monkeypatch.setattr(
+            render_door, "_run",
+            lambda command, **kwargs: launched.append(kwargs["log_prefix"]))
+        args = argparse.Namespace(
+            history=[str(history)], mesh=str(mesh), init=None, compose=None,
+            compose_base_only=False, out=str(tmp_path / "png"), scratch=None,
+            products="500mb_height_winds", frames="all", window="global",
+            field_set="full", simulation_start=None, size="1600x1000",
+            heavy=False, nc_format="cdf2", keep_scratch=False,
+            convert_exe=None, renderer_exe=None, view=None, model_label="hex")
+        with pytest.raises(RenderDoorError, match="no basemap geometry"):
+            render_door.run_render(args)
+        assert launched == []
+
+    def test_the_basemap_root_beside_a_built_renderer_is_found(
+            self, monkeypatch, tmp_path):
+        from hexcore import engines, render_door
+
+        monkeypatch.delenv("RUSTWX_BASEMAP_DIR", raising=False)
+        monkeypatch.delenv("RUSTWX_ASSETS_DIR", raising=False)
+        monkeypatch.setattr(engines, "USER_BRIDGE_DIR", tmp_path / "bridges")
+        renderer = tmp_path / "rustwx" / "target" / "release" / "rw_wrfbatch"
+        renderer.parent.mkdir(parents=True)
+        renderer.write_bytes(b"x")
+        root = tmp_path / "rustwx" / "assets" / "basemap"
+        (root / "natural_earth_10m").mkdir(parents=True)
+        (root / "natural_earth_10m" / "ne_10m_coastline.shp").write_bytes(b"s")
+        assert render_door.resolve_basemap_dir(renderer) == root
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        with pytest.raises(RenderDoorError, match="--basemap-dir"):
+            render_door.resolve_basemap_dir(renderer, str(elsewhere))
+
+
+def test_region_latlon_is_a_window_the_export_door_passes_to_the_converter():
+    """The ArWen parent route exports on region-latlon:, the regular lat-lon box the engine's mapped
+    NetCDF route reads; the door must pass it through, not refuse it as an unknown window."""
+    from hexcore import render_door
+
+    spec = "region-latlon:36,-91,2400,1800"
+    assert render_door.window_argument(spec) == spec
+    assert render_door.converter_window(spec) == spec
+    assert render_door.default_view(spec) == "region"
+
+
+def test_the_arwen_backend_publishes_sea_ice_and_snow_when_the_land_surface_holds_them():
+    from hexcore import cuda_arwen_physics_v841 as backend
+
+    assert {"xice", "snow", "snowh"} <= set(backend._OPTIONAL_ARWEN_EXPORT_FIELDS)
+
+
+def test_split_native_streams_are_pinned_and_require_one_history(tmp_path, monkeypatch):
+    from hexcore import render_door as rd
+    from types import SimpleNamespace
+    import hashlib
+    init = tmp_path / 'init.nc'
+    diag = tmp_path / 'diagnostics.nc'
+    init.write_bytes(b'init-coordinates')
+    diag.write_bytes(b'valid-time-diagnostics')
+    def fake_run(command, **kwargs):
+        (tmp_path / 'scratch' / 'convert-report.json').write_text('{"frames": []}')
+        return SimpleNamespace(stdout='', stderr='', returncode=0)
+    monkeypatch.setattr(rd, '_run', fake_run)
+    kwargs = dict(histories=[tmp_path/'history.nc'], mesh=tmp_path/'grid.nc',
+                  scratch=tmp_path/'scratch', window='mesh', field_set='full',
+                  simulation_start=None, nc_format='cdf2', init=init, diagnostics=diag)
+    _, cmd = rd.convert_frames(Path('convert'), **kwargs)
+    for flag, path in (('--init-sha256', init), ('--diagnostics-sha256', diag)):
+        assert cmd[cmd.index(flag)+1] == hashlib.sha256(path.read_bytes()).hexdigest()
+    for bad in ({'init': None}, {'compose': tmp_path/'compose.json'},
+                {'histories': []}, {'histories': [Path('a'), Path('b')]}):
+        with pytest.raises(rd.RenderDoorError, match='requires one history'):
+            rd.convert_frames(Path('convert'), **{**kwargs, **bad})

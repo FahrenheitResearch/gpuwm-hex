@@ -1,0 +1,79 @@
+--- a/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
++++ b/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
+@@ -9,7 +9,7 @@
+ use rustwx_render::{ContourLayer, LegendControls, LegendMode, LevelDensity, RenderDensity, advisory};
+ use crate::{panel::{PanelRequest, layout_path, render_panel, safe_component}, scales};
+
+-pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\tRENDERED\tFAILED";
++pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\tRENDERED\tFAILED";
+ const CONTRACT: &str = "gpuwm-resident-ensemble-products.v1";
+
+ fn attr(file: &File, name: &str) -> Result<String, String> {
+@@ -34,6 +34,32 @@
+     Ok(array.values().iter().map(|&v| v as f32).collect())
+ }
+
++// S2S window means and anomalies have declared units and fixed comparison
++// scales. The generic 0..100 fallback would hide every height/MSLP mean.
++fn s2s_scale(field: &str, kind: &str) -> Option<rustwx_render::ColorScale> {
++    let anomaly = field.ends_with("_anomaly");
++    let base = field.strip_suffix("_anomaly").unwrap_or(field);
++    let (low, high, delta, spread) = match base {
++        "temperature2" => (240.0, 320.0, 10.0, 10.0),
++        "precipitation_rate" => (0.0, 30.0, 10.0, 10.0),
++        "z500" => (4500.0, 6200.0, 300.0, 150.0),
++        "mslp" => (960.0, 1040.0, 20.0, 15.0),
++        _ => return None,
++    };
++    if kind == "spread" { return Some(scales::spread_scale(spread)); }
++    if anomaly {
++        use rustwx_render::difference::{difference_scale, DifferenceTable};
++        return Some(rustwx_render::ColorScale::Discrete(difference_scale(DifferenceTable::builtin(), delta)));
++    }
++    if base == "temperature2" { return None; } // canonical operational temperature palette
++    let mut scale = scales::spread_scale(high - low);
++    if let rustwx_render::ColorScale::Discrete(ref mut ladder) = scale {
++        for level in &mut ladder.levels { *level += low; }
++        ladder.extend = rustwx_render::ExtendMode::Both;
++    }
++    Some(scale)
++}
++
+ fn field_title(field: &str) -> &str {
+     match field {
+         "qpf_1h" => "1 h precipitation", "qpf_3h" => "3 h precipitation",
+@@ -41,7 +67,13 @@
+         "wind10" => "10 m wind speed", "gust" => "wind gust",
+         "temperature2" => "2 m temperature", "dewpoint2" => "2 m dewpoint",
+         "refl" => "composite reflectivity", "uh" => "2-5 km updraft helicity",
+-        "humidity2" => "2 m relative humidity", other => other,
++        "humidity2" => "2 m relative humidity",
++        "z500" => "500 hPa geopotential height", "mslp" => "mean sea level pressure",
++        "precipitation_rate" => "precipitation rate",
++        "temperature2_anomaly" => "2 m temperature anomaly",
++        "z500_anomaly" => "500 hPa geopotential height anomaly",
++        "mslp_anomaly" => "mean sea level pressure anomaly",
++        "precipitation_rate_anomaly" => "precipitation rate anomaly", other => other,
+     }
+ }
+
+@@ -232,6 +264,7 @@
+         .filter(|&n| n.is_finite() && n >= 1.0 && n.fract() == 0.0)
+         .ok_or("ensemble_members must name the complete integer roster")? as usize;
+     let valid = attr(&file, "valid_time")?;
++    let is_s2s = file.attribute("s2s_window").is_some();
+     let lat = file.read_array_f64("XLAT").map_err(|e| format!("read XLAT: {e}"))?;
+     if lat.shape().len() != 2 || lat.shape().contains(&0) {
+         return Err("XLAT must be a nonempty (south_north,west_east) plane".into());
+@@ -261,7 +294,10 @@
+         for kind in ["mean", "spread", "min", "max"] {
+             if !products.iter().any(|p| p == kind) { continue; }
+             let mut values = shaped(&file, &format!("{field}_{kind}"), &[ny, nx])?;
+-            let (scale, display_units) = if kind == "spread" {
++            let s2s = if is_s2s { s2s_scale(&field, kind) } else { None };
++            let (scale, display_units) = if let Some(scale) = s2s {
++                (scale, units.clone())
++            } else if kind == "spread" {
+                 let upper = if units == "1" { 1.0 } else { match field.as_str() { "temperature2" | "dewpoint2" => 15.0,
+                     "humidity2" => 40.0, "refl" => 30.0, "uh" => 150.0, _ => 50.0 }
+                 };

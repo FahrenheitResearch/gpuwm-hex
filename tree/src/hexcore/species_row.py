@@ -70,6 +70,7 @@ from .errors import ConfigurationRefusal
 
 
 __all__ = [
+    "ENERGY",
     "MASS_COMPONENT",
     "MASS_LOADING",
     "NUMBER",
@@ -83,6 +84,9 @@ __all__ = [
     "THOMPSON_AEROSOL_SPECIES_ROW",
     "THOMPSON_SPECIES_ROW",
     "WSM6_SPECIES_ROW",
+    "declared_species_rows",
+    "engine_species_row",
+    "register_engine_row",
     "register_extended_row",
     "registered_extended_rows",
     "registered_scheme_aliases",
@@ -109,12 +113,16 @@ NUMBER = "number"
 #: A volume mixing ratio.  Transported, never a mass.  P3's ``qib``.
 VOLUME = "volume"
 
+# Specific turbulent kinetic energy, transported but never moisture loading.
+ENERGY = "energy"
+
 #: Every tag a species may carry.  Ordered so the loading class is first.
 SPECIES_CLASSES: tuple[str, ...] = (
     MASS_LOADING,
     MASS_COMPONENT,
     NUMBER,
     VOLUME,
+    ENERGY,
 )
 
 #: The classes that enter ``qtot``.  A frozenset of one, written as a set so
@@ -190,6 +198,12 @@ class SpeciesDeclaration:
 
         return self.species_class in LOADING_CLASSES
 
+    @property
+    def units(self) -> str:
+        return {MASS_LOADING: "kg kg^{-1}", MASS_COMPONENT: "kg kg^{-1}",
+                NUMBER: "kg^{-1}", VOLUME: "m^3 kg^{-1}",
+                ENERGY: "m^2 s^{-2}"}[self.species_class]
+
 
 @dataclass(frozen=True, slots=True)
 class SurfaceAccumulatorDeclaration:
@@ -212,6 +226,9 @@ class SurfaceAccumulatorDeclaration:
     description: str
     #: True when appended by :meth:`with_extras`.
     declared_extra: bool = False
+    #: Native fallout may be signed, so neither sign nor monotonicity is an
+    #: invariant. Finite values are still required. Extra buckets default off.
+    signed_fallout: bool = False
 
     def __post_init__(self) -> None:
         name = _clean_name(self.name, "accumulator name")
@@ -222,6 +239,8 @@ class SurfaceAccumulatorDeclaration:
                 f"accumulator {self.name!r} declares dtype {self.dtype!r}; "
                 "only 'float32' and 'float64' are carried"
             )
+        if not isinstance(self.signed_fallout, bool):
+            raise TypeError("signed_fallout must be a bool")
         if not str(self.history_name).strip():
             raise ValueError(
                 f"accumulator {self.name!r} declares no history name"
@@ -498,21 +517,15 @@ class MicrophysicsSpeciesRow:
 # ---------------------------------------------------------------------------
 
 
-#: Why a declared row has no engine counterparty.  One sentence, one place:
-#: two rows share it, and the day the engine publishes a row for either of
-#: them the gate in tests/test_species_row.py fails and the deferral
-#: retires -- exactly the way the mp=28 deferral retired when the engine
-#: published its ``thompson_aero`` row (gpuwm 2.6.3).
-_NO_ENGINE_ROW = (
-    "the pinned gpuwm engine's column batch declares transported species "
-    "for 'wsm6', 'p3' and 'thompson_aero' only "
-    "(gpuwm/core/mpas_column_batch.py "
-    "_SPECIES_BY_SCHEME, read off the published 2.6.3 wheel), so a "
-    "{scheme} forecast has no phase-one or phase-two counterparty to call "
-    "and would either refuse mid-step or run one scheme's arithmetic "
-    "against another scheme's state.  Lifting this is an engine-side row, "
-    "not a change in this tree"
-)
+#: A row's ``engine_scheme`` is the frozen column batch's scheme name where
+#: that batch carries the scheme (wsm6, p3, thompson_aero, tempo), and the
+#: engine's own selector (``mp_physics=N``) where the scheme runs through the
+#: generic column seam, which takes the selector itself.  The "declared and
+#: refused" rows this file used to carry (Kessler, Thompson mp=8) retired
+#: with the limit they cited -- a frozen batch that built four schemes --
+#: on 2026-10-11: every microphysics of WOOF's registry is reachable, and a
+#: scheme with no row here gets one derived from the engine's plan
+#: (:func:`engine_species_row`).
 
 
 def _mass(name: str, history: str, description: str) -> SpeciesDeclaration:
@@ -701,13 +714,11 @@ THOMPSON_AEROSOL_SPECIES_ROW = MicrophysicsSpeciesRow(
 
 
 #: Kessler warm rain (gpuwm mp_physics=1).  Three mass species, no ice.
-#: DECLARED and refused: the pinned engine's column batch carries no
-#: kessler row.
+#: Runs through the engine's generic column seam.
 KESSLER_SPECIES_ROW = MicrophysicsSpeciesRow(
     scheme_name="mp_kessler",
     mp_physics=1,
-    engine_scheme=None,
-    engine_absent_reason=_NO_ENGINE_ROW.format(scheme="mp=1 (Kessler)"),
+    engine_scheme="mp_physics=1",
     species=(
         _mass("qv", "QVAPOR", "water vapour mixing ratio"),
         _mass("qc", "QCLOUD", "cloud water mixing ratio"),
@@ -725,12 +736,11 @@ KESSLER_SPECIES_ROW = MicrophysicsSpeciesRow(
 
 
 #: Thompson two-moment (gpuwm mp_physics=8).  The WSM6 six plus ice and
-#: rain number.  DECLARED and refused for the same reason as mp=28.
+#: rain number.  Runs through the engine's generic column seam.
 THOMPSON_SPECIES_ROW = MicrophysicsSpeciesRow(
     scheme_name="mp_thompson",
     mp_physics=8,
-    engine_scheme=None,
-    engine_absent_reason=_NO_ENGINE_ROW.format(scheme="mp=8 (Thompson)"),
+    engine_scheme="mp_physics=8",
     species=(
         _mass("qv", "QVAPOR", "water vapour mixing ratio"),
         _mass("qc", "QCLOUD", "cloud water mixing ratio"),
@@ -771,6 +781,15 @@ THOMPSON_SPECIES_ROW = MicrophysicsSpeciesRow(
 )
 
 
+TEMPO_SPECIES_ROW = replace(
+    THOMPSON_AEROSOL_SPECIES_ROW,
+    scheme_name="mp_tempo", mp_physics=900, engine_scheme="tempo",
+    species=THOMPSON_AEROSOL_SPECIES_ROW.species + (
+        SpeciesDeclaration("ng", NUMBER, True, "QNGRAUPEL", "graupel number concentration"),
+        SpeciesDeclaration("volg", VOLUME, True, "VOLG", "graupel volume in m3 per kg"),
+    ),
+)
+
 _ROWS: Mapping[str, MicrophysicsSpeciesRow] = MappingProxyType(
     {
         row.scheme_name: row
@@ -779,6 +798,7 @@ _ROWS: Mapping[str, MicrophysicsSpeciesRow] = MappingProxyType(
             WSM6_SPECIES_ROW,
             THOMPSON_SPECIES_ROW,
             THOMPSON_AEROSOL_SPECIES_ROW,
+            TEMPO_SPECIES_ROW,
             P3_SPECIES_ROW,
         )
     }
@@ -790,9 +810,147 @@ _ROWS_BY_SELECTOR: Mapping[int, MicrophysicsSpeciesRow] = MappingProxyType(
 
 
 def registered_species_rows() -> Mapping[str, MicrophysicsSpeciesRow]:
-    """Every declared row, keyed by ``config_microp_scheme`` value."""
+    """Every declared row, keyed by ``config_microp_scheme`` value: the rows
+    written here and the rows derived from the engine's own plan
+    (:func:`register_engine_row`)."""
+
+    if not _ENGINE_ROWS:
+        return _ROWS
+    return MappingProxyType({**_ROWS, **_ENGINE_ROWS})
+
+
+def declared_species_rows() -> Mapping[str, MicrophysicsSpeciesRow]:
+    """The rows written in this file alone (no engine-derived row)."""
 
     return _ROWS
+
+
+#: Rows derived from the ENGINE's account of a microphysics selection
+#: (``gpuwm.core.mpas_column_suite.column_physics_plan``: the transported
+#: species and which of them load the air), keyed by scheme name.  A scheme
+#: WOOF runs needs no row written in this file: the resolver
+#: (:mod:`hexcore.physics_suites`) derives one from the plan and registers
+#: it here.  A derived row never shadows a declared one and is never
+#: replaced by a different row under the same name.
+_ENGINE_ROWS: dict[str, MicrophysicsSpeciesRow] = {}
+
+_ACCUMULATOR_TEXT = {
+    "RAINNC": "accumulated grid-scale precipitation",
+    "SNOWNC": "accumulated grid-scale snow",
+    "GRAUPELNC": "accumulated grid-scale graupel",
+    "HAILNC": "accumulated grid-scale hail",
+}
+
+
+def engine_species_row(
+    *,
+    scheme_name: str,
+    mp_physics: int,
+    species: Sequence[str],
+    mass_species: Sequence[str],
+    surface_accumulators: Sequence[str] | None = None,
+    radius_names: Sequence[str] = (),
+    history_names: Mapping[str, str] | None = None,
+) -> MicrophysicsSpeciesRow:
+    """A species row built from the engine's plan for one microphysics.
+
+    ``species`` is the engine's transported set and ``mass_species`` the
+    subset that loads the air.  The hex scalar block orders the loading
+    species first (vapour at index 0), then the rest in the engine's order:
+    the moist-coefficient kernels sum a contiguous leading run, and the seam
+    takes every species by name, so the block's order is hex's to choose.
+    ``surface_accumulators`` are the engine's bucket keys beside RAINC;
+    when the plan does not publish them they follow from the species
+    (RAINNC always, SNOWNC with ``qs``, GRAUPELNC with ``qg``).
+    """
+
+    given = tuple(_clean_name(name, "species name") for name in species)
+    loading = tuple(_clean_name(name, "species name") for name in mass_species)
+    unknown = sorted(set(loading) - set(given))
+    if unknown:
+        raise ValueError(
+            f"the engine plan for {scheme_name!r} names mass species {unknown} "
+            f"that are not among its transported species {given}")
+    if "qv" not in loading:
+        raise ValueError(
+            f"the engine plan for {scheme_name!r} does not list qv among its "
+            f"mass species {loading}; vapour loads the air")
+    six = ("qv", "qc", "qr", "qi", "qs", "qg")
+    ordered = (
+        tuple(n for n in six if n in loading)
+        + tuple(n for n in given if n in loading and n not in six)
+        + tuple(n for n in given if n not in loading))
+    spelled = dict(history_names or {})
+    declarations = []
+    for name in ordered:
+        if name in loading:
+            kind, what = MASS_LOADING, "mixing ratio"
+        elif "vol" in name:
+            kind, what = VOLUME, "volume"
+        else:
+            # The plan splits species two ways: loads the air, or does not.
+            # Everything that does not is carried as a number-class scalar
+            # (transported, positive-definite, outside qtot).
+            kind, what = NUMBER, "number concentration"
+        declarations.append(SpeciesDeclaration(
+            name=name, species_class=kind, transported=True,
+            history_name=str(spelled.get(name, name.upper())),
+            description=f"{name} {what} (engine species of {scheme_name})",
+        ))
+    if surface_accumulators is None:
+        keys = ["RAINNC"]
+        if "qs" in given:
+            keys.append("SNOWNC")
+        if "qg" in given:
+            keys.append("GRAUPELNC")
+    else:
+        keys = [str(key) for key in surface_accumulators if str(key) != "RAINC"]
+    accumulators = tuple(
+        SurfaceAccumulatorDeclaration(
+            key.lower(), "float32", key,
+            _ACCUMULATOR_TEXT.get(key, f"accumulated {key}"),
+            # WRF Morrison sums signed category fallout (morrison.cu,
+            # precipitation sums). The engine preserves these bucket words;
+            # only its consumer-facing snow fraction is bounded to [0, 1].
+            signed_fallout=(int(mp_physics) == 10
+                            and key in ("RAINNC", "SNOWNC", "GRAUPELNC")))
+        for key in keys
+    )
+    return MicrophysicsSpeciesRow(
+        scheme_name=_clean_name(scheme_name, "scheme name"),
+        mp_physics=int(mp_physics),
+        engine_scheme=f"mp_physics={int(mp_physics)}",
+        species=tuple(declarations),
+        surface_accumulators=accumulators,
+        radius_names=tuple(radius_names),
+        restart_extra_names=("h_diabatic",),
+    )
+
+
+def register_engine_row(row: MicrophysicsSpeciesRow) -> MicrophysicsSpeciesRow:
+    """Register a row derived from the engine's plan under its scheme name."""
+
+    if not isinstance(row, MicrophysicsSpeciesRow):
+        raise TypeError("an engine row must be a MicrophysicsSpeciesRow")
+    if row.scheme_name in _ROWS:
+        raise ConfigurationRefusal(
+            "config_microp_scheme", row.scheme_name,
+            "a declared species row already carries this name; a derived row "
+            "that replaced it would change what a plain configuration runs",
+            "a scheme name no declared row carries",
+        )
+    held = _ENGINE_ROWS.get(row.scheme_name)
+    if held is not None:
+        if held != row:
+            raise ConfigurationRefusal(
+                "config_microp_scheme", row.scheme_name,
+                "an engine-derived species row is already registered under "
+                "this name with other species; rows are not replaceable",
+                "one engine tree per process",
+            )
+        return held
+    _ENGINE_ROWS[row.scheme_name] = row
+    return row
 
 
 #: Rows a lane extended with :meth:`MicrophysicsSpeciesRow.with_extras`,
@@ -921,6 +1079,9 @@ def species_row_for_scheme(scheme_name: str) -> MicrophysicsSpeciesRow:
     row = _EXTENDED_SCHEMES.get(wanted)
     if row is not None:
         return row
+    row = _ENGINE_ROWS.get(wanted)
+    if row is not None:
+        return row
     raise ConfigurationRefusal(
         "config_microp_scheme",
         scheme_name,
@@ -958,6 +1119,9 @@ def species_row_for_names(
     extended = _EXTENDED_ROWS.get(given)
     if extended is not None:
         return extended
+    for row in _ENGINE_ROWS.values():
+        if row.names() == given:
+            return row
     # LONGEST prefix wins, and that is not a nicety: mp_kessler declares
     # (qv, qc, qr), which is a prefix of every other row, so a first-match
     # rule resolves an eleven-species aerosol block plus a lane's extras to
@@ -995,6 +1159,9 @@ def species_row_for_mp_physics(mp_physics: int) -> MicrophysicsSpeciesRow:
     row = _ROWS_BY_SELECTOR.get(selector)
     if row is not None:
         return row
+    for row in _ENGINE_ROWS.values():
+        if row.mp_physics == selector:
+            return row
     raise ConfigurationRefusal(
         "mp_physics",
         selector,

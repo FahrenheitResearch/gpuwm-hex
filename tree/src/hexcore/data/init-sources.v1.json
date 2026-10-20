@@ -1,0 +1,1280 @@
+{
+  "schema": "gpuwm-hex.init-sources/v1",
+  "about": "Every initial-condition source hex can start from, as table rows. One path serves all of them: acquire the declared products, write one WPS intermediate through met_intermediate with the row's Vtable and map-source label, build the init through the source-agnostic init door with the row's first-guess declarations. A new source is a row here plus, when its parameter codes are new, a Vtable; no per-source code exists or may be added (the arbitrary acceptance test, a project ruling).",
+  "run_switches": {
+    "about": "Init switches that are properties of the run and mesh, not of the source. Identical for every row so two sources differ only in their meteorology. Every value is the one the shared GFS 30 km case was built with (its init provenance engine_argv).",
+    "extrap_airtemp": "constant",
+    "theta_adv_order": 3,
+    "coef_3rd_order": 0.25,
+    "virtual_factor": "reproduce-fortran",
+    "deep_soil_moisture": "reproduce-fortran",
+    "landuse_table": "MODIFIED_IGBP_MODIS_NOAH",
+    "frac_seaice": "yes",
+    "tsk_seaice_threshold": 100.0,
+    "oned_underflow": "preserve"
+  },
+  "sources": [
+    {
+      "id": "gfs",
+      "aliases": [
+        "gfs-0p25",
+        "ncep-gfs"
+      ],
+      "engine_source_id": "gfs",
+      "display_name": "NCEP GFS 0.25 degree, cycle step 0",
+      "role": "deterministic",
+      "license": "US government work, public domain",
+      "grid": {
+        "family": "regular_latlon",
+        "resolution_deg": 0.25,
+        "winds": "earth-relative, unstaggered (A grid)"
+      },
+      "products": [
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "gfs.t{hh}z.pgrb2.0p25.f{lead:03d}",
+          "url": "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{yyyymmdd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{lead:03d}",
+          "index": {
+            "format": "ncep-idx",
+            "url": "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{yyyymmdd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{lead:03d}.idx",
+            "select": {
+              "about": "The records Vtable.GFS decodes, by .idx name and level (about 36 % of the object's bytes). The WPS intermediate decoded from them is byte-identical to the whole-file decode (measured once on the 2026-10-16 12Z cycle).",
+              "records": [
+                [
+                  "TMP|UGRD|VGRD|RH|HGT",
+                  "[0-9.]+ mb"
+                ],
+                [
+                  "TMP|RH",
+                  "2 m above ground"
+                ],
+                [
+                  "UGRD|VGRD",
+                  "10 m above ground"
+                ],
+                [
+                  "PRES|HGT|TMP|LAND|ICEC|WEASD|SNOD",
+                  "surface"
+                ],
+                [
+                  "PRMSL",
+                  "mean sea level"
+                ],
+                [
+                  "SOILW|TSOIL",
+                  "[0-9.]+-[0-9.]+ m below ground"
+                ],
+                [
+                  "UGRD|VGRD|PRES|TMP|HGT",
+                  "max wind|tropopause"
+                ]
+              ]
+            }
+          },
+          "streams": 16
+        }
+      ],
+      "decode": {
+        "vtable": "vtables/Vtable.GFS",
+        "map_source": "ncep-gfs"
+      },
+      "vertical": {
+        "coordinate": "isobaric",
+        "humidity": "RH (over ice below freezing; the ncep-gfs rule converts it to over liquid)",
+        "height": "HGT geopotential metres"
+      },
+      "first_guess": {
+        "nfglevels": 34,
+        "nfgsoillevels": 4,
+        "use_spechumd": "no"
+      },
+      "surface": {
+        "land_sea": "LANDSEA 2-0-0",
+        "terrain": "SOILHGT, HGT on surface 1",
+        "soil": "Noah 0-10, 10-40, 40-100, 100-200 cm (type 106 depth pairs)",
+        "snow": "SNOW weasd (doubled by the ncep-gfs rule), SNOWH derived",
+        "sea_ice": "SEAICE ICEC fraction",
+        "two_metre_humidity": "RH 2 m"
+      },
+      "limits": [],
+      "posting": {
+        "cycle_hours": [
+          0,
+          6,
+          12,
+          18
+        ],
+        "lag_minutes": 211,
+        "basis": "3.51 h, measured (posting lags, 2026-10-16)"
+      },
+      "forecast": {
+        "interval_hours": 6,
+        "max_hours": 384
+      },
+      "surface_series": {
+        "interval_hours": 6,
+        "products": [
+          {
+            "transport": "https",
+            "filename": "gfs-{yyyymmddhh}.grib2",
+            "url": "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{yyyymmdd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{lead:03d}",
+            "index": {
+              "url": "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{yyyymmdd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{lead:03d}.idx",
+              "format": "ncep-idx",
+              "select": {
+                "records": [
+                  [
+                    "^(TMP|ICEC|LAND|SNOD)$",
+                    "^surface$"
+                  ]
+                ]
+              }
+            },
+            "role": "surface"
+          }
+        ],
+        "decode": {
+          "vtable": "vtables/Vtable.NCEP-surface",
+          "map_source": "ncep-gfs"
+        }
+      }
+    },
+    {
+      "id": "ifs",
+      "aliases": [
+        "ecmwf",
+        "ecmwf-ifs",
+        "ecmwf-open-data"
+      ],
+      "engine_source_id": "ecmwf-open-data",
+      "display_name": "ECMWF IFS open data 0.25 degree, oper step 0",
+      "role": "deterministic",
+      "license": "CC-BY-4.0 (ECMWF open data)",
+      "grid": {
+        "family": "regular_latlon",
+        "resolution_deg": 0.25,
+        "winds": "earth-relative, unstaggered (A grid)"
+      },
+      "products": [
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "{yyyymmdd}{hh}0000-0h-oper-fc.grib2",
+          "url": [
+            "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/{yyyymmdd}/{hh}z/ifs/0p25/oper/{yyyymmdd}{hh}0000-0h-oper-fc.grib2",
+            "https://storage.googleapis.com/ecmwf-open-data/{yyyymmdd}/{hh}z/ifs/0p25/oper/{yyyymmdd}{hh}0000-0h-oper-fc.grib2"
+          ]
+        }
+      ],
+      "decode": {
+        "vtable": "vtables/Vtable.ECMWF-OD.rw",
+        "map_source": "ecmwf"
+      },
+      "vertical": {
+        "coordinate": "isobaric",
+        "humidity": "RH (ecmwf rule converts over-ice to over-liquid); q also published",
+        "height": "gh geopotential metres"
+      },
+      "first_guess": {
+        "nfglevels": 15,
+        "nfgsoillevels": 4,
+        "use_spechumd": "no"
+      },
+      "surface": {
+        "land_sea": "lsm fraction, flagged by the ecmwf rule",
+        "terrain": "SOILGEO surface geopotential -> SOILHGT",
+        "soil": "4 IFS layers 0-7, 7-28, 28-100, 100-289 cm (ordinal pairs on surface 151)",
+        "snow": "sd m water equivalent -> SNOW kg m-2",
+        "sea_ice": "not published at step 0 (thickness only); fraction starts at zero",
+        "two_metre_humidity": "dewpoint; RH derived"
+      },
+      "limits": [
+        "sea-ice fraction is absent from the step-0 publication, so polar ice starts at zero"
+      ],
+      "posting": {
+        "cycle_hours": [
+          0,
+          6,
+          12,
+          18
+        ],
+        "lag_minutes": 450,
+        "basis": "7.5 h, measured for ECMWF HRES open data (posting lags, 2026-10-16)"
+      }
+    },
+    {
+      "id": "aifs",
+      "aliases": [
+        "aifs-single",
+        "ecmwf-aifs"
+      ],
+      "engine_source_id": "aifs",
+      "display_name": "ECMWF AIFS single open data 0.25 degree, step 0",
+      "role": "deterministic",
+      "license": "CC-BY-4.0 (ECMWF open data)",
+      "grid": {
+        "family": "regular_latlon",
+        "resolution_deg": 0.25,
+        "winds": "earth-relative, unstaggered (A grid)"
+      },
+      "products": [
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "{yyyymmdd}{hh}0000-0h-aifs-oper-fc.grib2",
+          "url": [
+            "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/{yyyymmdd}/{hh}z/aifs-single/0p25/oper/{yyyymmdd}{hh}0000-0h-oper-fc.grib2",
+            "https://storage.googleapis.com/ecmwf-open-data/{yyyymmdd}/{hh}z/aifs-single/0p25/oper/{yyyymmdd}{hh}0000-0h-oper-fc.grib2"
+          ]
+        }
+      ],
+      "decode": {
+        "vtable": "vtables/Vtable.ECMWF-OD.rw",
+        "map_source": "ecmwf"
+      },
+      "vertical": {
+        "coordinate": "isobaric",
+        "humidity": "specific humidity only (no pressure-level RH is published)",
+        "height": "gh geopotential metres"
+      },
+      "first_guess": {
+        "nfglevels": 15,
+        "nfgsoillevels": 2,
+        "use_spechumd": "yes"
+      },
+      "surface": {
+        "land_sea": "lsm, flagged by the ecmwf rule",
+        "terrain": "SOILGEO surface geopotential -> SOILHGT",
+        "soil": "2 layers 0-7, 7-28 cm (ordinal pairs on surface 151)",
+        "snow": "not published; starts bare",
+        "sea_ice": "not published; fraction starts at zero",
+        "two_metre_humidity": "dewpoint; RH derived"
+      },
+      "limits": [
+        "soil column reaches 28 cm; deeper Noah layers come from the init's interpolation toward the static deep-soil temperature",
+        "no snow and no sea-ice state",
+        "step 0 is the AIFS input state, which ECMWF takes from its own analysis"
+      ],
+      "posting": {
+        "cycle_hours": [
+          0,
+          6,
+          12,
+          18
+        ],
+        "lag_minutes": 326,
+        "basis": "5.44 h, measured (posting lags, 2026-10-16)"
+      }
+    },
+    {
+      "id": "ifs-ens",
+      "aliases": [
+        "ecmwf-ens",
+        "ens",
+        "enfo"
+      ],
+      "engine_source_id": "ecmwf-open-data",
+      "display_name": "ECMWF IFS ENS open data 0.25 degree, one member at step 0",
+      "role": "ensemble_member",
+      "license": "CC-BY-4.0 (ECMWF open data)",
+      "grid": {
+        "family": "regular_latlon",
+        "resolution_deg": 0.25,
+        "winds": "earth-relative, unstaggered (A grid)"
+      },
+      "members": {
+        "perturbed": {
+          "first": 1,
+          "last": 50,
+          "index_select": {
+            "type": "pf",
+            "number": "{member}"
+          }
+        }
+      },
+      "products": [
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "{yyyymmdd}{hh}0000-0h-enfo-ef-m{member:02d}.grib2",
+          "url": [
+            "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/{yyyymmdd}/{hh}z/ifs/0p25/enfo/{yyyymmdd}{hh}0000-0h-enfo-ef.grib2",
+            "https://storage.googleapis.com/ecmwf-open-data/{yyyymmdd}/{hh}z/ifs/0p25/enfo/{yyyymmdd}{hh}0000-0h-enfo-ef.grib2"
+          ],
+          "index": {
+            "format": "ecmwf-jsonl",
+            "url": [
+              "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/{yyyymmdd}/{hh}z/ifs/0p25/enfo/{yyyymmdd}{hh}0000-0h-enfo-ef.index",
+              "https://storage.googleapis.com/ecmwf-open-data/{yyyymmdd}/{hh}z/ifs/0p25/enfo/{yyyymmdd}{hh}0000-0h-enfo-ef.index"
+            ],
+            "select": "member"
+          }
+        },
+        {
+          "role": "terrain_donor",
+          "transport": "https",
+          "filename": "{yyyymmdd}{hh}0000-0h-oper-fc-z.grib2",
+          "url": [
+            "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/{yyyymmdd}/{hh}z/ifs/0p25/oper/{yyyymmdd}{hh}0000-0h-oper-fc.grib2",
+            "https://storage.googleapis.com/ecmwf-open-data/{yyyymmdd}/{hh}z/ifs/0p25/oper/{yyyymmdd}{hh}0000-0h-oper-fc.grib2"
+          ],
+          "index": {
+            "format": "ecmwf-jsonl",
+            "url": [
+              "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/{yyyymmdd}/{hh}z/ifs/0p25/oper/{yyyymmdd}{hh}0000-0h-oper-fc.index",
+              "https://storage.googleapis.com/ecmwf-open-data/{yyyymmdd}/{hh}z/ifs/0p25/oper/{yyyymmdd}{hh}0000-0h-oper-fc.index"
+            ],
+            "select": {
+              "param": "z",
+              "levtype": "sfc"
+            }
+          },
+          "fields": [
+            "SOILGEO"
+          ],
+          "reason": "the ENS publication carries no surface geopotential; the same cycle's oper step-0 surface geopotential on the identical 0.25-degree grid supplies SOILHGT only"
+        }
+      ],
+      "decode": {
+        "vtable": "vtables/Vtable.ECMWF-OD.rw",
+        "map_source": "ecmwf"
+      },
+      "vertical": {
+        "coordinate": "isobaric",
+        "humidity": "RH (ecmwf rule converts over-ice to over-liquid); q also published",
+        "height": "gh geopotential metres"
+      },
+      "first_guess": {
+        "nfglevels": 15,
+        "nfgsoillevels": 4,
+        "use_spechumd": "no"
+      },
+      "surface": {
+        "land_sea": "lsm, flagged by the ecmwf rule",
+        "terrain": "oper step-0 surface geopotential (terrain_donor) -> SOILHGT",
+        "soil": "4 IFS layers on surface 151",
+        "snow": "sd m water equivalent -> SNOW",
+        "sea_ice": "not published (thickness only); fraction starts at zero",
+        "two_metre_humidity": "dewpoint; RH derived"
+      },
+      "limits": [
+        "terrain comes from the oper (HRES) orography interpolated to 0.25 degree, not the ENS model's own orography; it enters only the skin/soil terrain correction",
+        "sea-ice fraction absent",
+        "the open-data enfo file carries the 50 perturbed members only (measured on the 2026-10-03 12Z index: no type cf record); the unperturbed run is the ifs row"
+      ],
+      "posting": {
+        "cycle_hours": [
+          0,
+          6,
+          12,
+          18
+        ],
+        "lag_minutes": 384,
+        "basis": "6.4 h, measured (posting lags, 2026-10-16)"
+      }
+    },
+    {
+      "id": "gefs",
+      "aliases": [
+        "gefs-member",
+        "ncep-gefs"
+      ],
+      "engine_source_id": "gefs",
+      "display_name": "NCEP GEFS 0.5 degree, one member at step 0",
+      "role": "ensemble_member",
+      "license": "US government work, public domain",
+      "grid": {
+        "family": "regular_latlon",
+        "resolution_deg": 0.5,
+        "winds": "earth-relative, unstaggered (A grid)"
+      },
+      "members": {
+        "control": {
+          "number": 0,
+          "tag": "gec00"
+        },
+        "perturbed": {
+          "first": 1,
+          "last": 30,
+          "tag": "gep{member:02d}"
+        }
+      },
+      "products": [
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "{member_tag}.t{hh}z.pgrb2a.0p50.f{lead:03d}",
+          "url": "https://noaa-gefs-pds.s3.amazonaws.com/gefs.{yyyymmdd}/{hh}/atmos/pgrb2ap5/{member_tag}.t{hh}z.pgrb2a.0p50.f{lead:03d}"
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "{member_tag}.t{hh}z.pgrb2b.0p50.f{lead:03d}",
+          "url": "https://noaa-gefs-pds.s3.amazonaws.com/gefs.{yyyymmdd}/{hh}/atmos/pgrb2bp5/{member_tag}.t{hh}z.pgrb2b.0p50.f{lead:03d}"
+        }
+      ],
+      "decode": {
+        "vtable": "vtables/Vtable.GFS",
+        "map_source": "ncep-gefs"
+      },
+      "vertical": {
+        "coordinate": "isobaric",
+        "humidity": "RH (ncep rule converts over-ice to over-liquid)",
+        "height": "HGT geopotential metres"
+      },
+      "first_guess": {
+        "nfglevels": 32,
+        "nfgsoillevels": 4,
+        "use_spechumd": "no"
+      },
+      "surface": {
+        "land_sea": "LANDSEA 2-0-0",
+        "terrain": "SOILHGT, HGT surface (pgrb2a at step 0)",
+        "soil": "Noah 4 layers, layer 1 in pgrb2a and layers 2-4 in pgrb2b",
+        "snow": "SNOW weasd",
+        "sea_ice": "SEAICE ICEC",
+        "two_metre_humidity": "RH 2 m"
+      },
+      "limits": [
+        "0.5-degree source on a 30 km mesh",
+        "the pgrb2a/pgrb2b pair of the SAME member is one state; neither file alone is complete"
+      ],
+      "posting": {
+        "cycle_hours": [
+          0,
+          6,
+          12,
+          18
+        ],
+        "lag_minutes": 222,
+        "basis": "3.7 h, measured (posting lags, 2026-10-16)"
+      },
+      "forecast": {
+        "interval_hours": 6,
+        "max_hours": 384
+      }
+    },
+    {
+      "id": "era5",
+      "aliases": [
+        "era5-pl",
+        "ecmwf-era5"
+      ],
+      "engine_source_id": "era5",
+      "display_name": "ECMWF ERA5 reanalysis 0.25 degree (Copernicus CDS)",
+      "role": "reanalysis",
+      "license": "Copernicus licence (CDS account required)",
+      "grid": {
+        "family": "regular_latlon",
+        "resolution_deg": 0.25,
+        "winds": "earth-relative, unstaggered (A grid)"
+      },
+      "products": [
+        {
+          "role": "primary",
+          "transport": "cds",
+          "filename": "era5-pl-{yyyymmdd}{hh}.grib",
+          "cds": {
+            "dataset": "reanalysis-era5-pressure-levels",
+            "variable": [
+              "geopotential",
+              "temperature",
+              "u_component_of_wind",
+              "v_component_of_wind",
+              "relative_humidity",
+              "specific_humidity"
+            ],
+            "pressure_level": [
+              "1",
+              "2",
+              "3",
+              "5",
+              "7",
+              "10",
+              "20",
+              "30",
+              "50",
+              "70",
+              "100",
+              "125",
+              "150",
+              "175",
+              "200",
+              "225",
+              "250",
+              "300",
+              "350",
+              "400",
+              "450",
+              "500",
+              "550",
+              "600",
+              "650",
+              "700",
+              "750",
+              "775",
+              "800",
+              "825",
+              "850",
+              "875",
+              "900",
+              "925",
+              "950",
+              "975",
+              "1000"
+            ]
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "cds",
+          "filename": "era5-sfc-{yyyymmdd}{hh}.grib",
+          "cds": {
+            "dataset": "reanalysis-era5-single-levels",
+            "variable": [
+              "surface_pressure",
+              "mean_sea_level_pressure",
+              "2m_temperature",
+              "2m_dewpoint_temperature",
+              "10m_u_component_of_wind",
+              "10m_v_component_of_wind",
+              "skin_temperature",
+              "sea_surface_temperature",
+              "sea_ice_cover",
+              "snow_depth",
+              "snow_density",
+              "soil_temperature_level_1",
+              "soil_temperature_level_2",
+              "soil_temperature_level_3",
+              "soil_temperature_level_4",
+              "volumetric_soil_water_layer_1",
+              "volumetric_soil_water_layer_2",
+              "volumetric_soil_water_layer_3",
+              "volumetric_soil_water_layer_4",
+              "land_sea_mask",
+              "geopotential"
+            ]
+          }
+        }
+      ],
+      "decode": {
+        "vtable": "vtables/Vtable.ERA5.rw",
+        "map_source": "ecmwf"
+      },
+      "vertical": {
+        "coordinate": "isobaric",
+        "humidity": "RH (ecmwf rule converts over-ice to over-liquid); q also published",
+        "height": "geopotential -> HGT (GEOPT / 9.81)"
+      },
+      "first_guess": {
+        "nfglevels": 38,
+        "nfgsoillevels": 4,
+        "use_spechumd": "no"
+      },
+      "surface": {
+        "land_sea": "lsm, flagged by the ecmwf rule",
+        "terrain": "SOILGEO surface geopotential -> SOILHGT",
+        "soil": "4 layers 0-7, 7-28, 28-100, 100-289 cm (GRIB1 type 112)",
+        "snow": "sd m water equivalent -> SNOW, with published snow density",
+        "sea_ice": "ci fraction",
+        "two_metre_humidity": "dewpoint; RH derived"
+      },
+      "limits": [
+        "acquisition needs the user's Copernicus CDS key; a box without one takes the files through --staged",
+        "ERA5T (preliminary) for dates within about three months"
+      ],
+      "surface_series": {
+        "interval_hours": 1,
+        "products": [
+          {
+            "transport": "cds",
+            "filename": "era5-surface-{yyyymmddhh}.grib",
+            "cds": {
+              "dataset": "reanalysis-era5-single-levels",
+              "variable": [
+                "sea_surface_temperature",
+                "sea_ice_cover",
+                "snow_depth",
+                "skin_temperature",
+                "land_sea_mask",
+                "snow_density"
+              ]
+            },
+            "role": "surface"
+          }
+        ],
+        "decode": {
+          "vtable": "vtables/Vtable.ERA5-surface",
+          "map_source": "ecmwf"
+        }
+      }
+    },
+    {
+      "id": "icon",
+      "aliases": [
+        "icon-global",
+        "dwd-icon"
+      ],
+      "engine_source_id": null,
+      "display_name": "DWD ICON global open data (R2B7 icosahedral, about 13 km), step 0",
+      "role": "deterministic",
+      "license": "DWD open data (CC-BY-4.0)",
+      "grid": {
+        "family": "icosahedral_unstructured",
+        "resolution_deg": null,
+        "winds": "earth-relative, cell centres; remapped to a regular 0.25-degree grid before decoding"
+      },
+      "archive": "DWD open data keeps only about the last 24 hours of cycles; older dates are not obtainable from this source",
+      "sets": {
+        "pressure_levels": [
+          {
+            "hpa": "30",
+            "pa": "3000"
+          },
+          {
+            "hpa": "50",
+            "pa": "5000"
+          },
+          {
+            "hpa": "70",
+            "pa": "7000"
+          },
+          {
+            "hpa": "100",
+            "pa": "10000"
+          },
+          {
+            "hpa": "150",
+            "pa": "15000"
+          },
+          {
+            "hpa": "200",
+            "pa": "20000"
+          },
+          {
+            "hpa": "250",
+            "pa": "25000"
+          },
+          {
+            "hpa": "300",
+            "pa": "30000"
+          },
+          {
+            "hpa": "400",
+            "pa": "40000"
+          },
+          {
+            "hpa": "500",
+            "pa": "50000"
+          },
+          {
+            "hpa": "600",
+            "pa": "60000"
+          },
+          {
+            "hpa": "700",
+            "pa": "70000"
+          },
+          {
+            "hpa": "800",
+            "pa": "80000"
+          },
+          {
+            "hpa": "850",
+            "pa": "85000"
+          },
+          {
+            "hpa": "900",
+            "pa": "90000"
+          },
+          {
+            "hpa": "925",
+            "pa": "92500"
+          },
+          {
+            "hpa": "950",
+            "pa": "95000"
+          },
+          {
+            "hpa": "1000",
+            "pa": "100000"
+          }
+        ],
+        "soil_nodes": [
+          {
+            "name": "5",
+            "depth_m": "0.005"
+          },
+          {
+            "name": "2",
+            "depth_m": "0.02"
+          },
+          {
+            "name": "6",
+            "depth_m": "0.06"
+          },
+          {
+            "name": "18",
+            "depth_m": "0.18"
+          },
+          {
+            "name": "54",
+            "depth_m": "0.54"
+          },
+          {
+            "name": "162",
+            "depth_m": "1.62"
+          },
+          {
+            "name": "486",
+            "depth_m": "4.86"
+          },
+          {
+            "name": "1458",
+            "depth_m": "14.58"
+          }
+        ],
+        "soil_layers": [
+          {
+            "name": "0",
+            "top_m": "0",
+            "bottom_m": "0.01"
+          },
+          {
+            "name": "1",
+            "top_m": "0.01",
+            "bottom_m": "0.03"
+          },
+          {
+            "name": "3",
+            "top_m": "0.03",
+            "bottom_m": "0.09"
+          },
+          {
+            "name": "9",
+            "top_m": "0.09",
+            "bottom_m": "0.27"
+          },
+          {
+            "name": "27",
+            "top_m": "0.27",
+            "bottom_m": "0.81"
+          },
+          {
+            "name": "81",
+            "top_m": "0.81",
+            "bottom_m": "2.43"
+          },
+          {
+            "name": "243",
+            "top_m": "2.43",
+            "bottom_m": "7.29"
+          },
+          {
+            "name": "729",
+            "top_m": "7.29",
+            "bottom_m": "21.87"
+          }
+        ]
+      },
+      "remap": {
+        "about": "The native grid is GRIB2 template 101 (unstructured). gdt101_remap builds one plan from the mesh's own CLAT/CLON/FR_LAND records and remaps every declared record onto an exact whole-sphere 0.25-degree grid with the method its product names (idw4 aloft, land/water-aware surface-idw4 at the surface, soil-nearest below ground, seaice-nearest for ice).",
+        "tool": "gdt101_remap",
+        "mesh_cells": 2949120,
+        "centre": 78,
+        "target": "0 -90 0.25 0.25 1440 721",
+        "coordinates": {
+          "latitude": {
+            "product": "clat",
+            "selector": "0,191,1,1,0,255,0"
+          },
+          "longitude": {
+            "product": "clon",
+            "selector": "0,191,2,1,0,255,0"
+          },
+          "land_fraction": {
+            "product": "fr_land",
+            "selector": "2,0,0,1,0,255,0"
+          }
+        }
+      },
+      "products": [
+        {
+          "role": "coordinate",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_time-invariant_{yyyymmdd}{hh}_CLAT.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/clat/icon_global_icosahedral_time-invariant_{yyyymmdd}{hh}_CLAT.grib2.bz2",
+          "codec": "bz2",
+          "id": "clat"
+        },
+        {
+          "role": "coordinate",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_time-invariant_{yyyymmdd}{hh}_CLON.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/clon/icon_global_icosahedral_time-invariant_{yyyymmdd}{hh}_CLON.grib2.bz2",
+          "codec": "bz2",
+          "id": "clon"
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_time-invariant_{yyyymmdd}{hh}_FR_LAND.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/fr_land/icon_global_icosahedral_time-invariant_{yyyymmdd}{hh}_FR_LAND.grib2.bz2",
+          "codec": "bz2",
+          "id": "fr_land",
+          "remap": {
+            "selector": "2,0,0,1,0,255,0",
+            "method": "nearest"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_time-invariant_{yyyymmdd}{hh}_HSURF.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/hsurf/icon_global_icosahedral_time-invariant_{yyyymmdd}{hh}_HSURF.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,3,6,1,0,101,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_T.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/t/icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_T.grib2.bz2",
+          "codec": "bz2",
+          "expand": "pressure_levels",
+          "remap": {
+            "selector": "0,0,0,100,{pa},255,0",
+            "method": "idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_U.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/u/icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_U.grib2.bz2",
+          "codec": "bz2",
+          "expand": "pressure_levels",
+          "remap": {
+            "selector": "0,2,2,100,{pa},255,0",
+            "method": "idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_V.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/v/icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_V.grib2.bz2",
+          "codec": "bz2",
+          "expand": "pressure_levels",
+          "remap": {
+            "selector": "0,2,3,100,{pa},255,0",
+            "method": "idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_RELHUM.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/relhum/icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_RELHUM.grib2.bz2",
+          "codec": "bz2",
+          "expand": "pressure_levels",
+          "remap": {
+            "selector": "0,1,1,100,{pa},255,0",
+            "method": "idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_FI.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/fi/icon_global_icosahedral_pressure-level_{yyyymmdd}{hh}_000_{hpa}_FI.grib2.bz2",
+          "codec": "bz2",
+          "expand": "pressure_levels",
+          "remap": {
+            "selector": "0,3,4,100,{pa},255,0",
+            "method": "idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_T_2M.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/t_2m/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_T_2M.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,0,0,103,2,255,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_TD_2M.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/td_2m/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_TD_2M.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,0,6,103,2,255,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_U_10M.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/u_10m/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_U_10M.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,2,2,103,10,255,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_V_10M.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/v_10m/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_V_10M.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,2,3,103,10,255,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_PS.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/ps/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_PS.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,3,0,1,0,255,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_PMSL.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/pmsl/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_PMSL.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,3,1,101,0,255,0",
+            "method": "idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_T_G.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/t_g/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_T_G.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,0,0,1,0,255,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_W_SNOW.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/w_snow/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_W_SNOW.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,1,60,1,0,255,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_H_SNOW.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/h_snow/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_H_SNOW.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "0,1,11,1,0,255,0",
+            "method": "surface-idw4"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_FR_ICE.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/fr_ice/icon_global_icosahedral_single-level_{yyyymmdd}{hh}_000_FR_ICE.grib2.bz2",
+          "codec": "bz2",
+          "remap": {
+            "selector": "10,2,0,1,0,255,0",
+            "method": "seaice-nearest"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_soil-level_{yyyymmdd}{hh}_000_{name}_T_SO.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/t_so/icon_global_icosahedral_soil-level_{yyyymmdd}{hh}_000_{name}_T_SO.grib2.bz2",
+          "codec": "bz2",
+          "expand": "soil_nodes",
+          "remap": {
+            "selector": "2,3,18,106,{depth_m},255,0",
+            "method": "soil-nearest"
+          }
+        },
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "icon_global_icosahedral_soil-level_{yyyymmdd}{hh}_000_{name}_W_SO.grib2",
+          "url": "https://opendata.dwd.de/weather/nwp/icon/grib/{hh}/w_so/icon_global_icosahedral_soil-level_{yyyymmdd}{hh}_000_{name}_W_SO.grib2.bz2",
+          "codec": "bz2",
+          "expand": "soil_layers",
+          "remap": {
+            "selector": "2,3,20,106,{top_m},106,{bottom_m}",
+            "method": "soil-nearest"
+          }
+        }
+      ],
+      "decode": {
+        "vtable": "vtables/Vtable.ICON.rw",
+        "map_source": "dwd"
+      },
+      "vertical": {
+        "coordinate": "isobaric (18 levels, 30-1000 hPa)",
+        "humidity": "RELHUM over water",
+        "height": "FI geopotential -> HGT"
+      },
+      "first_guess": {
+        "nfglevels": 19,
+        "nfgsoillevels": 8,
+        "use_spechumd": "no"
+      },
+      "surface": {
+        "land_sea": "FR_LAND fraction, flagged at 0.5 by the dwd rule",
+        "terrain": "HSURF metres",
+        "soil": "TERRA: T_SO at 8 layer-midpoint nodes, W_SO kg m-2 per layer -> volumetric",
+        "snow": "W_SNOW kg m-2, H_SNOW m",
+        "sea_ice": "FR_ICE fraction",
+        "two_metre_humidity": "TD_2M dewpoint; RH derived"
+      },
+      "limits": [
+        "the archive holds only the newest cycles, so ICON can be initialised and checked for recent dates but not scored against a past case like 2026-10-03",
+        "remapped from the native mesh to 0.25 degrees before the init's own horizontal interpolation (two interpolation steps)",
+        "the open-data pressure ladder tops at 30 hPa"
+      ],
+      "posting": {
+        "cycle_hours": [
+          0,
+          6,
+          12,
+          18
+        ],
+        "lag_minutes": 158,
+        "basis": "2.64 h, measured (posting lags, 2026-10-16)"
+      }
+    },
+    {
+      "id": "cfs",
+      "aliases": [
+        "cfsv2",
+        "ncep-cfs"
+      ],
+      "engine_source_id": "gfs",
+      "display_name": "NCEP CFSv2 operational analysis and 9-month forecasts",
+      "role": "deterministic",
+      "license": "US government work, public domain",
+      "grid": {
+        "family": "regular_latlon",
+        "resolution_deg": 0.5,
+        "winds": "earth-relative, unstaggered"
+      },
+      "products": [
+        {
+          "role": "primary",
+          "transport": "https",
+          "filename": "cdas1.t{hh}z.pgrbh00.grib2",
+          "url": "https://www.ncei.noaa.gov/oa/prod-cfs-operational-analysis/6-hourly-by-pressure/{yyyy}/{yyyy}{mm}/{yyyymmdd}/cdas1.t{hh}z.pgrbh00.grib2",
+          "index": {
+            "format": "ncep-idx",
+            "url": "https://www.ncei.noaa.gov/oa/prod-cfs-operational-analysis/6-hourly-by-pressure/{yyyy}/{yyyy}{mm}/{yyyymmdd}/cdas1.t{hh}z.pgrbh00.inv",
+            "select": {
+              "records": [
+                [
+                  "^(HGT|TMP|RH|UGRD|VGRD)$",
+                  "^[0-9.]+ mb$"
+                ],
+                [
+                  "^(TMP|RH|DPT|SPFH|PRES|PRMSL|LAND|ICEC|WEASD|SNOD|HGT)$",
+                  "^(surface|2 m above ground|mean sea level)$"
+                ],
+                [
+                  "^(TMP|SOILW)$",
+                  ".* m below ground"
+                ],
+                [
+                  "^(UGRD|VGRD)$",
+                  "^10 m above ground$"
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "decode": {
+        "vtable": "vtables/Vtable.CFS",
+        "map_source": "ncep-cdas-cfsv2"
+      },
+      "vertical": {
+        "coordinate": "isobaric",
+        "humidity": "RH",
+        "height": "HGT geopotential metres"
+      },
+      "first_guess": {
+        "nfglevels": 38,
+        "nfgsoillevels": 4,
+        "use_spechumd": "no"
+      },
+      "surface": {
+        "land_sea": "LAND",
+        "terrain": "HGT surface",
+        "soil": "Noah four layers in pressure analysis; FLXF supplies forecast land fields",
+        "sea_ice": "ICEC",
+        "snow": "WEASD, SNOD"
+      },
+      "forecast": {
+        "interval_hours": 6,
+        "max_hours": 6600,
+        "products": [
+          {
+            "role": "primary",
+            "transport": "https",
+            "filename": "pgbf{valid_yyyymmddhh}.01.{yyyymmddhh}.grb2",
+            "url": "https://www.ncei.noaa.gov/oa/prod-cfs-operational-forecast/6-hourly-by-pressure/{yyyy}/{yyyy}{mm}/{yyyymmdd}/{yyyymmddhh}/pgbf{valid_yyyymmddhh}.01.{yyyymmddhh}.grb2",
+            "index": {
+              "format": "ncep-idx",
+              "url": "https://www.ncei.noaa.gov/oa/prod-cfs-operational-forecast/6-hourly-by-pressure/{yyyy}/{yyyy}{mm}/{yyyymmdd}/{yyyymmddhh}/pgbf{valid_yyyymmddhh}.01.{yyyymmddhh}.inv",
+              "select": {
+                "records": [
+                  [
+                    "^(HGT|TMP|RH|UGRD|VGRD)$",
+                    "^[0-9.]+ mb$"
+                  ],
+                  [
+                    "^(TMP|RH|DPT|SPFH|PRES|PRMSL|LAND|ICEC|WEASD|SNOD|HGT)$",
+                    "^(surface|2 m above ground|mean sea level)$"
+                  ],
+                  [
+                    "^(TMP|SOILW)$",
+                    ".* m below ground"
+                  ],
+                  [
+                    "^(UGRD|VGRD)$",
+                    "^10 m above ground$"
+                  ]
+                ]
+              }
+            }
+          },
+          {
+            "role": "primary",
+            "transport": "https",
+            "filename": "flxf{valid_yyyymmddhh}.01.{yyyymmddhh}.grb2",
+            "url": "https://www.ncei.noaa.gov/oa/prod-cfs-operational-forecast/6-hourly-flux/{yyyy}/{yyyy}{mm}/{yyyymmdd}/{yyyymmddhh}/flxf{valid_yyyymmddhh}.01.{yyyymmddhh}.grb2",
+            "index": {
+              "format": "ncep-idx",
+              "url": "https://www.ncei.noaa.gov/oa/prod-cfs-operational-forecast/6-hourly-flux/{yyyy}/{yyyy}{mm}/{yyyymmdd}/{yyyymmddhh}/flxf{valid_yyyymmddhh}.01.{yyyymmddhh}.inv",
+              "select": {
+                "records": [
+                  [
+                    "^(HGT|TMP|RH|UGRD|VGRD)$",
+                    "^[0-9.]+ mb$"
+                  ],
+                  [
+                    "^(TMP|RH|DPT|SPFH|PRES|PRMSL|LAND|ICEC|WEASD|SNOD|HGT)$",
+                    "^(surface|2 m above ground|mean sea level)$"
+                  ],
+                  [
+                    "^(TMP|SOILW)$",
+                    ".* m below ground"
+                  ],
+                  [
+                    "^(UGRD|VGRD)$",
+                    "^10 m above ground$"
+                  ]
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "posting": {
+        "cycle_hours": [
+          0,
+          6,
+          12,
+          18
+        ],
+        "lag_minutes": 480
+      },
+      "archive": {
+        "documentation": "https://www.ncei.noaa.gov/products/weather-climate-models/climate-forecast-system"
+      },
+      "surface_series": {
+        "interval_hours": 6,
+        "products": [
+          {
+            "transport": "https",
+            "filename": "cfs-sfc-{yyyymmddhh}.grib2",
+            "url": "https://www.ncei.noaa.gov/oa/prod-cfs-operational-analysis/6-hourly-by-pressure/{yyyy}/{yyyy}{mm}/{yyyymmdd}/cdas1.t{hh}z.pgrbh00.grib2",
+            "index": {
+              "format": "ncep-idx",
+              "url": "https://www.ncei.noaa.gov/oa/prod-cfs-operational-analysis/6-hourly-by-pressure/{yyyy}/{yyyy}{mm}/{yyyymmdd}/cdas1.t{hh}z.pgrbh00.inv",
+              "select": {
+                "records": [
+                  [
+                    "^(TMP|ICEC|LAND|SNOD)$",
+                    "^surface$"
+                  ]
+                ]
+              }
+            },
+            "role": "surface"
+          }
+        ],
+        "forecast": {
+          "interval_hours": 6,
+          "max_hours": 6600,
+          "products": [
+            {
+              "role": "primary",
+              "transport": "https",
+              "filename": "flxf{valid_yyyymmddhh}.01.{yyyymmddhh}.grb2",
+              "url": [
+                "https://noaa-cfs-pds.s3.amazonaws.com/cfs.{yyyymmdd}/{hh}/6hrly_grib_01/flxf{valid_yyyymmddhh}.01.{yyyymmddhh}.grb2",
+                "https://www.ncei.noaa.gov/oa/prod-cfs-operational-forecast/6-hourly-flux/{yyyy}/{yyyy}{mm}/{yyyymmdd}/{yyyymmddhh}/flxf{valid_yyyymmddhh}.01.{yyyymmddhh}.grb2"
+              ],
+              "index": {
+                "format": "ncep-idx",
+                "url": [
+                  "https://noaa-cfs-pds.s3.amazonaws.com/cfs.{yyyymmdd}/{hh}/6hrly_grib_01/flxf{valid_yyyymmddhh}.01.{yyyymmddhh}.grb2.idx",
+                  "https://www.ncei.noaa.gov/oa/prod-cfs-operational-forecast/6-hourly-flux/{yyyy}/{yyyy}{mm}/{yyyymmdd}/{yyyymmddhh}/flxf{valid_yyyymmddhh}.01.{yyyymmddhh}.inv"
+                ],
+                "select": {
+                  "records": [
+                    [
+                      "^(TMP|ICEC|LAND|SNOD)$",
+                      "^surface$"
+                    ]
+                  ]
+                }
+              }
+            }
+          ],
+          "decode": {
+            "vtable": "vtables/Vtable.NCEP-surface",
+            "map_source": "ncep-cdas-cfsv2"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "schema": "mpas.native-deck-companions/v1",
+  "entries": [
+    {
+      "option": "config_pbl_scheme",
+      "value": "bl_mynn",
+      "companions": {
+        "config_sfclayer_scheme": "sf_mynn"
+      },
+      "native_authority": "mpas_atmphys_control.F:277-279"
+    },
+    {
+      "option": "config_pbl_scheme",
+      "value": "bl_ysu",
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_control.F:280-288"
+    },
+    {
+      "option": "config_lsm_scheme",
+      "value": "sf_noah",
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_control.F:293-306"
+    },
+    {
+      "option": "config_lsm_scheme",
+      "value": "sf_noahmp",
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_control.F:293-306"
+    },
+    {
+      "option": "config_radt_lw_scheme",
+      "value": "cam_lw",
+      "companions": {
+        "config_radt_cld_scheme": "cld_incidence"
+      },
+      "native_authority": "mpas_atmphys_control.F:257-267"
+    },
+    {
+      "option": "config_radt_lw_scheme",
+      "value": "rrtmg_lw",
+      "companions": {
+        "config_radt_cld_scheme": "cld_incidence"
+      },
+      "native_authority": "mpas_atmphys_control.F:257-267"
+    },
+    {
+      "option": "config_radt_sw_scheme",
+      "value": "cam_sw",
+      "companions": {
+        "config_radt_cld_scheme": "cld_incidence"
+      },
+      "native_authority": "mpas_atmphys_control.F:257-267"
+    },
+    {
+      "option": "config_radt_sw_scheme",
+      "value": "rrtmg_sw",
+      "companions": {
+        "config_radt_cld_scheme": "cld_incidence"
+      },
+      "native_authority": "mpas_atmphys_control.F:257-267"
+    },
+    {
+      "option": "config_oml1d",
+      "value": ".true.",
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_control.F:310-318; mpas_atmphys_driver.F:175-181"
+    },
+    {
+      "option": "config_gwdo_scheme",
+      "value": "bl_ysu_gwdo",
+      "companions": {
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_driver.F:175-181; mpas_atmphys_control.F:280-288"
+    },
+    {
+      "option": "config_gwdo_scheme",
+      "value": "bl_ugwp_gwdo",
+      "companions": {
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_driver.F:175-181; mpas_atmphys_control.F:280-288"
+    },
+    {
+      "option": "config_ngw_scheme",
+      "value": ".true.",
+      "companions": {
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev",
+        "config_gwdo_scheme": "bl_ugwp_gwdo"
+      },
+      "native_authority": "mpas_atmphys_driver.F:175-181; mpas_atmphys_control.F:310-318; mpas_atmphys_driver_gwdo.F:780-822"
+    },
+    {
+      "option": "config_convection_scheme",
+      "value": "cu_tiedtke",
+      "companions": {
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov",
+        "config_lsm_scheme": "sf_noah"
+      },
+      "native_authority": "mpas_atmphys_driver_convection.F:792-851; Registry.xml:2891-2905,3659-3667; p6 native-deck-companion-defect.json"
+    },
+    {
+      "option": "config_convection_scheme",
+      "value": "cu_ntiedtke",
+      "companions": {
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_driver_convection.F:792-851; Registry.xml:2891-2905,3659-3667; p7 native-policy-summary.json"
+    },
+    {
+      "option": "config_radt_cld_scheme",
+      "value": "cld_incidence",
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw"
+      },
+      "native_authority": "mpas_atmphys_driver_radiation_lw.F:864-900; mpas_atmphys_driver_radiation_sw.F:918-946; mpas_atmphys_driver_cloudiness.F:193-227"
+    },
+    {
+      "option": "config_radt_cld_scheme",
+      "value": "cld_fraction",
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw"
+      },
+      "native_authority": "mpas_atmphys_driver_radiation_lw.F:864-900; mpas_atmphys_driver_radiation_sw.F:918-946; mpas_atmphys_driver_cloudiness.F:193-227"
+    },
+    {
+      "option": "config_radt_cld_scheme",
+      "value": "cld_fraction_thompson",
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_microp_scheme": "mp_thompson"
+      },
+      "native_authority": "mpas_atmphys_driver_cloudiness.F:48-51,213-227"
+    },
+    {
+      "option": "config_convection_scheme",
+      "value": "cu_grell_freitas",
+      "companions": {
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_driver_convection.F:693-696,708-710,723-725; Registry.xml:2750-2752,2891-2905,3659-3665; strict standalone GF first-call SIGSEGV (f4 native-gf-policy-forecast.json)"
+    }
+  ]
+}

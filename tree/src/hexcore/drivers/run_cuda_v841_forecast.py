@@ -39,8 +39,11 @@ WHAT IS KEPT (unchanged, still enforced, refusal on violation)
     ``V841MpasColumnPhysicsGwdoConfig`` control under ``--horiz-mixing off``;
     both carry WSM6 + GF + YSU + external YSU-GWDO +
     revised-MO + NoahMP (+ glacier dispatch) + cloud fraction + legacy RRTMG,
-    dt = 120 s, radiation 600 s, surface/PBL/cumulus 120 s, six-species scalar
-    order, ``wsm6_hail_opt = 0``, ``xice_threshold = 0.02``, dx = 25000 m;
+    at the run's timestep and schedule -- MPAS-A's Registry defaults unless
+    the caller names others (RK order 2, four acoustic sub-steps, three
+    splits, radiation 1800 s, surface/PBL and cumulus every step;
+    hexcore.mpas_defaults) -- six-species scalar order,
+    ``wsm6_hail_opt = 0``, ``xice_threshold = 0.02``;
   * the staged two-owner transaction with its rollback contract
     (``execute_composite_step``), including the no-fail commit law;
   * the surface classification receipt and the NoahMP census/glacier-path
@@ -141,17 +144,20 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, fields as dataclass_fields
 from datetime import datetime, timedelta
 import gc
 import hashlib
 import json
 import math
+import os
+import re
 from pathlib import Path
 import sys
 import time
+import traceback
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -162,6 +168,8 @@ if str(_SRC) not in sys.path:
 from hexcore.drivers import run_cuda_v841_full_physics_x4 as proof  # noqa: E402
 from hexcore import dt_admission  # noqa: E402
 from hexcore import shipped_sources  # noqa: E402
+from hexcore import history_writer, kernel_prewarm, mesh_snapshot, prep_cache  # noqa: E402
+from hexcore import time_ledger  # noqa: E402
 from hexcore.errors import ConfigurationRefusal  # noqa: E402
 from hexcore.species_row import species_row_for_scheme as _row_for_scheme  # noqa: E402
 from hexcore.mesh import (  # noqa: E402
@@ -173,8 +181,66 @@ from hexcore.mesh import (  # noqa: E402
 ROOT = proof.ROOT
 
 SCHEMA = "mpas-port.cuda-v841-engineering-forecast/v1"
+
+#: How an IAU increment enters, and the route a run takes when it names none (one table, the door's).
+from hexcore.analysis_door import IAU_ROUTE_DEFAULT, IAU_ROUTES  # noqa: E402
 RECEIPT_MODE = "engineering-forecast"
+
+#: Written into the output root before the first step: which mesh and init this forecast runs on,
+#: so a reader drawing each history hour as it lands (a site publishing a forecast while it runs)
+#: needs nothing but the output directory, even when the door derived the init (an analysis
+#: bundle's background, a remap onto a nest).
+START_RECORD_NAME = "forecast-start.json"
+START_RECORD_SCHEMA = "gpuwm-hex.forecast-start/1"
+
+
+def restore_refused_dycore_values(rollback: Any, step: int) -> None:
+    """Copy a committed boundary's dycore state VALUES back into the driver's own arrays.
+
+    F1 follow-through (2026-10-15). CUDA graph replay returns the graph's own
+    output buffers, so the committed MPAS state shares memory with the graph,
+    and a refused step's replays overwrite it. The step's transaction rollback
+    restores the start-state identity, not those values. Breakage it prevents:
+    a --stop-on-refusal run with graphs ending on the refused step's dynamics
+    (final digest, any frame written from it) where eager ends on the committed
+    step. ``rollback`` is the armed TwoDeepForecastSnapshotV841, whose slot for
+    ``step`` was captured before the refused step. Identities are kept; only
+    bytes are copied.
+    """
+    slot = rollback.slots[step % 2]
+    if slot.get("step") != step:
+        raise RuntimeError(f"refusal restore lost committed boundary {step}")
+    driver = rollback.stack["driver"]
+    for part in ("state", "saved"):
+        source, target = getattr(slot["atmosphere"], part), getattr(driver.atmosphere, part)
+        for field in dataclass_fields(source):
+            value = getattr(source, field.name)
+            if isinstance(value, rollback.cp.ndarray):
+                rollback.cp.copyto(getattr(target, field.name), value)
+
+
+def write_start_record(output_root: Path, *, paths: Mapping[str, Any], schedule: Mapping[str, Any]) -> Path:
+    record = {"schema": START_RECORD_SCHEMA,
+              "grid": str(Path(paths["grid"]).resolve()),
+              "static": None if paths.get("static") is None else str(Path(paths["static"]).resolve()),
+              "init": str(Path(paths["init"]).resolve()),
+              "start_time": schedule.get("start_time")}
+    target = Path(output_root) / START_RECORD_NAME
+    partial = target.with_name(target.name + ".partial")
+    partial.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    partial.replace(target)
+    return target
 RECEIPT_NAME = "cuda-v841-forecast-receipt.json"
+
+
+def _phase_release_receipt() -> dict[str, Any]:
+    """What hexcore.device_memory_release gave back over this run."""
+
+    from hexcore.device_memory_release import process_release
+
+    return process_release().receipt()
+
+
 DERIVED_FROM = "src/hexcore/drivers/run_cuda_v841_full_physics_x4.py"
 
 N_CELLS = proof.N_CELLS
@@ -228,11 +294,53 @@ DROPPED_GUARANTEES = (
 )
 
 CLAIM = (
-    "one uninterrupted real-initialized x4.163842 MPAS-A v8.4.1 CUDA forecast "
+    "one uninterrupted real-initialized x4.163842 MPAS-A v8.4.2 CUDA forecast "
     "using WSM6 + GF + YSU + external YSU-GWDO + revised-MO + NoahMP "
     "(with the CUDA glacier path) + cloud fraction + legacy RRTMG, at "
     "dt = 120 s, from the init named in this receipt"
 )
+_FROZEN_CLAIM_SCHEMES = re.compile(
+    r"^WSM6 \+ (?:(?P<cumulus>.+?) \+ )?YSU \+ external YSU-GWDO \+ .* \+ legacy RRTMG$"
+)
+
+
+def claim_for_physics(claim: str, physics: Any) -> str:
+    """The forecast claim with its physics named as this run resolved it.
+
+    THE BREAKAGE THIS PREVENTS: the claim sentence lists the frozen column
+    batch's schemes ("WSM6 + ... + YSU + external YSU-GWDO + revised-MO +
+    NoahMP + cloud fraction + legacy RRTMG").  A selection that runs on
+    another seam kept that sentence: the 30 km RRTM + Dudhia and analytic
+    radiation runs of 2026-10-11 both carried receipts claiming legacy RRTMG
+    and the external YSU drag, neither of which ran.  A frozen-seam run's
+    claim is left byte-identical.  Nothing here lists a scheme: the selectors
+    are the run's own resolution (hexcore.physics_suites) and the engine
+    assignments are what the column seam was handed.
+    """
+
+    if physics is None or getattr(physics, "seam", "frozen") == "frozen":
+        return claim
+    head, using, tail = claim.partition(" using ")
+    body, at_dt, rest = tail.partition(", at dt")
+    match = _FROZEN_CLAIM_SCHEMES.match(body) if using and at_dt else None
+    if match is None:
+        return claim
+    cumulus = match.group("cumulus") or "no cumulus scheme"
+    selection = ", ".join(
+        f"{key}={value}" for key, value in physics.selectors.items()
+        if key != "config_convection_scheme"
+    )
+    engine = getattr(physics, "engine_physics", None)
+    handed = "" if not engine else (
+        "; the engine's column seam was handed "
+        + ", ".join(f"{key}={engine[key]}" for key in sorted(engine))
+    )
+    return (
+        f"{head} using {cumulus} for convection and the {physics.seam} seam's "
+        f"physics selection {selection}{handed}{at_dt}{rest}"
+    )
+
+
 NONCLAIMS = proof.NONCLAIMS + (
     "not a proof: the init pin, the native comparison stage and the "
     "checkpoint/restart stage of the sealed harness are deliberately absent "
@@ -426,6 +534,133 @@ def relax_surface_classification(
         census["glacier_path"] = glacier_path
     proof.EXPECTED_NOAHMP_CENSUS = MappingProxyType(dict(census))
     return {"surface_classification": dict(core), "noahmp_census": dict(census)}
+
+
+def _suite_adapter(row: Any):
+    """The row's adapter when it is a column-suite row, else None."""
+
+    from hexcore.physics_backend_admission import DEFAULT_BACKEND
+
+    if row.name == DEFAULT_BACKEND:
+        return None
+    adapter = row.load_adapter()
+    return adapter if hasattr(adapter, "soil_levels_for") else None
+
+
+def _rebind_soil_levels(levels: int) -> None:
+    """Rebind the soil width the init read, the snapshot writer and the
+    history files size from, exactly as bind_mesh rebinds the mesh's own
+    counts: one number from the selected land surface, every reader."""
+
+    global N_SOIL_LEVELS
+    N_SOIL_LEVELS = int(levels)
+    proof.N_SOIL_LEVELS = int(levels)
+
+
+def _suite_host(
+    adapter: Any,
+    row_name: str,
+    values: Mapping[str, Any],
+    receipt: dict[str, Any],
+    *,
+    orographic_statistics: Path | None,
+    is_regional: bool,
+    cell_area_m2=None,
+) -> tuple[dict[str, Any], None, dict[str, Any]]:
+    """The suite row's sealed-constructor mapping, drag statistics included.
+
+    The frozen door's mapping (already on the padded extent for a regional
+    mesh) is re-shaped by the row's adapter; the drag statistics are read
+    by the engine's Rust NetCDF bridge and put on the same extent.  The
+    hex-side YSU-GWDO statics are dropped: the suite's drag runs inside the
+    engine's PBL slot.
+    """
+
+    suite = adapter.physics_suite_record(row_name)
+    receipt["soil_geometry"] = adapter.require_init_soil_geometry(
+        receipt["init_path"], row_name=row_name
+    )
+    oro = None
+    if suite["drag_reads_statistics"]:
+        if orographic_statistics is None:
+            raise ConfigurationRefusal(
+                "orographic_statistics",
+                None,
+                f"--physics-backend {row_name} runs the "
+                f"{suite['selection']['drag_scheme']} drag, which reads the "
+                "mesh's orographic statistics; without them the drag would run "
+                "on zeros, which turns it off without saying so",
+                "--orographic-statistics <mesh>.ugwp_oro_data.nc",
+            )
+        oro, oro_receipt = adapter.read_orographic_statistics(
+            orographic_statistics, row_name=row_name, n_cells=int(N_CELLS)
+        )
+        if is_regional:
+            from hexcore.cuda_regional_forecast_v841 import (
+                pad_regional_physics_column,
+            )
+
+            oro = {
+                name: pad_regional_physics_column(value)
+                for name, value in oro.items()
+            }
+            oro_receipt["regional_pad"] = "duplicate-last-real-column"
+        receipt["orographic_statistics"] = oro_receipt
+    # The suite rows' sealed mapping is the engine's own initialize_physics
+    # keyword set, which has no shdmax; the frozen Noah-MP row binds it after
+    # construction.  A suite row keeps the engine's fill for now and says so.
+    if "shdmax" in values:
+        values = {key: value for key, value in values.items() if key != "shdmax"}
+        receipt["noahmp_shdmax"] = (
+            "not bound on suite rows: the generic engine entry takes no "
+            "shdmax (follow-up: carry it in the suite seam's statics)"
+        )
+    mapped = adapter.constructor_values_for(
+        values, row_name=row_name, orographic_statistics=oro,
+        cell_area_m2=cell_area_m2,
+    )
+    classification = dict(
+        adapter.seal_constructor(mapped).expected_surface_classification()
+    )
+    receipt["surface_classification"] = classification
+    receipt["physics_suite"] = dict(suite)
+    return mapped, None, classification
+
+
+def _suite_record_for_run(record: Mapping[str, Any], physics: Any) -> dict[str, Any]:
+    """The profile record as this run executed it.
+
+    A named suite records the MPAS spelling it was resolved from (the
+    fork's bl_mynnedmf for the engine's MYNN, say), which the configuration
+    also records; the profile row keeps its own spelling.  The receipt's
+    record names the run's, so the two cannot disagree in one receipt.
+    """
+
+    out = dict(record)
+    if physics is not None:
+        out["profile_mpas_selectors"] = dict(out["mpas_selectors"])
+        out["mpas_selectors"] = {
+            key: value for key, value in physics.selectors.items()
+            if key != "config_convection_scheme"
+        }
+        out["named_suite"] = physics.suite
+    return out
+
+
+def relax_suite_surface_classification(
+    classification: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebind the classification expectation for a suite row.
+
+    The land surface publishes its own census (RUC's land/water/lake/sea-ice
+    counts), which the snapshot receipts carry under their own key; the
+    Noah-MP census expectation is retired for the run (None), so no frame
+    is checked against a census its land surface never writes.
+    """
+
+    proof.EXPECTED_SURFACE_CLASSIFICATION = MappingProxyType(dict(classification))
+    proof.EXPECTED_NOAHMP_CENSUS = None
+    return {"surface_classification": dict(classification), "noahmp_census": None}
 
 
 def seed_p_top_expectation(
@@ -730,7 +965,146 @@ def install_capture_labels(labels: Mapping[int, str]) -> None:
 # constructor values (transcribed from proof.build_arwen_constructor_values,
 # case literals replaced by measurement)
 # --------------------------------------------------------------------------
+def step_admission_receipt(config: Any) -> dict[str, Any]:
+    """Record the evidence for the selected schedule.  Refuses nothing.
+
+    RETIRED 2026-10-10 as a gate (owner ruling).  This used to raise unless a timestep anchor or a dycore step
+    certificate held the configuration; it now writes, into the run's
+    receipt, whether one does, and whether the run is the native x4
+    reference's own schedule.  The cadences the run cannot schedule are
+    refused by ``config.validate()`` (hexcore.dt_admission.require_cadences).
+    """
+
+    from hexcore import convection_admission
+    from hexcore.step_anchors import step_anchor_record
+
+    cumulus_scheme = convection_admission.constructor_scheme(
+        config.config_convection_scheme
+    )
+    record = {
+        "refuses": False,
+        "anchor": dt_admission.anchor_record(
+            config.config_dt,
+            radiation_seconds=config.config_radt_seconds,
+            surface_pbl_seconds=config.config_bldt_seconds,
+            cumulus_seconds=config.config_cudt_seconds,
+            cumulus_scheme=cumulus_scheme,
+        ),
+        "dycore_anchor": step_anchor_record(config),
+    }
+    lane = getattr(config, "recorded_lane_match", None)
+    if lane is not None:
+        record["x4_recorded_schedule"] = lane()
+    return record
+
+
+def parse_dynamics_overrides(items: Sequence[str] | None) -> dict[str, Any]:
+    """``--dynamics KEY=VALUE`` (repeatable) as configuration attributes.
+
+    KEY is the configuration attribute, which is the MPAS namelist option's
+    own name (``config_apvm_upwinding``, ``config_smdiv``,
+    ``config_coef_3rd_order``, ``config_xnutr``, ``config_epssm``,
+    ``config_positive_definite``, ``config_smagorinsky_coef`` ...).  VALUE is
+    JSON (``0.25``, ``true``, ``"2d_smagorinsky"``), with Fortran's
+    ``.true.``/``.false.`` and a bare word accepted as written.
+    """
+
+    overrides: dict[str, Any] = {}
+    for item in items or ():
+        key, separator, raw = str(item).partition("=")
+        key = key.strip()
+        if not separator or not key:
+            raise ValueError(
+                f"--dynamics {item!r} is not KEY=VALUE, so there is no "
+                "option to set"
+            )
+        text = raw.strip()
+        folded = text.casefold().strip(".")
+        if folded in ("true", "false", "t", "f") and not text.startswith('"'):
+            value: Any = folded in ("true", "t")
+        else:
+            try:
+                value = json.loads(text)
+            except ValueError:
+                value = text
+        if key in overrides and overrides[key] != value:
+            raise ValueError(
+                f"--dynamics sets {key} twice, to {overrides[key]!r} and "
+                f"{value!r}; the run can hold one"
+            )
+        overrides[key] = value
+    return overrides
+
+
 def build_forecast_config(
+    *, dynamics_overrides: Mapping[str, Any] | None = None, **arguments: Any
+) -> Any:
+    """The run's configuration: the flags' knobs, then ``dynamics_overrides``.
+
+    ``arguments`` are :func:`_build_forecast_config`'s, which documents them.
+
+    ``dynamics_overrides`` maps configuration attributes to values for the
+    dynamics options that have no flag of their own.  THE BREAKAGE THIS
+    CLOSES (2026-10-10 audit, measured): the certificate gates over
+    ``config_apvm_upwinding``, ``config_smdiv``, ``config_coef_3rd_order``,
+    ``config_xnutr``, ``config_epssm*``, ``config_positive_definite``,
+    ``config_scalar_advection`` and the Smagorinsky coefficients were
+    retired from the configuration type, and no run could set any of them:
+    this function took none, so a ``--physics-namelist`` carrying
+    ``config_apvm_upwinding = 0.25`` was refused at the door with "the run
+    has no flag for it".  An attribute the run's configuration type does
+    not carry is refused here by name, because setting it would change
+    nothing the run executes.
+    """
+
+    config = _build_forecast_config(**arguments)
+    if not dynamics_overrides:
+        return config
+    from dataclasses import fields, replace
+
+    carried = {item.name for item in fields(config)}
+    unknown = sorted(set(dynamics_overrides) - carried)
+    if unknown:
+        raise ValueError(
+            f"{unknown} cannot be set on this run: its configuration "
+            f"({type(config).__name__}) carries no such option, so the value "
+            "would be recorded and not run"
+        )
+    welded = sorted(set(dynamics_overrides) & _FLAG_CARRIED_DYNAMICS)
+    if welded:
+        raise ValueError(
+            f"{welded} each have a flag of their own "
+            f"({[_FLAG_CARRIED_DYNAMICS_FLAGS[name] for name in welded]}); "
+            "set them there, so one option cannot be given two values"
+        )
+    return replace(config, **dict(dynamics_overrides))
+
+
+#: Options another argument of this driver already decides.  ``--dynamics``
+#: refuses them so one option cannot arrive with two values.
+_FLAG_CARRIED_DYNAMICS_FLAGS = {
+    "config_dt": "--dt",
+    "config_time_integration_order": "--time-integration-order",
+    "config_number_of_sub_steps": "--acoustic-substeps",
+    "config_monotonic": "--monotonic",
+    "config_horiz_mixing": "--horiz-mixing",
+    "config_mpas_cam_coef": "--cam-coefficient",
+    "config_number_cam_damping_levels": "--cam-damping-levels",
+    "config_rayleigh_damp_u": "--rayleigh-u",
+    "config_zd": "--damping-start-m",
+    "config_apply_lbcs": "--lbc-dir",
+    "config_radt_seconds": "--radiation-seconds",
+    "config_bldt_seconds": "--pbl-cadence",
+    "config_cudt_seconds": "--convection",
+    "config_convection_scheme": "--convection",
+    "config_local_timestep": "--local-timestep",
+    "config_local_timestep_rates": "--local-timestep-rates",
+    "config_local_timestep_buffer_rings": "--local-timestep-buffer-rings",
+}
+_FLAG_CARRIED_DYNAMICS = frozenset(_FLAG_CARRIED_DYNAMICS_FLAGS)
+
+
+def _build_forecast_config(
     *,
     dt_seconds: float,
     convection_scheme: str = "cu_grell_freitas",
@@ -741,6 +1115,14 @@ def build_forecast_config(
     local_timestep_rates: tuple[int, ...] = (1, 3),
     local_timestep_buffer_rings: int = 1,
     apply_lbcs: bool = False,
+    time_integration_order: int = 2,
+    acoustic_substeps: int = 4,
+    radiation_seconds: float = 1800.0,
+    monotonic: bool = True,
+    cam_coefficient: float = 0.0,
+    cam_damping_levels: int = 4,
+    rayleigh_u: bool = False,
+    damping_start_m: float = 22000.0,
 ) -> Any:
     """Build the run's configuration AT THE BOUND MESH'S TIMESTEP.
 
@@ -758,9 +1140,9 @@ def build_forecast_config(
     There is now ONE timestep in this path: the bound mesh's.  It reaches
     the config here, and ``build_forecast_constructor_values`` derives the
     seam's clocks from the config rather than from the module constant, so
-    the two cannot disagree by construction.  An unanchored timestep is
-    refused by ``config.validate()`` below, on the host, before a mesh file
-    is opened -- which is where a 285-second refusal belongs.
+    the two cannot disagree by construction.  A cadence the timestep cannot
+    schedule is refused by ``config.validate()`` below, on the host, before
+    a mesh file is opened -- which is where a 285-second refusal belongs.
 
     The two cadences welded to the timestep travel with it.  ``cudt`` has
     no choice: WRF pins ``cudt = 0`` for Grell-Freitas, so the sealed
@@ -775,6 +1157,7 @@ def build_forecast_config(
     """
 
     from hexcore.config_v841 import (
+        V841_GWDO_KERNEL_SHA256,
         V841MpasColumnPhysicsGwdoConfig,
         V841MpasColumnPhysicsSmagorinskyGwdoConfig,
     )
@@ -801,6 +1184,9 @@ def build_forecast_config(
         )
     )
     clocks: dict[str, Any] = {
+        # Imported mesh binding specializes GWD column storage and records its
+        # effective shader digest. Dataclass defaults retain the native digest.
+        "gwdo_kernel_sha256": V841_GWDO_KERNEL_SHA256,
         "config_dt": dt,
         "config_bldt_seconds": bldt,
         # WRF pins cudt=0 for Grell-Freitas, so with a scheme selected the
@@ -815,6 +1201,13 @@ def build_forecast_config(
         # mpas_atm_bdy_checks refuses either mismatch by name -- boundary
         # cells with the switch off, or the switch on with none.
         "config_apply_lbcs": bool(apply_lbcs),
+        "config_time_integration_order": time_integration_order,
+        "config_number_of_sub_steps": acoustic_substeps,
+        "config_radt_seconds": radiation_seconds,
+        "config_monotonic": monotonic,
+        "config_mpas_cam_coef": cam_coefficient,
+        "config_rayleigh_damp_u": rayleigh_u,
+        "config_zd": damping_start_m,
     }
     lts_block: dict[str, Any] = {
         "config_local_timestep": bool(local_timestep),
@@ -823,6 +1216,15 @@ def build_forecast_config(
     }
 
     if horiz_mixing == "2d_smagorinsky":
+        if cam_coefficient != 0 or rayleigh_u or damping_start_m != 22000 or cam_damping_levels != 4:
+            if local_timestep or local_timestep_declared_off:
+                raise ValueError(
+                    "no configuration type carries both the upper-damping block "
+                    "and the local-timestep block (V841UpperDamping*Config and "
+                    "V841LocalTimestep*Config are separate subclasses), so one "
+                    "of the two would be dropped without a word; run one or the other")
+            from hexcore.config_v841 import V841UpperDampingSmagorinskyConfig
+            return V841UpperDampingSmagorinskyConfig(**clocks,config_number_cam_damping_levels=cam_damping_levels)
         # Default: native's Registry configuration (deformation-based 2-D
         # Smagorinsky + del4), the regime the natA/natB 24-h references
         # integrate.  Numbers under this configuration are a NEW SUB-SERIES: they are
@@ -845,6 +1247,183 @@ def build_forecast_config(
     )
 
 
+def select_initial_scalar_names(
+    variables: Mapping[str, Any], model_names: Sequence[str],
+) -> tuple[str, ...]:
+    """Preserve a complete carried species row or use the existing cold start."""
+
+    names = tuple(model_names)
+    if names[:len(SOURCE_SCALAR_NAMES)] != tuple(SOURCE_SCALAR_NAMES):
+        raise ValueError("the model species row must begin with qv, qc and qr")
+    missing_source = [name for name in SOURCE_SCALAR_NAMES if name not in variables]
+    if missing_source:
+        raise ValueError(f"init is missing required source species {missing_source}")
+    carried = [name for name in names[len(SOURCE_SCALAR_NAMES):] if name in variables]
+    if not carried:
+        return tuple(SOURCE_SCALAR_NAMES)
+    missing = [name for name in names if name not in variables]
+    if missing:
+        raise ValueError(
+            f"init carries a partial model species row: present {carried}, "
+            f"missing {missing}; a cold start would discard carried condensate"
+        )
+    return names
+
+
+def prepare_initial_scalar_block(
+    state: Any, *, source_names: Sequence[str], model_names: Sequence[str],
+    negative_qv: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Record complete source planes without replacing them with cold zeros."""
+
+    names = tuple(model_names)
+    source = tuple(source_names)
+    if source == names:
+        return {
+            "source_present": list(source),
+            "source_absent": [],
+            "source_hashes": {
+                name: proof.array_sha256(state.scalars[index])
+                for index, name in enumerate(source)
+            },
+            "scalar_order": list(names),
+            "native_species_preserved": True,
+            "cold_zero_planes_added": 0,
+            "negative_qv": dict(negative_qv),
+            "negative_qv_preserved_until_candidate_pre_wsm6_clamp": True,
+        }
+    if names == tuple(proof.SCALAR_NAMES):
+        return proof.augment_exact_wsm6_scalars(state)
+    return proof.augment_cold_scalars(state, names)
+
+
+def supplied_undriven_scalars(
+    first_lbc_path: str | Path, scalar_names: Sequence[str], driven: Sequence[str],
+) -> list[str]:
+    """The model species a boundary stream carries but the row does not drive.
+
+    Metadata only, through the engine's Rust NetCDF reader (rw_netcdf).
+    ``driven`` holds the stream's own ``lbc_``-prefixed names, as
+    :func:`select_lbc_scalar_names` returns them, so the comparison is made on
+    those names.  Comparing the bare species name against it listed every
+    driven mass as undriven in the receipt (rrfs-h-h4a skeptic finding,
+    2026-10-05).
+    """
+
+    from gpuwm.netcdf_bridge import open_dataset
+
+    dataset = open_dataset(Path(first_lbc_path))
+    driven_names = set(driven)
+    return sorted(
+        name for name in dataset.variables
+        if name.startswith("lbc_")
+        and name[4:] in scalar_names
+        and name not in driven_names
+    )
+
+
+def select_lbc_scalar_names(
+    paths: Sequence[str], model_names: Sequence[str],
+) -> tuple[str, ...]:
+    """Select the contiguous model species every boundary endpoint carries."""
+
+    from netCDF4 import Dataset
+    from hexcore.lbc import LBC_REQUIRED_VARIABLES, LBC_OPTIONAL_SCALAR_VARIABLES
+
+    names = tuple(f"lbc_{name}" for name in model_names)
+    supported = {**LBC_REQUIRED_VARIABLES, **LBC_OPTIONAL_SCALAR_VARIABLES}
+    selected: tuple[str, ...] | None = None
+    for path in paths:
+        with Dataset(path, "r") as dataset:
+            present = tuple(name for name in names if name in dataset.variables)
+            if not present or present != names[:len(present)]:
+                raise ValueError(
+                    f"boundary file {path} carries noncontiguous model species "
+                    f"{present}; driven arrays must follow the model's leading "
+                    "species or a supplied field would drive the wrong tracer"
+                )
+            for name in present:
+                if name not in supported:
+                    raise ValueError(f"boundary species {name} has no supported reader schema")
+                variable = dataset.variables[name]
+                if tuple(variable.dimensions) != supported[name] or variable.dtype != np.dtype("float32"):
+                    raise ValueError(
+                        f"boundary species {name} in {path} must be float32 on "
+                        f"{supported[name]}; a shape or precision change would "
+                        "change the driving field's meaning"
+                    )
+        if selected is not None and present != selected:
+            raise ValueError(
+                f"boundary species presence changes at {path}: {selected} "
+                f"versus {present}; both hourly endpoints must carry each "
+                "driven tracer"
+            )
+        selected = present
+    if selected is None:
+        raise ValueError("no boundary files were supplied for tracer selection")
+    return selected
+
+
+def prepare_inactive_deformation(mesh: Any) -> dict[str, Any]:
+    """Retain supplied legacy carriers that v8.4.1 mixing does not consume."""
+
+    arrays = getattr(mesh, "arrays", {})
+    present = [name for name in ("defc_a", "defc_b") if name in arrays]
+    if not present:
+        return proof.attach_inactive_zero_deformation(mesh)
+    if len(present) != 2:
+        raise ValueError(
+            f"inactive deformation carrier pair is incomplete: present {present}; "
+            "the device mesh requires both defc_a and defc_b arrays"
+        )
+    return {
+        "shape": list(arrays["defc_a"].shape),
+        "dtype": str(arrays["defc_a"].dtype),
+        "active_mixing_claim": False,
+        "source": "preserved supplied legacy carriers; v8.4.1 uses deformation weights",
+        "defc_a_sha256": proof.array_sha256(arrays["defc_a"]),
+        "defc_b_sha256": proof.array_sha256(arrays["defc_b"]),
+    }
+
+
+def refusal_exception_details(error: BaseException) -> dict[str, Any]:
+    """Keep the numerical refusal behind a staged transaction's wrapper."""
+
+    chain: list[dict[str, str]] = []
+    current: BaseException | None = error
+    relation = "raised"
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append({
+            "exception": type(current).__name__,
+            "message": str(current),
+            "relation": relation,
+        })
+        if current.__cause__ is not None:
+            current, relation = current.__cause__, "cause"
+        elif not current.__suppress_context__:
+            current, relation = current.__context__, "context"
+        else:
+            current = None
+    return {
+        "exception": type(error).__name__,
+        "message": str(error),
+        # The refusal that started the chain.  A transaction wrapper, and a
+        # rollback that itself fails, each wrap the step's own words; the
+        # end of the chain is what the step refused, so a reader of the
+        # receipt sees it first rather than the last wrapper's text.
+        "original_refusal": {
+            "exception": chain[-1]["exception"],
+            "message": chain[-1]["message"],
+        },
+        "exception_chain": chain,
+        "traceback": "".join(traceback.format_exception(
+            type(error), error, error.__traceback__, chain=True,
+        )),
+    }
+
+
 def build_forecast_constructor_values(
     *,
     init_path: Path,
@@ -854,19 +1433,21 @@ def build_forecast_constructor_values(
     saved_diagnostics: Any,
     start_time_text: str | None,
     config: Any,
+    n_soil_levels: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, np.ndarray], dict[str, Any]]:
     from netCDF4 import Dataset
 
+    # The soil column is the selected land surface's: the frozen row's
+    # Noah-MP integrates four layers, a suite row's RUC nine levels.  The
+    # init is read at exactly that count and refused at any other, so a
+    # land surface is never handed a column interpolated for another one.
+    soil_levels = int(N_SOIL_LEVELS if n_soil_levels is None else n_soil_levels)
+
     read = proof._read_exact_variable
     with Dataset(init_path, "r") as dataset:
-        unexpected_species = sorted(
-            name for name in COLD_ZERO_SCALAR_NAMES if name in dataset.variables
+        select_initial_scalar_names(
+            dataset.variables, tuple(_row_for_scheme(config.config_microp_scheme).names())
         )
-        if unexpected_species:
-            raise RuntimeError(
-                "cold-start assumption changed; unexpected variables "
-                f"{unexpected_species}"
-            )
         landmask_i = read(dataset, "landmask", dtype=np.int32, dimensions=("nCells",))
         ivgtyp = read(dataset, "ivgtyp", dtype=np.int32, dimensions=("nCells",))
         isltyp = read(dataset, "isltyp", dtype=np.int32, dimensions=("nCells",))
@@ -897,10 +1478,27 @@ def build_forecast_constructor_values(
             if value.shape != (1, N_CELLS):
                 raise ValueError(f"{source} shape changed: {value.shape}")
             surface[target] = np.ascontiguousarray(value[0], dtype=np.float32)
+        # Noah-MP's vegetation fraction (FVEG = SHDMAX / 100 at dveg = 4).
+        # The frozen engine constructor takes no shdmax, so before this read
+        # every forecast ran its land surface at the engine's 90 % fill
+        # (hexcore.cuda_arwen_physics_v841, _NOAHMP_STATIC_FIELDS).  Native
+        # MPAS reads the same static field.  Percent, time-invariant.
+        surface["shdmax"] = np.ascontiguousarray(
+            read(dataset, "shdmax", dtype=np.float32, dimensions=("nCells",)),
+            dtype=np.float32,
+        )
         soil: dict[str, np.ndarray] = {}
+        # A selection with no land surface (sf_surface_physics=0) integrates
+        # no soil column, so no scheme reads the init's tslb/smois and there
+        # is no other scheme's interpolation to refuse: the init's own soil
+        # count is not held against zero.  Before this, every land-surface-off
+        # selection stopped at host preparation on "tslb shape (1, N, 4) is
+        # not (1, N, 0)" (global 30 km, 2026-10-11).
         for source, target in (
-            ("tslb", "soil_temperature"),
-            ("smois", "soil_moisture"),
+            () if soil_levels == 0 else (
+                ("tslb", "soil_temperature"),
+                ("smois", "soil_moisture"),
+            )
         ):
             value = read(
                 dataset,
@@ -908,8 +1506,13 @@ def build_forecast_constructor_values(
                 dtype=np.float32,
                 dimensions=("Time", "nCells", "nSoilLevels"),
             )
-            if value.shape != (1, N_CELLS, N_SOIL_LEVELS):
-                raise ValueError(f"{source} shape changed: {value.shape}")
+            if value.shape != (1, N_CELLS, soil_levels):
+                raise ValueError(
+                    f"{source} shape {value.shape} is not (1, {N_CELLS}, "
+                    f"{soil_levels}): the selected land surface integrates "
+                    f"{soil_levels} soil levels and this init carries another "
+                    "count"
+                )
             soil[target] = np.ascontiguousarray(value[0].T, dtype=np.float32)
         nominal_min_dc = read(dataset, "nominalMinDc", dtype=np.float32, dimensions=())
         start_text = str(getattr(dataset, "config_start_time", ""))
@@ -987,21 +1590,28 @@ def build_forecast_constructor_values(
     xice = surface["xice"]
     if float(np.min(xice)) < 0.0 or float(np.max(xice)) > 1.0:
         raise RuntimeError("init xice lies outside [0,1]")
-    sea_ice_mask = np.ascontiguousarray(xice >= ARWEN_XICE_THRESHOLD)
-    open_water_mask = np.ascontiguousarray((xland >= np.float32(1.5)) & ~sea_ice_mask)
-    land_mask = np.ascontiguousarray(~(sea_ice_mask | open_water_mask))
-    glacier_mask = np.ascontiguousarray(land_mask & (ivgtyp == np.int32(15)))
-    sflx_land_mask = np.ascontiguousarray(land_mask & ~glacier_mask)
-    surface_classification = {
-        "xland_source": "native",
-        "xland_land_columns": int(np.count_nonzero(xland < np.float32(1.5))),
-        "xland_water_columns": int(np.count_nonzero(xland >= np.float32(1.5))),
-        "xice_threshold": float(ARWEN_XICE_THRESHOLD),
-        "sea_ice_columns": int(np.count_nonzero(sea_ice_mask)),
-        "open_water_columns": int(np.count_nonzero(open_water_mask)),
-        "sflx_land_columns": int(np.count_nonzero(sflx_land_mask)),
-        "glacier_columns": int(np.count_nonzero(glacier_mask)),
-    }
+    # The partition the engine runs (xland, xice, ivgtyp), admitted as native
+    # made it.  The former "category signature" also demanded landmask 0
+    # under sea ice, landmask 1 under a glacier and xice 0 under a glacier;
+    # native init promises none of those (its skin-temperature branch leaves
+    # landmask 0 and xice untouched on the cold water columns it converts),
+    # and nothing downstream routes on landmask.  That demand refused RRFS
+    # v2's conus3km init over two frozen mountain-lake cells
+    # (hexcore.surface_signature has the measurement and native's rule).
+    # Landmask is measured into the receipt below; what still refuses names
+    # the surface branch it keeps off a sea-ice column.
+    from hexcore.surface_signature import classify_native_surface
+
+    surface_counts, surface_masks = classify_native_surface(
+        xland=xland,
+        xice=xice,
+        ivgtyp=ivgtyp,
+        landmask=landmask_i,
+        xice_threshold=float(ARWEN_XICE_THRESHOLD),
+    )
+    surface_classification = dict(surface_counts)
+    sea_ice_mask = surface_masks["sea_ice"]
+    glacier_mask = surface_masks["glacier"]
     if (
         surface_classification["sflx_land_columns"]
         + surface_classification["open_water_columns"]
@@ -1015,18 +1625,6 @@ def build_forecast_constructor_values(
     threshold_delta_indices = np.ascontiguousarray(
         np.flatnonzero((xice >= ARWEN_XICE_THRESHOLD) & (xice < np.float32(0.5)))
     )
-    # KEPT: the category signature.  Every sea-ice and glacier column must
-    # carry the native MPAS ice vegetation category and a consistent landmask.
-    if not (
-        np.all(ivgtyp[sea_ice_mask] == np.int32(15))
-        and np.all(landmask_i[sea_ice_mask] == np.int32(0))
-        and np.all(xland[sea_ice_mask] == np.float32(1.0))
-        and np.all(ivgtyp[glacier_mask] == np.int32(15))
-        and np.all(landmask_i[glacier_mask] == np.int32(1))
-        and np.all(xland[glacier_mask] == np.float32(1.0))
-        and np.all(xice[glacier_mask] == np.float32(0.0))
-    ):
-        raise RuntimeError("native xland/ice category signature is inconsistent")
     surface_classification_receipt = {
         **surface_classification,
         "lake_fold": lake_fold,
@@ -1205,8 +1803,12 @@ def build_forecast_constructor_values(
             "z_interface_nominal_m": "loaded native vertical.zw",
             "tsk": "init skintemp[0,:]",
             "snow_depth": "init snowh[0,:] (m)",
-            "soil_temperature": "init tslb[0,:,:].T",
-            "soil_moisture": "init smois[0,:,:].T",
+            "soil_temperature": (
+                "init tslb[0,:,:].T" if soil else
+                "not read: the selection integrates no soil column"),
+            "soil_moisture": (
+                "init smois[0,:,:].T" if soil else
+                "not read: the selection integrates no soil column"),
         },
         "p_top_pa": p_top_pa,
         "p_top_seed": p_top_seed,
@@ -1247,6 +1849,35 @@ def build_forecast_constructor_values(
 # host preparation (transcribed from proof._prepare_host_execution, with the
 # measurement/rebinding interleaved)
 # --------------------------------------------------------------------------
+#: Set by the same-host adapter while it is installed
+#: (samehost_forecast_v841.installed): the ranks join the prepared-input
+#: fingerprint after they are built, instead of main() joining it first.
+DEFER_PREPARED_FINGERPRINT = False
+
+
+def join_prepared_fingerprint(host: Mapping[str, Any]) -> None:
+    """Finish the prepared-input validation (cuda_dualrun.BackgroundFingerprintSeal).
+
+    Idempotent; re-raises the validation's refusal on the caller's thread.
+    """
+
+    seal = host.get("prepared_fingerprint_seal")
+    if seal is not None:
+        _timed_preparation("prep.host_validation_join", seal.join)
+
+
+def _timed_preparation(stage, function, *args, **kwargs):
+    """Time an existing producer without changing its inputs or returned object.
+
+    The earlier startup summary combined all host reads and transformations,
+    so it could not attribute the reported startup cost to the init or static.
+    These host spans include the producer's existing transformations and cache
+    hits. They do not add device synchronization or field copies.
+    """
+    with time_ledger.stage(stage):
+        return function(*args, **kwargs)
+
+
 def prepare_forecast_host(
     paths: Mapping[str, Path],
     authority_receipt: Mapping[str, Any],
@@ -1262,13 +1893,31 @@ def prepare_forecast_host(
     lbc_paths: Sequence[str] | None = None,
     physics_backend: str = "wsm6_column",
     source_table: str | None = None,
+    time_integration_order: int = 2,
+    acoustic_substeps: int = 4,
+    radiation_seconds: float = 1800.0,
+    monotonic: bool = True,
+    cam_coefficient: float = 0.0,
+    cam_damping_levels: int = 4,
+    rayleigh_u: bool = False,
+    damping_start_m: float = 22000.0,
+    invariant_path: Path | None = None,
+    orographic_statistics: Path | None = None,
+    physics: Any = None,
+    dynamics_overrides: Mapping[str, Any] | None = None,
+    physics_mode: str = "exact",
+    physics_correct_skip: Sequence[str] = (),
 ) -> dict[str, Any]:
     from hexcore.cuda_arwen_physics_v841 import SealedArwenConstructorV841
-    from hexcore.cuda_dualrun import PreparedCudaInputs
+    from hexcore.cuda_dualrun import BackgroundFingerprintSeal, PreparedCudaInputs
     from hexcore.driver import load_mpas_initial_state, load_mpas_vertical_grid
     from hexcore.dynamics_v841 import load_v841_reference_wind_profiles
-    from hexcore.mesh import load_precision_preserving_mesh_pair
+    from hexcore.mesh_snapshot import load_dynamics_mesh
 
+    # The claim names the physics this run resolved (claim_for_physics); the
+    # bind has already named its convection decision in the same sentence.
+    global CLAIM
+    CLAIM = claim_for_physics(CLAIM, physics)
     relaxation: dict[str, Any] = {"init_carriers": relax_init_carrier_pins(paths["init"])}
 
     # DT_SECONDS is the module constant bind_mesh rebinds to the bound row's
@@ -1322,7 +1971,8 @@ def prepare_forecast_host(
         )
     if pbl_decision is None:
         pbl_decision = _pbl.pbl_cadence_decision(
-            dt_seconds=float(DT_SECONDS), requested=pbl_cadence
+            dt_seconds=float(DT_SECONDS), requested=pbl_cadence,
+            radiation_seconds=float(radiation_seconds),
         )
     print(
         f"[pbl-cadence] {pbl_decision['label']} ({pbl_decision['source']}): "
@@ -1340,6 +1990,13 @@ def prepare_forecast_host(
         local_timestep_rates=local_timestep_rates,
         local_timestep_buffer_rings=local_timestep_buffer_rings,
         apply_lbcs=bool(lbc_paths),
+        time_integration_order=time_integration_order,
+        acoustic_substeps=acoustic_substeps,
+        radiation_seconds=radiation_seconds,
+        monotonic=monotonic,
+        cam_coefficient=cam_coefficient,cam_damping_levels=cam_damping_levels,
+        rayleigh_u=rayleigh_u,damping_start_m=damping_start_m,
+        dynamics_overrides=dynamics_overrides,
     )
     backend_row, scheme_alias, seam_options = resolve_run_row(
         physics_backend, source_table
@@ -1352,15 +2009,52 @@ def prepare_forecast_host(
         from dataclasses import replace as _replace
 
         config = _replace(config, config_microp_scheme=scheme_alias)
-    config.validate()
+    suite_adapter = _suite_adapter(backend_row)
+    if suite_adapter is not None:
+        # The suite row's configuration records the MPAS selectors the run
+        # EXECUTES (MYNN, RUC, the GSL drag), not the frozen lane's literals.
+        config = suite_adapter.suite_config(
+            config,
+            backend_row.name,
+            mpas_selectors=(
+                None if physics is None else {
+                    key: value for key, value in physics.selectors.items()
+                    if key != "config_convection_scheme"
+                }
+            ),
+        )
+        _rebind_soil_levels(suite_adapter.soil_levels_for(backend_row.name))
+    elif orographic_statistics is not None:
+        raise ConfigurationRefusal(
+            "orographic_statistics",
+            str(orographic_statistics),
+            f"--physics-backend {backend_row.name} runs no drag that reads "
+            "orographic statistics; the file would be accepted and never read",
+            "a row whose drag reads the mesh's orographic statistics",
+        )
+    if physics is not None and not physics.is_default():
+        # The configuration records the named suite the run was resolved
+        # from (hexcore.physics_suites).  The default suite changes nothing,
+        # so a run without a suite flag builds the identical configuration.
+        from dataclasses import replace as _replace_suite
+
+        config = _replace_suite(config, config_physics_suite=physics.suite)
+    from hexcore import arwen_les
+    if arwen_les.active(config):
+        from dataclasses import replace
+        config = replace(config, config_pbl_scheme="off",
+                         config_les_surface="varying", config_mix_scalars=True)
+    arwen_les.validate(config)
 
     run_row = _row_for_scheme(config.config_microp_scheme)
     scalar_names = tuple(run_row.names())
     surface_accumulators = tuple(item.name for item in run_row.surface_accumulators)
-    mesh, output_mesh, mesh_evidence = load_precision_preserving_mesh_pair(
+    # The loader's dynamics mesh and evidence, served from a verified snapshot
+    # of the same grid/static bytes when one exists (hexcore.mesh_snapshot);
+    # the grid-only output mesh was discarded here and is not built.
+    mesh, mesh_evidence = _timed_preparation("prep.static_read", load_dynamics_mesh,
         paths["grid"], paths["static"]
     )
-    del output_mesh
     # A limited-area grid declares itself: the cull writes the
     # bdyMaskCell/Edge/Vertex triple and nothing else does.  Everything below
     # is the SAME preparation the global lane runs -- the sentinel flag says
@@ -1399,38 +2093,75 @@ def prepare_forecast_host(
         static_path=paths["static"],
         init_path=paths["init"],
     )
-    defc = proof.attach_inactive_zero_deformation(mesh)
-    native = load_mpas_vertical_grid(
+    defc = prepare_inactive_deformation(mesh)
+    native = _timed_preparation("prep.init_vertical", load_mpas_vertical_grid,
         paths["init"],
         mesh,
         config_coef_3rd_order=config.config_coef_3rd_order,
         allow_regional_sentinels=is_regional,
+        invariant_path=invariant_path,
     )
-    state, reference, saved = load_mpas_initial_state(
+    from netCDF4 import Dataset
+    with Dataset(paths["init"], "r") as dataset:
+        source_scalar_names = select_initial_scalar_names(dataset.variables, scalar_names)
+    state, reference, saved = _timed_preparation("prep.init_state", load_mpas_initial_state,
         paths["init"],
         mesh,
         native.vertical_grid,
-        scalar_names=SOURCE_SCALAR_NAMES,
+        scalar_names=source_scalar_names,
         terrain_metrics=native.terrain_metrics,
         return_saved_diagnostics=True,
         allow_regional_sentinels=is_regional,
+        # A forecast always starts cold from its init: native MPAS-A then
+        # recomputes pressure_p/pressure_base/exner (F:7590-7650) rather than
+        # consuming the init program's copies.
+        cold_start=True,
     )
     relaxation["negative_qv"] = relax_negative_qv_pin(state)
-    if scalar_names == tuple(proof.SCALAR_NAMES):
-        scalar_receipt = proof.augment_exact_wsm6_scalars(state)
-    else:
-        scalar_receipt = proof.augment_cold_scalars(state, scalar_names)
+    scalar_receipt = prepare_initial_scalar_block(
+        state, source_names=source_scalar_names, model_names=scalar_names,
+        negative_qv=relaxation["negative_qv"],
+    )
+    les_theta_initial = None
+    if arwen_les.active(config):
+        from gpuwm.netcdf_bridge import open_dataset
+        with open_dataset(paths["init"]) as dataset:
+            les_theta_initial = np.ascontiguousarray(
+                np.asarray(dataset.variables["t_init"][:], dtype=np.float32).T)
+        model_names = arwen_les.model_row(config).names()
+        if "tke" in model_names:
+            # Native cold initialization is zero TKE. Production uses the
+            # existing native minimum viscosity, without an added seed.
+            from gpuwm.netcdf_bridge import open_dataset
+            with open_dataset(paths["init"]) as dataset:
+                if "tke" in dataset.variables:
+                    tke = np.asarray(dataset.variables["tke"][:], dtype=np.float32)
+                    if tke.ndim == 3:
+                        tke = tke[0]
+                    if tke.shape != (N_CELLS, N_LEVELS):
+                        raise ValueError(f"init tke shape changed: {tke.shape}")
+                    tke = np.ascontiguousarray(tke.T)
+                    source = "initialized tke"
+                else:
+                    tke = np.zeros((N_LEVELS, N_CELLS), dtype=np.float32)
+                    source = "native cold zero"
+            state.scalars = np.concatenate((state.scalars, tke[None]), axis=0)
+            scalar_receipt["tke_initialization"] = source
+        scalar_names = tuple(model_names)
+        scalar_receipt["scalar_order"] = list(scalar_names)
     state.validate(n_cells=N_CELLS, n_edges=N_EDGES, n_vert_levels=N_LEVELS)
     saved.validate((N_LEVELS, N_CELLS), np.dtype(np.float32), N_EDGES)
-    profiles = load_v841_reference_wind_profiles(paths["init"], n_vert_levels=N_LEVELS)
-    prepared = PreparedCudaInputs.validated(
+    profiles = _timed_preparation("prep.init_wind", load_v841_reference_wind_profiles,
+                                 paths["init"], n_vert_levels=N_LEVELS)
+    prepared = _timed_preparation("prep.host_validation", PreparedCudaInputs.validated,
         config=config,
         profile=proof.PROFILE,
         target=CLAIM,
         preparation_method=(
             "precision-preserving grid/static overlay plus exact initialized "
-            "reconstruction coefficients and edge-normal vectors; qv/qc/qr "
-            "plus exact +0 qi/qs/qg"
+            "reconstruction coefficients and edge-normal vectors; initialized "
+            "source species preserved in model order, with cold augmentation "
+            "only when the init carries the leading three species"
         ),
         mesh=mesh,
         state=state,
@@ -1441,17 +2172,23 @@ def prepare_forecast_host(
         input_bytes=dict(authority_receipt["files"]),
         reference_wind_profiles=profiles,
         allow_regional_sentinels=is_regional,
+        seal=False,
     )
-    f000_surface_diagnostics = proof.load_f000_initialized_surface_diagnostics(
+    # The execution fingerprint (the rest of the validation) runs on a thread
+    # while the init's surface fields and the physics constructor are read and
+    # built; it is joined, and any refusal raised, before host preparation
+    # returns (cuda_dualrun.BackgroundFingerprintSeal).
+    fingerprint_seal = BackgroundFingerprintSeal(prepared, config)
+    f000_surface_diagnostics = _timed_preparation("prep.init_surface", proof.load_f000_initialized_surface_diagnostics,
         paths["init"]
     )
-    f000_start_humidity = load_f000_start_humidity(paths["init"])
+    f000_start_humidity = _timed_preparation("prep.init_humidity", load_f000_start_humidity, paths["init"])
     (
         constructor_values,
         constructor_receipt,
         gwdo_host,
         classification,
-    ) = build_forecast_constructor_values(
+    ) = _timed_preparation("prep.physics_constructor", build_forecast_constructor_values,
         init_path=paths["init"],
         mesh=mesh,
         vertical=native.vertical_grid,
@@ -1459,14 +2196,28 @@ def prepare_forecast_host(
         saved_diagnostics=saved,
         start_time_text=start_time_text,
         config=config,
+        n_soil_levels=N_SOIL_LEVELS,
     )
+    if arwen_les.active(config):
+        constructor_values["pbl_scheme"] = None
+        constructor_receipt["turbulence"] = "resident cuda_les_v842; ArWen surface fluxes"
+    # physics.mode (hexcore.correct_mode; MODE-KEY.md).  Exact adds nothing to
+    # the mapping, so the sealed constructor and its identity are unchanged.
+    from hexcore import correct_mode as _correct_mode
+
+    _mode, _skip = _correct_mode.validate(physics_mode, physics_correct_skip)
+    if _mode != _correct_mode.PHYSICS_MODE_EXACT:
+        constructor_values["physics_mode"] = _mode
+        constructor_values["physics_correct_skip"] = _skip
+        constructor_receipt["physics_mode"] = {
+            "physics.mode": _mode, "physics.correct_skip": list(_skip)}
     if is_regional:
         # The ArWen statics move onto the PADDED extent here, BEFORE the
         # surface census is rebound, because the census counts columns and
         # the run seals nCells+1 of them.  Doing it after left the seam
         # reporting 11,021 classified columns against an expectation of
         # 11,020 and the first step receipt refused by exactly one column.
-        from hexcore.cuda_regional_forecast_v841 import pad_regional_physics_host
+        from hexcore.cuda_regional_forecast_v841 import pad_regional_physics_host, pad_regional_physics_column
         from hexcore.regional_v841 import derive_regional_masks, regional_bdy_checks
 
         regional_masks = derive_regional_masks(mesh, np.dtype(np.float32))
@@ -1477,21 +2228,38 @@ def prepare_forecast_host(
             regional_masks, config_apply_lbcs=True, lbc_input_interval_valid=True
         )
         constructor_values, gwdo_host, pad_receipt = pad_regional_physics_host(
-            constructor_values, gwdo_host, n_cells_solve=int(N_CELLS)
+            constructor_values, gwdo_host, n_cells_solve=int(N_CELLS),
+            donor_cell=getattr(mesh, "attrs", {}).get("regional_garbage_donor_cell"),
         )
         constructor_receipt["regional_physics_pad"] = pad_receipt
-        classification = dict(
-            SealedArwenConstructorV841.from_mapping(
-                constructor_values
-            ).expected_surface_classification()
+        if suite_adapter is None:
+            classification = dict(
+                SealedArwenConstructorV841.from_mapping(
+                    constructor_values
+                ).expected_surface_classification()
+            )
+    seal = SealedArwenConstructorV841.from_mapping
+    if suite_adapter is not None:
+        constructor_values, gwdo_host, classification = _suite_host(
+            suite_adapter,
+            backend_row.name,
+            constructor_values,
+            constructor_receipt,
+            orographic_statistics=orographic_statistics,
+            is_regional=is_regional,
+            cell_area_m2=(
+                pad_regional_physics_column(np.asarray(proof._mesh_value(mesh, "areaCell"), dtype=np.float64),
+                    donor_cell=getattr(mesh, "attrs", {}).get("regional_garbage_donor_cell"))
+                if is_regional else np.asarray(proof._mesh_value(mesh, "areaCell"), dtype=np.float64)),
         )
-    relaxation["surface"] = relax_surface_classification(
-        classification, proof.ARWEN_GLACIER_CUDA_PROVENANCE
-    )
+        seal = suite_adapter.seal_constructor
+        relaxation["surface"] = relax_suite_surface_classification(classification)
+    else:
+        relaxation["surface"] = relax_surface_classification(
+            classification, proof.ARWEN_GLACIER_CUDA_PROVENANCE
+        )
     relaxation["p_top"] = constructor_receipt["p_top_seed"]
-    sealed_constructor_audit = SealedArwenConstructorV841.from_mapping(
-        constructor_values
-    )
+    sealed_constructor_audit = seal(constructor_values)
     # Belt and braces on the wiring above: the seam's clocks are DERIVED from
     # the config, so this can only fail if somebody reintroduces a second
     # source of the timestep.  It costs nothing and it is the difference
@@ -1509,24 +2277,16 @@ def prepare_forecast_host(
     constructor_receipt["step_clock_coherence"] = coherence
     from hexcore import convection_admission as _convection
 
-    constructor_receipt["dt_admission"] = dt_admission.require_dt_anchor(
-        config.config_dt,
-        radiation_seconds=config.config_radt_seconds,
-        surface_pbl_seconds=config.config_bldt_seconds,
-        cumulus_seconds=config.config_cudt_seconds,
-        # The anchor certifies a CONFIGURATION at a timestep.  Omitting this
-        # would have admitted a convection-off run against a Grell-Freitas
-        # row -- an anchor whose forecasts measured a forcing this run does
-        # not apply.
-        cumulus_scheme=_convection.constructor_scheme(
-            config.config_convection_scheme
-        ),
-    ).as_dict()
-    # config_bldt_seconds reaches require_dt_anchor above as the LOOKUP key
-    # as well as the comparison, so a run holding the surface/PBL cadence
-    # reads the row that measured that cadence and never the welded one.
+    constructor_receipt["dt_admission"] = step_admission_receipt(config)
+    # config_bldt_seconds is part of the anchor LOOKUP key as well as the
+    # comparison, so a run holding the surface/PBL cadence is recorded
+    # against the row that measured that cadence and never the welded one.
     constructor_receipt["sealed_host_contract_audit"] = {
-        "authority": "SealedArwenConstructorV841.from_mapping",
+        "authority": (
+            "SealedArwenConstructorV841.from_mapping"
+            if suite_adapter is None
+            else f"{suite_adapter.__name__}.seal_constructor"
+        ),
         "accepted": True,
         "all_required_keys_dtypes_shapes_validated": True,
         "array_fields": sorted(constructor_receipt["arrays"]),
@@ -1537,20 +2297,39 @@ def prepare_forecast_host(
     regional: dict[str, Any] | None = None
     if is_regional:
         # The species the boundary files actually carry, intersected with
-        # the model's own scalar order.  LBC_REQUIRED_VARIABLES makes
-        # lbc_qv/lbc_qc/lbc_qr mandatory in every file rw_mpas_lbc writes,
-        # so this is the model's leading three for a WSM6 run -- but it is
-        # DERIVED from the stream rather than assumed, so a stream that
-        # gains a species drives it without a code change.
-        from hexcore.lbc import LBC_REQUIRED_VARIABLES
-
-        driven = tuple(
-            f"lbc_{name}"
-            for name in SCALAR_NAMES
-            if f"lbc_{name}" in LBC_REQUIRED_VARIABLES
+        # Drive the model-ordered mass species the complete hourly series
+        # supplies.  A three-species stream retains its existing treatment;
+        # a native stream with ice retains those supplied fields as well.
+        # A suite row names the block a boundary stream may drive (its
+        # driven_scalar_names, the model's leading species); the stream's
+        # other species -- an aerosol pair a native init_atmosphere writes
+        # beside the masses -- are supplied and not driven, and the record
+        # says so.  The frozen row keeps its exact call.
+        # A row that APPENDS scalars after its driven block (a suite row, or
+        # thompson_aero_column) drives only that block: an MPAS boundary
+        # stream carries no ni/nr/nc, so the full model list is never a
+        # prefix of what it supplies.  The frozen row appends nothing and
+        # keeps its exact call.
+        drives_block_only = (
+            suite_adapter is not None or bool(backend_row.appended_scalar_names) or arwen_les.active(config)
         )
+        driven_block = (
+            tuple(backend_row.driven_scalar_names)
+            if drives_block_only
+            else scalar_names
+        )
+        if tuple(scalar_names[: len(driven_block)]) != tuple(driven_block):
+            raise ValueError(
+                f"row {backend_row.name} drives {driven_block}, which is not "
+                f"the leading block of the model species {scalar_names}"
+            )
+        driven = select_lbc_scalar_names(lbc_paths or (), driven_block)
+        undriven: list[str] = []
+        if drives_block_only and lbc_paths:
+            undriven = supplied_undriven_scalars(lbc_paths[0], scalar_names, driven)
         regional = {
             "driven_scalars": driven,
+            "supplied_undriven_scalars": undriven,
             "lbc_paths": [str(path) for path in lbc_paths or ()],
             "start_time": datetime.strptime(
                 constructor_receipt["config_start_time"], "%Y-%m-%d_%H:%M:%S"
@@ -1572,8 +2351,15 @@ def prepare_forecast_host(
                 }
             ),
         }
+    selected_physics = constructor_values.get("physics")
+    if selected_physics is not None and "ishallow" in selected_physics:
+        # A registry-resolved selection that names GF's shallow switch runs
+        # with that value; the mesh-bind decision only knows the scheme's
+        # name and would record the MPAS hardwire (1) for a run handed 0.
+        decision = {**decision, "gf_ishallow": int(selected_physics["ishallow"])}
     return {
         "config": config,
+        "surface_init_path": str(paths["init"]),
         "regional": regional,
         "convection": decision,
         "pbl_cadence": pbl_decision,
@@ -1589,11 +2375,24 @@ def prepare_forecast_host(
         "defc": defc,
         "scalar_receipt": scalar_receipt,
         "physics_backend": backend_row.name,
+        "physics_resolution": None if physics is None else physics.receipt(),
         "scalar_names": scalar_names,
+        "les_theta_initial": les_theta_initial,
         "surface_accumulators": surface_accumulators,
+        "surface_accumulator_declarations": run_row.surface_accumulators,
         "seam_options": dict(seam_options),
+        "physics_suite": (
+            None
+            if suite_adapter is None
+            else _suite_record_for_run(
+                suite_adapter.physics_suite_record(backend_row.name), physics)
+        ),
         "case_pin_relaxation": relaxation,
         "start_time_text": constructor_receipt["config_start_time"],
+        # Joined by join_prepared_fingerprint before the prepared inputs are
+        # used: in main() for a one-card run, after the ranks are built for a
+        # same-host run (samehost_forecast_v841).
+        "prepared_fingerprint_seal": fingerprint_seal,
     }
 
 
@@ -1612,8 +2411,75 @@ _SAVED_HEALTH_FIELDS = (
 )
 
 
+def install_step_gate_batch(stack: Mapping[str, Any], cp: Any) -> None:
+    """Read final validation and health together, before driver publication.
+
+    Health refusals are evaluated in their existing order after the numeric
+    gate. The backend commit only publishes references and bookkeeping;
+    it does not write the endpoint arrays described here.
+    """
+    from hexcore.cuda_solve_region_v841 import SolveRegionKernels
+
+    driver = stack["driver"]
+
+    def read_endpoint(atmosphere: Any, flag: Any) -> int:
+        driver._step_gate_envelope = None
+        state, saved = atmosphere.state, atmosphere.saved
+        extents = {int(v) + 1: int(v) for v in
+                   (stack.get("solve_cells"), stack.get("solve_edges")) if v is not None}
+        fields = []
+        for owner, names in ((state, _STATE_HEALTH_FIELDS), (saved, _SAVED_HEALTH_FIELDS)):
+            for name in names:
+                array = cp.asarray(getattr(owner, name))
+                if array.dtype.kind == "f":
+                    fields.append((name, array, extents.get(int(array.shape[-1]))))
+        scalars = cp.asarray(state.scalars)
+        solve = extents.get(int(scalars.shape[-1]))
+        fields.extend((("scalars[0]", scalars[0], solve),
+                       ("scalars[1:]", scalars[1:], solve)))
+        measured, words = SolveRegionKernels.for_cache(driver.cache).envelope_with_flags(fields, [flag])
+        if words[0] == 0:
+            driver._step_gate_envelope = (atmosphere, measured)
+        return words[0]
+
+    driver.final_validation_reader = read_endpoint
+
+
+def may_capture_refusal_state(refusal: Mapping[str, Any]) -> bool:
+    """A health-refused endpoint must never become a bonus history frame."""
+    return refusal.get("refused_in") != "step health gate"
+
+
+def retired_physics_seam(backend: Any) -> dict[str, Any] | None:
+    """``None`` when the physics adapter sits at a committed step boundary.
+
+    Otherwise what the refused step left: the adapter's phase and why no
+    physics restart state exists.  ``restart_state`` -- and every digest
+    built from it -- is legal only at a boundary, so after a refused step
+    whose rollback could not rebuild the seam (phase ``broken``) or that
+    armed no rollback (``rollback_not_armed``), asking for it ended the run
+    with "restart_state is legal only at a step boundary" and no receipt,
+    and the step's own refusal was never reported.
+    """
+
+    phase = getattr(backend, "_phase", "boundary")
+    if phase == "boundary":
+        return None
+    return {
+        "phase": str(phase),
+        "restart_state": None,
+        "note": (
+            "the refused step left the physics adapter without a committed "
+            "boundary (its rollback did not rebuild the seam), so this run "
+            "has no physics restart state and no final-state digest; the "
+            "MPAS state is the last committed step's"
+        ),
+    }
+
+
 def step_health_gate(
-    stack: Mapping[str, Any], step: int, cp: Any, *, trace_hot_cell: bool = False
+    stack: Mapping[str, Any], step: int, cp: Any, *, trace_hot_cell: bool = False,
+    measured_health: Any = None,
 ) -> dict[str, Any]:
     """Refuse the moment the integration stops being finite and physical.
 
@@ -1654,10 +2520,16 @@ def step_health_gate(
         for value in (solve_cells, solve_edges)
         if value is not None
     }
+    owned_extents = stack.get("owned_health_extents", {})
 
     def _solve(array: Any) -> int | None:
         """How many of the last dimension's elements are solved (None: all)."""
 
+        if owned_extents:
+            extent = int(array.shape[-1])
+            if extent not in owned_extents:
+                raise ValueError("rank health field has an unknown entity extent; prevents skipping an owned forecast value")
+            return int(owned_extents[extent])
         if not padded_extents:
             return None
         return padded_extents.get(int(array.shape[-1]))
@@ -1680,7 +2552,14 @@ def step_health_gate(
     # first species, and every species after it, each C-contiguous.
     fields.append(("scalars[0]", scalars_array[0], scalars_solve))
     fields.append(("scalars[1:]", scalars_array[1:], scalars_solve))
-    measured = SolveRegionKernels.for_cache(stack["driver"].cache).envelope(fields)
+    pending = measured_health
+    if pending is None:
+        pending = getattr(stack["driver"], "_step_gate_envelope", None)
+        stack["driver"]._step_gate_envelope = None
+    if pending is not None and pending[0] is atmosphere and not owned_extents:
+        measured = pending[1]
+    else:
+        measured = SolveRegionKernels.for_cache(stack["driver"].cache).envelope(fields)
 
     envelope: dict[str, list[float]] = {}
     nonfinite: list[str] = []
@@ -1760,12 +2639,41 @@ def step_health_gate(
         "hydrometeor_min": hydrometeor_min,
         "hot_cell": hot,
         "finite": True,
+        "entity_scope": "owned partition union" if owned_extents else "native solve region",
+        "owned_health_extents": dict(owned_extents),
     }
 
 
 # --------------------------------------------------------------------------
 # evidence writers (partition-lane compatible)
 # --------------------------------------------------------------------------
+class UnarmedForecastSnapshotV841:
+    """The late-health rollback of a run that has no reader for one.
+
+    Without ``--stop-on-refusal`` a refused step ends the run, so the two
+    committed boundaries :class:`TwoDeepForecastSnapshotV841` retains are
+    never restored.  This takes no copy and holds no device memory; a
+    restore is a defect in the caller and refuses by name.
+    """
+
+    captures = rollbacks = 0
+
+    def capture(self, step: int, surface: Any, dynamics: Any) -> None:
+        del step, surface, dynamics
+
+    def restore(self, step: int) -> tuple[Any, Any]:
+        raise RuntimeError(
+            f"late health rollback to boundary {step} was requested, but this "
+            "run retained no boundary: without --stop-on-refusal a refused step "
+            "ends the run")
+
+    def receipt(self) -> dict[str, Any]:
+        return {"depth": 0, "device_bytes": 0, "host_bytes": 0,
+                "captures": 0, "rollbacks": 0, "slot_device_bytes": [],
+                "memory_scope": "no boundary retained: without --stop-on-refusal "
+                                "a refused step ends the run and nothing reads one"}
+
+
 class BoundaryFingerprintWriter:
     """Append-only ``step -> {atmosphere, backend}`` JSONL, partstream format."""
 
@@ -1805,7 +2713,7 @@ def _snapshot_q2_hash(snapshot: Mapping[str, Any]) -> str | None:
 # schedule
 # --------------------------------------------------------------------------
 def build_schedule(
-    *, hours: float, history_every_minutes: int, start_text: str
+    *, hours: float, history_every_minutes: float, start_text: str, history_from_minutes: float = 0.0
 ) -> dict[str, Any]:
     total_seconds = float(hours) * 3600.0
     steps = total_seconds / DT_SECONDS
@@ -1814,16 +2722,23 @@ def build_schedule(
             f"--hours {hours} is not a whole number of {DT_SECONDS:.0f} s steps"
         )
     steps = int(round(steps))
-    history_seconds = int(history_every_minutes) * 60
-    if history_seconds <= 0 or history_seconds % int(DT_SECONDS) != 0:
+    history_seconds = float(history_every_minutes) * 60
+    # Counted against the step itself, not its integer part (see the door's
+    # _schedule): an 18.75 s step truncated to 18 s gave a stride of 200
+    # steps for an hour that has 192.
+    raw_stride = history_seconds / float(DT_SECONDS)
+    if history_seconds <= 0 or abs(raw_stride - round(raw_stride)) > 1e-9:
         raise ValueError(
             f"--history-every-minutes {history_every_minutes} is not a whole "
-            f"number of {DT_SECONDS:.0f} s steps"
+            f"number of {DT_SECONDS:g} s steps"
         )
-    stride = history_seconds // int(DT_SECONDS)
-    if steps % stride != 0:
+    stride = int(round(raw_stride))
+    first = float(history_from_minutes) * 60 / DT_SECONDS
+    if first < 0 or first > steps or abs(first - round(first)) > 1e-9:
+        raise ValueError('--history-from-minutes must select a whole step within the forecast')
+    if (steps - int(round(first))) % stride != 0:
         raise ValueError("the history cadence does not divide the forecast length")
-    capture_steps = list(range(0, steps + 1, stride))
+    capture_steps = list(range(int(round(first)), steps + 1, stride))
     start = datetime.strptime(start_text, "%Y-%m-%d_%H:%M:%S")
     labels = {
         step: (start + timedelta(seconds=step * DT_SECONDS)).strftime(
@@ -1836,7 +2751,8 @@ def build_schedule(
         "dt_seconds": DT_SECONDS,
         "forecast_hours": float(hours),
         "steps": steps,
-        "history_every_minutes": int(history_every_minutes),
+        "history_every_minutes": float(history_every_minutes),
+        "history_from_minutes": float(history_from_minutes),
         "history_stride_steps": stride,
         "capture_steps": capture_steps,
         "labels": labels,
@@ -1846,6 +2762,214 @@ def build_schedule(
             )
             for step in capture_steps
         },
+    }
+
+
+# --------------------------------------------------------------------------
+# the DA file contract and the DA-cycling restart (RRFS v2 stage H6, T1)
+# --------------------------------------------------------------------------
+CHECKPOINT_SCHEMA = "gpuwm-hex.forecast-checkpoint/v1"
+
+
+def cycling_options(
+    args: argparse.Namespace, schedule: Mapping[str, Any], init_path: Path
+) -> dict[str, Any] | None:
+    """The JEDI-contract and checkpoint/restart selections, resolved to steps."""
+
+    checkpoint_steps: set[int] = set()
+    for hours in getattr(args, "checkpoint_hours", ()) or ():
+        step = float(hours) * 3600.0 / DT_SECONDS
+        if abs(step - round(step)) > 1e-9 or int(round(step)) not in schedule["capture_steps"]:
+            raise ValueError(
+                f"--checkpoint-hours {hours} is not a history frame of this run; "
+                "a checkpoint is written where a frame is captured so the "
+                "restart and the frame describe the same committed state"
+            )
+        checkpoint_steps.add(int(round(step)))
+    restart = getattr(args, "restart_from", None)
+    if not (getattr(args, "jedi_background", False) or checkpoint_steps or restart):
+        return None
+    return {
+        "jedi_background": bool(getattr(args, "jedi_background", False)),
+        "soil_levels": int(getattr(args, "jedi_soil_levels", 9)),
+        "checkpoint_steps": checkpoint_steps,
+        "restart_from": None if restart is None else Path(restart),
+        "da_analysis": None if args.da_analysis is None else Path(args.da_analysis),
+        "init_path": Path(init_path),
+    }
+
+
+def _strip_regional(array: Any, n: int) -> np.ndarray:
+    data = np.asarray(array)
+    if data.ndim >= 1 and data.shape[-1] == n + 1:
+        data = data[..., :n]
+    return np.ascontiguousarray(data)
+
+
+def download_forecast_checkpoint(
+    stack: Mapping[str, Any],
+    *,
+    step: int,
+    label: str,
+    valid_time: str,
+    dynamics_tendencies: Any,
+) -> dict[str, Any]:
+    """The full hex restart state at a committed history boundary, on the host.
+
+    The same four parts the proof harness's F030 checkpoint carries (dycore
+    state, saved diagnostics, physics backend payload, the GF advective
+    forcing carrier), at any history frame instead of one fixed step.  A
+    limited-area run's garbage column/edge is stripped: the restore re-pads
+    it exactly as a cold start does.
+    """
+
+    from hexcore.cuda_dualrun import fingerprint_atmosphere
+    from hexcore.driver import DrySavedDiagnostics
+    from hexcore.state import PrognosticState
+
+    driver = stack["driver"]
+    backend = stack["backend"]
+    cp = driver.cp
+    cp.cuda.get_current_stream().synchronize()
+    if float(driver.atmosphere.state.time_seconds) != step * DT_SECONDS:
+        raise RuntimeError("checkpoint clock does not equal its step")
+    device_state = driver.atmosphere.state.to_host()
+    saved = driver.atmosphere.saved
+    n_cells, n_edges = int(N_CELLS), int(N_EDGES)
+    state = PrognosticState(
+        rho=_strip_regional(device_state.rho, n_cells),
+        rho_theta=_strip_regional(device_state.rho_theta, n_cells),
+        rho_u=_strip_regional(device_state.rho_u, n_edges),
+        rho_w=_strip_regional(device_state.rho_w, n_cells),
+        scalars=_strip_regional(device_state.scalars, n_cells),
+        time_seconds=float(device_state.time_seconds),
+    )
+    host_saved = DrySavedDiagnostics(
+        theta_m=_strip_regional(cp.asnumpy(saved.theta_m), n_cells),
+        exner=_strip_regional(cp.asnumpy(saved.exner), n_cells),
+        density_perturbation=_strip_regional(cp.asnumpy(saved.density_perturbation), n_cells),
+        rho_theta_perturbation=_strip_regional(cp.asnumpy(saved.rho_theta_perturbation), n_cells),
+        pressure_perturbation=_strip_regional(cp.asnumpy(saved.pressure_perturbation), n_cells),
+        normal_velocity=_strip_regional(cp.asnumpy(saved.normal_velocity), n_edges),
+        vertical_velocity=_strip_regional(cp.asnumpy(saved.vertical_velocity), n_cells),
+    )
+    gf = None
+    if dynamics_tendencies is not None:
+        gf = {
+            "rthdynten": np.ascontiguousarray(cp.asnumpy(dynamics_tendencies.rthdynten)),
+            "rqvdynten": np.ascontiguousarray(cp.asnumpy(dynamics_tendencies.rqvdynten)),
+            "time_seconds": float(dynamics_tendencies.time_seconds),
+        }
+    backend_state = backend.restart_state()
+    return {
+        "schema": CHECKPOINT_SCHEMA,
+        "step": int(step),
+        "label": label,
+        "valid_time": valid_time,
+        "dt_seconds": float(DT_SECONDS),
+        "n_cells": n_cells,
+        "n_edges": n_edges,
+        "state": state,
+        "saved_diagnostics": host_saved,
+        "backend_state": backend_state,
+        "stochastic": (None if getattr(driver, "stochastic", None) is None
+                       else driver.stochastic.process.snapshot()),
+        "gf_dynamics_tendencies": gf,
+        "atmosphere_fingerprint": fingerprint_atmosphere(driver.atmosphere),
+        "backend_fingerprint": proof.fingerprint_nested_arrays(backend_state),
+    }
+
+
+def _seam_leaf_fields(backend_state: Mapping[str, Any]) -> dict[str, np.ndarray]:
+    seam = backend_state.get("seam", {}) if isinstance(backend_state, Mapping) else {}
+    arrays = seam.get("arrays", {}) if isinstance(seam, Mapping) else {}
+    leaves: dict[str, np.ndarray] = {}
+    for key, value in arrays.items():
+        if str(key).startswith("fields/"):
+            leaves[str(key).split("/", 1)[1]] = np.asarray(value)
+    return leaves
+
+
+def _init_fallback_fields(init_path: Path) -> dict[str, np.ndarray]:
+    # Read through the engine's Rust NetCDF reader (rw_netcdf); the JEDI
+    # contract's file traffic carries no Python NetCDF library.
+    from gpuwm.netcdf_bridge import open_dataset
+
+    out: dict[str, np.ndarray] = {}
+    dataset = open_dataset(Path(init_path))
+    for name in ("snowc", "snowh", "xice", "vegfra"):
+        if name in dataset.variables:
+            variable = dataset.variables[name]
+            variable.set_auto_mask(False)
+            out[name] = np.asarray(variable[0], dtype=np.float32)
+    if "lai12m" in dataset.variables:
+        variable = dataset.variables["lai12m"]
+        variable.set_auto_mask(False)
+        out["lai12m"] = np.asarray(variable[:], dtype=np.float32).T
+    return out
+
+
+def write_jedi_background(
+    *,
+    output_root: Path,
+    stack: Mapping[str, Any],
+    host: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    label: str,
+    valid_time: str,
+    soil_levels: int,
+    init_fallback: Mapping[str, np.ndarray],
+    init_path: Path,
+    backend_state: Mapping[str, Any] | None = None,
+    effective_radii: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    from hexcore import jedi_contract
+
+    driver = stack["driver"]
+    cp = driver.cp
+    if backend_state is None:
+        backend_state = stack["backend"].restart_state()
+    valid = datetime.strptime(valid_time, "%Y-%m-%d_%H:%M:%S")
+    fields, provenance = jedi_contract.assemble_background_fields(
+        snapshot_arrays=snapshot["arrays"],
+        pressure_perturbation=cp.asnumpy(driver.atmosphere.saved.pressure_perturbation),
+        pressure_base=np.asarray(host["prepared"].reference.pressure_base),
+        seam_fields={
+            **_seam_leaf_fields(backend_state),
+            **{
+                str(name): np.asarray(cp.asnumpy(value) if hasattr(value, "device") else value)
+                for name, value in dict(effective_radii or {}).items()
+            },
+        },
+        init_fallback=init_fallback,
+        scalar_names=host["scalar_names"],
+        n_cells=int(N_CELLS),
+        n_edges=int(N_EDGES),
+        n_levels=int(N_LEVELS),
+        soil_levels=int(soil_levels),
+        valid=valid,
+    )
+    record = jedi_contract.write_background(
+        output_root / f"mpasout.{label}.nc",
+        fields=fields,
+        provenance=provenance,
+        valid=valid,
+        n_cells=int(N_CELLS),
+        n_edges=int(N_EDGES),
+        n_levels=int(N_LEVELS),
+        soil_levels=int(soil_levels),
+        scalar_names=host["scalar_names"],
+        n_vertices=int(np.asarray(proof._mesh_value(host["prepared"].mesh, "areaTriangle")).size),
+        # OU1: the init's element identity rides in the background, so the
+        # analysis JEDI writes back into it can be proven to be on this run's
+        # cells and edges at the DA-cycling restart.
+        identity_path=Path(init_path),
+    )
+    return {
+        "path": record.path,
+        "bytes": record.bytes,
+        "sha256": record.sha256,
+        "receipt": record.receipt_path,
     }
 
 
@@ -1863,7 +2987,7 @@ def _physics_cadence_proof(
     first evidence the hold never happened, and a receipt that only repeats
     the request cannot tell the two apart.  So the receipt carries the
     seam's own counters -- how many steps the phase-one call reported
-    ``surface_pbl_ran``, the engine's ``ysu`` call count at the last step --
+    ``surface_pbl_ran``, the engine's surface-layer count at the last step --
     against the count the declared cadence predicts
     (:func:`hexcore.pbl_cadence.calls_in_steps`), and says whether they
     agree.  Radiation's count rides beside it because the receipt names
@@ -1888,7 +3012,10 @@ def _physics_cadence_proof(
     expected = pbl_cadence.calls_in_steps(
         steps_between_calls=stepbl, executed_steps=int(executed_steps)
     )
-    engine_calls = None if "ysu" not in counts else int(counts["ysu"])
+    # The surface layer remains active when LES replaces YSU. Older seam
+    # receipts carry only the YSU counter, so retain that fallback.
+    counter = "sfclay" if "sfclay" in counts else "ysu"
+    engine_calls = None if counter not in counts else int(counts[counter])
     consistent = due == expected and (engine_calls in (None, expected))
     return {
         "schema": "gpuwm-hex.physics-cadence-proof/v1",
@@ -1911,7 +3038,7 @@ def _physics_cadence_proof(
             f"({decision['label']}) predicts {expected} calls"
             + (
                 "" if engine_calls is None
-                else f"; the engine's own ysu counter reads {engine_calls}"
+                else f"; the engine's own {counter} counter reads {engine_calls}"
             )
             + (".  They agree" if consistent else ".  THEY DISAGREE")
         ),
@@ -1926,6 +3053,14 @@ def _mixing_treatment_proof(driver: Any, executed_steps: int) -> dict[str, Any]:
     3 dynamics subcycles per executed step.
     """
 
+    les = getattr(driver, "les_dissipation", None)
+    if les is not None:
+        return {"active": True, "lane": "resident_cuda_les_v842",
+                "closure": driver.config.config_les_model,
+                "surface": "ArWen surface-layer device fluxes",
+                "pbl": "off", "calls": dict(les.counts),
+                "scalar_order": list(les.names),
+                "native_pools": False}
     cfg = getattr(driver, "mixing_config_v841", None)
     calls = int(getattr(driver, "mixing_calls_v841", 0))
     expected = 3 * int(executed_steps)
@@ -1979,7 +3114,50 @@ def execute_forecast(
     park_physics_tier: bool = False,
     required_free_bytes: int | None = None,
     local_timestep_classing_path: Path | None = None,
+    fullstep_lts_options: Mapping[str, Any] | None = None,
+    cycling: Mapping[str, Any] | None = None,
+    iau: Mapping[str, Any] | None = None,
+    balance_series: bool = False,
+    on_history_ready: Callable[[dict[str, Any]], Any] | None = None,
+    history_product_session: Callable[[], Any] | None = None,
+    history_product_max_pending: int = 2,
+    required_product_ids: Sequence[str] = (),
 ) -> dict[str, Any]:
+    """Run the native forecast; optionally notify products of closed frames.
+
+    Notifications carry only native file metadata and run on a separate
+    worker. Consumer failures surface at the final callback drain.
+    """
+    if on_history_ready is not None and history_product_session is not None:
+        raise ValueError("supply one history callback or one product session factory")
+    if history_product_max_pending < 1:
+        raise ValueError("history_product_max_pending must be positive")
+    if required_product_ids and on_history_ready is None and history_product_session is None:
+        raise ValueError("required products need a history consumer")
+    join_prepared_fingerprint(host)
+    if (fullstep_lts_options is not None
+            and fullstep_lts_options.get("fullstep_lts_mode") == "active"
+            and int(fullstep_lts_options.get("fullstep_lts_max_rate", 8)) != 1):
+        if on_history_ready is not None or history_product_session is not None:
+            raise NotImplementedError("history-ready callbacks are supported by the native executor; "
+                                      "the active class executor owns a different history path")
+        # Active full-step local time stepping: every rate class on its own
+        # whole step.  The class executor hands a mesh that classes entirely
+        # at rate one back to this function with the option cleared, so a
+        # uniform mesh runs the unchanged path below.
+        import sys
+
+        from hexcore.drivers import fullstep_lts_forecast_v841 as fullstep_forecast
+
+        return fullstep_forecast.execute_fullstep_lts(
+            sys.modules[__name__], native_execute=execute_forecast, policy=dict(fullstep_lts_options),
+            host=host, schedule=schedule, cache_root=cache_root, output_root=output_root,
+            arwen_checkout=arwen_checkout, source_receipt=source_receipt,
+            authority_receipt=authority_receipt, fingerprint_every=fingerprint_every,
+            stop_on_refusal=stop_on_refusal, grid_path=grid_path, park_physics_tier=park_physics_tier,
+            required_free_bytes=required_free_bytes,
+            local_timestep_classing_path=local_timestep_classing_path, cycling=cycling,
+            iau=iau, balance_series=balance_series)
     from hexcore.cuda_arwen_physics_v841 import pin_arwen_physics_v841
 
     arwen_pin = dict(_pin_for_run(host, arwen_checkout, pin_arwen_physics_v841))
@@ -2000,14 +3178,104 @@ def execute_forecast(
     # the mesh bind and the kernel compile were already paid for.  Absent,
     # the mesh-bound floor from the same admission surface applies.
     if required_free_bytes is None:
-        memory = proof.gpu_memory_admission(cp)
+        from hexcore.forecast_door import stochastic_array_bytes
+        from hexcore.stochastic import StochasticConfig
+        stochastic_options = host.get("stochastic")
+        # Price stochastic arrays only for a run that enables them; a run
+        # without stochastic physics reads no prepared mesh here.
+        stochastic_bytes = (stochastic_array_bytes(
+            int(host["prepared"].mesh.n_cells), stochastic_options,
+            levels=int(host["prepared"].vertical.n_vert_levels))
+            if StochasticConfig.parse(stochastic_options).enabled else 0)
+        memory = proof.gpu_memory_admission(cp, minimum=int(proof.MIN_FREE_DEVICE_BYTES) +
+            stochastic_bytes)
     else:
         memory = proof.gpu_memory_admission(cp, minimum=int(required_free_bytes))
     cache = KernelCache(capability=capability, cache_dir=cache_root)
+    # RRFS v2 stage H6: a resumed run (plain restart or DA-cycling restart).
+    stochastic_restart = None
+    start_step = 0
+    restart_kwargs: dict[str, Any] = {}
+    restart_receipt: dict[str, Any] | None = None
+    if cycling is not None and cycling.get("restart_from") is not None:
+        import pickle
+
+        with Path(cycling["restart_from"]).open("rb") as stream:
+            checkpoint = pickle.load(stream)
+        if not isinstance(checkpoint, Mapping) or checkpoint.get("schema") != CHECKPOINT_SCHEMA:
+            raise ValueError("--restart-from is not a checkpoint this driver wrote")
+        if float(checkpoint["dt_seconds"]) != float(DT_SECONDS) or int(checkpoint["n_cells"]) != int(N_CELLS):
+            raise ValueError("checkpoint was written on a different mesh or timestep")
+        start_step = int(checkpoint["step"])
+        if start_step not in schedule["capture_steps"] or start_step >= int(schedule["steps"]):
+            raise ValueError(
+                "the checkpoint step must be a history frame of this run and "
+                "before its end; --start-time/--hours name the ORIGINAL run"
+            )
+        if schedule["valid_times"][start_step] != checkpoint["valid_time"]:
+            raise ValueError("checkpoint valid time differs from this schedule's")
+        state = checkpoint["state"]
+        saved = checkpoint["saved_diagnostics"]
+        restart_receipt = {
+            "checkpoint": str(cycling["restart_from"]),
+            "checkpoint_sha256": proof.sha256_file(Path(cycling["restart_from"])),
+            "step": start_step,
+            "valid_time": checkpoint["valid_time"],
+            "da_cycling": None,
+        }
+        if cycling.get("da_analysis") is not None:
+            from hexcore import jedi_contract
+
+            prepared = host["prepared"]
+            state, saved, da_receipt = jedi_contract.recouple_da_cycling(
+                Path(cycling["da_analysis"]),
+                init_path=Path(cycling["init_path"]),
+                mesh=prepared.mesh,
+                vertical=prepared.vertical,
+                terrain_metrics=prepared.terrain_metrics,
+                expected_reference=prepared.reference,
+                # OU1: the analysis record must be the checkpoint's valid time.
+                expected_valid_time=str(checkpoint["valid_time"]),
+                scalar_names=host["scalar_names"],
+                n_cells=int(N_CELLS),
+                n_edges=int(N_EDGES),
+                n_levels=int(N_LEVELS),
+                allow_regional_sentinels=host.get("regional") is not None,
+                time_seconds=float(state.time_seconds),
+                work_dir=output_root,
+            )
+            restart_receipt["da_cycling"] = da_receipt
+        restart_kwargs = {
+            "state": state,
+            "saved_diagnostics": saved,
+            "backend_restart": checkpoint["backend_state"],
+        }
+        # The GF advective-forcing carrier is re-seeded below, not through
+        # the proof's stack constructor: that constructor validates it at the
+        # GLOBAL column count, while a limited-area driver forms it on its
+        # padded extent (nCells + native's garbage column).  MEASURED
+        # 2026-10-05: "rthdynten must be FP32 [level,cell]" for (59, 157860).
+        restart_gf = checkpoint["gf_dynamics_tendencies"]
+        if host.get("regional") is not None:
+            host = dict(host)
+            host["regional"] = dict(host["regional"])
+            host["regional"]["start_time"] = datetime.strptime(
+                checkpoint["valid_time"], "%Y-%m-%d_%H:%M:%S"
+            )
+        from hexcore.iau_native import IAU_WINDOW_KEY, resolve_restart_window
+
+        iau = resolve_restart_window(iau, carried=checkpoint.get(IAU_WINDOW_KEY),
+                                     restart_seconds=float(start_step) * float(DT_SECONDS))
+        stochastic_restart = checkpoint.get("stochastic")
+        del checkpoint
+    else:
+        restart_gf = None
+    time_ledger.emit("prep.device_upload", "begin")
     stack = proof._construct_device_stack(
         host=host,
         cache=cache,
         arwen_checkout=arwen_checkout,
+        **restart_kwargs,
         backend_builder=_backend_builder(host, arwen_checkout),
         # The physics rollback is armed only when this run keeps a refused
         # step's boundary: --stop-on-refusal writes the last committed frame
@@ -2016,7 +3284,17 @@ def execute_forecast(
         # 24 ms of host time every step on the 43,884-cell point mesh) is not
         # taken.  No output byte depends on it.
         physics_rollback_snapshot=bool(stop_on_refusal),
+        stochastic_restart=stochastic_restart,
     )
+    from hexcore.arwen_surface_update import attach_host
+    surface_receipt = attach_host(stack["backend"], host, schedule, output_root, dt=float(DT_SECONDS))
+    if surface_receipt is not None:
+        print(json.dumps({"surface_update": surface_receipt}), flush=True)
+    time_ledger.emit("prep.device_upload", "end", attrs={"scope": "device_stack_including_kernel_load"})
+    from hexcore.cuda_column_order_v841 import attach_column_order
+    column_order_receipt = attach_column_order(stack["backend"], host["prepared"].mesh)
+    if column_order_receipt is not None:
+        time_ledger.emit("forecast.construct", "mark", attrs={"column_order":column_order_receipt})
     # Opt-in local time stepping.  Returns None -- and rebinds nothing -- when
     # config_local_timestep is off, which is the default.
     from hexcore.cuda_driver_lts import attach_local_timestep
@@ -2042,6 +3320,52 @@ def execute_forecast(
         classing=explicit_classing,
     )
     stack["local_timestep"] = lts_attachment
+    fullstep_shadow = None
+    if fullstep_lts_options is not None:
+        from hexcore.config_fullstep_lts import FullStepLtsConfig
+        from hexcore.fullstep_lts_dispatch import attach_fullstep_lts
+        def fullstep_sink(row):
+            with (output_root / "fullstep-lts-stages.jsonl").open("a") as stream:
+                stream.write(json.dumps(row) + "\n")
+        from netCDF4 import Dataset
+        if grid_path is None:
+            raise ValueError("full-step shadow needs the source grid's global cell IDs")
+        with Dataset(grid_path) as dataset:
+            fullstep_ids = np.asarray(dataset["indexToCellID"][:], dtype=np.int64)
+        fullstep_shadow = attach_fullstep_lts(stack["driver"], FullStepLtsConfig(**fullstep_lts_options), sink=fullstep_sink, global_cell_ids=fullstep_ids)
+        if fullstep_shadow is not None:
+            state = stack["driver"].atmosphere.state
+            fullstep_shadow.observe(state.rho, state.rho_u, state.rho_w,
+                stack["driver"].atmosphere.vertical.rdzw, stage=0,
+                stage_dt=float(stack["driver"].config.config_dt), time_seconds=float(state.time_seconds))
+    if restart_gf is not None:
+        # Restore side of the step-16 restart divergence (see the proof
+        # harness): the first resumed step must consume the forcing pair the
+        # checkpoint step's dynamics formed.  Validated at the extent the
+        # running driver forms it on.
+        from hexcore.cuda_driver import CudaV841GfDynamicsTendencies
+
+        carrier = CudaV841GfDynamicsTendencies(
+            rthdynten=cp.asarray(np.ascontiguousarray(restart_gf["rthdynten"], dtype=np.float32)),
+            rqvdynten=cp.asarray(np.ascontiguousarray(restart_gf["rqvdynten"], dtype=np.float32)),
+            time_seconds=float(restart_gf["time_seconds"]),
+        )
+        width = int(np.asarray(restart_gf["rthdynten"]).shape[-1])
+        if width not in (int(N_CELLS), int(N_CELLS) + 1):
+            raise ValueError(f"restored GF forcing has {width} columns for a {N_CELLS}-cell mesh")
+        carrier.validate(cp=cp, n_vert_levels=int(N_LEVELS), n_cells=width)
+        if float(carrier.time_seconds) != float(stack["driver"].atmosphere.state.time_seconds):
+            raise RuntimeError("restored GF forcing is not stamped with the restored model time")
+        stack["gf_dynamics_tendencies"] = carrier
+
+    from hexcore.cuda_subcycle_graphs import graph_policy, graphs_enabled
+    graph_requested = graphs_enabled(int(N_CELLS))
+    graph_controller = None
+    if graph_requested and lts_attachment is None and fullstep_shadow is None:
+        from hexcore.cuda_subcycle_graphs import attach_subcycle_graphs
+
+        graph_controller = attach_subcycle_graphs(stack["driver"])
+    graph_full_steps = graph_partial_steps = 0
 
     physics_park = None
     if park_physics_tier:
@@ -2051,10 +3375,48 @@ def execute_forecast(
             cp, stack["backend"]._seam, diagnose=True
         )
 
-    capture_steps = set(schedule["capture_steps"])
+    capture_steps = {step for step in schedule["capture_steps"] if step >= start_step}
+    if start_step > 0:
+        # The checkpoint frame itself was captured by the run that wrote it.
+        capture_steps.discard(start_step)
+    install_step_gate_batch(stack, cp)
     labels = schedule["labels"]
     steps = int(schedule["steps"])
+    # Incremental analysis update on this executor (lane W1): one class, every cell and
+    # edge, the same hook the full-step class executor uses.  None leaves the step loop
+    # exactly as before.
+    iau_forcing = None
+    iau_receipt = None
+    balance = None
+    if iau is not None:
+        from hexcore.iau_native import build_iau_forcing, identity_layout
+
+        local_cells = int(stack["driver"].atmosphere.state.rho.shape[1])
+        pad = local_cells - int(N_CELLS)
+        if pad not in (0, 1):
+            raise ValueError(f"the driver carries {local_cells} cell columns for a {N_CELLS}-cell mesh")
+        layout = identity_layout(int(N_CELLS) + pad, int(N_EDGES))
+        if iau.get("route") == "native":
+            layout = identity_layout(int(N_CELLS), int(N_EDGES))
+        iau_forcing, iau_receipt = build_iau_forcing(
+            iau, prepared=host["prepared"], scalar_names=host["scalar_names"], layouts=[layout], cp=cp,
+            work_dir=cache_root, n_cells=int(N_CELLS), n_edges=int(N_EDGES), n_levels=int(N_LEVELS),
+            pad_cells=pad)
+        print(json.dumps({"iau": iau_receipt}, default=str), flush=True)
+    if balance_series:
+        from types import SimpleNamespace as _Namespace
+
+        from hexcore.iau_forcing import BalanceSeries
+
+        balance = BalanceSeries.build(output_root / "balance-series.jsonl", host["scalar_names"],
+                                      np.asarray(host["prepared"].vertical.dzw, dtype=np.float64), cp)
+        balance_view = _Namespace(classes=[_Namespace(driver=stack["driver"], n_owned_cells=int(N_CELLS),
+                                                      tables=_Namespace(rate=1))])
+        balance.sample(balance_view, float(start_step) * float(DT_SECONDS), cp)
     static = proof._static_output_fields(host)
+    jedi_files: dict[str, Any] = {}
+    checkpoint_files: dict[str, Any] = {}
+    init_fallback_cache: dict[str, Any] = {}
 
     fingerprint_path = output_root / "boundary-fingerprints.jsonl"
     fingerprints = (
@@ -2070,37 +3432,48 @@ def execute_forecast(
 
     capture_seconds = 0.0
     write_seconds = 0.0
+    write_wait_seconds = 0.0
+    current_gf: dict[str, Any] = {"value": None}
     fingerprint_seconds = 0.0
     health_seconds = 0.0
     integration_seconds = 0.0
     first_step_seconds = None
 
-    def capture(step: int) -> None:
-        nonlocal capture_seconds, write_seconds
-        mark = time.perf_counter()
-        snapshot = proof.capture_snapshot(
-            label=labels[step],
-            step=step,
-            driver=stack["driver"],
-            backend=stack["backend"],
-            prep_geometry=stack["prep_geometry"],
-            kernel_cache=stack["driver"].cache,
-            f000_surface_diagnostics=stack["f000_surface_diagnostics"],
-            expect_refl10cm=True,
-            solve_cells=stack.get("solve_cells"),
-            scalar_names=host["scalar_names"],
-            surface_accumulators=host["surface_accumulators"],
-        )
+    # Queue immutable D2H copies on the producer stream before a successor
+    # can mutate the fields. A worker waits for their event, audits the host
+    # arrays and submits the same NetCDF writer to its existing process.
+    # Cycling and refusal recovery retain their synchronous state boundary.
+    # GPUWM_HEX_HISTORY_BACKGROUND=off also retains direct capture/writing.
+    history = history_writer.open_writer(proof.write_snapshot_netcdf)
+    product_ready = None
+    if on_history_ready is not None or history_product_session is not None:
+        from hexcore.history_ready import HistoryReady
+        product_ready = HistoryReady(on_history_ready, session_factory=history_product_session,
+                                     max_pending=history_product_max_pending,
+                                     required_product_ids=required_product_ids)
+
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+    from hexcore.host_parallel import threads as history_hash_threads
+    async_capture = history is not None and cycling is None and not stop_on_refusal
+    capture_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hex-capture") if async_capture else None
+    capture_pending = []
+    capture_finish_seconds = 0.0
+
+    def finish_capture(step, snapshot):
+        nonlocal write_seconds, capture_finish_seconds
+        finish_started = time.perf_counter()
+        time_ledger.emit("forecast.output.capture.finish", "begin", attrs={"step": step})
         if step == 0:
             snapshot["receipt"]["f000_completed_surface_diagnostics"] = (
                 complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"])
             )
-        capture_seconds += time.perf_counter() - mark
         physical_gates[str(step)] = proof.physical_snapshot_gate(
             snapshot,
             allow_initial_negative_qv=(step == 0),
             scalar_names=host["scalar_names"],
             surface_accumulators=host["surface_accumulators"],
+            surface_accumulator_declarations=host.get("surface_accumulator_declarations"),
         )
         if step == steps and hasattr(stack["backend"], "write_ledger"):
             # A seeded backend dumps its conservation ledger beside the
@@ -2110,12 +3483,134 @@ def execute_forecast(
         snapshot_q2[str(step)] = _snapshot_q2_hash(snapshot)
         snapshot_receipts[str(step)] = snapshot["receipt"]
         mark = time.perf_counter()
-        snapshot_files[str(step)] = proof.write_snapshot_netcdf(
-            output_root / f"cuda-history.{labels[step]}.nc", snapshot, static
-        )
+        destination = output_root / f"cuda-history.{labels[step]}.nc"
+        snapshot["valid_time"] = schedule["valid_times"][step]
+        if history is None:
+            time_ledger.emit("forecast.output.history", "begin", attrs={"step": step})
+            snapshot_files[str(step)] = proof.write_snapshot_netcdf(
+                destination, snapshot, static
+            )
+            time_ledger.emit("forecast.output.history", "end", attrs={"step": step})
+        else:
+            # The writer reads only the arrays.  An array the capture does
+            # not solely own (a view, or a host buffer something else holds
+            # and the next step could write into) is copied at hand-off.
+            snapshot_files[str(step)] = history.submit(
+                destination,
+                # the writer reads the arrays, plus the step for the f000
+                # refl10cm provenance attribute
+                {"arrays": snapshot["arrays"] if async_capture else history_writer.private_arrays(snapshot["arrays"]),
+                 "receipt": {"step": step},
+                 "valid_time": snapshot["valid_time"]},
+                static,
+                defer_fallback=async_capture,
+            )
+        if product_ready is not None:
+            context = {"step": step, "label": labels[step],
+                       "valid_time": schedule["valid_times"][step]}
+            if history is None:
+                product_ready.submit(snapshot_files[str(step)], **context)
+            else:
+                product_ready.watch(snapshot_files[str(step)], **context)
+        if cycling is not None:
+            backend_state = None
+            if cycling["jedi_background"] or step in cycling["checkpoint_steps"]:
+                backend_state = stack["backend"].restart_state()
+            if cycling["jedi_background"]:
+                if "fields" not in init_fallback_cache:
+                    init_fallback_cache["fields"] = _init_fallback_fields(
+                        Path(cycling["init_path"])
+                    )
+                jedi_files[str(step)] = write_jedi_background(
+                    output_root=output_root,
+                    stack=stack,
+                    host=host,
+                    snapshot=snapshot,
+                    label=labels[step],
+                    valid_time=schedule["valid_times"][step],
+                    soil_levels=int(cycling["soil_levels"]),
+                    init_fallback=init_fallback_cache["fields"],
+                    init_path=Path(cycling["init_path"]),
+                    backend_state=backend_state,
+                    effective_radii=current_gf.get("radii"),
+                )
+            if step in cycling["checkpoint_steps"]:
+                payload = download_forecast_checkpoint(
+                    stack,
+                    step=step,
+                    label=labels[step],
+                    valid_time=schedule["valid_times"][step],
+                    dynamics_tendencies=current_gf["value"],
+                )
+                if iau is not None:
+                    from hexcore.iau_native import IAU_WINDOW_KEY, window_record
+
+                    payload[IAU_WINDOW_KEY] = window_record(iau)
+                target = output_root / f"checkpoint.{labels[step]}.pkl"
+                from hexcore.checkpoint_io import write_checkpoint
+                write_checkpoint(target, payload)
+                checkpoint_files[str(step)] = {
+                    "path": str(target),
+                    "bytes": target.stat().st_size,
+                    "sha256": proof.sha256_file(target),
+                    "atmosphere_fingerprint_sha256": proof.canonical_json_sha256(
+                        json.loads(json.dumps(payload["atmosphere_fingerprint"], sort_keys=True, default=str))
+                    ),
+                }
+                del payload
+            del backend_state
         write_seconds += time.perf_counter() - mark
         del snapshot
         gc.collect()
+        capture_finish_seconds += time.perf_counter() - finish_started
+        time_ledger.emit("forecast.output.capture.finish", "end", attrs={"step": step})
+
+    def capture(step: int) -> None:
+        nonlocal capture_seconds
+        time_ledger.emit("forecast.output.capture", "begin", attrs={"step": step})
+        mark = time.perf_counter()
+        if capture_pending:
+            previous_step = capture_pending.pop(0).result()
+            # A failed writer must not move NetCDF into the capture worker.
+            # Recover here before another frame can retain its host arrays;
+            # healthy writes continue without a producer-side wait.
+            recovered = history.recover_if_needed(snapshot_files[str(previous_step)])
+            if recovered is not None and product_ready is not None:
+                product_ready.submit(recovered, step=previous_step, label=labels[previous_step],
+                                     valid_time=schedule["valid_times"][previous_step])
+        snapshot = proof.capture_snapshot(
+            label=labels[step],
+            step=step,
+            driver=stack["driver"],
+            backend=stack["backend"],
+            prep_geometry=stack["prep_geometry"],
+            kernel_cache=stack["driver"].cache,
+            f000_surface_diagnostics=stack["f000_surface_diagnostics"],
+            expect_refl10cm=True,
+            deferred=async_capture,
+            solve_cells=stack.get("solve_cells"),
+            scalar_names=host["scalar_names"],
+            surface_accumulators=host["surface_accumulators"],
+        )
+        capture_seconds += time.perf_counter() - mark
+        if async_capture:
+            def complete():
+                time_ledger.emit("forecast.output.capture.materialize", "begin", attrs={"step": step})
+                try:
+                    completed = snapshot.result()
+                finally:
+                    time_ledger.emit("forecast.output.capture.materialize", "end", attrs={"step": step})
+                finish_capture(step, completed)
+                return step
+            try:
+                capture_pending.append(capture_pool.submit(copy_context().run, complete))
+            except BaseException:
+                # If hand-off fails, nobody else owns the queued copies.
+                snapshot.transfer.wait()
+                raise
+        else:
+            finish_capture(step, snapshot)
+        time_ledger.emit("forecast.output.capture", "end", attrs={"step": step})
 
     # ORDER MATTERS.  ``proof._run_steps`` reads the previous surface updates
     # BEFORE capturing its start-step snapshot; capture allocates device
@@ -2136,142 +3631,261 @@ def execute_forecast(
     loop_started = time.perf_counter()
     # GF advective forcing carried step to step; None at step 1 is native's
     # own start state (tend_physics is zero before dynamics first forms it).
-    gf_dynamics_tendencies = None
-    for step in range(1, steps + 1):
-        mark = time.perf_counter()
+    # A resumed run starts from the carrier its checkpoint restored.
+    gf_dynamics_tendencies = stack.get("gf_dynamics_tendencies") if start_step else None
+    current_gf["value"] = gf_dynamics_tendencies
+    last_step_clock = None
+    from hexcore.cuda_seam_snapshot_v841 import TwoDeepForecastSnapshotV841
+    from hexcore.step_receipt_writer import StepReceiptWriter
+    from types import SimpleNamespace
+
+    # The two committed boundaries are kept only for a run that reads them.
+    # THE BREAKAGE THIS PREVENTS (measured 2026-10-11, RTX PRO 6000 host, one 96 GB card,
+    # 30 km x1.655362, bare defaults, per-allocation hook): both slots held
+    # 21,540 MiB of copies -- the seam export twice (14,925 MiB) and the MPAS
+    # state, saved state and adapter carriers twice -- and the run stopped
+    # at its second step with "Out of memory allocating 865,078,272 bytes"
+    # inside the scalar limiter, after a door that predicted 66,086 MiB.
+    # Nothing read them: without --stop-on-refusal a refused step ends the
+    # run (read_pending_health raises), exactly as the per-step physics
+    # boundary export is already not taken without it
+    # (physics_rollback_snapshot above).
+    rollback = (
+        TwoDeepForecastSnapshotV841(stack, cp, observers={
+            "graphs": graph_controller, "physics_park": physics_park})
+        if stop_on_refusal
+        else UnarmedForecastSnapshotV841()
+    )
+    # Allocate both slots before launching the forecast. Never fall back to
+    # host snapshots or one slot when the card cannot protect a late refusal.
+    rollback.capture(start_step - 1, previous, gf_dynamics_tendencies)
+    rollback.capture(start_step, previous, gf_dynamics_tendencies)
+    receipt_writer = StepReceiptWriter(output_root / "step-receipts.jsonl",
+                                       document=output_root / "step-receipts.json",
+                                       schema=SCHEMA + "/step-receipts")
+    pending_health = None
+    late_health_error = None
+    snapshot_seconds = 0.0
+    card_attrs = {"card": time_ledger.card_index(), "card_count": 1,
+                  "visible_device": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                  "mutex_cards": os.environ.get("GPU_MUTEX_CARDS")}
+
+    def inspect_pending_health() -> None:
+        nonlocal pending_health, health_seconds, late_health_error
+        if pending_health is None:
+            return
+        checked_step, measured, atmosphere = pending_health
+        pending_health = None
+        started = time.perf_counter()
+        checked_stack = {**stack, "driver": SimpleNamespace(
+            atmosphere=atmosphere, cache=stack["driver"].cache)}
         try:
-            result = proof.execute_composite_step(
-                driver=stack["driver"],
-                backend=stack["backend"],
-                scalar_names=host["scalar_names"],
-                physics_geometry=stack["physics_geometry"],
-                kernel_cache=stack["driver"].cache,
-                previous_surface_updates=previous,
-                dynamics_tendencies=gf_dynamics_tendencies,
-                physics_park=physics_park,
-                # WRF/native diagflag: the step ENDING at a history frame
-                # computes refl10cm inside its own microphysics call.
-                refl_10cm_due=(step in capture_steps),
-            )
-        except (proof.CompositeTransactionError, FloatingPointError) as error:
-            if not stop_on_refusal:
-                raise
-            # The port refused to publish this step.  The staged two-owner
-            # transaction rolled back, so the committed state is still the
-            # previous step.  NO GUARD IS RELAXED: the refusal is recorded
-            # verbatim, the forecast stops here, and every retained frame
-            # precedes the refused step.
-            refusal = {
-                "refused": True,
-                "step": step,
-                "model_seconds": step * DT_SECONDS,
-                "exception": type(error).__name__,
-                "message": str(error),
-                "last_committed_step": step - 1,
-                "note": (
-                    "the port own numeric/geometry validation refused this "
-                    "step; the forecast is truncated at the last committed "
-                    "step and no unpublished state was retained"
-                ),
-            }
-            executed_steps = step - 1
-            break
-        cp.cuda.get_current_stream().synchronize()
-        elapsed = time.perf_counter() - mark
-        integration_seconds += elapsed
-        if first_step_seconds is None:
-            first_step_seconds = elapsed
-        previous = result.committed.surface_updates
-        gf_dynamics_tendencies = result.dynamics_tendencies
-        backend_receipt = dict(result.backend_receipt)
-        surface_execution = proof.require_arwen_v2_surface_execution(
-            backend_receipt, executed=True, label=f"step {step} backend receipt"
-        )
-        step_receipts.append(
-            {
-                "step": step,
-                "seconds": elapsed,
-                "driver": asdict(result.committed.receipt),
-                "backend": backend_receipt,
-                "arwen_v2_surface_execution": surface_execution,
-                "clamp_d2h": result.clamp_d2h.as_dict(),
-                "recovery": result.recovery.receipt(),
-            }
-        )
-        mark = time.perf_counter()
-        try:
-            health.append(
-                step_health_gate(
-                    stack,
-                    step,
-                    cp,
-                    trace_hot_cell=stack.get("solve_cells") is not None,
-                )
-            )
+            health.append(step_health_gate(
+                checked_stack, checked_step, cp,
+                trace_hot_cell=stack.get("solve_cells") is not None,
+                measured_health=measured))
         except FloatingPointError as error:
-            if not stop_on_refusal:
-                raise
-            # The step was committed but the health gate refuses the state it
-            # produced (non-finite, non-positive, or |w| beyond the divergence
-            # refusal).  Record the refusal verbatim WITH the receipt so the
-            # committed health-envelope series (including this death) is
-            # preserved for signature analysis; nothing is relaxed.
-            refusal = {
-                "refused": True,
-                "refused_in": "step health gate",
-                "step": step,
-                "model_seconds": step * DT_SECONDS,
-                "exception": type(error).__name__,
-                "message": str(error),
-                "last_committed_step": step,
-                "note": (
-                    "the composite step committed but its state fails the "
-                    "health gate; the forecast is truncated here and the "
-                    "per-step health envelopes up to the previous step are "
-                    "retained in this receipt"
-                ),
-            }
-            executed_steps = step
-            health_seconds += time.perf_counter() - mark
-            break
-        health_seconds += time.perf_counter() - mark
-        if fingerprints is not None and step % fingerprint_every == 0:
+            # Inspection can happen while the successor is still staged.
+            # Finish its transaction before restoring the committed slot.
+            late_health_error = (checked_step, error)
+        finally:
+            health_seconds += time.perf_counter() - started
+
+    def read_pending_health() -> bool:
+        nonlocal refusal, executed_steps, previous, gf_dynamics_tendencies
+        inspect_pending_health()
+        if late_health_error is None:
+            return True
+        checked_step, error = late_health_error
+        if not stop_on_refusal:
+            # The run ends here; no boundary was retained to restore.
+            raise error
+        # The serial gate keeps the refused committed endpoint. Remove only
+        # a successor, even if its own transaction already rolled back.
+        if step > checked_step:
+            previous, gf_dynamics_tendencies = rollback.restore(checked_step)
+            time_ledger.emit("forecast.integrate", "mark", attrs={
+                **card_attrs, "event": "rollback", "step": checked_step, "discarded_step": checked_step + 1,
+                "reason": str(error)})
+        refusal = {
+            "refused": True, "refused_in": "step health gate",
+            "step": checked_step, "model_seconds": checked_step * DT_SECONDS,
+            **refusal_exception_details(error), "last_committed_step": checked_step,
+            "note": (
+                "the composite step committed but its state fails the "
+                "health gate; the forecast is truncated here and the "
+                "per-step health envelopes up to the previous step are "
+                "retained in this receipt"),
+        }
+        executed_steps = checked_step
+        return False
+
+    # This hook runs after the successor's final validation kernels have
+    # been enqueued and before waiting on its publication event. Inspecting
+    # the previous step here overlaps device work instead of leaving the
+    # card idle after execute_composite_step returns.
+    endpoint_reader = stack["driver"].final_validation_reader
+
+    def read_current_endpoint(atmosphere: Any, flag: Any) -> int:
+        inspect_pending_health()
+        return endpoint_reader(atmosphere, flag)
+
+    stack["driver"].final_validation_reader = read_current_endpoint
+
+    try:
+        for step in range(start_step + 1, steps + 1):
+            if step == start_step + 1:
+                time_ledger.emit("forecast.construct", "end")
+                time_ledger.emit("forecast.integrate", "begin", attrs=card_attrs)
+                time_ledger.emit("forecast.first_step", "begin", attrs=card_attrs)
+            if step > start_step + 1:
+                snapshot_mark = time.perf_counter()
+                rollback.capture(step - 1, previous, gf_dynamics_tendencies)
+                snapshot_seconds += time.perf_counter() - snapshot_mark
             mark = time.perf_counter()
-            fingerprints.write(step, proof.fingerprint_execution_boundary(stack))
-            fingerprint_seconds += time.perf_counter() - mark
-        if step in capture_steps:
+            replay_before = (0 if graph_controller is None else
+                             graph_controller.stats["replayed_subcycles"])
             try:
-                capture(step)
-            except (
-                FloatingPointError,
-                RuntimeError,
-                proof.CompositeTransactionError,
-            ) as error:
+                result = proof.execute_composite_step(
+                    driver=stack["driver"],
+                    backend=stack["backend"],
+                    scalar_names=host["scalar_names"],
+                    physics_geometry=stack["physics_geometry"],
+                    kernel_cache=stack["driver"].cache,
+                    previous_surface_updates=previous,
+                    dynamics_tendencies=gf_dynamics_tendencies,
+                    physics_park=physics_park,
+                    # WRF/native diagflag: the step ENDING at a history frame
+                    # computes refl10cm inside its own microphysics call.
+                    refl_10cm_due=(step in capture_steps),
+                    **({} if iau_forcing is None else {"held_forcing": (
+                        lambda held, start, length, **context:
+                        iau_forcing.add(0, held, start, length, **context))}),
+                )
+            except (proof.CompositeTransactionError, FloatingPointError) as error:
+                # An earlier health refusal has precedence over a successor's
+                # transaction refusal, exactly as in the serial loop.
+                if not read_pending_health():
+                    break
                 if not stop_on_refusal:
+                    receipt_writer.close()
                     raise
-                # Writing a frame re-runs the MPAS-to-physics preparation.  The
-                # state immediately before the instability already fails it, so
-                # this frame cannot be produced.  Stop here with the frames that
-                # were captured cleanly.
+                if (graph_controller is not None and
+                        graph_controller.stats["replayed_subcycles"] != replay_before):
+                    # F1 follow-through (2026-10-15): this step's graph replays
+                    # wrote into the buffers the committed state shares with the
+                    # graph; the armed snapshot of the previous step (taken
+                    # before this step) puts its values back.
+                    restore_refused_dycore_values(rollback, step - 1)
+                # The port refused to publish this step.  The staged two-owner
+                # transaction rolled back, so the committed state is still the
+                # previous step.  NO GUARD IS RELAXED: the refusal is recorded
+                # verbatim, the forecast stops here, and every retained frame
+                # precedes the refused step.
                 refusal = {
                     "refused": True,
-                    "refused_in": "history capture",
                     "step": step,
                     "model_seconds": step * DT_SECONDS,
-                    "exception": type(error).__name__,
-                    "message": str(error),
-                    "last_committed_step": step,
+                    **refusal_exception_details(error),
+                    "last_committed_step": step - 1,
                     "note": (
-                        "the step integrated and published, but the port own "
-                        "numeric/geometry validation refused to prepare it for "
-                        "physics, so no history frame exists for it; the "
-                        "forecast is truncated at the last frame written"
+                        "the port own numeric/geometry validation refused this "
+                        "step; the forecast is truncated at the last committed "
+                        "step and no unpublished state was retained"
                     ),
                 }
-                executed_steps = step
+                executed_steps = step - 1
                 break
+            # Numeric transaction gates remain owned by the predecessor. They
+            # already close the endpoint D2H event. The main loop needs no stream
+            # drain, and inspects the prior health only after the next launch.
+            last_step_clock = (time.monotonic(), time.time())
+            if step == start_step + 1:
+                time_ledger.emit("forecast.first_step", "end", attrs=card_attrs)
+            elapsed = time.perf_counter() - mark
+            current_health = stack["driver"]._step_gate_envelope
+            stack["driver"]._step_gate_envelope = None
+            if current_health is None or current_health[0] is not stack["driver"].atmosphere:
+                receipt_writer.close()
+                raise RuntimeError("late health requires the predecessor endpoint envelope; "
+                                   "reading mutable successor fields would check the wrong step")
+            if not read_pending_health():
+                break
+            if graph_controller is not None:
+                replays = graph_controller.stats["replayed_subcycles"] - replay_before
+                if replays == int(stack["driver"].config.config_dynamics_split_steps):
+                    graph_full_steps += 1
+                elif replays:
+                    graph_partial_steps += 1
+            integration_seconds += elapsed
+            if first_step_seconds is None:
+                first_step_seconds = elapsed
+            previous = result.committed.surface_updates
+            gf_dynamics_tendencies = result.dynamics_tendencies
+            current_gf["value"] = gf_dynamics_tendencies
+            if balance is not None:
+                balance.sample(balance_view, float(step) * float(DT_SECONDS), cp)
+            current_gf["radii"] = getattr(result.committed, "effective_radii", None)
+            backend_receipt = dict(result.backend_receipt)
+            surface_execution = proof.require_arwen_v2_surface_execution(
+                backend_receipt, executed=True, label=f"step {step} backend receipt"
+            )
+            receipt_writer.submit(step, elapsed, result, surface_execution)
+            pending_health = (step, current_health, stack["driver"].atmosphere)
+            # A capture re-prepares live diagnostics and consumes refl10cm. Drain
+            # at that boundary so no successor changes any output byte or gate.
+            output_due = (step in capture_steps or
+                          (fingerprints is not None and step % fingerprint_every == 0))
+            if (output_due or step == steps) and not read_pending_health():
+                break
+            if fingerprints is not None and step % fingerprint_every == 0:
+                mark = time.perf_counter()
+                fingerprints.write(step, proof.fingerprint_execution_boundary(stack))
+                fingerprint_seconds += time.perf_counter() - mark
+            if step in capture_steps:
+                try:
+                    capture(step)
+                except (
+                    FloatingPointError,
+                    RuntimeError,
+                    proof.CompositeTransactionError,
+                ) as error:
+                    if not stop_on_refusal:
+                        raise
+                    # Writing a frame re-runs the MPAS-to-physics preparation.  The
+                    # state immediately before the instability already fails it, so
+                    # this frame cannot be produced.  Stop here with the frames that
+                    # were captured cleanly.
+                    refusal = {
+                        "refused": True,
+                        "refused_in": "history capture",
+                        "step": step,
+                        "model_seconds": step * DT_SECONDS,
+                        **refusal_exception_details(error),
+                        "last_committed_step": step,
+                        "note": (
+                            "the step integrated and published, but the port own "
+                            "numeric/geometry validation refused to prepare it for "
+                            "physics, so no history frame exists for it; the "
+                            "forecast is truncated at the last frame written"
+                        ),
+                    }
+                    executed_steps = step
+                    break
+    finally:
+        with time_ledger.stage("post.forecast.step_receipts"):
+            step_receipts = receipt_writer.close()
     loop_seconds = time.perf_counter() - loop_started
-    if refusal is not None and executed_steps > 0 and executed_steps not in capture_steps:
+    if last_step_clock is not None:
+        if product_ready is not None:
+            product_ready.forecast_ended(*last_step_clock)
+        time_ledger.emit("forecast.integrate", "end",
+                         attrs={"last_step": executed_steps, "refused": refusal is not None},
+                         t_mono=last_step_clock[0], t_unix=last_step_clock[1])
+        time_ledger.emit("post.forecast", "begin",
+                         t_mono=last_step_clock[0], t_unix=last_step_clock[1])
+    if (refusal is not None and may_capture_refusal_state(refusal)
+            and executed_steps > 0 and executed_steps not in capture_steps):
         # Keep the last committed state renderable even though the refusal
         # landed between scheduled captures.
         stamp = datetime.strptime(schedule["start_time"], "%Y-%m-%d_%H:%M:%S") + timedelta(
@@ -2290,22 +3904,61 @@ def execute_forecast(
             # before the instability.
             refusal["final_state_capture_failed"] = True
             refusal["final_state_capture_error"] = str(error)
+            refusal["final_state_capture_exception_details"] = refusal_exception_details(error)
             labels.pop(executed_steps, None)
             schedule["valid_times"].pop(executed_steps, None)
         else:
             capture_steps.add(executed_steps)
+    retired_physics = None
     if refusal is not None:
         steps = executed_steps
+        retired_physics = retired_physics_seam(stack["backend"])
+        if retired_physics is not None:
+            refusal["physics_seam"] = retired_physics
     if fingerprints is not None:
+        from hexcore.final_identity import carried_digest
+        proof._write_exclusive_json(
+            output_root / "carried-identity.json",
+            {"final_state_digest": None, "physics_seam": retired_physics}
+            if retired_physics is not None
+            else {"final_state_digest": carried_digest(
+                stack["driver"].atmosphere, stack["backend"].restart_state(),
+                gf_dynamics_tendencies, previous,
+                gf_required=(executed_steps > 0 and host["convection"]["scheme"] != "off"))},
+        )
         fingerprints.close()
+    if capture_pool is not None:
+        try:
+            for pending in capture_pending:
+                pending.result()
+        finally:
+            capture_pool.shutdown(wait=True)
+    history_receipt = None
+    if history is not None:
+        mark = time.perf_counter()
+        time_ledger.emit("forecast.output.wait", "begin")
+        try:
+            for key in list(snapshot_files):
+                snapshot_files[key] = history.result(snapshot_files[key])
+                if product_ready is not None:
+                    step = int(key)
+                    product_ready.submit(snapshot_files[key], step=step, label=labels[step],
+                                         valid_time=schedule["valid_times"][step])
+        finally:
+            history.close()
+            time_ledger.emit("forecast.output.wait", "end")
+        write_wait_seconds = time.perf_counter() - mark
+        history_receipt = history.receipt()
+    product_ready_receipt = None
+    if product_ready is not None:
+        mark = time.perf_counter()
+        product_ready.close()
+        product_ready_receipt = product_ready.receipt()
+        product_ready_receipt["final_drain_seconds"] = time.perf_counter() - mark
 
     proof._write_exclusive_json(
         output_root / "snapshot-hashes.json",
         {"projection": snapshot_projection, "q2": snapshot_q2},
-    )
-    proof._write_exclusive_json(
-        output_root / "step-receipts.json",
-        {"schema": SCHEMA + "/step-receipts", "receipts": step_receipts},
     )
 
     evolution = None
@@ -2318,11 +3971,42 @@ def execute_forecast(
         }
     from hexcore.cuda_backend.arch_admission import architecture_status
 
+    from hexcore.final_identity import final_digest
+    with time_ledger.stage("post.forecast.identity"):
+        final_state_digest = None if retired_physics is not None else final_digest(
+            stack, gf_dynamics_tendencies, host["surface_accumulators"],
+            None if executed_steps == 0 else result.committed.surface_updates,
+        )
+
+    iau_record = None
+    if iau_forcing is not None:
+        iau_record = {**iau_receipt, **iau_forcing.receipt()}
+        if (executed_steps * DT_SECONDS >= float(iau.get("window_start_seconds") or 0.0) + float(iau["window_seconds"])
+                and not iau_record.get("complete")):
+            raise RuntimeError(f"IAU window not fully applied: {iau_record}")
     return {
+        "stochastic": (None if getattr(stack["driver"], "stochastic", None) is None
+                       else stack["driver"].stochastic.receipt()),
+        **({"iau": iau_record} if iau_record is not None else {}),
+        **({"balance_series": {"path": str(output_root / "balance-series.jsonl"),
+                               "rows": len(balance.rows)}} if balance is not None else {}),
+        "final_state_digest": final_state_digest,
+        "prepared_content_sha256": host["prepared"].expected_execution_fingerprint["sha256"],
+        "prepared_execution_fingerprint": host["prepared"].expected_execution_fingerprint,
         "capability": capability.as_dict(),
+        **({"cuda_graphs": {
+            "requested": True,
+            "active": graph_controller is not None,
+            "fully_replayed_committed_steps": graph_full_steps,
+            "partly_replayed_committed_steps": graph_partial_steps,
+            "subcycles": None if graph_controller is None else graph_controller.receipt(),
+            "skip_reason": "local_timestep_controller" if lts_attachment is not None else None,
+        }} if graph_requested else {}),
+        "cuda_graphs_policy": graph_policy(int(N_CELLS)),
         "architecture": architecture_status(capability.compute).as_dict(),
         "arwen_pre_kernel_cache_pin": arwen_pin,
         "memory_admission": memory,
+        "device_memory_release": _phase_release_receipt(),
         "physics_tier_park": (
             None
             if physics_park is None
@@ -2384,8 +4068,8 @@ def execute_forecast(
         "walls": {
             "integration_seconds": integration_seconds,
             "integration_note": (
-                "sum of the per-step composite transaction only, each closed by "
-                "a stream synchronize; EXCLUDES host preparation, device stack "
+                "sum of the accepted per-step composite transactions, closed by "
+                "the predecessor numeric gate event; EXCLUDES host preparation, device stack "
                 "construction, snapshot capture, history writing, boundary "
                 "fingerprinting and the per-step health gate"
             ),
@@ -2404,7 +4088,21 @@ def execute_forecast(
             ),
             "loop_seconds_including_io": loop_seconds,
             "snapshot_capture_seconds": capture_seconds,
+            "snapshot_capture_pipeline": {
+                "mode": "stream-ordered background capture" if async_capture else "synchronous capture",
+                "event_wait_thread": "hex-capture" if async_capture else "forecast",
+                "finish_seconds": capture_finish_seconds,
+                "max_materializing_frames": 1 if async_capture else 0,
+                "max_writer_frames": history.max_pending if history is not None else 0,
+                "hash_threads": history_hash_threads(),
+                "backpressure": "previous materialization before the next history boundary",
+                "note": "enqueue and worker durations overlap integration; neither is device kernel time",
+            },
             "history_write_seconds": write_seconds,
+            "history_write_wait_after_loop_seconds": write_wait_seconds,
+            "history_writer": history_receipt,
+            **({"history_product_ready": product_ready_receipt}
+               if product_ready_receipt is not None else {}),
             "boundary_fingerprint_seconds": fingerprint_seconds,
             "health_gate_seconds": health_seconds,
             "steps": steps,
@@ -2412,9 +4110,14 @@ def execute_forecast(
         },
         "physical_gates": physical_gates,
         "step_health": health,
+        "late_health_pipeline": {**rollback.receipt(), "default_on": True,
+                                 "rollback_armed": bool(stop_on_refusal),
+                                 "snapshot_seconds": snapshot_seconds,
+                                 "receipt_transport": "background thread compact JSONL",
+                                 "phase_boundary_numeric_gates": "synchronous predecessor gates"},
         "step_receipt_count": len(step_receipts),
         "physics_cadence": _physics_cadence_proof(
-            host.get("pbl_cadence"), step_receipts, executed_steps
+            host.get("pbl_cadence"), step_receipts, executed_steps - start_step
         ),
         "physics_rollback": {
             "armed": bool(stop_on_refusal),
@@ -2449,8 +4152,10 @@ def execute_forecast(
             if stack.get("local_timestep") is None
             else stack["local_timestep"].receipt()
         ),
+        **({"fullstep_lts_treatment": fullstep_shadow.receipt()}
+           if fullstep_shadow is not None else {}),
         "horizontal_mixing": _mixing_treatment_proof(
-            stack["driver"], executed_steps
+            stack["driver"], executed_steps - start_step
         ),
         "gf_deviation": {
             "mpas_dynamics_tendencies_computed": True,
@@ -2459,6 +4164,17 @@ def execute_forecast(
             "native_gf_parity_claim": False,
         },
         "full_physics_cuda_executed": True,
+        "jedi_contract": (
+            None
+            if cycling is None
+            else {
+                "background_files": jedi_files,
+                "soil_levels": int(cycling["soil_levels"]),
+                "checkpoint_files": checkpoint_files,
+                "restart": restart_receipt,
+                "start_step": start_step,
+            }
+        ),
     }
 
 
@@ -2467,10 +4183,20 @@ def execute_forecast(
 # --------------------------------------------------------------------------
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fullstep-local-timestep", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--fullstep-lts-mode", choices=("shadow", "active"), default=None)
+    parser.add_argument("--fullstep-lts-max-rate", type=int, choices=(1,2,4,8,16,32), default=None)
+    parser.add_argument("--fullstep-lts-buffer-rings", type=int, default=None)
     defaults = proof.default_authority_paths()
     parser.add_argument("--grid", type=Path, default=defaults["grid"])
     parser.add_argument("--static", type=Path, default=defaults["static"])
     parser.add_argument("--init", type=Path, required=True)
+    parser.add_argument(
+        "--invariant", type=Path, default=None,
+        help="the native invariant stream file, for a run that configures "
+             "one (RRFS v2 does): the vertical grid is read from it, as "
+             "MPAS-A does, instead of from the init file",
+    )
     parser.add_argument(
         "--init-source",
         required=True,
@@ -2482,7 +4208,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="asserted against the init's config_start_time; the init is the authority",
     )
     parser.add_argument("--hours", type=float, required=True)
-    parser.add_argument("--history-every-minutes", type=int, required=True)
+    # MPAS-A v8.4.2 Registry defaults (hexcore.mpas_defaults): order 2
+    # (Registry.xml:69), four acoustic sub-steps (:104; two through v8.4.1,
+    # still selectable), radiation every
+    # 00:30:00 (:2316, :2321), the monotonic limiter on (:239).
+    parser.add_argument("--time-integration-order", type=int, choices=(2, 3), default=2)
+    parser.add_argument("--acoustic-substeps", type=int, default=4)
+    parser.add_argument("--radiation-seconds", type=float, default=1800.0)
+    parser.add_argument("--monotonic", action=argparse.BooleanOptionalAction, default=True,
+                        help="the native flux-corrected scalar limiter (MPAS-A default on; --no-monotonic turns it off)")
+    parser.add_argument("--cam-coefficient",type=float,default=0.0)
+    parser.add_argument("--cam-damping-levels",type=int,default=4)
+    parser.add_argument("--rayleigh-u",action="store_true")
+    parser.add_argument("--damping-start-m",type=float,default=22000.0)
+    parser.add_argument(
+        "--dynamics", action="append", default=None, metavar="KEY=VALUE",
+        help="set a dynamics option that has no flag of its own, by its "
+             "MPAS namelist name (repeatable): config_apvm_upwinding=0.25, "
+             "config_smdiv=0.2, config_coef_3rd_order=1.0, config_xnutr=0.2, "
+             "config_positive_definite=true, config_smagorinsky_coef=0.125")
+    parser.add_argument("--history-every-minutes", type=float, required=True)
+    parser.add_argument("--history-from-minutes", type=float, default=0.0)
     parser.add_argument(
         "--arwen-checkout",
         type=Path,
@@ -2501,6 +4247,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--case-label", default=None)
     parser.add_argument(
+        "--physics-mode",
+        choices=("exact", "correct"),
+        default="exact",
+        help=(
+            "physics.mode (hexcore.correct_mode): 'exact' is the matched "
+            "arithmetic; 'correct' applies every correction the engine "
+            "carries (WB4 New Tiedtke dry-mass coupling, WB5 WSM6 "
+            "conservative surface integral); one the engine does not carry "
+            "runs as the matched arithmetic and is named as a gap in the "
+            "receipt.  The default here stays 'exact' because the door "
+            "passes no flag for exact; the door's own default is 'correct'"
+        ),
+    )
+    parser.add_argument(
+        "--physics-correct-skip",
+        action="append",
+        default=None,
+        metavar="FINDING",
+        help="drop one correction from correct mode (an A/B arm); repeatable",
+    )
+    parser.add_argument(
         "--horiz-mixing",
         choices=("2d_smagorinsky", "off"),
         default="2d_smagorinsky",
@@ -2514,7 +4281,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--convection",
-        choices=("auto", "off", "gf"),
         default="auto",
         help=(
             "cumulus selection.  The default 'auto' switches the cumulus "
@@ -2525,7 +4291,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "convection is resolved explicitly at those spacings.  'off' and "
             "'gf' are explicit A/B arms -- they record themselves as "
             "explicit in the receipt, and an arm that overrides the default "
-            "says so.  See hexcore.convection_admission"
+            "says so.  'ntiedtke' is a profile's explicit selection of New "
+            "Tiedtke, which 'auto' also picks at 20 km and coarser.  "
+            "See hexcore.convection_admission"
         ),
     )
     parser.add_argument(
@@ -2660,6 +4428,84 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="a point-source table the selected row's seam releases from",
     )
+    parser.add_argument(
+        "--jedi-background",
+        action="store_true",
+        help=(
+            "at every history frame also write mpasout.<valid>.nc: the 27-field "
+            "background stream RRFS v2's MPAS-JEDI reads, in native MPAS form "
+            "(CDF-5, MPAS names and dimensions), with a per-field provenance "
+            "receipt (hexcore.jedi_contract)"
+        ),
+    )
+    parser.add_argument(
+        "--jedi-soil-levels",
+        type=int,
+        default=9,
+        help=(
+            "soil levels in the JEDI background.  RRFS v2's namelist declares "
+            "nine (RUC); hex carries four Noah-MP layers, so 9 writes the "
+            "labelled INTERIM mapping (hexcore.jedi_contract."
+            "interim_soil_levels) and 4 writes the layers as they are"
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-hours",
+        default="",
+        help=(
+            "comma-separated forecast hours (each a history frame) at which "
+            "to write checkpoint.<valid>.pkl: the full hex restart state "
+            "(dycore state and saved diagnostics, physics backend payload, "
+            "GF advective-forcing carrier) a --restart-from run resumes from"
+        ),
+    )
+    parser.add_argument(
+        "--restart-from",
+        type=Path,
+        default=None,
+        help=(
+            "resume from a checkpoint.<valid>.pkl this driver wrote.  "
+            "--start-time/--hours keep naming the ORIGINAL run, so step "
+            "numbers, labels and the boundary clock continue unbroken"
+        ),
+    )
+    parser.add_argument(
+        "--da-analysis",
+        type=Path,
+        default=None,
+        help=(
+            "DA-cycling restart (upstream config_do_DAcycling): with "
+            "--restart-from, replace the checkpoint's dycore state by the "
+            "analysis file's rho/theta/species/u/w and recompute the coupled "
+            "fields with hex's transcription of atm_init_coupled_diagnostics; "
+            "physics state resumes from the checkpoint"
+        ),
+    )
+    parser.add_argument(
+        "--physics-suite",
+        default=None,
+        help="the named physics suite the door resolved (hexcore.physics_suites)",
+    )
+    parser.add_argument(
+        "--physics",
+        action="append",
+        default=None,
+        help="one physics override KEY=VALUE, as the door resolved it",
+    )
+    parser.add_argument(
+        "--physics-mesh",
+        default=None,
+        help="the mesh row a suite's per-mesh selectors key on",
+    )
+    parser.add_argument(
+        "--orographic-statistics",
+        type=Path,
+        default=None,
+        help=(
+            "the mesh's orographic statistics file (<mesh>.ugwp_oro_data.nc), "
+            "read by a suite row whose drag uses it"
+        ),
+    )
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument(
         "--stop-on-refusal",
@@ -2671,7 +4517,58 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "validation is relaxed"
         ),
     )
+    parser.add_argument(
+        "--iau-analysis", type=Path, default=None,
+        help="incremental analysis update: the analysis init (same mesh and cell order as --init, "
+             "which is the background); analysis minus background enters as a constant tendency "
+             "over --iau-window-seconds (hexcore.iau_forcing)")
+    parser.add_argument("--iau-window-seconds", type=float, default=None,
+                        help="IAU window length from the start of the run")
+    parser.add_argument(
+        "--iau-increment", type=Path, default=None,
+        help="MPAS IAU increments (the iau stream: u_amb, rho_amb, theta_amb, q*_amb), the analysis "
+             "minus --init, which is the background (hexcore.analysis_bundle); native route")
+    parser.add_argument(
+        "--iau-route", choices=IAU_ROUTES, default=None,
+        help="native: MPAS-A v8.4.2's own IAU kernels (hexcore.iau_v842, through hexcore.iau_native) "
+             "convert the uncoupled increments every step against that step's state; physics.mode "
+             "exact runs them word for word, correct applies IN1-IN3.  hex: hexcore.iau_forcing adds "
+             "the coupled analysis minus background as a constant tendency.  Default: "
+             + ", ".join(f"{route} in {mode} mode" for mode, route in IAU_ROUTE_DEFAULT.items()))
+    parser.add_argument("--stochastic", default=None, metavar="JSON")
+    parser.add_argument("--balance-series", action="store_true",
+                        help="write balance-series.jsonl: surface-pressure tendency statistics "
+                             "at every macro boundary (initialization-shock measure)")
     args = parser.parse_args(argv)
+    has_increment = args.iau_analysis is not None or args.iau_increment is not None
+    if has_increment != (args.iau_window_seconds is not None):
+        parser.error("--iau-analysis (or --iau-increment) and --iau-window-seconds go together: an "
+                     "increment without a window (or a window without an increment) has no defined forcing")
+    if args.iau_window_seconds is not None and not args.iau_window_seconds > 0:
+        parser.error("--iau-window-seconds must be positive; a zero window is direct insertion")
+    if args.iau_route is not None and not has_increment:
+        parser.error("--iau-route selects how an increment enters; it needs --iau-analysis or --iau-increment")
+    if has_increment:
+        args.iau_route = args.iau_route or IAU_ROUTE_DEFAULT[args.physics_mode]
+        if args.iau_route == "hex" and args.iau_analysis is None:
+            parser.error("--iau-route hex forms its increment from two recoupled initial-conditions files "
+                         "and needs --iau-analysis; an MPAS increment file alone runs --iau-route native")
+        for flag, value in (("--iau-analysis", args.iau_analysis), ("--iau-increment", args.iau_increment)):
+            if value is not None and not Path(value).is_file():
+                parser.error(f"{flag} {value} is not a file")
+        # Retired (named gap W1-G1): a checkpoint carries its IAU window (hexcore.iau_native.window_record),
+        # and a restart continues that window or begins a new one by rule (resolve_restart_window), so the
+        # increment is admitted once across a restart (IN3).
+    fullstep_knobs = {name: getattr(args, name) for name in
+                     ("fullstep_lts_mode", "fullstep_lts_max_rate", "fullstep_lts_buffer_rings")}
+    args.fullstep_lts_options = None
+    if args.fullstep_local_timestep:
+        from hexcore.config_fullstep_lts import validate_fullstep_lts_request
+        validate_fullstep_lts_request(args)
+        args.fullstep_lts_options = dict(fullstep_local_timestep=True,
+            **{name: value for name, value in fullstep_knobs.items() if value is not None})
+    elif any(value is not None for value in fullstep_knobs.values()):
+        parser.error("the requested LTS policy would be ignored; enable --fullstep-local-timestep")
     if not args.preflight_only and (args.cache_root is None or args.output is None):
         parser.error("execution requires --cache-root and --output")
     if args.fingerprint_every < 0:
@@ -2702,6 +4599,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         )
     if args.local_timestep_buffer_rings < 1:
         parser.error("--local-timestep-buffer-rings must be >= 1")
+    try:
+        args.checkpoint_hours = tuple(
+            float(piece) for piece in str(args.checkpoint_hours).split(",") if piece.strip()
+        )
+    except ValueError:
+        parser.error("--checkpoint-hours must be comma-separated numbers")
+    if args.da_analysis is not None and args.restart_from is None:
+        parser.error(
+            "--da-analysis is a DA-cycling RESTART: it replaces the dycore "
+            "state of a checkpoint, so it needs --restart-from; without one "
+            "the physics state it resumes against would not exist"
+        )
+    if args.restart_from is not None and not Path(args.restart_from).is_file():
+        parser.error(f"--restart-from {args.restart_from} is not a file")
+    if args.da_analysis is not None and not Path(args.da_analysis).is_file():
+        parser.error(f"--da-analysis {args.da_analysis} is not a file")
+    if args.jedi_soil_levels not in (4, 9):
+        parser.error("--jedi-soil-levels must be 4 (native) or 9 (RRFS v2, interim mapping)")
     if args.local_timestep_classing is not None:
         if not args.local_timestep:
             parser.error(
@@ -2760,43 +4675,56 @@ def measured_engine_identity(checkout: Path) -> dict[str, Any]:
     constants, so every forecast receipt named an engine commit older than
     the engine the run executed.  They now come from the identity the seam
     bytes match (the pin, or an admitted row), the one the adapter records.
-    A tree that matches neither (a provider row bound by its own manifest)
-    records ``None`` here and is named under ``arwen_git`` by its measured
-    files.
+
+    A tree that matches no measured row runs (the byte match stopped being
+    a gate on 2026-10-10, :func:`hexcore.engine_pin.identity_of`) and is
+    named by the version it declares; its commit and glacier digest are
+    ``None`` here because no measured row supplies them, and the tree's own
+    commit is under ``arwen_git``.  ``arwen_engine_pin`` records the match,
+    the moved files and the absent ones.
     """
 
     from hexcore import engine_pin
 
     inspection = engine_pin.inspect_seam(checkout)
-    if (
-        inspection.engine is None
-        or inspection.absent
-        or inspection.moved
-        or inspection.misdeclared
-    ):
+    identity = engine_pin.identity_of(inspection)
+    record = {"arwen_engine_pin": engine_pin.measured_row_record(inspection)}
+    if not identity.matches_measured_row:
         return {
             "arwen_commit": None,
-            "arwen_engine_version": None,
+            "arwen_engine_version": inspection.declared,
             "arwen_glacier_composed_tu_sha256": None,
+            **record,
         }
-    identity = engine_pin.identity_for(inspection.engine)
     return {
         "arwen_commit": identity.build_commit,
         "arwen_engine_version": identity.version,
         "arwen_glacier_composed_tu_sha256": identity.glacier_composed_tu_sha256,
+        **record,
     }
 
 
 def _manifest_for_run(row, checkout: Path) -> dict[str, str] | None:
-    """The byte manifest the run's row is bound by: None (the frozen
-    sixteen) for the frozen row; a provider row's own pin files plus its
-    frozen-batch cross-pin, so the git verifier gates the bytes that will
-    actually execute and records the checkout's commit as before."""
+    """The byte manifest the run's row is bound by.
 
+    For the frozen row on an engine a measured row names: None (the
+    verifier reads that row's sixteen).  For the frozen row on any other
+    engine: the sixteen paths as they are found NOW, so the verifier records
+    the tree and its before/after comparison still says whether a file
+    changed while the run was using it -- it no longer refuses the tree for
+    not being the pinned build (retired 2026-10-10,
+    :func:`hexcore.engine_pin.identity_of`).  For a provider row: its own
+    pin files plus its frozen-batch cross-pin.
+    """
+
+    from hexcore import engine_pin
     from hexcore.physics_backend_admission import DEFAULT_BACKEND
 
     if row.name == DEFAULT_BACKEND:
-        return None
+        inspection = engine_pin.inspect_seam(checkout)
+        if engine_pin.identity_of(inspection).matches_measured_row:
+            return None
+        return dict(inspection.digests)
     probe = getattr(row.load_adapter(), "pin_column_batch", None)
     if probe is None:
         raise ConfigurationRefusal(
@@ -2854,7 +4782,92 @@ def _backend_builder(host: Mapping[str, Any], checkout: Path):
             **kwargs,
         )
 
+    # A row that seals its own constructor (a suite row: its soil column and
+    # drag statistics are not the frozen mapping's) hands the stack build
+    # its sealer; the frozen row's sealer is the stack build's default.
+    sealer = getattr(row.load_adapter(), "seal_constructor", None)
+    if sealer is not None:
+        build.seal_constructor = sealer
     return build
+
+
+def claim_for_run(physics, convection: Mapping[str, Any], arwen_checkout) -> str:
+    """The claim sentence for the physics this run executes.
+
+    ``CLAIM`` lists the frozen suite, with the mesh and the cumulus already
+    rebound at the mesh bind.  A bare default run keeps it byte for byte.
+    Any other selection has its schemes named by the engine registry's
+    labels (see ``mpas_mesh_binding.claim_for_selection`` for the receipt
+    that named WSM6 for a Thompson run):
+
+    * the generic seam: every label, from the mapping handed to the engine;
+    * the column-suite seam: every label, from the selectors' assignments;
+    * the frozen batch on another microphysics row: only the microphysics
+      differs from the sentence, so only its term (the first) is renamed and
+      hex's own drag and glacier terms stay as written.
+    """
+
+    if physics is None or physics.is_default():
+        return CLAIM
+    from hexcore import convection_admission, engine_registry
+    from hexcore.drivers.mpas_mesh_binding import claim_for_selection, claim_scheme_terms
+
+    checkout = engine_registry.checkout_with_registry(arwen_checkout)
+    by_selector = getattr(physics, "engine_assignments", {})
+    if physics.seam == "frozen":
+        micro = by_selector.get("config_microp_scheme") or {}
+        named = engine_registry.selection_labels(micro, checkout)
+        if not named:
+            return CLAIM
+        return claim_for_selection(CLAIM, [*named, *claim_scheme_terms(CLAIM)[1:]])
+    mapping = physics.engine_physics
+    if mapping is None:
+        mapping = {}
+        for assignments in by_selector.values():
+            for name, value in assignments.items():
+                mapping.setdefault(name, value)
+    labels = list(engine_registry.selection_labels(mapping, checkout, skip=("cu_physics",)))
+    scheme = convection.get("scheme")
+    if scheme != convection_admission.SCHEME_OFF:
+        labels.insert(min(1, len(labels)), convection_admission.label(scheme))
+    return claim_for_selection(CLAIM, labels)
+
+
+def resolve_driver_physics(args: argparse.Namespace):
+    """The named physics the door resolved, re-resolved from the same table.
+
+    ``None`` when no suite was named (the legacy road).  The door passes the
+    suite, its overrides, the mesh row the per-mesh selectors key on, and the
+    backend row it decided; the driver resolves the same request with the
+    same function and refuses if the row differs, so the receipt can never
+    name a backend the configuration did not select.
+    """
+
+    suite = getattr(args, "physics_suite", None)
+    raw = list(getattr(args, "physics", None) or ())
+    if suite is None and not raw:
+        return None
+    from hexcore import engine_registry
+    from hexcore.physics_suites import parse_override, resolve_physics
+
+    # The same engine tree the run executes answers which options exist.
+    overrides = dict(parse_override(text) for text in raw)
+    physics = resolve_physics(
+        suite, overrides, mesh=getattr(args, "physics_mesh", None),
+        engine_checkout=engine_registry.checkout_with_registry(
+            getattr(args, "arwen_checkout", None)))
+    if physics.backend_row != str(args.physics_backend) and not (
+        physics.backend_row == "wsm6_column" and args.physics_backend in (None, "wsm6_column")
+    ):
+        raise ConfigurationRefusal(
+            "physics_backend",
+            args.physics_backend,
+            f"the physics suite {physics.suite!r} resolves to backend row "
+            f"{physics.backend_row!r} and the driver was handed "
+            f"{args.physics_backend!r}: one decision, two sources",
+            f"--physics-backend {physics.backend_row}",
+        )
+    return physics
 
 
 def resolve_physics_backend_row(args: argparse.Namespace):
@@ -2895,27 +4908,38 @@ def resolve_physics_backend_row(args: argparse.Namespace):
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    from hexcore.speculative_contract import validate_output
+    validate_output(args.output)
+    time_ledger.begin_if_closed("forecast.construct", root=args.output)
+    time_ledger.emit("prep.host", "begin", root=args.output)
     paths = {
         "grid": Path(args.grid).expanduser().absolute(),
         "static": Path(args.static).expanduser().absolute(),
         "init": Path(args.init).expanduser().absolute(),
     }
     arwen_checkout = proof.resolve_arwen_checkout(args.arwen_checkout)
+    # Resolved first: a selection behind the column-suite seam that no
+    # profile row names registers its synthesized backend row here.
+    physics = resolve_driver_physics(args)
     physics_backend = resolve_physics_backend_row(args)
 
-    # Source pins verify first: the checkout guard imports the seam manifest
-    # from a pinned module, so that module's bytes are proven before its
-    # constants are trusted.
-    source_before = proof.require_frozen_execution_sources()
+    # This port's own sources and the engine's seam files are hashed and
+    # RECORDED here, with whether each matches the x4 proof's pins; neither
+    # match is a condition of running (retired 2026-10-10, see
+    # proof.measure_execution_sources and engine_pin.identity_of).  The
+    # same two measurements are repeated after the run, and a difference is
+    # refused there: the receipt would name bytes the run did not use.
+    source_before = proof.measure_execution_sources()
     run_manifest = _manifest_for_run(physics_backend, arwen_checkout)
     arwen_git_before = proof.verify_arwen_checkout_git(
-        arwen_checkout, manifest=run_manifest
+        arwen_checkout, manifest=run_manifest, require_committed=False
     )
-    authority_before = verify_forecast_authorities(paths)
+    authority_before = _timed_preparation("prep.authority_hashes", verify_forecast_authorities, paths)
     lbc_paths: list[str] | None = None
     if args.lbc_dir is not None:
         lbc_dir = Path(args.lbc_dir).expanduser().absolute()
-        lbc_paths = sorted(str(path) for path in lbc_dir.glob("lbc.*.nc"))
+        from hexcore.lbc_stream import initial_paths
+        lbc_paths = [str(path) for path in initial_paths(lbc_dir)]
         if not lbc_paths:
             raise ConfigurationRefusal(
                 "config_apply_lbcs",
@@ -2937,16 +4961,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         horiz_mixing=args.horiz_mixing,
         convection=args.convection,
         pbl_cadence=args.pbl_cadence,
+        time_integration_order=args.time_integration_order,
+        acoustic_substeps=args.acoustic_substeps,
+        radiation_seconds=args.radiation_seconds,
+        monotonic=args.monotonic,
+        cam_coefficient=args.cam_coefficient,cam_damping_levels=args.cam_damping_levels,
+        rayleigh_u=args.rayleigh_u,damping_start_m=args.damping_start_m,
+        dynamics_overrides=parse_dynamics_overrides(args.dynamics),
+        orographic_statistics=(
+            None
+            if args.orographic_statistics is None
+            else Path(args.orographic_statistics).expanduser().absolute()
+        ),
         local_timestep=args.local_timestep,
         local_timestep_declared_off=args.local_timestep_declared_off,
         local_timestep_rates=args.local_timestep_rates,
         local_timestep_buffer_rings=args.local_timestep_buffer_rings,
+        invariant_path=(
+            None if args.invariant is None
+            else Path(args.invariant).expanduser().absolute()
+        ),
+        physics=physics,
+        physics_mode=args.physics_mode,
+        physics_correct_skip=tuple(args.physics_correct_skip or ()),
     )
+    from hexcore.stochastic import resolve_options
+    host["stochastic"] = resolve_options(args.stochastic).json()
+    if args.preflight_only or not DEFER_PREPARED_FINGERPRINT:
+        join_prepared_fingerprint(host)
     schedule = build_schedule(
         hours=args.hours,
         history_every_minutes=args.history_every_minutes,
+        history_from_minutes=args.history_from_minutes,
         start_text=host["start_time_text"],
     )
+    time_ledger.emit("prep.host", "end", root=args.output)
     install_capture_labels(schedule["labels"])
 
     provenance = {
@@ -2960,6 +5009,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "bytes": authority_before["files"]["init"]["bytes"],
             "sha256": authority_before["files"]["init"]["sha256"],
             "source": args.init_source,
+            "invariant": None if args.invariant is None else {
+                # The bytes the vertical grid came from, named like the init's.
+                "path": str(args.invariant),
+                "bytes": Path(args.invariant).stat().st_size,
+                "sha256": proof.sha256_file(Path(args.invariant)),
+            },
+            "coupled_diagnostics": "cold-start-recomputed",
             "config_start_time": host["start_time_text"],
             "pinned": False,
         },
@@ -2972,6 +5028,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "profile": proof.PROFILE,
         "source_release": proof.SOURCE_RELEASE,
         "horiz_mixing": args.horiz_mixing,
+        # Dynamics options set by name (--dynamics / a namelist the door
+        # read); empty when the run holds the configuration's own values.
+        "dynamics_overrides": parse_dynamics_overrides(args.dynamics),
         "convection": host["convection"],
         "local_timestep": {
             "enabled": bool(args.local_timestep),
@@ -2996,15 +5055,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "config_type": type(host["config"]).__name__,
         "dropped_guarantees": list(DROPPED_GUARANTEES),
-        "claim": CLAIM,
+        "claim": claim_for_run(physics, host["convection"], arwen_checkout),
         "nonclaims": list(NONCLAIMS),
         "weather_plot_policy": "native Rust/Arwen renderer only; q2 ships in the history stream and its weather-field plots go through the same renderer",
     }
 
     if args.preflight_only:
-        source_after = proof.require_frozen_execution_sources()
+        source_after = proof.measure_execution_sources()
         authority_after = verify_forecast_authorities(paths)
-        arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout, manifest=run_manifest)
+        arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout, manifest=run_manifest, require_committed=False)
         if (
             source_after != source_before
             or authority_after != authority_before
@@ -3041,6 +5100,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     cache_root.mkdir(parents=False)
     output_root.mkdir(parents=False)
+    time_ledger.emit("prep.destination", "mark", root=output_root)
+    write_start_record(output_root, paths=paths, schedule=schedule)
     started = time.perf_counter()
     forecast = execute_forecast(
         host=host,
@@ -3056,10 +5117,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         park_physics_tier=bool(args.park_physics_tier),
         required_free_bytes=args.required_free_bytes,
         local_timestep_classing_path=args.local_timestep_classing,
+        fullstep_lts_options=args.fullstep_lts_options,
+        cycling=cycling_options(args, schedule, paths["init"]),
+        iau=(None if args.iau_window_seconds is None else {
+            "route": args.iau_route, "mode": args.physics_mode,
+            "analysis": (None if args.iau_analysis is None else Path(args.iau_analysis).resolve(strict=True)),
+            "increment": (None if args.iau_increment is None else Path(args.iau_increment).resolve(strict=True)),
+            "background": paths["init"], "window_seconds": float(args.iau_window_seconds)}),
+        balance_series=bool(args.balance_series),
     )
-    source_after = proof.require_frozen_execution_sources()
+    join_prepared_fingerprint(host)
+    source_after = proof.measure_execution_sources()
     authority_after = verify_forecast_authorities(paths)
-    arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout, manifest=run_manifest)
+    arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout, manifest=run_manifest, require_committed=False)
     if (
         source_after != source_before
         or authority_after != authority_before
@@ -3075,6 +5145,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "arwen_git": {"before": arwen_git_before, "after": arwen_git_after},
         "arwen_checkout_unchanged": True,
+        # Which host-preparation results this run computed and which it was
+        # served (hexcore.prep_cache), with each call's key, so a reader can
+        # tell a cold run from a warm one and find the stored arrays.
+        "host_preparation_cache": prep_cache.receipt(),
+        # Whether the dynamics mesh was loaded and validated or served from a
+        # verified snapshot of the same grid/static bytes (hexcore.mesh_snapshot).
+        "mesh_snapshot": mesh_snapshot.receipt(),
+        # Background replay of the previous run's NVRTC compiles
+        # (hexcore.kernel_prewarm): how many it found or compiled.
+        "kernel_prewarm": kernel_prewarm.receipt(),
         "physics_backend": physics_backend.name,
         "source_table": (
             None if args.source_table is None else str(args.source_table)
@@ -3091,6 +5171,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     proof._write_exclusive_json(
         receipt, json.loads(json.dumps(payload, sort_keys=True, default=str))
     )
+    from hexcore.observation_scorecard import forecast_hook
+
+    forecast_hook(output_root, init=paths["init"], grid=paths["grid"],
+                  start=host["start_time_text"])
     print(
         json.dumps(
             {

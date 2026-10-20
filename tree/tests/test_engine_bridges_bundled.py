@@ -1,0 +1,264 @@
+"""The wheel bundles the three engine bridges no released gpuwm carries.
+
+THE BREAKAGE THIS PREVENTS (release readiness B5, 2026-10-14): the init door
+needs rw_mpas_geometry speaking hex-vertical-v1 and the stream I/O needs
+rw_mpas_stream.  The frozen 2.9.0 engine bundle carries a geometry bridge
+without hex-vertical-v1 and no stream bridge, so a clean install refused the
+init door ("lacks hex-vertical-v1") and every native stream read and write
+("rw_mpas_stream not found").  The wheel now carries both, pinned by SHA-256
+(src/hexcore/data/engine-bridges.json), and the engines ladder reads the
+wheel's own hexcore/libexec before gpuwm's bridge directories.  rw_mpas_static
+joined them (ARWEN-VS-HEX-TIMING-2026-10-15): 2.9.0's static builder gives a
+generated grid a static declaring binary64 coordinates it does not hold, and
+the point door could not build a regional mesh.  These checks need no network,
+compiler or device.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+
+import pytest
+
+from hexcore import engines
+from hexcore.engines import GEOMETRY, EngineRefusal, locate, resolve
+
+ROOT = Path(__file__).resolve().parents[1]
+PINS = ROOT / "src/hexcore/data/engine-bridges.json"
+
+
+@pytest.fixture(scope="module")
+def hexsetup():
+    import setuptools
+
+    original = setuptools.setup
+    setuptools.setup = lambda *args, **kwargs: None
+    try:
+        spec = importlib.util.spec_from_file_location("_hex_setup_bridges_under_test", ROOT / "setup.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        setuptools.setup = original
+    return module
+
+
+def test_the_pins_name_both_bridges_their_source_and_where_the_release_fetches_them(hexsetup):
+    pins = json.loads(PINS.read_text(encoding="utf-8"))
+    assert pins["schema"] == "gpuwm-hex.engine-bridges/v1"
+    assert re.fullmatch(r"[0-9a-f]{40}", pins["gpuwm_source_rev"])
+    assert set(pins["bridges"]) == {name.removesuffix(".exe") for name in hexsetup.ENGINE_BRIDGES}
+    for name, row in pins["bridges"].items():
+        assert re.fullmatch(r"[0-9a-f]{64}", row["sha256"]), name
+        assert re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"]), name
+        # rw_igra2 is crate rw-obs (its bin file is igra2.rs); every other bridge is an rw-mpas bin.
+        assert row["source"] == ("tools/rustwx/crates/rw-obs/src/bin/igra2.rs" if name == "rw_igra2"
+                                 else f"tools/rustwx/crates/rw-mpas/src/bin/{name}.rs")
+    assert "hex-vertical-v1" in pins["bridges"]["rw_mpas_geometry"]["protocols"]
+    assert "netcdf4" in pins["bridges"]["rw_mpas_stream"]["formats"]
+    assert "binary64" in pins["bridges"]["rw_mpas_static"]["holds"]
+    # The case-9 port lives in the library; its four sources are pinned beside the bin file.
+    assert "case 9" in pins["bridges"]["rw_mpas_lbc"]["holds"]
+    assert len(pins["bridges"]["rw_mpas_lbc"]["port_sources"]) == 4
+    assert set(pins["release_assets"]) == {"repository", "tag"}
+    assert (ROOT / pins["recipe"]).is_file()
+    assert (ROOT / "tools/build_netcdf4_static.sh").is_file()
+    assert pins["retire_when"]
+
+
+def _pinned_root(tmp_path: Path, files: dict[str, bytes]) -> Path:
+    root = tmp_path / "tree"
+    (root / "src/hexcore/data").mkdir(parents=True)
+    pins = {"bridges": {name: {"sha256": hashlib.sha256(data).hexdigest()} for name, data in files.items()}}
+    (root / "src/hexcore/data/engine-bridges.json").write_text(json.dumps(pins))
+    return root
+
+
+def test_prebuilt_bridges_are_bundled_only_with_their_pinned_bytes(hexsetup, tmp_path, monkeypatch):
+    files = {"rw_mpas_geometry": b"\x7fELF geometry", "rw_mpas_stream": b"\x7fELF stream"}
+    root = _pinned_root(tmp_path, files)
+    prebuilt = tmp_path / "prebuilt"
+    prebuilt.mkdir()
+    for name, data in files.items():
+        (prebuilt / name).write_bytes(data)
+    monkeypatch.setenv("GPUWM_HEX_ENGINE_BRIDGES", str(prebuilt))
+    assert sorted(path.name for path in hexsetup.engine_bridges(root)) == sorted(files)
+    (prebuilt / "rw_mpas_stream").write_bytes(b"\x7fELF another build")
+    with pytest.raises(SystemExit, match="is not the pinned"):
+        hexsetup.engine_bridges(root)
+    (prebuilt / "rw_mpas_stream").unlink()
+    with pytest.raises(SystemExit, match="has no rw_mpas_stream"):
+        hexsetup.engine_bridges(root)
+
+
+
+def test_hash_matched_old_stream_writer_cannot_satisfy_ordered_metadata(hexsetup, tmp_path, monkeypatch):
+    # A stale release asset matched its own old hash but failed every forecast
+    # when restart_v842 requested native dimension/attribute ordering.
+    data = b"\x7fELF stream without the required response field"
+    root = _pinned_root(tmp_path, {"rw_mpas_stream": data})
+    pins_path = root / "src/hexcore/data/engine-bridges.json"
+    pins = json.loads(pins_path.read_text())
+    pins["bridges"]["rw_mpas_stream"]["required_markers"] = ["ordered_metadata"]
+    pins_path.write_text(json.dumps(pins))
+    prebuilt = tmp_path / "prebuilt"
+    prebuilt.mkdir()
+    (prebuilt / "rw_mpas_stream").write_bytes(data)
+    monkeypatch.setenv("GPUWM_HEX_ENGINE_BRIDGES", str(prebuilt))
+    with pytest.raises(SystemExit, match="missing required bridge capability ordered_metadata"):
+        hexsetup.engine_bridges(root)
+
+
+def test_without_a_pinned_directory_or_a_carrying_engine_nothing_is_bundled_and_it_says_so(
+        hexsetup, tmp_path, monkeypatch, capsys):
+    root = _pinned_root(tmp_path, {"rw_mpas_geometry": b"g", "rw_mpas_stream": b"s", "rw_mpas_static": b"t"})
+    monkeypatch.delenv("GPUWM_HEX_ENGINE_BRIDGES", raising=False)
+    monkeypatch.setattr(hexsetup, "engine_source", lambda: None)
+    assert hexsetup.engine_bridges(root) == []
+    assert "NOT BUNDLED" in capsys.readouterr().err
+
+
+def test_source_build_cannot_bundle_a_bridge_from_another_revision(hexsetup, tmp_path, monkeypatch):
+    files = {name: ("pinned " + name).encode() for name in hexsetup.ENGINE_BRIDGES}
+    root = _pinned_root(tmp_path, files)
+    engine = tmp_path / "engine"
+    workspace = engine / "tools/rustwx"
+    sources = workspace / "crates/rw-mpas"
+    (sources / "src/bin").mkdir(parents=True)
+    for name in hexsetup.ENGINE_BRIDGES:
+        (sources / "src/bin" / (name + ".rs")).write_bytes(b"hex-vertical-v1")
+    (sources / "src/static_builder.rs").write_bytes(hexsetup.STATIC_BUILDER_MARK)
+    (sources / "src/init").mkdir()
+    (sources / "src/init/metfile.rs").write_bytes(hexsetup.LBC_CASE9_MARK)
+    (workspace / "crates/rw-obs/src/bin").mkdir(parents=True)
+    (workspace / "crates/rw-obs/src/bin/igra2.rs").write_bytes(b"source")
+    output = workspace / "target/release"
+    output.mkdir(parents=True)
+    for name, data in files.items():
+        (output / name).write_bytes(data)
+    monkeypatch.delenv("GPUWM_HEX_ENGINE_BRIDGES", raising=False)
+    monkeypatch.setattr(hexsetup, "engine_source", lambda: engine)
+    monkeypatch.setattr(hexsetup.subprocess, "run", lambda *a, **k: type("Built", (), {"returncode": 0})())
+    assert {path.name for path in hexsetup.engine_bridges(root)} == set(files)
+    (output / "rw_mpas_stream").write_bytes(b"a successful build from another revision")
+    with pytest.raises(SystemExit, match="is not the pinned"):
+        hexsetup.engine_bridges(root)
+
+
+def test_the_wheel_tag_counts_the_bundled_bridges(hexsetup, tmp_path, monkeypatch):
+    monkeypatch.setenv("GPUWM_HEX_ENGINE_BRIDGES", str(tmp_path))
+    names = {path.name for path in hexsetup.bundled_helpers(ROOT)}
+    assert set(hexsetup.ENGINE_BRIDGES) <= names
+    assert "rw_wrfbatch" in names
+
+
+def test_s2s_renderer_prebuilt_rejects_stale_source_or_corrupt_bytes(hexsetup, tmp_path, monkeypatch):
+    directory = tmp_path / "bridges"
+    directory.mkdir()
+    binary = directory / "rw_wrfbatch"
+    binary.write_bytes(b"renderer build")
+    patches = ROOT / "docs/s2s/engine-patches"
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    row = {"sha256": sha(binary), "recipe_sha256": sha(ROOT / "tools/build_s2s_renderer.sh"),
+           "patches": {p.name: sha(p) for p in sorted(patches.glob("*.patch"))}}
+    receipt = directory / "provenance.json"
+    receipt.write_text(json.dumps({"bridges": {"rw_wrfbatch": row}}))
+    monkeypatch.setenv("GPUWM_HEX_ENGINE_BRIDGES", str(directory))
+    assert hexsetup.s2s_renderer_bridge(ROOT) == binary
+    binary.write_bytes(b"corrupt build")
+    with pytest.raises(SystemExit, match="hash mismatch"):
+        hexsetup.s2s_renderer_bridge(ROOT)
+    row["patches"] = {}
+    receipt.write_text(json.dumps({"bridges": {"rw_wrfbatch": row}}))
+    with pytest.raises(SystemExit, match="current S2S fixes"):
+        hexsetup.s2s_renderer_bridge(ROOT)
+
+
+def test_s2s_renderer_is_reachable_from_the_wheel(tmp_path, monkeypatch):
+    from hexcore.engines import RENDERER
+    binary = _executable(tmp_path / "hexcore/libexec" / RENDERER.name)
+    for name in (*RENDERER.env_names, RENDERER.gpuwm_env):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(engines, "bundled_candidate", lambda spec: binary)
+    assert locate(RENDERER) == (binary, "this distribution's hexcore/libexec")
+
+
+def _executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.skipif(os.name != "posix", reason="executable bits are a POSIX notion")
+def test_the_ladder_reads_the_wheels_libexec_before_gpuwms_bridges(tmp_path, monkeypatch):
+    bundled = _executable(tmp_path / "hexcore/libexec" / GEOMETRY.name)
+    staged = _executable(tmp_path / "bridges" / GEOMETRY.name)
+    for name in (*GEOMETRY.env_names, GEOMETRY.gpuwm_env):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(engines, "bundled_candidate", lambda spec: bundled)
+    monkeypatch.setattr(engines, "gpuwm_candidates", lambda spec: (staged,))
+    assert resolve(GEOMETRY) == bundled
+    assert locate(GEOMETRY) == (bundled, "this distribution's hexcore/libexec")
+    # An explicit setting still wins, and a wheel without the file falls through to gpuwm.
+    monkeypatch.setenv(GEOMETRY.env_names[0], str(staged))
+    assert resolve(GEOMETRY) == staged
+    monkeypatch.delenv(GEOMETRY.env_names[0])
+    bundled.unlink()
+    assert resolve(GEOMETRY) == staged.resolve()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="executable bits are a POSIX notion")
+def test_a_bundled_bridge_without_its_executable_bit_is_refused_by_name(tmp_path, monkeypatch):
+    bundled = _executable(tmp_path / "libexec" / GEOMETRY.name)
+    bundled.chmod(0o644)
+    for name in (*GEOMETRY.env_names, GEOMETRY.gpuwm_env):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(engines, "bundled_candidate", lambda spec: bundled)
+    with pytest.raises(EngineRefusal, match="not executable"):
+        resolve(GEOMETRY)
+
+
+def test_a_source_checkout_bundles_nothing_so_its_ladder_is_unchanged():
+    # Checkout runs (G0, the gates) resolve exactly as before: the rung finds no file.
+    assert not engines.bundled_candidate(GEOMETRY).is_file() or "site-packages" in str(
+        engines.bundled_candidate(GEOMETRY))
+
+
+def test_the_release_build_fetches_checks_and_requires_every_bridge():
+    path = ROOT.parent / ".github/workflows/publish.yml"
+    if not path.is_file():
+        pytest.skip("an sdist carries no .github; the repository checkout does")
+    workflow = path.read_text(encoding="utf-8")
+    assert "GPUWM_HEX_ENGINE_BRIDGES" in workflow and "engine-bridges.json" in workflow
+    for name in ("rw_mpas_geometry", "rw_mpas_stream", "rw_mpas_static", "rw_mpas_rrfs_connectivity",
+                 "rw_mpas_rrfs_damping", "rw_mpas_rrfs_deformation", "rw_mpas_lbc", "rw_igra2"):
+        assert workflow.count(f"--require-libexec {name}") == 2, name
+    script = (ROOT / "tools/build_manylinux_artifacts.sh").read_text(encoding="utf-8")
+    assert "GPUWM_HEX_ENGINE_BRIDGES" in script
+
+
+def test_source_prebuilts_match_this_tree_so_publish_can_build():
+    """publish.yml downloads rw_wrfbatch and rw_sfc_series by pin, with this provenance (source_prebuilts.breakage).
+
+    setup.py refuses a prebuilt whose provenance differs from the tree (s2s_renderer_bridge,
+    surface_series_bridge), so a pin that went stale after a recipe, patch or crate edit would stop the
+    public build after the tag exists. This test stops it at the commit instead: re-pin from a fresh build.
+    """
+    pins = json.loads(PINS.read_text(encoding="utf-8"))
+    files = pins["source_prebuilts"]["files"]
+    assert set(files) == {"rw_wrfbatch", "rw_sfc_series"}
+    sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    for name, row in files.items():
+        assert re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) and row["provenance"]["sha256"] == row["sha256"]
+        assert isinstance(row["bytes"], int) and row["bytes"] > 0
+    renderer = files["rw_wrfbatch"]["provenance"]
+    assert renderer["recipe_sha256"] == sha(ROOT / "tools/build_s2s_renderer.sh")
+    assert renderer["patches"] == {p.name: sha(p) for p in sorted((ROOT / "docs/s2s/engine-patches").glob("*.patch"))}
+    crate = ROOT / "tools/rustwx/crates/rw-sfc-series"
+    assert files["rw_sfc_series"]["provenance"]["sources"] == {
+        str(p.relative_to(crate)).replace(os.sep, "/"): sha(p) for p in sorted(crate.rglob("*")) if p.is_file()}

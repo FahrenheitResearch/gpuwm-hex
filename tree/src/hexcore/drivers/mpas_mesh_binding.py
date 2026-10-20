@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 """Mesh, geometry, timestep, and memory binding for the frozen v8.4.1 path.
 
-The frozen x4 proof remains an asserted no-op.  Every non-native mesh is bound
-at runtime from a registry entry whose grid/static bytes, dimensions, nominal
-resolution, *declared timestep*, and Courant policy are explicit.  The actual
-stability length is the finite positive ``dcEdge`` array in the supplied
-Earth-scaled static file; ``nominalMinDc`` is never used as its substitute.
+The frozen x4 proof remains an asserted no-op at its recorded timestep.  Every
+other bind is made from a registry entry whose grid/static bytes, dimensions
+and nominal resolution are explicit; the run's timestep is the caller's
+(``dt_seconds``) or MPAS-A's 6 s per km of nominal spacing.  The stability
+length is the finite positive ``dcEdge`` array in the supplied Earth-scaled
+static file; ``nominalMinDc`` is never used as its substitute for stability.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -25,6 +26,7 @@ from hexcore import dt_admission
 from hexcore import cascade_row
 from hexcore import mesh_row_candidate
 from hexcore import mesh_rows
+from hexcore import mpas_defaults
 from hexcore.cell_coordination_admission import (
     CellCoordinationAdmissionError,
     CellCoordinationPolicy,
@@ -39,6 +41,7 @@ from hexcore.dual_edge_admission import (
 from hexcore.timestep_admission import (
     CourantPolicy,
     EdgeLengthAuthority,
+    SplitExplicitSchedule,
     TimestepAdmissionError,
     admit_timestep,
     edge_length_authority,
@@ -65,17 +68,16 @@ class MeshBindingMismatch(MeshBindingError):
     """The declared mesh and supplied bytes/geometry/timestep do not agree."""
 
 
-# The frozen v8.4.1 physics radiation cadence, in seconds
-# (``src/hexcore/drivers/run_cuda_v841_forecast.py`` passes it into the sealed constructor).
-# The other two cadences the constructor checks -- surface/PBL and cumulus --
-# are dt itself, so this is the only one a row's dt has to divide.
-PHYSICS_RADIATION_CADENCE_SECONDS = 600.0
+# The radiation cadence a run gets when it names none: MPAS-A's own
+# config_radtlw_interval/config_radtsw_interval default, 00:30:00
+# (Registry.xml:2316, 2321).  The run's actual cadence reaches bind_mesh as
+# ``radiation_seconds`` and is the one a timestep must divide.
+PHYSICS_RADIATION_CADENCE_SECONDS = mpas_defaults.DEFAULT_RADIATION_SECONDS
 
-# The timestep the frozen v8.4.1 column-physics lane was PROVEN at, kept as a
-# module name because the registry rows and the refusal text both quote it.
-# It is no longer the whole rule: which timesteps the lane may execute is the
-# earned-anchor registry ``hexcore.dt_admission.ADMITTED_TIMESTEPS``, which
-# holds this one value today and is the surface a decision of record would add to.
+# The timestep the native x4 reference was integrated at, kept as a module
+# name because the registry rows quote it.  It admits and refuses nothing:
+# since 2026-10-10 a run's timestep is --dt or MPAS-A's 6 s per km, and the
+# earned-anchor registry is evidence recorded in the receipt.
 FROZEN_LANE_DT_SECONDS = dt_admission.PROVEN_DT_SECONDS
 
 
@@ -88,13 +90,18 @@ class MeshBinding:
     n_interfaces: int
     n_soil_levels: int
     nominal_dx_m: float
+    #: The timestep the row was registered with.  Since 2026-10-10 it is not
+    #: the run's timestep: a run takes ``--dt``, or by default 6 s per km of
+    #: nominal spacing (hexcore.mpas_defaults.default_dt_seconds); ``--dt row``
+    #: selects this value.
     dt_seconds: float
     grid_bytes: int
     grid_sha256: str
     static_bytes: int
     static_sha256: str
+    #: The largest horizontal wind the stability check bounds the advective
+    #: Courant number with (hexcore.timestep_admission.CourantPolicy).
     courant_wave_speed_m_s: float = 125.0
-    courant_safety_factor: float = 0.90
     frozen_native: bool = False
     scale_admission_floor: bool = True
     drop_carried_deformation: bool = False
@@ -108,62 +115,46 @@ class MeshBinding:
     boundary_zone_width: int | None = None
     bdy_mask_sha256: str | None = None
     lbc_source: str | None = None
+    # The native invariant stream a mesh's own workflow configures, as the
+    # file NAME its fix directory carries beside the grid (table data: a new
+    # mesh fills the slot, no code path keys on it).  When the slot is filled
+    # and that file sits beside --grid or --static, the forecast door hands it
+    # to the driver by default, so the vertical grid comes from it as it does
+    # in MPAS-A.  THE BREAKAGE THIS CLOSES (measured
+    # 2026-10-05): RRFS v2 configures the stream on conus12km, and hex read
+    # the vertical grid from init.nc instead, 2.7 mm off in zgrid and 8e-5
+    # relative in zz; native v8.4.1 with versus without the stream differs by
+    # 2.0e-4 K RMS theta at hour 1, 7 times NOAA's rounding envelope.
+    invariant_file: str | None = None
     notes: str = ""
+    #: The coarsest cell spacing a generated variable-resolution row
+    #: declares (its background), so preflight can take the per-cell
+    #: convection decision from the row alone.  ``None`` on every uniform
+    #: row; the bind decides from the grid's own meshDensity either way.
+    coarsest_dx_m: float | None = None
 
     @property
     def regional(self) -> bool:
         return self.boundary_zone_width is not None or self.bdy_mask_sha256 is not None
 
-    def __post_init__(self) -> None:
-        """Refuse a declared dt the physics cadence cannot divide.
+    def courant_policy(self, max_wind_m_s: float | None = None) -> CourantPolicy:
+        """The stability policy: the run's ``--max-wind``, else this row's
+        wind bound.  Both are assumed bounds, recorded with their source."""
 
-        THE BREAKAGE THIS PREVENTS, MEASURED (2026-08-26, the proving RTX 5090):
-        a graded row declared dt = 90 s -- comfortably inside its measured
-        Courant limit of 95.84 s, admitted by every geometry gate, bytes
-        and dimensions cross-examined clean -- and both 6 h forecast legs
-        died identically at host preparation with
-        ``radiation_seconds=600.0 s is not a positive integer multiple of
-        dt=90.0 s``, after the card was reserved and the mesh loaded.
-        Courant admission cannot catch it: 90 s is a perfectly stable
-        timestep, it just does not divide the radiation cadence. A row is
-        data, so this is checked where the row is WRITTEN rather than one
-        card-hour later.
-
-        The divisibility itself is computed by
-        ``hexcore.dt_admission.cadence_steps`` -- the same function the
-        schedule receipt and the sealed constructor's own rule use -- so
-        this row check and the anchor machinery cannot drift apart on the
-        tolerance.
-        """
-
-        ratio = PHYSICS_RADIATION_CADENCE_SECONDS / float(self.dt_seconds)
-        try:
-            dt_admission.cadence_steps(
-                "radiation_seconds",
-                PHYSICS_RADIATION_CADENCE_SECONDS,
-                self.dt_seconds,
+        if max_wind_m_s is not None:
+            return CourantPolicy(
+                max_characteristic_speed_m_s=float(max_wind_m_s),
+                max_characteristic_speed_source="--max-wind",
             )
-        except dt_admission.DtAdmissionError:
-            largest = PHYSICS_RADIATION_CADENCE_SECONDS / max(
-                1, int(-(-PHYSICS_RADIATION_CADENCE_SECONDS // float(self.dt_seconds)))
-            )
-            raise MeshBindingError(
-                f"mesh {self.name!r}: dt={self.dt_seconds} s does not divide the "
-                f"{PHYSICS_RADIATION_CADENCE_SECONDS:g} s physics radiation cadence "
-                f"({ratio:.4f} steps). The sealed v8.4.1 constructor refuses a "
-                "non-integer cadence at host preparation -- after the card is "
-                "reserved and the mesh is loaded -- and Courant admission cannot "
-                "catch it, because such a dt is stable and merely indivisible. "
-                f"The largest admissible dt at or below this one is {largest:g} s"
-            ) from None
-
-    def courant_policy(self) -> CourantPolicy:
         return CourantPolicy(
             max_characteristic_speed_m_s=self.courant_wave_speed_m_s,
-            safety_factor=self.courant_safety_factor,
+            max_characteristic_speed_source=(
+                "default" if float(self.courant_wave_speed_m_s) == 125.0
+                else "the mesh row's courant_wave_speed_m_s"
+            ),
         )
 
-    def dual_edge_policy(self) -> DualEdgePolicy:
+    def dual_edge_policy(self, *, apvm_upwinding: float = 0.5) -> DualEdgePolicy:
         """One floor for every row, deliberately with no per-row override.
 
         The Courant policy is per-row because a wave speed is a modelling
@@ -173,7 +164,7 @@ class MeshBinding:
         measured anchors that set it live.
         """
 
-        return DualEdgePolicy()
+        return DualEdgePolicy(apvm_upwinding=apvm_upwinding)
 
     def cell_coordination_policy(self) -> CellCoordinationPolicy:
         """One floor for every row, for the same reason the dual-edge one is.
@@ -216,7 +207,7 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
                 "Static provenance (read from the file, 2026-08-24): native MPAS-A "
                 "v8.4.1 init_atmosphere with config_native_gwd_static=YES; no writer "
                 "of ours ever touched it, so the retired writer's antipodal drag band "
-                "does not apply. Rebuilding it would break the dycore byte-identity "
+                "does not apply. Rebuilding it would change the frozen mesh/reference relationship "
                 "anchor and is refused."
             ),
         ),
@@ -1257,6 +1248,73 @@ MESH_BINDINGS: Mapping[str, MeshBinding] = MappingProxyType(
                 "Evidence: evidence/hex-speed-20260902/."
             ),
         ),
+        "conus12km": MeshBinding(
+            name="conus12km",
+            n_cells=157_859,
+            n_edges=475_138,
+            n_levels=59,
+            n_interfaces=60,
+            n_soil_levels=4,
+            nominal_dx_m=12_000.0,
+            dt_seconds=60.0,
+            grid_bytes=167_235_640,
+            grid_sha256="245c511b0ba39d9df74ff5d611634e481646ad003bff8ea6e36f081d5b483c56",
+            static_bytes=275_923_012,
+            static_sha256="55b7cb11ec6cad7418e47d86d9ade248b2a6d84ba0b71bcc798e4389cda89458",
+            boundary_zone_width=7,
+            bdy_mask_sha256="0620f99c2618d4bbc000d53225dc2826155aab53fc967d4dd68991f2b6ccd1e2",
+            lbc_source="gfs-hourly-wps-intermediate",
+            # RRFS v2's L60 invariant for GFS-driven runs (source profile
+            # rrfs-v2, mesh_set.invariant_rule): 957,584,940 bytes, SHA-256
+            # cabfea7d4136f0eb5f1314039e6e6a1c1c6633fc6dfb6d49957c70d46412d17f.
+            invariant_file="conus12km.invariant.nc_L60_GFS",
+            notes=(
+                "Public 12 km limited-area mesh and static data from the "
+                "20251017 set. The atmosphere has 59 layers and 60 interfaces; "
+                "the column-physics soil ABI retains four Noah layers. "
+                "All geometric and timestep admissions are measured at bind. "
+                "The 60 s timestep requires a measured anchor or a recorded mint. "
+                "This row supplies no regional forecast contract or skill claim."
+            ),
+        ),
+        "conus3km": MeshBinding(
+            name="conus3km",
+            n_cells=2_341_818,
+            n_edges=7_031_657,
+            n_levels=59,
+            n_interfaces=60,
+            n_soil_levels=4,
+            nominal_dx_m=3_000.0,
+            dt_seconds=20.0,
+            grid_bytes=2_587_577_704,
+            grid_sha256="773ffde88ef8c21b356523c2aa0ad2461c32ac75e1692d3e7c9e41c1791ac444",
+            static_bytes=4_086_429_764,
+            static_sha256="41f93c75ba2d601ddfd8b5f96a9de2b47d11fd3f8f0cd4cb8782a3afd1870a6c",
+            boundary_zone_width=7,
+            bdy_mask_sha256="a5e29f2deb8396d1601e6198a4ab58c4ea6b4c7ba84db21c1178d72255a14c09",
+            lbc_source="gfs-hourly-wps-intermediate",
+            # RRFS v2's L60 invariant for GFS-driven runs (source profile
+            # rrfs-v2, mesh_set.invariant_rule; 14,164,674,656 bytes there).
+            invariant_file="conus3km.invariant.nc_L60_GFS",
+            # RETIRED 2026-10-10: courant_safety_factor=0.95, the per-row
+            # loosening of the old 0.90 outer-step policy that had refused
+            # RRFS v2's own 20 s step here (rrfs-3km-proof, 2026-10-05).  The
+            # stability check is now physical (hexcore.timestep_admission):
+            # 20 s with 4 sub-steps measures 0.942 against the 1.160
+            # advective limit and 0.23 against the 0.816 acoustic one.
+            notes=(
+                "Public 3 km limited-area mesh and static data from the "
+                "20251017 set (RRFS v2's conus3km). The atmosphere has 59 layers "
+                "and 60 interfaces from the L60 vertical file; the column-physics "
+                "soil ABI retains four Noah layers. The row's step is RRFS v2's "
+                "20 s (--dt row): min(dcEdge) is 2,652.95 m, an advective "
+                "Courant number of 0.942 at 125 m/s against the 1.160 limit. "
+                "Hashes, sizes and the "
+                "boundary-mask digest were read from the published files on "
+                "2026-10-05. This row supplies no regional forecast contract or "
+                "skill claim."
+            ),
+        ),
     }
 )
 
@@ -1387,6 +1445,29 @@ def _static_edge_authority(static_path: Path) -> EdgeLengthAuthority:
         raise MeshBindingMismatch(f"{static_path}: {error}") from error
 
 
+def _grid_cell_spacing(grid_path: Path, len_disp_m: float) -> Any:
+    """Each cell's scheme spacing, read from the grid's own ``meshDensity``.
+
+    ``len_disp`` is the row's nominal spacing, the value the forecast driver
+    hands :func:`hexcore.cuda_gwdo_v841.native_cell_dx_m` for the column
+    physics, so the convection decision classifies the same per-cell length
+    the scheme receives.  A grid without ``meshDensity`` is uniform by
+    construction and returns ``None`` (the whole-mesh decision).
+    """
+
+    import netCDF4
+
+    with netCDF4.Dataset(str(grid_path)) as dataset:
+        raw = dataset.variables.get("meshDensity")
+        if raw is None:
+            return None
+        density = np.asarray(raw[:])
+    try:
+        return convection_admission.cell_spacing_m(density, len_disp_m)
+    except convection_admission.ConvectionAdmissionError as error:
+        raise MeshBindingMismatch(f"{grid_path}: {error}") from error
+
+
 def _grid_cell_coordination(grid_path: Path) -> Any:
     """Read how many edges each cell has, from the file topology binds against.
 
@@ -1463,11 +1544,12 @@ def binding_fingerprint(proof: Any, static: Path) -> dict[str, Any]:
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    # The file's real SHA-256, computed once per file version
+    # (hexcore.file_digest): the bind re-read the 2 GB grid and 3 GB static
+    # of the 20 km mesh on every forecast, 3.9 s of the door (rented box, 2026-10-13).
+    from hexcore.file_digest import sha256_file as file_version_sha256
+
+    return file_version_sha256(path)
 
 
 #: The regional mask triple, in the fixed digest order.
@@ -1602,6 +1684,12 @@ def _inspect_grid(grid_path: Path, binding: MeshBinding) -> dict[str, Any]:
         dims = {key: len(value) for key, value in dataset.dimensions.items()}
         observed_cells = dims.get("nCells")
         observed_edges = dims.get("nEdges")
+        max_edges = dims.get("maxEdges")
+        if not isinstance(max_edges, int) or max_edges < 1:
+            raise MeshBindingMismatch(
+                f"mesh {binding.name!r}: no positive maxEdges dimension; the "
+                "reconstruction coefficients cannot be bound to the cell topology"
+            )
         if observed_cells != binding.n_cells or observed_edges != binding.n_edges:
             raise MeshBindingMismatch(
                 f"mesh {binding.name!r}: grid declares nCells={observed_cells}, nEdges={observed_edges}; "
@@ -1642,6 +1730,7 @@ def _inspect_grid(grid_path: Path, binding: MeshBinding) -> dict[str, Any]:
         "regional_masks": regional_masks,
         "nCells": observed_cells,
         "nEdges": observed_edges,
+        "maxEdges": max_edges,
         "grid_sphere_radius": radius,
         "grid_nominalMinDc_f32": nominal,
         "active_slots": active_slots,
@@ -1715,6 +1804,159 @@ def _zero_digest(shape: tuple[int, ...]) -> str:
     return hashlib.sha256(np.zeros(shape, dtype="<f4").tobytes(order="C")).hexdigest()
 
 
+def _admit_vertical_dimensions(proof: Any, binding: MeshBinding) -> None:
+    """Check the atmospheric shape and the fixed column-physics soil ABI."""
+
+    if binding.n_levels < 3 or binding.n_interfaces != binding.n_levels + 1:
+        raise MeshBindingMismatch(
+            f"mesh {binding.name!r}: n_levels={binding.n_levels}, "
+            f"n_interfaces={binding.n_interfaces}; the lower-boundary "
+            "coefficients require at least three layers and one more interface"
+        )
+    if binding.n_soil_levels != proof.N_SOIL_LEVELS:
+        raise MeshBindingMismatch(
+            f"mesh {binding.name!r}: n_soil_levels={binding.n_soil_levels}, "
+            f"column physics requires {proof.N_SOIL_LEVELS}; changing the soil "
+            "extent without converting its layer geometry would feed the "
+            "land-surface model the wrong soil depths"
+        )
+    if binding.frozen_native:
+        for attr, want in (
+            ("N_LEVELS", binding.n_levels),
+            ("N_INTERFACES", binding.n_interfaces),
+        ):
+            have = getattr(proof, attr)
+            if have != want:
+                raise MeshBindingMismatch(
+                    f"mesh {binding.name!r} is the frozen native mesh, so "
+                    f"binding must be a no-op, but {attr}={have}, registry={want}"
+                )
+
+
+def _rebind_atmospheric_dimensions(
+    proof: Any, binding: MeshBinding, forecast: Any = None,
+) -> dict[str, Any]:
+    """Carry a verified row's atmospheric extents to every runtime consumer."""
+
+    rebindings: dict[str, Any] = {}
+    for attr, want in (
+        ("N_LEVELS", binding.n_levels),
+        ("N_INTERFACES", binding.n_interfaces),
+    ):
+        rebindings[attr] = [int(getattr(proof, attr)), int(want)]
+        setattr(proof, attr, int(want))
+        if forecast is not None:
+            setattr(forecast, attr, int(want))
+    return rebindings
+
+
+def _rebind_gwdo_vertical_dimension(gwdo: Any, binding: MeshBinding) -> list[int]:
+    """Keep the runtime GWD shape guard on the verified atmosphere's extent."""
+
+    before = int(gwdo.X4_N_VERT_LEVELS)
+    if binding.frozen_native:
+        if before != binding.n_levels:
+            raise MeshBindingMismatch(
+                f"mesh {binding.name!r} is the frozen native mesh, but the "
+                f"GWD layer guard moved from {binding.n_levels} to {before}"
+            )
+        return [before, before]
+    gwdo.X4_N_VERT_LEVELS = int(binding.n_levels)
+    return [before, int(binding.n_levels)]
+
+
+def _rebind_gwdo_kernel_dimension(
+    gwdo: Any, binding: MeshBinding, physics: Any, config: Any,
+) -> dict[str, Any]:
+    """Bind CUDA column storage to the same verified extent as its carriers."""
+
+    source = gwdo._CUDA_SOURCE
+    definitions = [line for line in source.splitlines()
+                   if line.startswith("#define GWDO_NLEV ")]
+    if len(definitions) != 1:
+        raise MeshBindingMismatch("GWD CUDA source needs one GWDO_NLEV definition")
+    definition = definitions[0]
+    try:
+        before = int(definition.removeprefix("#define GWDO_NLEV "))
+    except ValueError as error:
+        raise MeshBindingMismatch("GWD CUDA extent is not an integer") from error
+    after = int(binding.n_levels)
+    before_sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    if gwdo.CUDA_GWDO_V841_KERNEL_SHA256 != before_sha:
+        raise MeshBindingMismatch("GWD CUDA source and recorded kernel hash differ")
+    if binding.frozen_native and before != after:
+        raise MeshBindingMismatch("frozen native GWD CUDA extent moved")
+    rebound = source.replace(definition, f"#define GWDO_NLEV {after}", 1)
+    after_sha = hashlib.sha256(rebound.encode("utf-8")).hexdigest()
+    if rebound != source:
+        gwdo._CUDA_SOURCE = rebound
+        # Compiled kernels cache the former source. A new binding must compile
+        # the new allocation, and both receipt consumers need its actual hash.
+        gwdo._KERNELS.clear()
+    gwdo.CUDA_GWDO_V841_KERNEL_SHA256 = after_sha
+    physics.CUDA_GWDO_V841_KERNEL_SHA256 = after_sha
+    config.V841_GWDO_KERNEL_SHA256 = after_sha
+    return {"layers": [before, after], "sha256": [before_sha, after_sha]}
+
+
+def claim_for_convection(claim: str, scheme: str) -> str:
+    """The forecast claim with its convection scheme named as ``scheme``.
+
+    The drivers' claim sentences are written for GF ("WSM6 + GF + YSU ...").
+    A GF decision returns the sentence unchanged; any other scheme replaces
+    the single "GF + " term with its own label, and convection off drops it.
+    The label is the one :mod:`hexcore.convection_admission` holds for the
+    scheme -- the three ruled schemes, and every cumulus option of WOOF's
+    registry a run resolved -- so no scheme list lives here.  A scheme no
+    selection resolved refuses rather than leaving a receipt that names a
+    scheme the run did not execute."""
+
+    if scheme == convection_admission.SCHEME_OFF:
+        label = None
+    else:
+        try:
+            label = convection_admission.label(scheme)
+        except convection_admission.ConvectionAdmissionError as error:
+            raise ValueError(f"no claim label for convection scheme {scheme!r}: {error}") from error
+    if label == "GF" or "GF + " not in claim:
+        return claim
+    return claim.replace("GF + ", "" if label is None else f"{label} + ", 1)
+
+
+def claim_for_selection(claim: str, labels: Sequence[str]) -> str:
+    """The forecast claim with its scheme list replaced by ``labels``.
+
+    THE BREAKAGE THIS PREVENTS: the claim sentence lists the frozen suite
+    ("WSM6 + ... + legacy RRTMG") whatever the run selected.  A Thompson
+    mp_physics=8 run on the generic column seam (global 30 km, 2026-10-11)
+    wrote a receipt whose claim said WSM6 while its constructor record said
+    mp_physics=8.  The labels are the engine registry's for the mapping the
+    run hands the engine, so no scheme list lives here.  A claim that is not
+    shaped "... using <schemes>, at dt = ..." refuses rather than keeping a
+    list the run did not execute."""
+
+    head, using, _schemes, at, tail = _claim_parts(claim)
+    if not labels:
+        raise ValueError("a claim needs at least one scheme label")
+    return f"{head}{using}{' + '.join(labels)}{at}{tail}"
+
+
+def claim_scheme_terms(claim: str) -> tuple[str, ...]:
+    """The scheme terms of a claim sentence, in the order it lists them."""
+
+    return tuple(_claim_parts(claim)[2].split(" + "))
+
+
+def _claim_parts(claim: str) -> tuple[str, str, str, str, str]:
+    head, using, rest = claim.partition(" using ")
+    schemes, at, tail = rest.partition(", at dt = ")
+    if not using or not at or not schemes:
+        raise ValueError(
+            "the claim sentence has no 'using <schemes>, at dt = ' term to "
+            f"name the selected schemes in: {claim!r}")
+    return head, using, schemes, at, tail
+
+
 def bind_mesh(
     proof: Any,
     mesh_name: str,
@@ -1725,23 +1967,65 @@ def bind_mesh(
     verify_frozen_sources: bool = True,
     convection: str = "auto",
     pbl_cadence: str = "auto",
+    time_integration_order: int = mpas_defaults.DEFAULT_TIME_INTEGRATION_ORDER,
+    acoustic_substeps: int = mpas_defaults.DEFAULT_ACOUSTIC_SUBSTEPS,
+    radiation_seconds: float = mpas_defaults.DEFAULT_RADIATION_SECONDS,
+    dt_seconds: float | None = None,
+    dynamics_splits: int = mpas_defaults.DEFAULT_DYNAMICS_SPLITS,
+    max_wind_m_s: float | None = None,
+    apvm_upwinding: float = 0.5,
     log=print,
 ) -> dict[str, Any]:
-    """Cross-examine, Courant-admit, and bind one registered mesh before CUDA."""
+    """Cross-examine, stability-admit, and bind one registered mesh before CUDA.
+
+    ``max_wind_m_s`` is the run's ``--max-wind``: the largest horizontal
+    wind the advective stability estimate assumes, in place of the row's
+    (125 m/s by default).  The estimate is not a measurement of the case,
+    so the run may state its own bound (2026-10-10 audit: dt 105 s on the
+    15 km mesh was refused at 1.189 against 1.160 although it is inside the
+    estimate for every wind below 122 m/s).
+
+    ``dt_seconds`` is the run's timestep.  ``None`` takes MPAS-A's rule, 6 s
+    per km of the row's nominal spacing rounded down to divide the radiation
+    interval (hexcore.mpas_defaults.default_dt_seconds); the forecast door
+    always passes the timestep it resolved.  The row's own ``dt_seconds`` is
+    the timestep it was registered with and is recorded beside it.
+    """
 
     if mesh_name not in MESH_BINDINGS:
         raise MeshBindingMismatch(
             f"unknown mesh {mesh_name!r}; registered meshes are {sorted(MESH_BINDINGS)}. "
-            "Register dimensions, file pins, nominal dx, timestep, and Courant policy before running"
+            "Register dimensions, file pins and nominal dx before running"
         )
     binding = MESH_BINDINGS[mesh_name]
+    registered_dt = float(binding.dt_seconds)
+    if dt_seconds is None:
+        dt_choice = mpas_defaults.default_dt_seconds(
+            float(binding.nominal_dx_m), radiation_seconds=float(radiation_seconds)
+        )
+    else:
+        dt_choice = {"dt_seconds": float(dt_seconds), "source": "caller"}
+    dt_choice["registered_row_dt_seconds"] = registered_dt
+    if float(dt_choice["dt_seconds"]) != registered_dt:
+        # The run's timestep travels on the binding from here on, so every
+        # rebind below (DT_SECONDS in the proof and forecast modules, the
+        # pbl and convection decisions, the receipt) reads ONE number.  A
+        # frozen native row bound at another timestep is not a no-op, so it
+        # binds like any other row.
+        from dataclasses import replace as _replace
+
+        binding = _replace(
+            binding, dt_seconds=float(dt_choice["dt_seconds"]), frozen_native=False
+        )
 
     frozen: dict[str, Any] | None = None
     if verify_frozen_sources:
-        frozen = proof.require_frozen_execution_sources()
+        frozen = proof.measure_execution_sources()
         log(
-            f"[mesh-binding] frozen execution sources verified: {len(frozen['files'])} modules, "
-            f"receipt {frozen['sha256'][:16]}"
+            f"[mesh-binding] execution sources recorded: {len(frozen['files'])} modules, "
+            f"receipt {frozen['sha256'][:16]}, "
+            f"{'all match' if frozen['matches_pins'] else str(len(frozen['moved_from_pins'])) + ' differ from'} "
+            "the x4 proof's pins"
         )
 
     files = {
@@ -1762,15 +2046,20 @@ def bind_mesh(
         timestep = admit_timestep(
             binding.dt_seconds,
             authority,
-            policy=binding.courant_policy(),
+            policy=binding.courant_policy(max_wind_m_s),
+            schedule=SplitExplicitSchedule(
+                time_integration_order=int(time_integration_order),
+                acoustic_substeps=int(acoustic_substeps),
+                dynamics_splits=int(dynamics_splits),
+            ),
+            cadence_seconds=float(radiation_seconds),
         )
     except TimestepAdmissionError as error:
         raise MeshBindingMismatch(f"mesh {mesh_name!r}: {error}") from error
     observed["timestep_admission"] = timestep.as_dict()
-    # Dual-edge admission runs for EVERY mesh, published or generated, frozen
-    # or not.  A mesh whose Voronoi edges collapse cannot be saved by a smaller
-    # timestep, so it is refused here rather than inside step 0 on a validation
-    # flag that names no array, no cell and no edge.
+    # Positive dual geometry is required for every mesh. The ratio floor
+    # prevents the measured APVM gradient runaway only when that operator
+    # is selected; disabling APVM keeps the roughness census in the receipt.
     dv_edge, dc_edge, cells_on_edge = _static_dual_edges(
         Path(files["static"]["path"])
     )
@@ -1778,7 +2067,7 @@ def bind_mesh(
         dual_edges = admit_dual_edges(
             dv_edge,
             dc_edge,
-            policy=binding.dual_edge_policy(),
+            policy=binding.dual_edge_policy(apvm_upwinding=apvm_upwinding),
             cells_on_edge=cells_on_edge,
             mesh_name=mesh_name,
         )
@@ -1800,42 +2089,30 @@ def bind_mesh(
     except CellCoordinationAdmissionError as error:
         raise MeshBindingMismatch(str(error)) from error
     observed["cell_coordination_admission"] = coordination.as_dict()
-    # The frozen v8.4.1 column-physics lane is pinned to ONE timestep.
+    # RETIRED 2026-10-10 (owner ruling):
+    # the refusal of every timestep the earned-anchor registry did not hold
+    # ("this row is STABLE and merely unrunnable HERE").  Stability is the
+    # physical check above; the cadences are checked below against the run's
+    # own radiation interval; whether the configuration matches a registered
+    # anchor is recorded in observed["dt_admission"].
     #
-    # THE BREAKAGE THIS PREVENTS, MEASURED (2026-08-26, the proving RTX 5090): a
-    # row declaring dt = 100 s -- Courant-admitted against its mesh's own
-    # 103.67 s limit, dual-edge admitted at 2.08x the floor, dividing the
-    # 600 s radiation cadence exactly -- bound clean, allocated 18,820 MiB,
-    # ran 285 s of setup, and died inside composite step 0 with
-    # ``post-RK candidate time must equal the exact step endpoint:
-    # 120.0 != 100.0``. The rebind reaches DT_SECONDS in the proof and
-    # forecast modules and the GWDO guards, but the DYCORE reads
-    # ``self.config.config_dt``, and V841MpasColumnPhysicsConfig.validate
-    # refuses any value but 120.0 ("the matched v8.4.1 real-x4
-    # column-physics lane is exact"), alongside config_bldt_seconds and
-    # config_cudt_seconds. Every mesh that has ever run this door declares
-    # 120 s. Checked AFTER dual-edge admission so the recorded refusal of
-    # v15.150.38857 keeps naming its collapsed edges.
+    # The cumulus selection is decided from this mesh's own finest spacing:
+    # it was ruled on 2026-08-26 that convection is switched off below 3 km,
+    # and on 2026-10-05 that New Tiedtke runs at 20 km and coarser;
+    # ``convection='auto'`` is that default and needs no flag.
     #
-    # The literal comparison this replaced said the same thing with one
-    # number. It now asks the EARNED-ANCHOR registry
-    # (hexcore.dt_admission), the same surface the config validates
-    # through, so a row and a run can never disagree about which timesteps
-    # are admitted, and the refusal names the evidence an anchor needs
-    # rather than an adjective. Registering a second anchor is a decision of record, not
-    # a registry edit.
-    #
-    # The anchor certifies a CONFIGURATION at a timestep, so the cumulus
-    # selection is decided BEFORE the lookup, from this mesh's own finest
-    # spacing.  it was ruled on 2026-08-26 that convection is switched off
-    # below 3 km; ``convection='auto'`` is that default and needs no flag.
-    # THE BREAKAGE THIS PREVENTS: a sub-3-km mesh binding against a
-    # Grell-Freitas anchor and then running with the closure off, so the row
-    # admitting the run would have measured a forcing the run never applies.
+    # On a variable-resolution mesh the cells' own scheme spacing decides
+    # (len_disp/meshDensity**0.25, the length the scheme is handed): read
+    # at min(dcEdge), the 3 km ruling switched cumulus off for the whole
+    # 48-3 km patch mesh, its 48 km cells included
+    # (hexcore.convection_admission).
     convection_decision = convection_admission.convection_decision(
         nominal_dx_m=float(binding.nominal_dx_m),
         minimum_dc_edge_m=float(authority.minimum_m),
         requested=convection,
+        cell_spacing_m=_grid_cell_spacing(
+            Path(files["grid"]["path"]), float(binding.nominal_dx_m)
+        ),
     )
     observed["convection_admission"] = convection_decision
     cumulus_scheme = convection_decision["constructor_scheme"]
@@ -1845,16 +2122,26 @@ def bind_mesh(
         f"{convection_decision['threshold_m']:.0f} m threshold -> "
         f"{convection_decision['scheme']} ({convection_decision['source']})"
     )
-    # The surface/PBL cadence is the third half of the same decision, taken
-    # here from the bound row's OWN timestep for the same reason.  'auto' is
-    # the proven weld (config_bldt_seconds = config_dt) and needs no flag.
-    # THE BREAKAGE THIS PREVENTS: a run holding the cadence binding against
-    # a welded anchor, so the row admitting the run would have measured the
-    # surface/PBL stack at up to 24x the call rate the run actually uses.
-    # See hexcore.pbl_cadence.
-    pbl_decision = pbl_cadence_module.pbl_cadence_decision(
-        dt_seconds=float(binding.dt_seconds), requested=pbl_cadence
-    )
+    # The surface/PBL cadence is taken here from the run's timestep.  'auto'
+    # is the weld (config_bldt_seconds = config_dt), which is MPAS-A's own
+    # default (config_pbl_interval = 'none' -> dt_pbl = dt,
+    # mpas_atmphys_manager.F:541-542) and needs no flag.  See
+    # hexcore.pbl_cadence.
+    try:
+        pbl_decision = pbl_cadence_module.pbl_cadence_decision(
+            dt_seconds=float(binding.dt_seconds), requested=pbl_cadence,
+            radiation_seconds=float(radiation_seconds),
+        )
+    except pbl_cadence_module.PblCadenceError as error:
+        largest = mpas_defaults.default_dt_seconds(
+            float(binding.dt_seconds) * 1000.0 / mpas_defaults.SECONDS_PER_KM,
+            radiation_seconds=float(radiation_seconds),
+        )["dt_seconds"]
+        raise MeshBindingMismatch(
+            f"mesh {mesh_name!r}: {error}.  The largest whole-second timestep "
+            f"at or below {binding.dt_seconds:g} s that divides the "
+            f"{float(radiation_seconds):g} s radiation interval is {largest:g} s"
+        ) from error
     observed["pbl_cadence"] = pbl_decision
     surface_pbl_seconds = float(pbl_decision["surface_pbl_seconds"])
     log(
@@ -1863,50 +2150,77 @@ def bind_mesh(
         f"{pbl_decision['calls_per_hour_at_proven_dt']:g}) "
         f"({pbl_decision['source']})"
     )
-    dt_anchor = dt_admission.admitted_timestep(
-        binding.dt_seconds, cumulus_scheme, surface_pbl_seconds
-    )
-    if dt_anchor is None:
-        raise MeshBindingMismatch(
-            f"mesh {mesh_name!r}: "
-            f"{dt_admission.unanchored_refusal(binding.dt_seconds, cumulus_scheme, surface_pbl_seconds)}. "
-            f"This row is STABLE and merely unrunnable HERE: the mesh's own "
-            f"Courant limit is {timestep.maximum_admitted_dt_seconds:.2f} s "
-            f"(min dcEdge {authority.minimum_m:.1f} m), so the timestep is not "
-            f"the problem -- the missing anchor is. The registry admits "
-            f"{dt_admission.admitted_summary()}; the largest of those at or "
-            f"below this mesh's own limit is what the row should declare, and "
-            f"if none is, the remedy above is to mint one"
+    # THE BREAKAGE THIS PREVENTS: a radiation, surface/PBL or cumulus
+    # cadence that is not a whole number of this timestep's steps has no step
+    # to run on, and the sealed constructor refuses it at host preparation
+    # after the card is reserved (measured 2026-08-26: a row at 90 s against
+    # the then 600 s radiation cadence died on both 6 h legs).  Checked here
+    # against the RUN's radiation interval, not a constant.
+    cumulus_seconds = None if cumulus_scheme is None else float(binding.dt_seconds)
+    try:
+        cadence_steps = dt_admission.require_cadences(
+            binding.dt_seconds,
+            radiation_seconds=float(radiation_seconds),
+            surface_pbl_seconds=surface_pbl_seconds,
+            cumulus_seconds=cumulus_seconds,
+            cumulus_scheme=cumulus_scheme,
         )
-    observed["dt_admission"] = dt_anchor.as_dict()
+    except dt_admission.DtAdmissionError as error:
+        largest = mpas_defaults.default_dt_seconds(
+            float(binding.dt_seconds) * 1000.0 / mpas_defaults.SECONDS_PER_KM,
+            radiation_seconds=float(radiation_seconds),
+        )["dt_seconds"]
+        raise MeshBindingMismatch(
+            f"mesh {mesh_name!r}: {error}.  The largest whole-second timestep "
+            f"at or below {binding.dt_seconds:g} s that divides the "
+            f"{float(radiation_seconds):g} s radiation interval is {largest:g} s"
+        ) from error
+    from types import SimpleNamespace
+    from hexcore.step_anchors import step_anchor_record
+
+    observed["dt_admission"] = {
+        "refuses": False,
+        "dt_seconds": float(binding.dt_seconds),
+        "dt_selection": dt_choice,
+        "cadence_steps": cadence_steps,
+        "anchor": dt_admission.anchor_record(
+            binding.dt_seconds,
+            radiation_seconds=float(radiation_seconds),
+            surface_pbl_seconds=surface_pbl_seconds,
+            cumulus_seconds=cumulus_seconds,
+            cumulus_scheme=cumulus_scheme,
+        ),
+        "dycore_anchor": step_anchor_record(SimpleNamespace(
+            config_dt=float(binding.dt_seconds),
+            config_time_integration_order=int(time_integration_order),
+            config_number_of_sub_steps=int(acoustic_substeps),
+            config_dynamics_split_steps=int(dynamics_splits),
+        )),
+    }
     log(
         f"[mesh-binding] mesh {mesh_name}: nCells={observed['nCells']} "
         f"nEdges={observed['nEdges']} nominal={observed['nominalMinDc_f32']} m; "
-        f"min(dcEdge)={authority.minimum_m:.3f} m; dt={binding.dt_seconds:.3f} s; "
-        f"limit={timestep.maximum_admitted_dt_seconds:.3f} s"
+        f"min(dcEdge)={authority.minimum_m:.3f} m; dt={binding.dt_seconds:.3f} s "
+        f"({dt_choice['source']}); stability limit="
+        f"{timestep.maximum_admitted_dt_seconds:.3f} s (advective "
+        f"{timestep.estimated_outer_courant:.3f}/{timestep.admitted_courant:.3f}, "
+        f"acoustic {timestep.acoustic_courant:.3f}/"
+        f"{timestep.acoustic_courant_limit:.3f})"
     )
     log(
         f"[mesh-binding] mesh {mesh_name}: min(dvEdge/dcEdge)="
         f"{dual_edges.minimum_ratio:.6g} at edge {dual_edges.minimum_ratio_edge} "
         f"(dvEdge={dual_edges.minimum_ratio_dv_edge_m:.3f} m), "
         f"TRiSK tangential amplification {dual_edges.amplification:.4g}x; "
-        f"floor {dual_edges.policy.minimum_dv_over_dc:.6g}"
+        f"floor {dual_edges.policy.minimum_dv_over_dc:.6g}; "
+        f"APVM={dual_edges.policy.apvm_upwinding:g}, "
+        f"ratio floor active={dual_edges.policy.apvm_upwinding > 0.0}"
     )
 
     edge_sha = authority.raw_sha256
     fingerprint_before = _fingerprint_with_authority(proof, authority)
 
-    for attr, want in (
-        ("N_LEVELS", binding.n_levels),
-        ("N_INTERFACES", binding.n_interfaces),
-        ("N_SOIL_LEVELS", binding.n_soil_levels),
-    ):
-        have = getattr(proof, attr)
-        if have != want:
-            raise MeshBindingMismatch(
-                f"mesh {mesh_name!r}: module {attr}={have}, registry={want}; vertical structure "
-                "is not rebound by mesh binding and must already agree"
-            )
+    _admit_vertical_dimensions(proof, binding)
 
     native = MESH_BINDINGS[NATIVE_MESH_NAME]
     if binding.frozen_native:
@@ -1971,20 +2285,23 @@ def bind_mesh(
     proof.N_CELLS, proof.N_EDGES = nc, ne
     rebindings["N_CELLS"] = [native.n_cells, nc]
     rebindings["N_EDGES"] = [native.n_edges, ne]
+    rebindings.update(_rebind_atmospheric_dimensions(proof, binding, forecast))
 
     before_dt = float(proof.DT_SECONDS)
     proof.DT_SECONDS = float(binding.dt_seconds)
     rebindings["DT_SECONDS"] = [before_dt, float(binding.dt_seconds)]
 
+    max_edges = observed["maxEdges"]
+    reconstruction_shape = (nc, max_edges, 3)
     rc_pin = dict(proof.INIT_RECONSTRUCTION_COEFFICIENTS_PIN)
-    rc_pin["shape"] = (nc, 10, 3)
-    rc_pin["static_placeholder_raw_sha256"] = _zero_digest((nc, 10, 3))
+    rc_pin["shape"] = reconstruction_shape
+    rc_pin["static_placeholder_raw_sha256"] = _zero_digest(reconstruction_shape)
     rc_pin["active_slots"] = observed["active_slots"]
     rc_pin["active_components"] = observed["active_components"]
     rc_pin["nonzero_components"] = observed["active_components"]
     proof.INIT_RECONSTRUCTION_COEFFICIENTS_PIN = MappingProxyType(rc_pin)
     rebindings["INIT_RECONSTRUCTION_COEFFICIENTS_PIN"] = {
-        "shape": [nc, 10, 3],
+        "shape": list(reconstruction_shape),
         "active_slots": observed["active_slots"],
         "active_components": observed["active_components"],
     }
@@ -2081,6 +2398,8 @@ def bind_mesh(
         rebindings["forecast_reexports"] = [
             "N_CELLS",
             "N_EDGES",
+            "N_LEVELS",
+            "N_INTERFACES",
             "NOMINAL_DX_M",
             "DT_SECONDS",
             "CONVECTION_DECISION",
@@ -2111,13 +2430,32 @@ def bind_mesh(
                     ),
                 )
                 rebindings[f"{attribute}_mesh_label"] = [native_label, mesh_label]
+        # THE BREAKAGE THIS PREVENTS: the claim sentence names "GF" as the
+        # convection scheme whatever the decision above selected.  The RRFS v2
+        # conus12km run with New Tiedtke (2026-10-05)
+        # carried a receipt claiming GF.  A GF run's claim is left byte-identical.
+        claim = getattr(forecast, "CLAIM", None)
+        if isinstance(claim, str):
+            rewritten = claim_for_convection(claim, convection_decision["scheme"])
+            if rewritten != claim:
+                forecast.CLAIM = rewritten
+                rebindings["CLAIM_convection_label"] = convection_decision["scheme"]
         prepare = forecast.prepare_forecast_host
+
+        import hexcore.cuda_gwdo_v841 as gwdo
+        import hexcore.cuda_arwen_physics_v841 as arwen_physics
+        import hexcore.config_v841 as config
+
+        rebindings["cuda_gwdo_v841.kernel_dimension"] = (
+            _rebind_gwdo_kernel_dimension(gwdo, binding, arwen_physics, config)
+        )
 
         def _prepare(
             *args,
             _prepare=prepare,
             _dx=dx,
             _dt=np.float32(binding.dt_seconds),
+            _binding=binding,
             **kwargs,
         ):
             import hexcore.cuda_gwdo_v841 as gwdo
@@ -2134,9 +2472,11 @@ def bind_mesh(
             # step 0 in run_bl_ysu_gwdo_cuda_v841.
             before_dt = np.float32(gwdo.X4_DT_SECONDS_F32)
             gwdo.X4_DT_SECONDS_F32 = _dt
+            before_levels, after_levels = _rebind_gwdo_vertical_dimension(gwdo, _binding)
             log(
                 f"[mesh-binding] GWD effective len_disp {float(before)} -> {float(_dx)} m; "
-                f"GWDO dt guard {float(before_dt)} -> {float(_dt)} s"
+                f"GWDO dt guard {float(before_dt)} -> {float(_dt)} s; "
+                f"GWD layer guard {before_levels} -> {after_levels}"
             )
             return _prepare(*args, **kwargs)
 
@@ -2148,6 +2488,10 @@ def bind_mesh(
         rebindings["cuda_gwdo_v841.X4_DT_SECONDS_F32"] = [
             float(native.dt_seconds),
             float(binding.dt_seconds),
+        ]
+        rebindings["cuda_gwdo_v841.X4_N_VERT_LEVELS"] = [
+            native.n_levels,
+            binding.n_levels,
         ]
 
     fingerprint_after = _fingerprint_with_authority(proof, authority)

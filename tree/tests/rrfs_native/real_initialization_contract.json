@@ -1,0 +1,58 @@
+{
+  "schema": "rrfs-real-initialization/v1",
+  "source_commit": "1d6e370e7b43a332074809f170532a216c2212fb",
+  "gpuwm_commit": "8f2f37a5ea83c415b33a1bfc43a19c4524bd9523",
+  "rust_sources": [
+    {
+      "path": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_rrfs_deformation.rs",
+      "sha256": "1433756ed9bf828248a8a00f20dc2d14c559fce8bb3381ae542613d5deaa9550",
+      "staged": "rust-source/rw_mpas_rrfs_deformation.rs"
+    },
+    {
+      "path": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_rrfs_damping.rs",
+      "sha256": "747a6d7c3ea4a60b0b185725938e01be9ad9208eca607ee275639eee995ada8c",
+      "staged": "rust-source/rw_mpas_rrfs_damping.rs"
+    }
+  ],
+  "cases": [
+    {
+      "case": "global",
+      "init": "scratch/dycore-native-case/init.nc",
+      "init_sha256": "6d81d963216a7838402a8138a16ee1d06dc8fed44ac12b6ff236c22a10f648ae",
+      "xnutr": 0.2,
+      "zd": 16000.0,
+      "records": [
+        {
+          "field": "zgrid",
+          "path": "scratch/reference-host-banks/comparison/runs/active/captures/dycore__atm_advance_acoustic_step_work.s0000000001.e0000000001.r000000.pre.argument.zgrid.bin",
+          "sha256": "9ac3acf3c573667b3306142f25ed9b092e432e80ed1191b04aedefdcd3b16b3c"
+        },
+        {
+          "field": "dss",
+          "path": "scratch/reference-host-banks/comparison/runs/active/captures/dycore__atm_advance_acoustic_step_work.s0000000001.e0000000001.r000000.pre.argument.dss.bin",
+          "sha256": "d67350a8fb2920cfb6dbc34a7dfdfc41ffc17922b89f4d09f8cb78a9a9315228"
+        }
+      ]
+    },
+    {
+      "case": "regional",
+      "init": "scratch/dycore-regional-common/init.nc",
+      "init_sha256": "62d8552692de7dd13f0fdb66a181701bdc989f75e3383e36811c741c7b587095",
+      "xnutr": 0.2,
+      "zd": 16000.0,
+      "records": [
+        {
+          "field": "zgrid",
+          "path": "scratch/reference-host-banks/regional-work/runs/active/captures/dycore__atm_advance_acoustic_step_work.s0000000001.e0000000001.r000000.pre.argument.zgrid.bin",
+          "sha256": "280ef1f3c2fc5e31b5b2f3620870e2670fb657cddbcdba923b8d6b7b535ee4dc"
+        },
+        {
+          "field": "dss",
+          "path": "scratch/reference-host-banks/regional-work/runs/active/captures/dycore__atm_advance_acoustic_step_work.s0000000001.e0000000001.r000000.pre.argument.dss.bin",
+          "sha256": "7acf484256774a841f0e1b44fa74678543b13e2c7e48f627e898686ef328e248"
+        }
+      ]
+    }
+  ],
+  "compared_words": 322255
+}

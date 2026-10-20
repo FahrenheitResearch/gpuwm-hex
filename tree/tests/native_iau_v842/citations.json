@@ -1,0 +1,84 @@
+{
+  "release": "v8.4.2",
+  "commit": "f34984b2c89353cf31c235b08d3b4acd96b37bb3",
+  "pins": {
+    "mpas_atm_time_integration.F:2145-2174": {
+      "path": "src/core_atmosphere/dynamics/mpas_atm_time_integration.F",
+      "first_line": 2145,
+      "last_line": 2174,
+      "sha256": "3000ca32978d6dd467c4b4e1bdf2aae675c6446bce16910c421499d7cf794327"
+    },
+    "Registry.xml:423-430": {
+      "path": "src/core_atmosphere/Registry.xml",
+      "first_line": 423,
+      "last_line": 430,
+      "sha256": "dc6bc11fb7d7b575aaac05fc11e624b84afac07eb9d6a0e445c6cc609c78bfb4"
+    },
+    "Registry.xml:1173-1183": {
+      "path": "src/core_atmosphere/Registry.xml",
+      "first_line": 1173,
+      "last_line": 1183,
+      "sha256": "ed956023dfac9b08087215415d2357e11706a8851cd7cc2009fb03bd23cb72e1"
+    },
+    "Registry.xml:3972-4011": {
+      "path": "src/core_atmosphere/Registry.xml",
+      "first_line": 3972,
+      "last_line": 4011,
+      "sha256": "a3954f19b0dd3588cf1b8b581a8c03f1b895ccae6127fdc8de4ad77837048fed"
+    },
+    "mpas_atm_core.F:222-233": {
+      "path": "src/core_atmosphere/mpas_atm_core.F",
+      "first_line": 222,
+      "last_line": 233,
+      "sha256": "1e366945a46a3099cabba420cd1229db426eb758541d27bbf4874458d4d46d5b"
+    },
+    "mpas_atm_core_interface.F:145-155": {
+      "path": "src/core_atmosphere/mpas_atm_core_interface.F",
+      "first_line": 145,
+      "last_line": 155,
+      "sha256": "e76703c7ca0fcfb76d10b1e4fc77811ab48fc66919009bf043bfda19fe06de4b"
+    },
+    "mpas_atm_iau.F:31-87": {
+      "path": "src/core_atmosphere/dynamics/mpas_atm_iau.F",
+      "first_line": 31,
+      "last_line": 87,
+      "sha256": "b93c27fce7014d417305248bd2d7230ed2610c6eb6d03891e5588ff2a6e899a8"
+    },
+    "mpas_atm_iau.F:90-121": {
+      "path": "src/core_atmosphere/dynamics/mpas_atm_iau.F",
+      "first_line": 90,
+      "last_line": 121,
+      "sha256": "06cf5c639df4723a3cd1a187c36a4842414efecca85454c3783ddf3e80f82314"
+    },
+    "mpas_atm_iau.F:124-149": {
+      "path": "src/core_atmosphere/dynamics/mpas_atm_iau.F",
+      "first_line": 124,
+      "last_line": 149,
+      "sha256": "a34c63f7459a0ec312c904b6563ee7e0e3088b927a083baf6c38589d31202e31"
+    },
+    "mpas_atm_iau.F:152-292": {
+      "path": "src/core_atmosphere/dynamics/mpas_atm_iau.F",
+      "first_line": 152,
+      "last_line": 292,
+      "sha256": "5d4ac48ea4c566cdb0232d3c1c252ed8ec86e5d074077fc33e6c376421807ef8"
+    },
+    "mpas_constants.F:46-51": {
+      "path": "src/framework/mpas_constants.F",
+      "first_line": 46,
+      "last_line": 51,
+      "sha256": "ed7f5199d895f9ad97cb7c116882ce68c8216f1c7893427e0b9911f49e5bf242"
+    },
+    "mpas_atm_iau.F:241-246": {
+      "path": "src/core_atmosphere/dynamics/mpas_atm_iau.F",
+      "first_line": 241,
+      "last_line": 246,
+      "sha256": "cce0f153b3d986b69ea31d9fd8f6f2d3fcced875b939f55e42804654590bf9d1"
+    },
+    "mpas_atm_iau.F:248-285": {
+      "path": "src/core_atmosphere/dynamics/mpas_atm_iau.F",
+      "first_line": 248,
+      "last_line": 285,
+      "sha256": "0d515febadf69e7da50ad11cb505ea37dde86e1d0bb0221fa37665cd818e8a49"
+    }
+  }
+}

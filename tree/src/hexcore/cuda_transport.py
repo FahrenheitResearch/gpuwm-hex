@@ -248,35 +248,28 @@ extern "C" __global__ void fct_minmax_source(
     for (int tracer = 0; tracer < ntracers; ++tracer) {
         for (int k = 0; k < nlev; ++k) {
             const int index = Q3(tracer, k, cell, nlev, ncells);
-            const float current = mpas_add(old[index], mpas_mul(dt,
-                mpas_div(source[index], rho_old[C2(k, cell, ncells)])));
+            const float current = mpas_add(old[index], mpas_div(mpas_mul(dt, source[index]), rho_old[C2(k, cell, ncells)]));
             source_old[index] = current;
             float low = current;
             float high = current;
             if (k > 0) {
                 const float value = mpas_add(old[Q3(
-                    tracer, k - 1, cell, nlev, ncells)], mpas_mul(dt,
-                    mpas_div(source[Q3(
-                        tracer, k - 1, cell, nlev, ncells)],
-                        rho_old[C2(k - 1, cell, ncells)])));
+                    tracer, k - 1, cell, nlev, ncells)], mpas_div(mpas_mul(dt, source[Q3(
+                        tracer, k - 1, cell, nlev, ncells)]), rho_old[C2(k - 1, cell, ncells)]));
                 low = mpas_min(low, value);
                 high = mpas_max(high, value);
             }
             if (k + 1 < nlev) {
                 const float value = mpas_add(old[Q3(
-                    tracer, k + 1, cell, nlev, ncells)], mpas_mul(dt,
-                    mpas_div(source[Q3(
-                        tracer, k + 1, cell, nlev, ncells)],
-                        rho_old[C2(k + 1, cell, ncells)])));
+                    tracer, k + 1, cell, nlev, ncells)], mpas_div(mpas_mul(dt, source[Q3(
+                        tracer, k + 1, cell, nlev, ncells)]), rho_old[C2(k + 1, cell, ncells)]));
                 low = mpas_min(low, value);
                 high = mpas_max(high, value);
             }
             for (int slot = 0; slot < n_edges_on_cell[cell]; ++slot) {
                 const int neighbor = cells_on_cell[CES(cell, slot, max_edges)];
                 const float value = mpas_add(old[Q3(
-                    tracer, k, neighbor, nlev, ncells)], mpas_mul(dt,
-                    mpas_div(source[Q3(tracer, k, neighbor, nlev, ncells)],
-                        rho_old[C2(k, neighbor, ncells)])));
+                    tracer, k, neighbor, nlev, ncells)], mpas_div(mpas_mul(dt, source[Q3(tracer, k, neighbor, nlev, ncells)]), rho_old[C2(k, neighbor, ncells)]));
                 low = mpas_min(low, value);
                 high = mpas_max(high, value);
             }
@@ -592,6 +585,34 @@ class CudaAdvectionCoefficients:
     adv_cells_for_edge: Any
     h2d: TransferStats
     horizontal_order: int = 3
+    #: Stencil width of the host coefficients and the constants their
+    #: dropped slots held.  Every launcher takes the width from
+    #: ``adv_coefs.shape[1]`` and every kernel loops
+    #: ``slot < n_adv_cells_for_edge[edge]``, so the upload keeps only the
+    #: largest count the mesh has (``cuda_backend/compaction.py``).
+    #: 0 means "not compacted".
+    source_width: int = 0
+    adv_coefs_fill: float = 0.0
+    adv_coefs_3rd_fill: float = 0.0
+    adv_cells_for_edge_fill: int = 0
+
+    def full_layout(self) -> dict[str, Any]:
+        """The three stencil tables in the host's padded layout (transient)."""
+
+        from .cuda_backend.compaction import restore_device
+
+        width = int(self.source_width or self.adv_coefs.shape[1])
+        return {
+            "adv_coefs": restore_device(
+                self.adv_coefs, width, self.adv_coefs_fill, axis=1
+            ),
+            "adv_coefs_3rd": restore_device(
+                self.adv_coefs_3rd, width, self.adv_coefs_3rd_fill, axis=1
+            ),
+            "adv_cells_for_edge": restore_device(
+                self.adv_cells_for_edge, width, self.adv_cells_for_edge_fill, axis=1
+            ),
+        }
 
     @classmethod
     def from_host(cls, coefficients: Any) -> "CudaAdvectionCoefficients":
@@ -631,6 +652,37 @@ class CudaAdvectionCoefficients:
             raise ValueError("adv_cells_for_edge shape differs from adv_coefs")
         if not all(np.all(np.isfinite(value)) for value in host_float.values()):
             raise ValueError("advection coefficients contain non-finite values")
+        compact: dict[str, Any] = {}
+        from .cuda_backend.compaction import (
+            compact_host,
+            compaction_enabled,
+            uniform_tail,
+            used_width,
+        )
+
+        if compaction_enabled("ADVECTION"):
+            keep = used_width(host_index["n_adv_cells_for_edge"], width)
+            if keep < width:
+                tails = {
+                    name: uniform_tail(value, keep, axis=1)
+                    for name, value in (
+                        ("adv_coefs", host_float["adv_coefs"]),
+                        ("adv_coefs_3rd", host_float["adv_coefs_3rd"]),
+                        ("adv_cells_for_edge", host_index["adv_cells_for_edge"]),
+                    )
+                }
+                if all(value is not None for value in tails.values()):
+                    for name in ("adv_coefs", "adv_coefs_3rd"):
+                        host_float[name] = compact_host(host_float[name], keep, axis=1)
+                    host_index["adv_cells_for_edge"] = compact_host(
+                        host_index["adv_cells_for_edge"], keep, axis=1
+                    )
+                    compact = {
+                        "source_width": int(width),
+                        "adv_coefs_fill": float(tails["adv_coefs"]),
+                        "adv_coefs_3rd_fill": float(tails["adv_coefs_3rd"]),
+                        "adv_cells_for_edge_fill": int(tails["adv_cells_for_edge"]),
+                    }
         started = time.perf_counter()
         device = {
             **{name: cp.asarray(value) for name, value in host_float.items()},
@@ -643,6 +695,7 @@ class CudaAdvectionCoefficients:
             h2d=TransferStats(
                 sum(int(value.nbytes) for value in device.values()), elapsed
             ),
+            **compact,
         )
         result.validate()
         return result

@@ -110,6 +110,109 @@ def test_recovery_writes_every_species_and_reads_vapour_for_theta(
             water[index]).tobytes(), index
 
 
+@pytest.mark.parametrize("n", [1, 3, 5, 6, 8, 10, 23])
+def test_the_commit_publishes_the_whole_block_and_nothing_past_it(module, n):
+    """``commit_wsm6_state_v841_f32`` copies exactly the row's block.
+
+    THE BREAKAGE THIS PREVENTS, measured 2026-10-11: the kernel looped
+    ``s < 6`` whatever the row's length.  A three-species block (Kessler,
+    microphysics off) was read and written three planes past both buffers
+    and the card stopped with cudaErrorIllegalAddress at the first commit
+    of a 60 km and a 30 km global forecast; a block longer than six left
+    every plane after the sixth unpublished.  The live buffer here is
+    allocated six planes longer than the block and filled with a sentinel,
+    so an over-long copy is a failed assertion and not a card fault.
+    """
+
+    count = NLEV * NCELLS
+    pad = 6
+    sentinel = np.float32(-777.0)
+    rng = np.random.default_rng(11)
+    candidate_rt = _f32(rng.uniform(120.0, 400.0, (NLEV, NCELLS)))
+    candidate = _f32(rng.uniform(0.0, 2.0e-3, (n + pad, NLEV, NCELLS)))
+    live_rt = cp.zeros((NLEV, NCELLS), dtype=cp.float32)
+    live = cp.full((n + pad, NLEV, NCELLS), sentinel, dtype=cp.float32)
+    _launch(module, "commit_wsm6_state_v841_f32", count,
+            (np.int32(count), np.int32(n), candidate_rt, candidate,
+             live_rt, live))
+    cp.cuda.Stream.null.synchronize()
+
+    result = cp.asnumpy(live)
+    assert result[:n].tobytes() == cp.asnumpy(candidate[:n]).tobytes()
+    assert (result[n:] == sentinel).all()
+    assert cp.asnumpy(live_rt).tobytes() == cp.asnumpy(candidate_rt).tobytes()
+
+
+_OFF_ROW = sr.engine_species_row(
+    scheme_name="test-carrier-off", mp_physics=0, species=("qv", "qc", "qr"),
+    mass_species=("qv", "qc", "qr"), surface_accumulators=())
+
+
+@pytest.mark.parametrize("off", [False, True], ids=["kessler", "microphysics-off"])
+def test_the_recovery_commits_a_three_species_block(module, monkeypatch, off):
+    """The whole recovery on Kessler's block of three, through the real
+    launch site: three planes published, nothing written past them.
+
+    The live scalars are the first three planes of a nine-plane buffer, so
+    the launch site passing a wrong length shows as a touched sentinel."""
+
+    from types import SimpleNamespace
+
+    from hexcore import cuda_physics_v841 as physics
+    from hexcore import cuda_solve_region_v841 as solve_region
+
+    monkeypatch.setattr(
+        physics, "_launch",
+        lambda cache, name, count, args: _launch(module, name, count, args))
+    monkeypatch.setattr(
+        solve_region, "read_validation_word",
+        lambda invalid, cache: int(invalid.get()[0]))
+
+    # Microphysics off carries Kessler's three species and no grid-scale
+    # bucket.  The names alone select Kessler's row (and its RAINNC), so the
+    # off update names its own row; before it could, the recovery asked the
+    # update for a RAINNC it never carried.
+    row = _OFF_ROW if off else sr.KESSLER_SPECIES_ROW
+    names = row.names()
+    assert names == ("qv", "qc", "qr")
+    n, nedges = len(names), 3 * NCELLS
+    sentinel = np.float32(-777.0)
+    rng = np.random.default_rng(13)
+    backing = cp.full((n + 6, NLEV, NCELLS), sentinel, dtype=cp.float32)
+    state = SimpleNamespace(
+        rho=_f32(rng.uniform(0.4, 1.2, (NLEV, NCELLS))),
+        rho_u=cp.zeros((NLEV, nedges), dtype=cp.float32),
+        rho_theta=cp.zeros((NLEV, NCELLS), dtype=cp.float32),
+        scalars=backing[:n],
+        time_seconds=360.0,
+        dtype=np.float32,
+        validate=lambda **_: None,
+    )
+    species = {name: _f32(rng.uniform(0.0, 2.0e-3, (NLEV, NCELLS)))
+               for name in names}
+    # Microphysics off publishes no SR (no scheme forms one).
+    surface = {} if off else {"sr": _f32(np.zeros(NCELLS))}
+    for item in row.surface_accumulators:
+        surface[item.name] = _f32(np.full(NCELLS, 2.0))
+        surface[f"{item.name}v"] = _f32(np.full(NCELLS, 1.0))
+    update = physics.CudaPostRkWsm6UpdateV841(
+        theta=_f32(rng.uniform(250.0, 350.0, (NLEV, NCELLS))),
+        species=species, surface=surface,
+        radii={name: _f32(np.full((NLEV, NCELLS), 1.0e-5))
+               for name in row.radius_names},
+        time_seconds=360.0, row=row if off else None)
+    physics.recover_post_rk_wsm6_state_v841(
+        state, update, scalar_names=names, kernel_cache=None,
+        phase2_dt_seconds=360.0)
+    cp.cuda.Stream.null.synchronize()
+
+    result = cp.asnumpy(backing)
+    for index, name in enumerate(names):
+        assert result[index].tobytes() == cp.asnumpy(species[name]).tobytes(), name
+    assert (result[n:] == sentinel).all()
+    assert cp.asnumpy(state.rho_theta).all()
+
+
 def test_the_surface_validator_refuses_a_decreasing_accumulator(module):
     """Every row's bucket count, and the refusal still has teeth."""
 
@@ -124,11 +227,47 @@ def test_the_surface_validator_refuses_a_decreasing_accumulator(module):
         def run(previous):
             flag = cp.zeros(1, dtype=cp.int32)
             _launch(module, "validate_wsm6_surface_v841_f32", NCELLS,
-                    (np.int32(NCELLS), np.int32(buckets), np.float32(1.0),
+                    (np.int32(NCELLS), np.int32(buckets), np.int32(1),
+                     np.float32(1.0),
                      _table(acc), _table(inc), _table(previous),
+                     cp.asarray([v.signed_fallout for v in row.surface_accumulators], dtype=cp.int32),
                      sr_field, flag))
             cp.cuda.Stream.null.synchronize()
             return int(flag.get()[0])
 
         assert run(good) == 0, row.scheme_name
-        assert run(bad) == 1, row.scheme_name
+        assert run(bad) == (0 if all(v.signed_fallout for v in row.surface_accumulators) else 1), row.scheme_name
+
+
+@pytest.mark.parametrize("signed", [False, True])
+@pytest.mark.parametrize("broken", [None, "acc", "inc", "old", "sr"])
+def test_surface_fallout_policy_preserves_words_and_refuses_nonfinite(module, signed, broken):
+    # Includes the real Morrison refusal's magnitude and a positive bucket
+    # decreasing from a previous positive word. Neither is clipped or resummed.
+    acc = _f32([-1.3981764490221711e-14, 0.5])
+    inc = _f32([-1.3981764490221711e-14, -0.5])
+    old = _f32([0.0, 1.0])
+    sr_field = _f32([0.0, 0.5])
+    arrays = dict(acc=acc, inc=inc, old=old, sr=sr_field)
+    if broken:
+        arrays[broken][0] = cp.float32(cp.nan)
+    before = {key: value.get().tobytes() for key, value in arrays.items()}
+    flag = cp.zeros(1, dtype=cp.int32)
+    _launch(module, "validate_wsm6_surface_v841_f32", 2,
+            (np.int32(2), np.int32(1), np.int32(1), np.float32(1.0),
+             _table([acc]), _table([inc]), _table([old]),
+             cp.asarray([signed], dtype=cp.int32), sr_field, flag))
+    assert int(flag.get()[0]) == (0 if signed and broken is None else 1)
+    assert {key: value.get().tobytes() for key, value in arrays.items()} == before
+
+
+def test_signed_fallout_does_not_relax_a_neighbouring_strict_bucket(module):
+    acc = [_f32([-1e-14]), _f32([-1e-14])]
+    inc = [_f32([-1e-14]), _f32([-1e-14])]
+    old = [_f32([0.0]), _f32([0.0])]
+    flag = cp.zeros(1, dtype=cp.int32)
+    _launch(module, "validate_wsm6_surface_v841_f32", 1,
+            (np.int32(1), np.int32(2), np.int32(1), np.float32(1.0),
+             _table(acc), _table(inc), _table(old),
+             cp.asarray([1, 0], dtype=cp.int32), _f32([0.0]), flag))
+    assert int(flag.get()[0]) == 1

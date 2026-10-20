@@ -1,11 +1,11 @@
 """Opt-in local-timestep configuration, default OFF.
 
-This project's standing position keeps the **dycore** byte-identical to native
-MPAS-A v8.4.1 while retiring physics parity.  Native v8.4.1 has no local time
+The dycore implements MPAS-A v8.4.x numerics and checks whole-step agreement
+with stated dry-test tolerances. Physics is judged against observations.  Native v8.4.1 has no local time
 stepping: ``Registry.xml:64-68`` offers SRK3 only, and ``dt_dynamics``,
 ``rk_timestep(1:3)``, ``rk_sub_timestep(1:3)`` and ``number_sub_steps(1:3)`` are
 scalars at ``mpas_atm_time_integration.F:2053-2092``.  There is therefore no
-byte-identical local-timestep implementation and there never can be.
+native-equivalent local-timestep implementation: this option changes the schedule.
 
 ``config_local_timestep`` defaults to ``False``, and with it off the solver
 executes the pinned path unchanged, so the dycore pin is untouched by the
@@ -18,11 +18,13 @@ defect.
 (``src/hexcore/drivers/run_cuda_v841_full_physics_x4.py::EXECUTION_SOURCE_PINS``), so these
 fields live in a sibling subclass in this unpinned module instead.  The
 parent's ``validate()`` runs unchanged through a reconstructed parent
-instance, which keeps every pinned knob exactly as declared -- including
-``config_dt``, which since 2026-08-26 is admitted from the earned-anchor
-registry ``hexcore.dt_admission`` and holds exactly one anchor, 120.0 s.
-Local time stepping does not move the model time step: it changes how many
-acoustic sub-steps a column executes inside the step it already had.
+instance, so every knob is validated exactly as the parent validates it
+(since 2026-10-10 that is cadence integrality and the selectors the seam can
+run, with no timestep anchor).  Local time stepping does not move the model
+time step: it changes how many acoustic sub-steps a column executes inside
+the step it already had.  Its kernels are built for the RK3 six-sub-step
+stage counts (1, 3, 6), so ``--local-timestep`` takes that schedule (and the
+limiter off) when the run names none.
 """
 
 from __future__ import annotations
@@ -111,10 +113,10 @@ class V841LocalTimestepDryConfig(V841DryDycoreConfig):
     the transport, and cannot decide whether local time stepping conserves.
 
     ``config_dt``, ``config_number_of_sub_steps`` and
-    ``config_dynamics_split_steps`` are validated for sanity here but not
-    pinned to one value the way the column-physics lane pins them, which is
-    what lets the referee arm run the same mesh at a globally smaller acoustic
-    step.
+    ``config_dynamics_split_steps`` are validated for sanity here, as they
+    are in the column-physics lane since its certificate pins were retired
+    on 2026-10-10, so the referee arm can run the same mesh at a globally
+    smaller acoustic step.
     """
 
     config_local_timestep: bool = False

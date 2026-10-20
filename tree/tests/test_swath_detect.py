@@ -26,11 +26,20 @@ for candidate in (str(ROOT / "src"), str(ROOT / "tools")):
         sys.path.insert(0, candidate)
 
 import build_swath_fixture_history as fixture  # noqa: E402
+import site_support  # noqa: E402
 from hexcore.swath import detect as detect_module  # noqa: E402
 from hexcore.swath import registry, track  # noqa: E402
 from hexcore.swath.errors import SwathRefusal  # noqa: E402
 from hexcore.swath.geometry import great_circle_km  # noqa: E402
 from hexcore.swath.history import HistoryReader  # noqa: E402
+
+
+def _write_history(*args, **kwargs):
+    """fixture.build, after checking the engine carries the stream bridge the writer needs."""
+    from hexcore.restart_v842 import _STREAM_ENGINE
+
+    site_support.engine_bridge_or_skip(_STREAM_ENGINE, "writing the swath test history")
+    return fixture.build(*args, **kwargs)
 
 #: The size of the coarse global mesh this layer is designed against: the
 #: shipped ladder's L1 is a graded mesh of this order, and a search ball of
@@ -56,7 +65,7 @@ HOURS = [0.0, 3.0, 6.0, 9.0, 12.0]
 @pytest.fixture(scope="module")
 def history(tmp_path_factory: pytest.TempPathFactory) -> Path:
     target = tmp_path_factory.mktemp("swath-detect") / "coarse.nc"
-    return fixture.build(target, cells=CELLS, hours=HOURS, scenario=SCENARIO)
+    return _write_history(target, cells=CELLS, hours=HOURS, scenario=SCENARIO)
 
 
 @pytest.fixture(scope="module")
@@ -214,7 +223,7 @@ def test_a_failed_confirmation_is_recorded_as_a_drop_with_its_numbers(
          "bearing_deg": 90.0, "speed_km_per_hour": 40.0, "radius_km": 700.0,
          "amplitude": 4500.0, "wind_factor": 0.05},
     ]
-    path = fixture.build(tmp_path / "calm.nc", cells=CELLS, hours=HOURS, scenario=calm)
+    path = _write_history(tmp_path / "calm.nc", cells=CELLS, hours=HOURS, scenario=calm)
     with HistoryReader(path) as reader:
         result = detect_module.detect(reader, metrics)
     assert not [f for f in result.features if f.metric_id == "tropical_cyclone_centre"]

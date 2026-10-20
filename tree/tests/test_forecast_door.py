@@ -31,10 +31,134 @@ import pytest
 
 from hexcore import forecast_door as door
 from hexcore.cli import build_parser
+from hexcore.errors import ConfigurationRefusal
 
 
 X1_CELLS = 40_962
+
+
+@pytest.mark.parametrize('prefix', ['output', 'history', 'custom'])
+def test_native_success_products_use_mpas_frames_and_real_start(tmp_path, monkeypatch, prefix):
+    frame = tmp_path / f"{prefix}.2023-03-31_12.00.00.nc"
+    frame.touch()
+    (tmp_path / "native-physics-request.json").write_text(json.dumps(
+        {"grid": "/grid.nc", "init": "/init.nc", "start": "2023-03-31_12:00:00",
+         "streams": [{"name": "output", "directions": ["output"],
+                      "filename": prefix + ".$Y-$M-$D_$h.$m.$s.nc"}]}))
+    seen = []
+    monkeypatch.setattr(door, "run_default_products", lambda request, history, args:
+                        seen.append((door.products_command(request, history), history)))
+    args = argparse.Namespace(out=tmp_path, preflight=False, no_products=False)
+    door.native_default_products(args)
+    assert seen[0][1] == [frame]
+    assert seen[0][0][-2:] == ["--simulation-start", "2023-03-31_12:00:00"]
+    args.no_products = True
+    door.native_default_products(args)
+    assert len(seen) == 1
+
+
+def test_fullstep_shadow_is_separate_and_forwarded(tmp_path):
+    args = _namespace(tmp_path)
+    args.fullstep_local_timestep = True
+    request = door.resolve_request(args,registry=_registry())
+    argv = door.build_driver_argv(request)
+    assert '--fullstep-local-timestep' in argv
+    assert '--local-timestep' not in argv
+    assert argv[argv.index('--fullstep-lts-mode')+1] == 'shadow'
+    assert request.time_integration_order == 2
+
+
+def test_fullstep_disabled_receipt_keeps_shape(tmp_path):
+    args = _namespace(tmp_path)
+    args.fullstep_local_timestep = False
+    request = door.resolve_request(args,registry=_registry())
+    assert '--fullstep-local-timestep' not in door.build_driver_argv(request)
+    receipt = door.build_receipt(request=request,admission=None,bind_receipt=None,
+                                driver_receipt=None,history=[],driver_argv=[],seconds=0,status='test')
+    assert 'fullstep_lts' not in receipt
+
+
+def test_fullstep_only_knob_disabled_is_refused_even_at_default(tmp_path):
+    args = _namespace(tmp_path)
+    args.fullstep_lts_max_rate = 16
+    with pytest.raises(door.ForecastDoorRefusal,match='ignored'):
+        door.resolve_request(args,registry=_registry())
+
+
+def test_fullstep_active_is_forwarded_with_the_default_top_rate(tmp_path):
+    # Retired refusal: active mode used to stop here for want of a per-class
+    # physics clock.  It now resolves and reaches the driver, which owns the
+    # refusals that remain.
+    args = _namespace(tmp_path)
+    args.fullstep_local_timestep = True
+    args.fullstep_lts_mode = 'active'
+    request = door.resolve_request(args,registry=_registry())
+    argv = door.build_driver_argv(request)
+    assert argv[argv.index('--fullstep-lts-mode')+1] == 'active'
+    # 8 guards the full-physics top-rate-16 stop at 10.3 h (drivers/fullstep_lts_forecast_v841.py)
+    assert argv[argv.index('--fullstep-lts-max-rate')+1] == '8'
+
+
+def test_fullstep_active_resolves_on_several_cards(tmp_path):
+    # Retired refusal (multi-card stage): active LTS now cuts every rate class
+    # into blocks across the same-host cards, so the request resolves and is
+    # forwarded; the same-host executor routes it to the class executor.
+    args = _namespace(tmp_path)
+    args.fullstep_local_timestep = True
+    args.fullstep_lts_mode = 'active'
+    args.samehost_devices = '0,1'
+    request = door.resolve_request(args,registry=_registry())
+    argv = door.build_driver_argv(request)
+    assert argv[argv.index('--fullstep-lts-mode')+1] == 'active'
+
+
+def test_fullstep_shadow_still_refuses_more_than_one_card(tmp_path):
+    args = _namespace(tmp_path)
+    args.fullstep_local_timestep = True
+    args.samehost_devices = '0,1'
+    with pytest.raises(door.ForecastDoorRefusal,match='halo duplicates'):
+        door.resolve_request(args,registry=_registry())
+
+
+def test_samehost_ranks_route_active_lts_to_the_class_executor(monkeypatch):
+    from types import SimpleNamespace
+    from hexcore.drivers import fullstep_lts_forecast_v841 as fullstep
+    from hexcore.drivers import samehost_forecast_v841 as samehost
+
+    seen = {}
+
+    def fake(forecast, *, native_execute, policy, devices, memory_floor_by_device=None, **kwargs):
+        seen.update(policy=policy, devices=devices, native=native_execute, keys=sorted(kwargs))
+        return {"routed": True}
+
+    monkeypatch.setattr(fullstep, "execute_fullstep_lts", fake)
+    forecast = SimpleNamespace(execute_forecast=None)
+    with samehost.installed(forecast, devices=(0, 1), layouts_path=None, part_path=None):
+        result = forecast.execute_forecast(host={}, fullstep_lts_options={
+            "fullstep_local_timestep": True, "fullstep_lts_mode": "active", "fullstep_lts_max_rate": 8})
+        assert result == {"routed": True}
+        assert seen["devices"] == (0, 1) and seen["policy"]["fullstep_lts_mode"] == "active"
+        assert "fullstep_lts_options" not in seen["keys"]
+        with pytest.raises(ValueError, match="halo duplicates"):
+            forecast.execute_forecast(host={}, fullstep_lts_options={
+                "fullstep_local_timestep": True, "fullstep_lts_mode": "shadow"})
 X4_CELLS = 163_842
+
+
+@pytest.mark.parametrize("execution", ["single", "samehost", "lts"])
+def test_cycling_flags_reach_each_forecast_executor(tmp_path, execution):
+    args = _namespace(tmp_path, checkpoint_hours="3,6", restart_from=tmp_path / "restart.pkl",
+                      jedi_background=True, da_analysis=tmp_path / "analysis.nc")
+    if execution == "samehost":
+        args.samehost_devices = "0,1"
+    if execution == "lts":
+        args.fullstep_local_timestep = True
+        args.fullstep_lts_mode = "active"
+    argv = door.build_driver_argv(door.resolve_request(args, registry=_registry()))
+    assert argv[argv.index("--checkpoint-hours") + 1] == "3,6"
+    assert argv[argv.index("--restart-from") + 1] == str(args.restart_from.absolute())
+    assert argv[argv.index("--da-analysis") + 1] == str(args.da_analysis.absolute())
+    assert "--jedi-background" in argv
 V15_CELLS = 38_857
 MIB = 1024**2
 GIB = 1024**3
@@ -52,6 +176,8 @@ def _proven_architecture(monkeypatch):
     monkeypatch.setattr(door, "read_device_compute", lambda: (12, 0))
     monkeypatch.setattr(door, "read_nvrtc_targets", lambda: NVRTC_TARGETS)
     monkeypatch.setattr(door, "probe_numeric_route", _no_probe)
+    from hexcore.drivers import samehost_forecast_v841
+    monkeypatch.setattr(samehost_forecast_v841, "visible_card_memory", lambda: (32 * GIB,))
 
 
 #: The targets CUDA 13's NVRTC lists.
@@ -431,6 +557,43 @@ def test_half_a_measured_footprint_row_is_refused(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # admission: the measured model, decided against memory measured NOW
+
+@pytest.mark.parametrize('options', [
+    '{"sppt":true,"degree":48}',
+    '{"skeb":true,"degree":24}',
+    '{"sppt":true,"skeb":true,"sppt_scales":[[0.3,500000,600,91]]}',
+])
+def test_stochastic_array_threshold_agrees_with_driver_floor(tmp_path, options):
+    from dataclasses import replace
+    from hexcore.device_admission import required_free_bytes, harmonic_basis_bytes
+    request = door.resolve_request(_namespace(tmp_path), registry=_registry())
+    request = replace(request, stochastic=options)
+    from hexcore.stochastic import StochasticConfig
+    basis = harmonic_basis_bytes(request.cells, StochasticConfig.parse(options).degree)
+    arrays = door.stochastic_array_ledger(request.cells, options)
+    array_bytes = sum(arrays.values())
+    model = door._driver_floor_model(request)
+    required = required_free_bytes(request.cells, model, request.headroom_bytes) + array_bytes
+    args = dict(mesh=request.mesh, cells=request.cells, total_bytes=required*2,
+                headroom_bytes=request.headroom_bytes, registry={}, model=model,
+                stochastic=request.stochastic)
+    rejected = door.admission_verdict(**args, free_bytes=required-1)
+    accepted = door.admission_verdict(**args, free_bytes=required)
+    assert not rejected.admitted and accepted.admitted
+    assert rejected.fitted_cells < request.cells <= accepted.fitted_cells
+    assert accepted.as_dict()['stochastic_basis_bytes'] == basis
+    assert accepted.as_dict()['stochastic_array_bytes'] == array_bytes > basis
+    assert accepted.as_dict()['stochastic_arrays'] == arrays
+    argv = door.build_driver_argv(request)
+    assert int(argv[argv.index('--required-free-bytes')+1]) == required
+
+
+def test_disabled_stochastic_arrays_do_not_change_admission():
+    assert door.stochastic_array_ledger(40962, None) == {}
+    assert door.stochastic_array_bytes(40962, '{"sppt":false,"skeb":false}') == 0
+    # Inactive SPPT scales are neither constructed nor charged for SKEB-only.
+    assert door.stochastic_array_bytes(40962, '{"skeb":true}') == door.stochastic_array_bytes(
+        40962, '{"skeb":true,"sppt_scales":[[0.3,500000,600,91]]}')
 # ---------------------------------------------------------------------------
 def test_the_shipped_model_is_the_measured_row() -> None:
     # The merged-tip row of record: the deeper pin against the raw evidence
@@ -443,13 +606,26 @@ def test_the_shipped_model_is_the_measured_row() -> None:
         "off the shaped row is how a caller silently prices a mesh without "
         "the workspace terms"
     )
-    # x1.40962 at this row is the 8,874 MiB measured peak, within rounding.
-    predicted = door.FOOTPRINT_MODEL.predict_bytes(X1_CELLS) / MIB
-    assert predicted == pytest.approx(8874.0, abs=1.0)
-    # x4.163842 is the row's other fitted point: the 20,446 MiB peak.
-    assert door.FOOTPRINT_MODEL.predict_bytes(X4_CELLS) / MIB == pytest.approx(
-        20446.0, abs=1.0
-    )
+    # Today's row is measured on today's build (the hex memory census cuts,
+    # device_admission.CURRENT_GLOBAL_ROW): nothing restated, and it
+    # reproduces its two measured peaks, 5,726 MiB at x1.40962 and 12,244 MiB
+    # at x1.163842, within rounding.
+    from hexcore.device_admission import STACK_RESTATEMENT_BYTES_PER_CELL, _row_model
+
+    model = door.FOOTPRINT_MODEL
+    assert model.restated_bytes_per_cell == 0.0
+    assert model.predict_bytes(X1_CELLS) / MIB == pytest.approx(5726.0, abs=1.0)
+    assert model.predict_bytes(X4_CELLS) / MIB == pytest.approx(12244.0, abs=1.0)
+    # The 2026-08 proof row it replaced, without its restatement, is still the
+    # 8,874 and 20,446 MiB it was fitted from.
+    proof = _row_model("global/170sm")
+    assert proof.restated_bytes_per_cell == STACK_RESTATEMENT_BYTES_PER_CELL
+
+    def measured_part(cells: int) -> float:
+        return (proof.predict_bytes(cells) - proof.restated_bytes_per_cell * cells) / MIB
+
+    assert measured_part(X1_CELLS) == pytest.approx(8874.0, abs=1.0)
+    assert measured_part(X4_CELLS) == pytest.approx(20446.0, abs=1.0)
 
 
 def test_a_twelve_gib_card_admits_the_published_global_mesh() -> None:
@@ -466,7 +642,7 @@ def test_a_twelve_gib_card_admits_the_published_global_mesh() -> None:
 
 
 def test_a_ten_gib_card_in_use_refuses_and_names_the_shortfall() -> None:
-    free = 7374 * MIB
+    free = 5900 * MIB
     verdict = door.admission_verdict(
         mesh="x1.40962",
         cells=X1_CELLS,
@@ -481,9 +657,9 @@ def test_a_ten_gib_card_in_use_refuses_and_names_the_shortfall() -> None:
         door.require_admitted(verdict)
     message = str(caught.value)
     assert "x1.40962" in message
-    # The published row (5,016.5 MiB + 98,748 B/cell) reproduces the
-    # measured 8,874 MiB x1 peak to publication rounding: 8,874.0 MiB.
-    assert "8,874" in message or "8874" in message
+    # Today's row reproduces the measured 5,726 MiB x1 peak of the build it
+    # prices (device_admission.CURRENT_GLOBAL_ROW).
+    assert "5,726" in message or "5726" in message
     assert "MiB" in message
     # The remedy is not "try again": it is a fitted alternative, by name.
     assert "fits" in message or "fitted" in message
@@ -681,6 +857,25 @@ def test_the_driver_vector_carries_the_run_and_maps_the_checkout_flag(
     assert argv[argv.index("--arwen-checkout") + 1] == str(request.gpuwm_checkout)
     assert "--preflight-only" not in argv
     assert "--local-timestep" not in argv
+    # The schedule always reaches the driver explicitly: MPAS-A's Registry
+    # defaults (hexcore.mpas_defaults) unless the request names others.
+    assert argv[argv.index("--time-integration-order") + 1] == "2"
+    assert argv[argv.index("--acoustic-substeps") + 1] == "4"
+    assert argv[argv.index("--radiation-seconds") + 1] == "1800.0"
+    assert "--monotonic" in argv and "--no-monotonic" not in argv
+
+
+@pytest.mark.parametrize("count,radiation", [(4, 900.0), (2, 1800.0)])
+def test_the_requested_schedule_reaches_the_internal_parser(tmp_path, count, radiation):
+    from hexcore.drivers.run_cuda_v841_forecast import parse_args
+    # dt 60 divides both radiation intervals; 900 s does not divide the
+    # row's 120 s, which the door now refuses by name before the card.
+    request = door.resolve_request(_namespace(tmp_path, time_integration_order=2,
+        acoustic_substeps=count, radiation_seconds=radiation, monotonic=True, dt="60"),
+        registry=_registry())
+    parsed = parse_args(door.build_driver_argv(request))
+    assert (parsed.time_integration_order, parsed.acoustic_substeps, parsed.radiation_seconds,
+            parsed.monotonic) == (2, count, radiation, True)
 
 
 def test_the_opt_in_lane_reaches_the_driver_only_when_asked(tmp_path: Path) -> None:
@@ -691,6 +886,18 @@ def test_the_opt_in_lane_reaches_the_driver_only_when_asked(tmp_path: Path) -> N
     argv = door.build_driver_argv(request)
     assert "--local-timestep" in argv
     assert argv[argv.index("--local-timestep-rates") + 1] == "1,3,6"
+
+
+def test_boundary_fingerprint_cadence_preserves_default_and_rejects_negative(tmp_path):
+    args = _namespace(tmp_path)
+    request = door.resolve_request(args, registry=_registry())
+    assert "--fingerprint-every" not in door.build_driver_argv(request)
+    args.boundary_fingerprint_every = 36
+    request = door.resolve_request(args, registry=_registry())
+    argv = door.build_driver_argv(request)
+    assert argv[argv.index("--fingerprint-every") + 1] == "36"
+    args.boundary_fingerprint_every = -1
+    assert "nonnegative" in _refusal(args)
 
 
 def test_the_door_leaves_destination_creation_to_the_driver(
@@ -706,6 +913,10 @@ def test_the_door_leaves_destination_creation_to_the_driver(
     """
 
     seen: dict[str, bool] = {}
+    from hexcore import kernel_prewarm
+    # This test supplies a CPU driver. Compile replay has its own tests.
+    monkeypatch.setattr(kernel_prewarm, "install_recorder", lambda: None)
+    monkeypatch.setattr(kernel_prewarm, "start_replay", lambda: None)
 
     class _Driver:
         @staticmethod
@@ -728,8 +939,10 @@ def test_the_door_leaves_destination_creation_to_the_driver(
     monkeypatch.setattr(
         door, "_bind", lambda binding, driver, request: {"rebound": True}
     )
+    # Free memory ample for x1.40962 on today's restated row; this test is
+    # about destination creation, not the admission number.
     monkeypatch.setattr(
-        door, "measure_device_memory", lambda: (11 * GIB, 12 * GIB)
+        door, "measure_device_memory", lambda: (15 * GIB, 16 * GIB)
     )
     arguments = _namespace(tmp_path)
     rc = door.run_forecast(arguments)
@@ -738,6 +951,87 @@ def test_the_door_leaves_destination_creation_to_the_driver(
     # verdict from the stub; the point of this test is that no
     # ForecastDoorRefusal wrapping FileExistsError was raised above.
     assert rc == 1
+    import importlib.util
+    if importlib.util.find_spec("gpuwm") is None or importlib.util.find_spec("gpuwm.timeline") is None:
+        # No engine ledger (gpuwm 2.8.7 and earlier): nothing is recorded.
+        assert not (arguments.out / "timeline.jsonl").exists()
+        return
+    events = [json.loads(line) for line in (arguments.out / "timeline.jsonl").read_text().splitlines()]
+    assert [(event["stage"], event["phase"]) for event in events] == [
+        ("prep.door", "begin"), ("forecast.construct", "begin"),
+        ("forecast.construct", "mark"), ("prep.door", "end"), ("finish", "mark")]
+    assert all(event["product"] == "hex" for event in events)
+
+
+def test_samehost_two_device_run_finishes_the_door_receipt(tmp_path, monkeypatch):
+    """A successful N-rank driver must also return a successful CLI receipt."""
+    import sys
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from hexcore.drivers import samehost_forecast_v841 as samehost
+    from hexcore import engine_per_card, kernel_prewarm
+    from hexcore.cuda_backend import runtime
+
+    # This receipt fixture supplies CPU admission and a CPU driver. Do not
+    # open a real CUDA context or replay the machine's kernel manifest before
+    # invoking that stub (the same-host prewarm path does both on GPU hosts).
+    monkeypatch.setattr(runtime, "require_cuda", lambda **kwargs: None)
+    monkeypatch.setattr(kernel_prewarm, "install_recorder", lambda: None)
+    monkeypatch.setattr(kernel_prewarm, "start_replay", lambda **kwargs: None)
+    # The forward-merged door also binds engine modules per card before the
+    # CPU driver stub. Supply a fake provider and record that binding without
+    # importing CuPy or creating a device context in this receipt-only test.
+    fake_cupy = SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "cupy", fake_cupy)
+    bound = []
+    monkeypatch.setattr(engine_per_card, "bind_engine_modules_per_card", bound.append)
+
+    selected = []
+    options = {"devices": (0, 1), "admission_records": [
+        {"device": 0, "compute_capability": [12, 0]},
+        {"device": 1, "compute_capability": [12, 0]},
+    ]}
+
+    @contextmanager
+    def installed(driver, **received):
+        assert received == options
+        selected.append(True)
+        try:
+            yield
+        finally:
+            selected.pop()
+
+    def admit(request, registry, received, module):
+        assert received is options
+        return door.admission_verdict(mesh=request.mesh, cells=request.cells,
+            free_bytes=96 * GIB, total_bytes=96 * GIB,
+            headroom_bytes=door.DEFAULT_HEADROOM_BYTES, registry=registry)
+
+    def driver_main(argv):
+        assert selected == [True]
+        output = Path(argv[argv.index("--output") + 1])
+        output.mkdir()
+        (output / "cuda-history.2026-08-24_01.00.00.nc").write_bytes(b"driver-owned history")
+        (output / door.DRIVER_RECEIPT_NAME).write_text(json.dumps({
+            "status": "passed", "forecast": {"admission": options["admission_records"]}}))
+        return 0
+
+    monkeypatch.setattr(door, "load_registry", lambda repo: _registry())
+    monkeypatch.setattr(door, "_load_drivers", lambda repo: (object(), SimpleNamespace(main=driver_main)))
+    monkeypatch.setattr(door, "_bind", lambda binding, driver, request: {"rebound": True})
+    monkeypatch.setattr(samehost, "request_options", lambda arguments, request: options)
+    monkeypatch.setattr(samehost, "admit_request", admit)
+    monkeypatch.setattr(samehost, "installed", installed)
+    monkeypatch.setattr(door, "admit_architecture", lambda: pytest.fail("same-host already admits every card"))
+    receipt_path = tmp_path / "complete-door.json"
+    arguments = _namespace(tmp_path, samehost_devices="0,1", receipt=str(receipt_path))
+    assert door.run_forecast(arguments) == 0
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "passed"
+    assert receipt["architecture"] is None
+    assert receipt["driver_receipt"]["forecast"]["admission"] == options["admission_records"]
+    assert selected == []
+    assert bound == [fake_cupy]
 
 
 def test_preflight_asks_the_driver_for_a_preflight_and_no_destination(
@@ -1058,7 +1352,7 @@ def _provider_row_name() -> str:
     names = sorted(
         name
         for name in admission.backend_rows()
-        if name != admission.DEFAULT_BACKEND
+        if name not in admission.IN_TREE_ROWS
     )
     if not names:
         pytest.skip(
@@ -1106,3 +1400,53 @@ def test_a_default_run_carries_no_backend_token(tmp_path):
     argv = door.build_driver_argv(request)
     assert "--physics-backend" not in argv
     assert "--source-table" not in argv
+
+
+def test_boundary_fingerprint_interval_reaches_the_driver(tmp_path: Path) -> None:
+    request = door.resolve_request(
+        _namespace(tmp_path, fingerprint_every=720), registry=_registry()
+    )
+    argv = door.build_driver_argv(request)
+    assert argv[argv.index("--fingerprint-every") + 1] == "720"
+
+
+def test_negative_boundary_fingerprint_interval_refuses(tmp_path: Path) -> None:
+    with pytest.raises(door.ForecastDoorRefusal, match="nonnegative"):
+        door.resolve_request(
+            _namespace(tmp_path, fingerprint_every=-1), registry=_registry()
+        )
+
+
+@pytest.mark.parametrize("first,alias", [(720, 0), (0, 720), (720, 720)])
+def test_boundary_fingerprint_alias_has_one_effective_schedule(tmp_path, first, alias):
+    request = door.resolve_request(
+        _namespace(tmp_path, fingerprint_every=first, boundary_fingerprint_every=alias),
+        registry=_registry(),
+    )
+    argv = door.build_driver_argv(request)
+    assert argv.count("--fingerprint-every") == 1
+    assert argv[argv.index("--fingerprint-every") + 1] == "720"
+
+
+def test_conflicting_boundary_fingerprint_aliases_refuse(tmp_path):
+    with pytest.raises(door.ForecastDoorRefusal, match="two different identity schedules"):
+        door.resolve_request(
+            _namespace(tmp_path, fingerprint_every=720, boundary_fingerprint_every=360),
+            registry=_registry(),
+        )
+
+
+def test_resident_member_publishes_standard_forecast_discovery_receipt(tmp_path):
+    from hexcore import multi_member, products_door
+    request = door.resolve_request(_namespace(tmp_path), registry=_registry())
+    request.out.mkdir()
+    history = request.out / 'cuda-history.2026-08-24_00.00.00.nc'
+    history.write_bytes(b'frame discovery fixture')
+    multi_member.publish_forecast_receipt(door, request, {'steps': request.steps}, {'mesh': request.mesh},
+                                         {'sm': '120'}, 7.25, 'passed')
+    receipt = products_door.forecast_receipt(request.out)
+    assert receipt['mesh']['grid'] == str(request.grid)
+    assert receipt['init']['path'] == str(request.init)
+    assert receipt['history'] == [str(history)]
+    assert receipt['schedule']['start_time'] == request.start_time
+    assert receipt['door_seconds'] == 7.25 and receipt['status'] == 'passed'

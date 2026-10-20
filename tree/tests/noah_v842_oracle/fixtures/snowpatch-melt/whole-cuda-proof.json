@@ -1,0 +1,220 @@
+{
+  "scope": "complete corrected CUDA module, public captures and synthetic door; no forecast proof",
+  "forecast_proven": false,
+  "process_count": 1,
+  "backend": "hex-cuda",
+  "source_sha256": "6b4e9299215dbbac03b7e4197151d2ca435b4b6c62242a2186d2d6a3d314654f",
+  "checkout_commit": "72f0f5d89cd8b570f0758ff41e6fe6da706d4538",
+  "completed": true,
+  "exit_codes": {
+    "snowpatch-whole-cuda.exit": 0,
+    "snowpatch-whole-cuda-regression.exit": 0,
+    "snowpatch-public-cuda-repeat4.exit": 0,
+    "snowpatch-public-synthetic.exit": 0
+  },
+  "cuda_manifest": {
+    "path": "n1out/snowpatch-cuda-sm120/manifest.json",
+    "sha256": "33a97de02fd2d3a40b131c928e847765d0077df531aac29c7d3dbeb4ec6d9663"
+  },
+  "public_cuda_manifest": {
+    "path": "n1out/snowpatch-cuda-sm89/manifest.json",
+    "sha256": "641741b5084c0d2e753cc174446582b0bf1b056077aa5ec255e8b11055706a9e"
+  },
+  "public_replay_checkout_commit": "b236b26834a359c96809c5966bc39f740783532c",
+  "public_replay_adapter": {
+    "path": "hex/tree/tests/noah_v842_oracle/replay_f1_cuda.py",
+    "sha256": "883091c8bc9d99acdef106956bb285ed23835efcc15217151811e6033ed594d3"
+  },
+  "matrix": {
+    "path": "receipts/snowpatch-whole-cuda/whole-fixed-cuda-result.json",
+    "sha256": "5f8346f398f5fb87b806125657b339075e7fd5dcc6d4079e6fa446b91bae04d9"
+  },
+  "matrix_receipts": [
+    {
+      "path": "receipts/snowpatch-whole-cuda/pipeline-cuda.json",
+      "sha256": "330d62db9b6a2075cd6ef26a36d5dd7cc4983b3a01af6429d6169c8d11113a6f"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-driver-cuda.json",
+      "sha256": "b0cd0eb30bc902945457e3e0540ec2cc783e17629b89fe8f257b2c0b94d1ac75"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-corrected-current-cuda.json",
+      "sha256": "ab67da22eb79caf515fe34fdabcf1ee46efa0eb534c9fdec154ef187f76b4fa1"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.2562-2022-12-22_12.00.00-init-current-cuda.json",
+      "sha256": "33320c9be233ff631e356169e0c0f50b8df20d2f98a2efb42091ad4f8c556673"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.2562-2022-12-22_12.00.00-driver-current-cuda.json",
+      "sha256": "c26512eff9f0872041a810b1789ae1dd76fb1e149473ca6526ffa59dcf2d6b30"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.2562-2023-03-31_12.00.00-init-current-cuda.json",
+      "sha256": "33320c9be233ff631e356169e0c0f50b8df20d2f98a2efb42091ad4f8c556673"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.2562-2023-03-31_12.00.00-driver-current-cuda.json",
+      "sha256": "c26512eff9f0872041a810b1789ae1dd76fb1e149473ca6526ffa59dcf2d6b30"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.10242-2022-12-22_12.00.00-init-cuda.json",
+      "sha256": "9d84cdc171f9b3322101b2692c1d3622971d847aeb0676cf36f491c3730d3248"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.10242-2022-12-22_12.00.00-driver-cuda.json",
+      "sha256": "0c4850d2eea85f5e43e548e705e15e9bfd7b6ad5738f9fe8fdbdf5e99ddba102"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.10242-2023-03-31_12.00.00-init-cuda.json",
+      "sha256": "9d84cdc171f9b3322101b2692c1d3622971d847aeb0676cf36f491c3730d3248"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.10242-2023-03-31_12.00.00-driver-cuda.json",
+      "sha256": "0c4850d2eea85f5e43e548e705e15e9bfd7b6ad5738f9fe8fdbdf5e99ddba102"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.40962-2022-12-22_12.00.00-init-cuda.json",
+      "sha256": "ab67da22eb79caf515fe34fdabcf1ee46efa0eb534c9fdec154ef187f76b4fa1"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/real-x1.40962-2022-12-22_12.00.00-driver-cuda.json",
+      "sha256": "b0cd0eb30bc902945457e3e0540ec2cc783e17629b89fe8f257b2c0b94d1ac75"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/synthetic-state-export-cuda.json",
+      "sha256": "1eb05f830992949b60043384741e9108fb498d74333b8475806e1b6ba52998b5"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/usgs-state-export-cuda.json",
+      "sha256": "1d05e4e4b4e3eb79c861f18ef03848f090a26c925956cb6603ae67b4d5c66673"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/helpers-cuda.json",
+      "sha256": "95a9ee6452ba735b0a045de14cc2aff164d3fbf4e3b69b5cf5c4baabba7e7aa4"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/dump-state-cuda.json",
+      "sha256": "75d434531b85ef1f077cb83c56401ea04d65e0e9f2aca46f6f5dd6fb66905964"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/subnormal-cuda.json",
+      "sha256": "cf9bf9308e0734828f290b6bbd05fc0dbbb99eb3632a498535f1f2fea0102e2e"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/io-cuda.json",
+      "sha256": "35d12bd139c1d73e3a07a435f41e0faab264d94527946fd3bda0bfffff8abf8d"
+    },
+    {
+      "path": "receipts/snowpatch-whole-cuda/errors-cuda.json",
+      "sha256": "c95a8d37911593a00b894dd6d286fefde7e8201d8277e3247eeee564db1f4a06"
+    }
+  ],
+  "public_captures": [
+    {
+      "root": "december-convection",
+      "receipt": {
+        "path": "receipts/snowpatch-public-cuda/december-convection.json",
+        "sha256": "de16b2de6a04a179a89dd8fa45e309b059ef7679828979c8601e42e5165eae85"
+      },
+      "captures": 4,
+      "arrays": 784,
+      "words": 546812,
+      "differing_words": 0
+    },
+    {
+      "root": "december-mesoscale",
+      "receipt": {
+        "path": "receipts/snowpatch-public-cuda/december-mesoscale.json",
+        "sha256": "52c6aa84d1f67980e4961fd78a246b70be9fccb9658d5d2b5ffe0b76e9b35457"
+      },
+      "captures": 4,
+      "arrays": 784,
+      "words": 546812,
+      "differing_words": 0
+    },
+    {
+      "root": "large-convection",
+      "receipt": {
+        "path": "receipts/snowpatch-public-cuda/large-convection.json",
+        "sha256": "174b63645b5038267585110332c5cc27859a91f328671a5aa35d97fc5c4da407"
+      },
+      "captures": 1,
+      "arrays": 196,
+      "words": 2133503,
+      "differing_words": 0
+    },
+    {
+      "root": "large-mesoscale",
+      "receipt": {
+        "path": "receipts/snowpatch-public-cuda/large-mesoscale.json",
+        "sha256": "711bd3b122d6a85cfc257adfbb711bb788419b42be2af37b0946ef9a5d890c32"
+      },
+      "captures": 1,
+      "arrays": 196,
+      "words": 2133503,
+      "differing_words": 0
+    },
+    {
+      "root": "medium-2022-12-22-mesoscale",
+      "receipt": {
+        "path": "receipts/snowpatch-public-cuda/medium-2022-12-22-mesoscale.json",
+        "sha256": "7d198f80c43de0ffe92eb604fcad58755a80f2078a9d0aa2b1a9e94c5ac31b20"
+      },
+      "captures": 4,
+      "arrays": 784,
+      "words": 2144252,
+      "differing_words": 0
+    },
+    {
+      "root": "medium-2023-03-31-mesoscale",
+      "receipt": {
+        "path": "receipts/snowpatch-public-cuda/medium-2023-03-31-mesoscale.json",
+        "sha256": "d904023c33549081aa99f43daf6a0db9efa0ba6132e221b1c7a4b9ad12ce6c5f"
+      },
+      "captures": 4,
+      "arrays": 784,
+      "words": 2144252,
+      "differing_words": 0
+    },
+    {
+      "root": "small-convection",
+      "receipt": {
+        "path": "receipts/snowpatch-public-cuda/small-convection.json",
+        "sha256": "089b0716a3abaeff58536dd46b90a5a0e4cc3f29f82a9c22978ccc7ccada3613"
+      },
+      "captures": 4,
+      "arrays": 784,
+      "words": 546812,
+      "differing_words": 0
+    },
+    {
+      "root": "small-mesoscale",
+      "receipt": {
+        "path": "receipts/snowpatch-public-cuda/small-mesoscale.json",
+        "sha256": "70465b14f4538bd875bf9c3ea9af80fa97432a2154e1af2dd0656842f5abfed2"
+      },
+      "captures": 4,
+      "arrays": 784,
+      "words": 546812,
+      "differing_words": 0
+    }
+  ],
+  "regression": {
+    "path": "receipts/snowpatch-whole-cuda-regression.json",
+    "sha256": "1b766a2c396a6914ce2d85f513d16b6e47e11a39770ada29d837121b07eb1234"
+  },
+  "synthetic": {
+    "path": "receipts/snowpatch-public-synthetic.json",
+    "sha256": "77609afa388d0c4556bd4043692faab671e27584141aeeb6df82105eaf4ad441"
+  },
+  "assigned_host_execution": {
+    "path": "receipts/snowpatch-public-cuda-repeat4-host-a.log",
+    "sha256": "ccedbfb50478987204b148305ac59db038d87ce26116abef2e7b76962d542a27"
+  },
+  "assigned_host_exit": {
+    "path": "receipts/snowpatch-public-cuda-repeat4-host-a.exit",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  }
+}

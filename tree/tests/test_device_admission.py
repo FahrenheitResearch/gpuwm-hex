@@ -88,6 +88,17 @@ X1_TAG = "x1"
 X4_TAG = "x4"
 
 
+def _proof_stack(model: "surface.ShapedFootprintModel") -> "surface.ShapedFootprintModel":
+    """The row as it was measured: without the per-cell restatement to today's
+    stack (``STACK_RESTATEMENT_BYTES_PER_CELL``).  A test that checks a row
+    against the receipt it was fitted from reads this; a test that checks a
+    gate reads the restated row the door actually uses."""
+
+    from dataclasses import replace
+
+    return replace(model, restated_bytes_per_cell=0.0)
+
+
 def _load_tool(name: str, filename: str) -> object:
     spec = importlib.util.spec_from_file_location(name, (DRIVERS if (DRIVERS / filename).is_file() else TOOLS) / filename)
     assert spec is not None and spec.loader is not None
@@ -184,7 +195,7 @@ def test_the_shipped_row_reproduces_the_raw_merged_tip_peaks(receipts) -> None:
 
     for tag in (X1_TAG, X4_TAG):
         cells = _ledger_cells(tag)
-        predicted_mib = surface.FOOTPRINT_MODEL.predict_bytes(cells) / MIB
+        predicted_mib = _proof_stack(surface.FOOTPRINT_MODEL).predict_bytes(cells) / MIB
         assert predicted_mib == pytest.approx(_ledger_peak_mib(tag), abs=0.2), (
             f"the shipped row no longer reproduces the measured {tag} peak; "
             "either the coefficients moved without the evidence, or the "
@@ -221,9 +232,14 @@ def test_the_shipped_row_names_its_evidence_and_pin() -> None:
     """A row with no pin on it outlives the tree it was measured on."""
 
     provenance = surface.FOOTPRINT_MODEL.provenance
-    assert "memory-row-refit-20260826" in provenance
-    assert "26daaab7e" in provenance, "the row must name the engine pin it was measured at"
-    assert "2009db7" in provenance, "the row must name the hex tree it was measured at"
+    assert "hex/mem-census-cuts" in provenance and "e212d4a5" in provenance, (
+        "the row must name the hex tree it was measured at")
+    assert "cb2a7f4af54" in provenance, "the row must name the engine pin it was measured at"
+    # The 2026-08 proof row it replaced keeps its own evidence and pins.
+    historical = surface._row_model("global/170sm").provenance
+    assert "memory-row-refit-20260826" in historical
+    assert "26daaab7e" in historical
+    assert "2009db7" in historical
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +431,9 @@ def test_the_small_card_admits_the_meshes_its_own_measurement_ran(receipts) -> N
     flipped = desktop["registered_meshes_that_flip"]
     assert flipped, "the re-fit record no longer names the meshes the borrowed-row defect was about"
 
-    model = surface.model_for_card(surface.KNOWN_CARDS["10gib-68sm"])
+    # The desktop ran these meshes on the 2026-08 proof stack, so the claim
+    # is checked on the row as measured, not on today's restatement.
+    model = _proof_stack(surface.model_for_card(surface.KNOWN_CARDS["10gib-68sm"]))
     for mesh, row in flipped.items():
         cells = int(row["cells"])
         assert model.required_bytes(cells) < free_bytes, (
@@ -434,7 +452,10 @@ def test_an_unmeasured_card_still_gets_arithmetic_and_says_it_is_derived() -> No
     all means no gate, and an unlabelled row means a derivation is read as a
     measurement."""
 
-    card = surface.CardProfile("made up", 46)
+    # 82 SM: small enough to scale, large enough that the two card-scaled
+    # savings stay inside the 170 SM core of today's build (on a 46 SM card
+    # they exceed it and the derivation keeps the reference core instead).
+    card = surface.CardProfile("made up", 82)
     model = surface.model_for_card(card)
 
     assert model.measured is False
@@ -543,7 +564,7 @@ def test_agreement_is_to_the_cell_at_any_free_value() -> None:
     model = surface.FOOTPRINT_MODEL
     knees = [ws.knee_cells(model.card) for ws in surface.TILED_WORKSPACES]
     fitted_counts = []
-    for free in (8 * 1024**3, 10_066_521_290, 12 * 1024**3, 24 * 1024**3):
+    for free in (6 * 1024**3, 10_066_521_290, 12 * 1024**3, 24 * 1024**3):
         fitted = model.max_cells(free)
         fitted_counts.append(fitted)
         assert model.required_bytes(fitted) <= free
@@ -628,6 +649,55 @@ def test_the_door_forwards_its_own_requirement_into_the_driver_argv(
     assert request.model.tiled_bytes(x1_cells) == surface.FOOTPRINT_MODEL.tiled_bytes(
         x1_cells
     )
+
+
+def test_a_samehost_supplied_row_is_pinned_before_the_driver_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same-host admission keeps the supplied row unresolved; the argv needs it pinned.
+
+    THE BREAKAGE: every same-host run given --device-fixed-mib and
+    --device-bytes-per-cell was admitted and then stopped in
+    build_driver_argv with AttributeError ('_SuppliedRow' has no
+    'required_bytes'), because only the one-card route pinned the row.
+    """
+
+    monkeypatch.setattr(door, "read_card_profile", lambda: surface.REFERENCE_CARD)
+    monkeypatch.setattr(door, "seam_pin_problem", lambda checkout: None)
+    grid, static, init = (tmp_path / name for name in ("g.nc", "s.nc", "i.nc"))
+    for path in (grid, static, init):
+        path.write_bytes(b"x")
+    checkout = tmp_path / "engine"
+    checkout.mkdir()
+    parser = argparse.ArgumentParser()
+    door.add_forecast_arguments(parser)
+    x1_cells = 40962  # x1.40962; no ledger file needed for an argv question
+    registry = {"x1.40962": door.MeshRow("x1.40962", x1_cells, 120.0)}
+    arguments = parser.parse_args([
+        "--mesh", "x1.40962", "--grid", str(grid), "--static", str(static), "--init", str(init),
+        "--init-source", "GFS", "--hours", "1.0", "--history-every-minutes", "30",
+        "--out", str(tmp_path / "out"), "--gpuwm-checkout", str(checkout),
+        "--repo", str(door.PROJECT_ROOT or tmp_path),
+        "--device-fixed-mib", "2237.7", "--device-bytes-per-cell", "103696",
+    ])
+    request = door.resolve_request(arguments, registry=registry)
+    assert isinstance(request.model, door._SuppliedRow)  # what same-host admission is handed
+    # build_driver_argv also resolves a supplied row itself (8c0405a6, the same defect caught at the argv), so
+    # the unpinned request no longer raises; both routes must forward the same floor.
+    direct = door.build_driver_argv(request)
+    pinned = door._pinned_for_driver(request)
+    assert isinstance(pinned.model, surface.ShapedFootprintModel)
+    argv = door.build_driver_argv(pinned)
+    forwarded = int(argv[argv.index("--required-free-bytes") + 1])
+    assert forwarded == surface.required_free_bytes(x1_cells, pinned.model, pinned.headroom_bytes)
+    assert int(direct[direct.index("--required-free-bytes") + 1]) == forwarded
+    # A request with no supplied row is left exactly as it was.
+    plain = door.resolve_request(parser.parse_args([a for a in [
+        "--mesh", "x1.40962", "--grid", str(grid), "--static", str(static), "--init", str(init),
+        "--init-source", "GFS", "--hours", "1.0", "--history-every-minutes", "30",
+        "--out", str(tmp_path / "out"), "--gpuwm-checkout", str(checkout),
+        "--repo", str(door.PROJECT_ROOT or tmp_path)]]), registry=registry)
+    assert door._pinned_for_driver(plain) is plain
 
 
 def test_the_driver_refuses_a_non_positive_requirement() -> None:
@@ -759,17 +829,17 @@ def test_the_retired_proxy_refuses_the_largest_mesh_that_the_measured_row_admits
         .read_text(encoding="utf-8")
     )
     admission = receipt["forecast"]["memory_admission"]
-    node2_total = int(admission["total_bytes"])
-    node2_free = int(admission["free_bytes"])
+    card_total = int(admission["total_bytes"])
+    card_free = int(admission["free_bytes"])
 
     cells = binding_mod.MESH_BINDINGS[LARGEST_REGISTERED_MESH].n_cells
     retired = surface.retired_linear_floor_bytes(cells)
     measured = surface.required_free_bytes(cells)
 
     # the defect: the proxy asks for more than the card contains
-    assert retired > node2_total
+    assert retired > card_total
     # the fix: the shaped row fits inside what the card actually offered
-    assert measured < node2_free
+    assert measured < card_free
     # and it still sits above the predicted peak by exactly the model's margin
     predicted = int(round(surface.FOOTPRINT_MODEL.predict_bytes(cells)))
     assert measured - predicted == surface.FOOTPRINT_MODEL.margin_bytes()
@@ -1259,7 +1329,121 @@ def test_the_shaped_row_is_exact_on_the_two_meshes_it_was_fitted_from(receipts) 
     for tag in (X1_TAG, X4_TAG):
         cells = _ledger_cells(tag)
         peak_bytes = _ledger_peak_mib(tag) * MIB
-        gap = surface.required_free_bytes(cells) - peak_bytes
+        gap = surface.required_free_bytes(cells, _proof_stack(surface.FOOTPRINT_MODEL)) - peak_bytes
         assert gap == pytest.approx(
             surface.FOOTPRINT_MODEL.margin_bytes(), abs=0.2 * MIB
         )
+
+
+# ---------------------------------------------------------------------------
+# today's stack: the 30 km one-card run the proof rows under-priced
+# ---------------------------------------------------------------------------
+#: x1.655362, measured 2026-10-11 on an RTX PRO 6000 (188 SM, 97,887 MiB)
+#: through the bare forecast door at MPAS-A defaults, after the late-health
+#: fix: the 6 h run peaked 82,963 MiB on the card and the 1 h run 81,311 MiB,
+#: over a 559 MiB idle floor; the door saw 96,691.6 MiB free.
+GLOBAL30_CELLS = 655_362
+GLOBAL30_PEAK_6H_MIB = 82_963 - 559
+GLOBAL30_PEAK_1H_MIB = 81_311 - 559
+GLOBAL30_FREE_MIB = 96_691.6
+CARD_188SM = surface.KNOWN_CARDS["96gib-188sm"]
+
+
+def test_the_188sm_row_predicts_the_measured_30km_peak_within_five_percent() -> None:
+    """THE BREAKAGE: the door priced this run at 66,086 MiB (the 170 SM proof
+    row, derived for 188 SM), admitted it, and the run then filled the card.
+    The row measured on this card reproduces the 6 h peak it was split from
+    and over-predicts the shorter run by under five percent."""
+
+    # The record of that build: the row measured on this card.  The door now
+    # prices today's build (CURRENT_GLOBAL_ROW, derived for 188 SM).
+    model = surface._row_model("global/188sm")
+    assert model.measured is True and model.restated_bytes_per_cell == 0.0
+    predicted = model.predict_bytes(GLOBAL30_CELLS) / MIB
+    assert predicted == pytest.approx(GLOBAL30_PEAK_6H_MIB, abs=1.0)
+    assert 0.0 <= predicted - GLOBAL30_PEAK_1H_MIB < 0.05 * GLOBAL30_PEAK_1H_MIB
+    # The arithmetic the door used before this row existed: the 170 SM proof
+    # row derived for 188 SM (core grown by the local-memory backing store),
+    # 66,086 MiB -- 20 % under the peak.
+    from dataclasses import replace
+
+    reference = _proof_stack(surface._row_model("global/170sm"))
+    before = replace(reference, card=CARD_188SM, core_bytes=reference.core_bytes
+                     + surface.WIDEST_LAUNCHED_LOCAL_FRAME_BYTES
+                     * (CARD_188SM.resident_threads - surface.REFERENCE_CARD.resident_threads))
+    assert before.predict_bytes(GLOBAL30_CELLS) / MIB == pytest.approx(66_086.1, abs=0.2)
+
+
+def test_the_bare_30km_run_is_admitted_on_one_96gb_card_and_the_armed_one_refused() -> None:
+    """The door admits what fits and refuses what does not, with the number.
+
+    ``--stop-on-refusal`` arms the forecast rollback (two committed
+    boundaries plus the per-step physics export); on this card that is more
+    than the card holds, and the refusal must carry the requirement."""
+
+    registry = {"x1.655362": door.MeshRow("x1.655362", GLOBAL30_CELLS, 180.0)}
+    free = int(GLOBAL30_FREE_MIB * MIB)
+    # On the build the 30 km run was measured on (the 188 SM row of record):
+    from dataclasses import replace
+
+    historical = surface._row_model("global/188sm")
+    bare = door.admission_verdict(
+        mesh="x1.655362", cells=GLOBAL30_CELLS, free_bytes=free,
+        total_bytes=97_249 * MIB, headroom_bytes=None, registry=registry,
+        model=historical)
+    assert bare.admitted is True
+    armed_model = replace(historical, rollback_bytes_per_cell=surface.ROLLBACK_ARMED_BYTES_PER_CELL)
+    assert armed_model.rollback_bytes_per_cell == surface.ROLLBACK_ARMED_BYTES_PER_CELL
+    armed = door.admission_verdict(
+        mesh="x1.655362", cells=GLOBAL30_CELLS, free_bytes=free,
+        total_bytes=97_249 * MIB, headroom_bytes=None, registry=registry,
+        model=armed_model)
+    assert armed.admitted is False
+    assert armed.required_bytes == surface.required_free_bytes(GLOBAL30_CELLS, armed_model)
+    assert armed.required_bytes - bare.required_bytes == pytest.approx(
+        surface.ROLLBACK_ARMED_BYTES_PER_CELL * GLOBAL30_CELLS, abs=1.0)
+    # Today's build (hex memory census cuts) admits both on that card, and
+    # the armed run still pays exactly the rollback term.
+    today_bare = door.admission_verdict(
+        mesh="x1.655362", cells=GLOBAL30_CELLS, free_bytes=free,
+        total_bytes=97_249 * MIB, headroom_bytes=None, registry=registry,
+        model=surface.model_for_card(CARD_188SM))
+    today_armed = door.admission_verdict(
+        mesh="x1.655362", cells=GLOBAL30_CELLS, free_bytes=free,
+        total_bytes=97_249 * MIB, headroom_bytes=None, registry=registry,
+        model=surface.model_for_card(CARD_188SM, rollback_armed=True))
+    assert today_bare.admitted is True and today_armed.admitted is True
+    assert today_armed.required_bytes - today_bare.required_bytes == pytest.approx(
+        surface.ROLLBACK_ARMED_BYTES_PER_CELL * GLOBAL30_CELLS, abs=1.0)
+
+
+def test_the_door_arms_the_rollback_term_from_stop_on_refusal(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(door, "read_card_profile", lambda: CARD_188SM)
+    for armed in (False, True):
+        request = SimpleNamespace(lbc_dir=None, model=None, stop_on_refusal=armed)
+        model = door.resolve_admission_model(request)
+        assert model.rollback_bytes_per_cell == (
+            surface.ROLLBACK_ARMED_BYTES_PER_CELL if armed else 0.0)
+
+
+def test_the_restatement_rides_every_proof_stack_row_and_nothing_else() -> None:
+    """A row measured on the 2026-08 proof stack (limiter off, no graph
+    staging) carries the per-cell restatement; the row measured on today's
+    stack and the regional envelope do not, and a derived row inherits its
+    reference's."""
+
+    restated = surface.STACK_RESTATEMENT_BYTES_PER_CELL
+    assert restated == pytest.approx(124_655.2996 - 96_581.5833)
+    for key in ("global/170sm", "global/70sm", "global/68sm"):
+        assert surface._row_model(key).restated_bytes_per_cell == restated
+    assert surface._row_model("global/188sm").restated_bytes_per_cell == 0.0
+    assert surface.model_for_card(surface.KNOWN_CARDS["32gib-170sm"],
+                                  "limited-area").restated_bytes_per_cell == 0.0
+    # Today's global price is the census-cuts row, measured on its own build:
+    # nothing to restate, on any card.
+    for card in (*surface.KNOWN_CARDS.values(), surface.CardProfile("made up", 46)):
+        model = surface.model_for_card(card)
+        assert model.restated_bytes_per_cell == 0.0
+        assert model.bytes_per_cell == surface.CURRENT_GLOBAL_ROW["bytes_per_cell"]

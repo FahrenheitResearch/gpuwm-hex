@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/rw-surface"]
+exclude = ["crates/rw-sfc-series"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

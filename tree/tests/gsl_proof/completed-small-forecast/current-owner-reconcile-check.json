@@ -1,0 +1,36 @@
+{
+  "schema": "i4-current-owner-reconcile-check/v1",
+  "checked_at": "2026-10-14T02:16:08.680772+00:00",
+  "clean_hex_revision": "1e8e8148bf57a6c298728e9ae0b652ca32fca326",
+  "integration_revision": "4dfa70f372e6d6db6fdcb6703bb6be3612571bbd",
+  "ratchet_sha256": "8583ab06f35707e8f50fed3b7af2975e35d64a46e5d7b3935c69d0336d1e62da",
+  "patches": [
+    {
+      "path": "receipts/integrator-front-door.diff",
+      "sha256": "ce644e569c7c020efcd4aea053528352e6a71e03256fa2a4f77432cda9adc485",
+      "apply_check_exit": 0,
+      "applied": false
+    },
+    {
+      "path": "receipts/integrator-auxiliary-identity.diff",
+      "sha256": "e2ac283fe8e350ef5b8cbc23fa2077a29d9178f2ad2997f67f99151d068f9c73",
+      "apply_check_exit": 0,
+      "applied": false
+    },
+    {
+      "path": "receipts/current-owner-context-review/owner-context-proposed.diff",
+      "sha256": "ea685ace08a2143c57ae157427c34febcf8b4228284fcc9f111b13bdafaa84cb",
+      "apply_check_exit": 0,
+      "applied": false
+    },
+    {
+      "path": "receipts/integrator-difference-sheets.patch",
+      "sha256": "bf1ed0894fad55d9a70353d33342c731592a82088ae51e2065e6ba621f4ea4ea",
+      "apply_check_exit": 0,
+      "applied": false
+    }
+  ],
+  "owner_files_mutated": false,
+  "official_acceptance_claimed": false,
+  "combined_four_patch_apply_check_exit": 0
+}

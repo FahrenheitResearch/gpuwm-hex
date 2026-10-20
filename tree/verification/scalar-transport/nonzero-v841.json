@@ -1,0 +1,73 @@
+{
+  "native_changed": 66474,
+  "values": 66612,
+  "rounding_slots": 128,
+  "absolute_budget": 7.629452708869218e-18,
+  "limited_values": [
+    320,
+    320,
+    318,
+    318
+  ],
+  "cuda_native_max_absolute_error": 1.6263032587282567e-19,
+  "cpu_cuda_different_bits": 0,
+  "cuda_sha256": "e885eb1bb4eec9fc47c9699bf1e023282a066aa0075b6454e358fe074fdaf421",
+  "native_sha256": "ff673cc04183fe1a652461f9932e6c1837c2371705fdbd24b553d70c6eb0c480",
+  "production_repeat_a": {
+    "rho": "819847ccfb66de385a982b8896ce81869e4d685bf3291102b1879005e4dcc491",
+    "rho_theta": "e834d4284341c57dc433c1f2e5b65a00d679f67e778db63280cd9c31829de158",
+    "rho_u": "136b60787c538a6e798506cc794a5a68fb3724ec7fbb592e255b91ad063df00f",
+    "rho_w": "74430759d9c3297ade1d136690067ee2d3f66761b6669e9e13f8515b6b08169b",
+    "scalars": "1334c328898cf06bde8ced7868e8c1b0f29e3f73d1f5dee9ab589a655b40b7ec"
+  },
+  "production_repeat_b": {
+    "rho": "819847ccfb66de385a982b8896ce81869e4d685bf3291102b1879005e4dcc491",
+    "rho_theta": "e834d4284341c57dc433c1f2e5b65a00d679f67e778db63280cd9c31829de158",
+    "rho_u": "136b60787c538a6e798506cc794a5a68fb3724ec7fbb592e255b91ad063df00f",
+    "rho_w": "74430759d9c3297ade1d136690067ee2d3f66761b6669e9e13f8515b6b08169b",
+    "scalars": "1334c328898cf06bde8ced7868e8c1b0f29e3f73d1f5dee9ab589a655b40b7ec"
+  },
+  "fixture": {
+    "input_file": "x1.2562.init.nc",
+    "hashes": {
+      "x1.2562.init.nc": "896f46769b469a6a771fde2828b0224658c67e828117771ae59d2097f9da9b1d",
+      "namelist.atmosphere": "b625485401310a5c0d2938899775ef9bffa2c2df2b74a0e27f382e5398c1d392",
+      "streams.atmosphere": "faf1dffb85d5684eab37a5c3cfa6b6ea6f3f63e14a1891e0ea715a77d88c5d4f",
+      "t0/qv.bin": "f6992c09c7a5588fd17e69291736c112fd7b22d10c0a16e12825e21cab2ddf27",
+      "t0/rho_zz.bin": "c4852640d5f0611b623b7b029320f8f1cbd7f27aaac56f5564b241626b3aac6a",
+      "t0/variables.json": "fb716cfcda458d235a8bf7dbdedc80b6e3a86a08c5c9bf84783d292b40643da4",
+      "t1/qv.bin": "b3af4093b5883cb235325921fa9d63fc5845e0abe93e79fa3073f9dc8290fa40",
+      "t1/rho_zz.bin": "bc373899794bc8c66b95a259d2dc6b9b36944037fc9d4e7c443dc0b42fbac41c",
+      "t1/ruAvg.bin": "4153c1eb3cc980545bd11b43d820fd7bf64b296c7548e39c6d897995cf454cb9",
+      "t1/variables.json": "9efe9c63228a1ab9aaf1244afbdf8387136e7b0bea71bf43d259dc6ec2e0a798",
+      "t1/wwAvg.bin": "559c3e8756848b1ddb84d450260f08e8faf521f524b42a130e32c9ee63b45226"
+    },
+    "source_commit": "91c5eac175eebeaf4206bacd5cb50c39dff3c152",
+    "executable_sha256": "16a8fdbe796a3bb5f103ef917c296d6fbfaf863d3d632028f61ec1d7ae61db47",
+    "native": {
+      "dt_seconds": 20,
+      "time_integration_order": 2,
+      "acoustic_substeps": 4,
+      "monotonic": true
+    }
+  },
+  "source_url": "https://github.com/MPAS-Dev/MPAS-Model/blob/91c5eac175eebeaf4206bacd5cb50c39dff3c152/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L5097",
+  "boundary_block_bits": [
+    1065353216,
+    1073741824,
+    1077936128,
+    1082130432,
+    0,
+    0,
+    1088421888,
+    0,
+    0,
+    1088421888,
+    1082130432,
+    1084227584,
+    1086324736,
+    0
+  ],
+  "boundary_source_blocks_sha256": "41e491b85acd4ca01cd02509b996151315f076947a2be90c4a5063bbe1f1d72c",
+  "native_endpoint_comparison": "source-derived rounding envelope; native endpoint byte identity is not claimed"
+}

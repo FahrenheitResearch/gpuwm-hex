@@ -486,7 +486,7 @@ def build_regrid_weights(
         raise ConfigurationRefusal(
             "method",
             method,
-            "only spherical nearest-neighbor and inverse-distance interpolation are evidenced",
+            "only spherical nearest-neighbor and inverse-distance interpolation are implemented",
             "method='nearest' or method='inverse_distance'",
         )
     if not isinstance(neighbors, (int, np.integer)) or int(neighbors) < 1:

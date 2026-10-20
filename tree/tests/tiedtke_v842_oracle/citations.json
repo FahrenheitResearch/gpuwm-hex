@@ -1,0 +1,414 @@
+{
+  "release": "v8.4.2",
+  "commit": "f34984b2c89353cf31c235b08d3b4acd96b37bb3",
+  "pins": [
+    {
+      "citation": "module_cu_tiedtke.F:1004",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 1004,
+      "last_line": 1004,
+      "window_sha256": "7d0d2d1954946888edba26fc2d7d888c749950ea10ec584a34c4ad8a3ccd9311",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3180"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:1211",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 1211,
+      "last_line": 1211,
+      "window_sha256": "00560b6efb69902d1ed38e26075fbac943fc6d6a6b4e6bd19f771fe3938b948b",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:945"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:134-3001",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 134,
+      "last_line": 3001,
+      "window_sha256": "d75a924553b19ebcc61ae1d190203fb93cdb08232e6e061dedbd3bcb045d4dd1",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3308"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:134-475",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 134,
+      "last_line": 475,
+      "window_sha256": "8db0ae664ecf223e1655829aa5da5978176d76e00745f96e2bdd351a3da4a246",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3323"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:1350",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 1350,
+      "last_line": 1350,
+      "window_sha256": "f8ed3cbd8c924f556cefc16b180d066ac094fa7153615035edad97f549a2990d",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:1102"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:1513",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 1513,
+      "last_line": 1513,
+      "window_sha256": "8e52a313b168a85162ee0f0d88926390e230fc700545dadce1e7671f94c6ab9a",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:1280"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:1962",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 1962,
+      "last_line": 1962,
+      "window_sha256": "c73a180f0b8f717e15eb4141cef9a046a8dddc3aa6203e294bf5a5f057b17b4a",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:1830"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:2097",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 2097,
+      "last_line": 2097,
+      "window_sha256": "abbf3f6c7c18727504644c9ef41fdc228103a2e1f2486549a0de708fc9d140af",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:1956"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:2244",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 2244,
+      "last_line": 2244,
+      "window_sha256": "e69cabfaa85572be64b958d49e1e39e5ee00f0d5e19e931b21ffe0acfdde8b40",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:2131"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:2329",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 2329,
+      "last_line": 2329,
+      "window_sha256": "997829205565a69755ca3939ca1a63ad01f937528344ac758faa10e87cdc3d93",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:58"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:2428",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 2428,
+      "last_line": 2428,
+      "window_sha256": "507af5502f554de2c25a4c30b83362c9b45b42f04266f9233a93a6c1fcc385af",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:2367"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:2554",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 2554,
+      "last_line": 2554,
+      "window_sha256": "5017da960aca8984c8a23ad425463eed4da29fa5669c8e0a10201337642e6020",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:2511"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:2668",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 2668,
+      "last_line": 2668,
+      "window_sha256": "f11afcef3f79402a67e629c65c9432a7207037e22889312b447c632c01ae7418",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:2646"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:2749",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 2749,
+      "last_line": 2749,
+      "window_sha256": "da432a5af30dd3096bb9901d1f09810316ab0f7ea8c08870e03c08ae94509cd8",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:2706"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:2910",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 2910,
+      "last_line": 2910,
+      "window_sha256": "28d640e2351b0cddd8254319fb5a5c80bb3010cf62da743a280b5109ac6470b9",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:2954"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:3007",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 3007,
+      "last_line": 3007,
+      "window_sha256": "84e4ae0ee6e13a8a94af59c5241b7d3f1e266d6168afbd1f3fc3fb8599eec478",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3052"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:3029",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 3029,
+      "last_line": 3029,
+      "window_sha256": "83f9d58cafd4d3fe9d48e3c14560a1eaf54af7e308b6b862aa2a0b178ba17706",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3077"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:3048",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 3048,
+      "last_line": 3048,
+      "window_sha256": "89ea3fd21f1ca2ad28d2aecf32319daef3d4e943f3f885b89d8ccf41cd8b4eb2",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3102"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:3069",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 3069,
+      "last_line": 3069,
+      "window_sha256": "15e4742f2f0d90ae4e5b129b7b62397f43915bb9a61d8e183f6c88b794c08c05",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3133"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:331-376",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 331,
+      "last_line": 376,
+      "window_sha256": "6fefd019efbdfe52a6b0820399c8a820426dec099117642276ca5256dbc400bc",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3214"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:378-422",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 378,
+      "last_line": 422,
+      "window_sha256": "c59ceb2eb61d6fa69ea59a7ff20b789d28a96f035b39240fd666a8b5a2b905be",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3226"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:432-433",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 432,
+      "last_line": 433,
+      "window_sha256": "0f3e2706215db17e9ba1fa7145d6ae227df0432e3e5d7f5cbf5464ecad68bae2",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3247"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:435-469",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 435,
+      "last_line": 469,
+      "window_sha256": "6e455fa335895d9adf9c340d788f4c6445cb83fd3df93f52fb0a66f36044cb46",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3251"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:478-540",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 478,
+      "last_line": 540,
+      "window_sha256": "f2f56024ac7aae00c5e77ae4f689d48eb2e362c0425187c819103d5ba560b755",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3386"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:556",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 556,
+      "last_line": 556,
+      "window_sha256": "17b3e14b8aa6b6d1ca77503eaa344845f5f8f041e9fc7cf6ad6173776dc98ccc",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:237"
+      ]
+    },
+    {
+      "citation": "module_cu_tiedtke.F:707",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 707,
+      "last_line": 707,
+      "window_sha256": "516d377a6e3ec98a594c4a87158d31b3f4969ce4e2cd41640253e10ec4b49ae3",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:457"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:361-402",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 361,
+      "last_line": 402,
+      "window_sha256": "561b3235bf7970816d3ff4b45919d04db15b29c9db87dd427218223b89a592a9",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3388"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:405-478",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 405,
+      "last_line": 478,
+      "window_sha256": "ff7542f4cf80ddbd20f4ba78ddc6ba498d6dee4241f8563ab7c01fae53f7b597",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3457"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:405-621",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 405,
+      "last_line": 621,
+      "window_sha256": "f4599306a5f5159fc213a142a87d8143783015d5f26b646992f666f39f2aaba6",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:4"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:555-578",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 555,
+      "last_line": 578,
+      "window_sha256": "751835e04197f519ceda5986900586e86176fca1a57694ad6ee554e1d0180d8b",
+      "occurrences": 2,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3437",
+        "hexcore/mpasphys/tiedtke_v842.py:3457"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:624-676",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 624,
+      "last_line": 676,
+      "window_sha256": "ff962ab46079c474ed61e2b2873e682d4b98a8a24272ba418baa14f6d213b613",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3409"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:624-860",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 624,
+      "last_line": 860,
+      "window_sha256": "a1a5e9514711af1aa2227e855c7ba30359e784bbe863d23500cf7dcb41980b8b",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:4"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:790-825",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 790,
+      "last_line": 825,
+      "window_sha256": "61209516fda0b397ec3786657d3f727943843d59d3d3803188ba25803a9556b8",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3409"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:863-918",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 863,
+      "last_line": 918,
+      "window_sha256": "d8be4d3e0742d361a060d1aceb2bc29c90c9abeedbd5d8846252322ad2bd5144",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3428"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:863-988",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 863,
+      "last_line": 988,
+      "window_sha256": "0a77d43a5d9541fac0e24e56e5e95b1a5e083ccb31810dbf36bfcd1e91c1a0f1",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:4"
+      ]
+    },
+    {
+      "citation": "mpas_atmphys_driver_convection.F:971-983",
+      "source_path": "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F",
+      "first_line": 971,
+      "last_line": 983,
+      "window_sha256": "66f3b7fe9b1747df04718c6c2de43ac8729ee93b30a73cd95bd2dcd222222168",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3428"
+      ]
+    },
+    {
+      "citation": "physics_wrf/module_cu_tiedtke.F:134-3086",
+      "source_path": "src/core_atmosphere/physics/physics_wrf/module_cu_tiedtke.F",
+      "first_line": 134,
+      "last_line": 3086,
+      "window_sha256": "bbc1cdede8e151edc80fe86a03b40dce82967e6cdff440f2d745e097ac4be3ee",
+      "occurrences": 1,
+      "published_at": [
+        "hexcore/mpasphys/tiedtke_v842.py:3"
+      ]
+    }
+  ]
+}

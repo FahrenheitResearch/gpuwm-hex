@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from typing import Any
 
 import numpy as np
@@ -14,6 +15,23 @@ from .cuda_horizontal import (
     CudaSolveDiagnostics,
 )
 from .cuda_v841 import CudaV841Context
+
+
+def retain_pv_diagnostics() -> bool:
+    """Whether ``solve_diagnostics`` hands back its PV intermediates.
+
+    Default no (memory lane, 2026-10-15).  ``pv_vertex``, ``pv_cell`` and the
+    two APVM gradients are intermediates of ``pv_edge``: no device code reads
+    them after the APVM launch (the only readers are the CPU authority in
+    ``driver.py``, which forms its own).  Returning them kept four fields
+    (about 1.9 KB per column at 55 levels) alive for as long as the
+    diagnostics set lived -- through every RK stage's tendencies and, on the
+    CUDA-graph path, in the graph's staged inputs and retained scratch.
+    ``GPUWM_HEX_DIAG_PV_RETAIN=1`` restores the old allocation pattern and
+    hands them back, for A/B runs and for tools that dump them.
+    """
+
+    return os.environ.get("GPUWM_HEX_DIAG_PV_RETAIN", "0") == "1"
 
 
 _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
@@ -77,6 +95,65 @@ extern "C" __global__ void vertex_diagnostics_v841_f32(
     }
 }
 
+#ifndef HEX_HOIST_EOE
+#define HEX_HOIST_EOE 10
+#endif
+/* Thread-per-edge form of tangential_velocity_f32 (cuda_horizontal.py): the
+   edge's neighbour indices and TRiSK weights are read once into registers
+   and the thread walks the levels; each level runs the element body
+   unchanged (same slot order, same helper calls), so each value carries the
+   same bits. */
+extern "C" __global__ void tangential_velocity_hoist_v841_f32(
+    const float* normal_velocity,
+    const int* edges_on_edge,
+    const int* n_edges_on_edge,
+    const float* weights_on_edge,
+    const int nlev,
+    const int nedges,
+    const int max_edges2,
+    float* tangential_velocity, const int lpt)
+{
+    const int hex_rows = nlev;
+    const int hex_chunks = (hex_rows + lpt - 1) / lpt;
+    const int hex_element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (hex_element >= nedges * hex_chunks) return;
+    const int edge = hex_element % nedges;
+    const int hex_k0 = (hex_element / nedges) * lpt;
+    const int hex_k1 = min(hex_rows, hex_k0 + lpt);
+    const int count = n_edges_on_edge[edge];
+    if (count > HEX_HOIST_EOE) {
+        for (int k = hex_k0; k < hex_k1; ++k) {
+            float value = 0.0f;
+            for (int slot = 0; slot < count; ++slot) {
+                const int offset = edge * max_edges2 + slot;
+                const int neighbor = edges_on_edge[offset];
+                value = mpas_add(value, mpas_mul(weights_on_edge[offset],
+                    normal_velocity[lidx_v841(k, neighbor, nedges)]));
+            }
+            tangential_velocity[lidx_v841(k, edge, nedges)] = value;
+        }
+        return;
+    }
+    int nb[HEX_HOIST_EOE];
+    float wt[HEX_HOIST_EOE];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_EOE; ++slot) {
+        nb[slot] = slot < count ? edges_on_edge[edge * max_edges2 + slot] : edge;
+        wt[slot] = slot < count ? weights_on_edge[edge * max_edges2 + slot] : 0.0f;
+    }
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        float value = 0.0f;
+#pragma unroll
+        for (int slot = 0; slot < HEX_HOIST_EOE; ++slot) {
+            if (slot < count) {
+                value = mpas_add(value, mpas_mul(wt[slot],
+                    normal_velocity[lidx_v841(k, nb[slot], nedges)]));
+            }
+        }
+        tangential_velocity[lidx_v841(k, edge, nedges)] = value;
+    }
+}
+
 extern "C" __global__ void cell_diagnostics_v841_f32(
     const float *normal_velocity, const float *ke_edge,
     const float *ke_vertex, const int *edges_on_cell,
@@ -125,6 +202,338 @@ extern "C" __global__ void cell_diagnostics_v841_f32(
     }
 }
 
+extern "C" __global__ void laplacian_divergence_v841_f32(
+    const float* delsq_u,
+    const int* edges_on_cell,
+    const int* n_edges_on_cell,
+    const int* cells_on_edge,
+    const float* dv_edge,
+    const float* area_cell,
+    const int nlev,
+    const int ncells,
+    const int nedges,
+    const int max_edges,
+    float* delsq_divergence
+) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
+        float value = 0.0f;
+        for (int slot = 0; slot < count; ++slot) {
+            const int edge = edges_on_cell[cell * max_edges + slot];
+            value = mpas_add(value, mpas_mul(mpas_mul(mpas_mul(mpas_div(1.0f, area_cell[cell]), dv_edge[edge]),
+                cell_sign_v841(cell, edge, cells_on_edge)), delsq_u[lidx_v841(k, edge, nedges)]));
+        }
+        delsq_divergence[lidx_v841(k, cell, ncells)] = value;
+    }
+}
+
+
+extern "C" __global__ void laplacian_vorticity_v841_f32(
+    const float* delsq_u,
+    const int* edges_on_vertex,
+    const int* vertices_on_edge,
+    const float* dc_edge,
+    const float* area_triangle,
+    const int nlev,
+    const int nedges,
+    const int nvertices,
+    const int vertex_degree,
+    float* delsq_vorticity
+) {
+    const int vertex = blockDim.x * blockIdx.x + threadIdx.x;
+    if (vertex >= nvertices) return;
+    for (int k = 0; k < nlev; ++k) {
+        float value = 0.0f;
+        for (int slot = 0; slot < vertex_degree; ++slot) {
+            const int edge = edges_on_vertex[vertex * vertex_degree + slot];
+            if (edge < 0) continue;
+            value = mpas_add(value, mpas_mul(mpas_mul(mpas_mul(mpas_div(1.0f, area_triangle[vertex]), dc_edge[edge]),
+                vertex_sign_v841(vertex, edge, vertices_on_edge)), delsq_u[lidx_v841(k, edge, nedges)]));
+        }
+        delsq_vorticity[lidx_v841(k, vertex, nvertices)] = value;
+    }
+}
+
+
+extern "C" __global__ void theta_filter_lap2_v841_f32(
+    const float* theta_m,
+    const float* rho_edge,
+    const float* kdiff,
+    const float* del2,
+    const int* edges_on_cell,
+    const int* n_edges_on_cell,
+    const int* cells_on_edge,
+    const float* dc_edge,
+    const float* dv_edge,
+    const float* area_cell,
+    const int nlev,
+    const int ncells,
+    const int nedges,
+    const int max_edges,
+    float* delsq_theta,
+    float* tendency
+) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
+        float lap = 0.0f;
+        float tend = 0.0f;
+        for (int slot = 0; slot < count; ++slot) {
+            const int edge = edges_on_cell[cell * max_edges + slot];
+            const int cell0 = cells_on_edge[2 * edge];
+            const int cell1 = cells_on_edge[2 * edge + 1];
+            const float factor = mpas_mul(mpas_mul(mpas_mul(mpas_div(1.0f, area_cell[cell]),
+                cell_sign_v841(cell, edge, cells_on_edge)), dv_edge[edge]),
+                mpas_div(1.0f, dc_edge[edge]));
+            const float flux = mpas_mul(mpas_mul(factor, mpas_sub(
+                theta_m[lidx_v841(k, cell1, ncells)],
+                theta_m[lidx_v841(k, cell0, ncells)])),
+                rho_edge[lidx_v841(k, edge, nedges)]);
+            lap = mpas_add(lap, flux);
+            tend = mpas_add(tend, mpas_mul(mpas_mul(mpas_mul(
+                flux, 0.5f), mpas_add(
+                    kdiff[lidx_v841(k, cell0, ncells)],
+                    kdiff[lidx_v841(k, cell1, ncells)])), del2[edge]));
+        }
+        const int tid = lidx_v841(k, cell, ncells);
+        delsq_theta[tid] = lap;
+        tendency[tid] = tend;
+    }
+}
+
+
+extern "C" __global__ void theta_filter_lap4_v841_f32(
+    const float* delsq_theta,
+    const float* del4,
+    const int* edges_on_cell,
+    const int* n_edges_on_cell,
+    const int* cells_on_edge,
+    const float* dc_edge,
+    const float* dv_edge,
+    const float* area_cell,
+    const float h4,
+    const int nlev,
+    const int ncells,
+    const int max_edges,
+    float* tendency
+) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
+        const int tid = lidx_v841(k, cell, ncells);
+        float tend = tendency[tid];
+        for (int slot = 0; slot < count; ++slot) {
+            const int edge = edges_on_cell[cell * max_edges + slot];
+            const int cell0 = cells_on_edge[2 * edge];
+            const int cell1 = cells_on_edge[2 * edge + 1];
+            const float factor = mpas_mul(mpas_mul(mpas_mul(mpas_mul(del4[edge],
+                mpas_mul(h4, mpas_div(1.0f, area_cell[cell]))), dv_edge[edge]),
+                cell_sign_v841(cell, edge, cells_on_edge)), mpas_div(1.0f, dc_edge[edge]));
+            tend = mpas_sub(tend, mpas_mul(factor, mpas_sub(
+                delsq_theta[lidx_v841(k, cell1, ncells)],
+                delsq_theta[lidx_v841(k, cell0, ncells)])));
+        }
+        tendency[tid] = tend;
+    }
+}
+
+
+// Geometry is immutable for a horizontal operator. Store the native-rounded
+// factor in slot-major order so adjacent cell threads read adjacent words.
+extern "C" __global__ void w_filter_geometry_v841_f32(
+    const int* edges_on_cell, const int* n_edges_on_cell,
+    const int* cells_on_edge, const float* dc_edge, const float* dv_edge,
+    const float* area_cell, const int ncells, const int max_edges,
+    int4* factors)
+{
+    HORIZONTAL_ELEMENT_LOOP(ncells * max_edges) {
+        const int cell = element % ncells;
+        const int slot = element / ncells;
+        if (slot >= n_edges_on_cell[cell]) {
+            factors[element] = make_int4(0, 0, 0, 0);
+            continue;
+        }
+        const int edge = edges_on_cell[cell * max_edges + slot];
+        const float factor = mpas_mul(mpas_mul(mpas_mul(mpas_mul(0.5f,
+            mpas_div(1.0f, area_cell[cell])),
+            cell_sign_v841(cell, edge, cells_on_edge)), dv_edge[edge]),
+            mpas_div(1.0f, dc_edge[edge]));
+        factors[element] = make_int4(edge, cells_on_edge[2 * edge],
+            cells_on_edge[2 * edge + 1], __float_as_int(factor));
+    }
+}
+
+// Keep twelve 128-thread blocks resident in fast mode; strict retains the
+// compiler's register choice for guarded subnormal arithmetic.
+#ifdef HEX_NUMERICS_FAST
+#define W_FILTER_BOUNDS __launch_bounds__(128, 12)
+#else
+#define W_FILTER_BOUNDS
+#endif
+extern "C" __global__ W_FILTER_BOUNDS void w_filter_lap2_v841_f32(
+    const float* vertical_velocity,
+    const float* rho_edge,
+    const float* kdiff,
+    const float* del2,
+    const int* edges_on_cell,
+    const int* n_edges_on_cell,
+    const int* cells_on_edge,
+    const float* dc_edge,
+    const float* dv_edge,
+    const int4* factors,
+    const int nlev,
+    const int ncells,
+    const int nedges,
+    const int max_edges,
+    float* delsq_w,
+    float* tendency
+) {
+    HORIZONTAL_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int count = n_edges_on_cell[cell];
+        if (k == 0) {
+            delsq_w[element] = 0.0f;
+            tendency[element] = 0.0f;
+            continue;
+        }
+        float lap = 0.0f;
+        float tend = 0.0f;
+        for (int slot = 0; slot < count; ++slot) {
+            const int4 stencil = factors[slot * ncells + cell];
+            const int edge = stencil.x;
+            const int cell0 = stencil.y;
+            const int cell1 = stencil.z;
+            const float factor = __int_as_float(stencil.w);
+            const float flux = mpas_mul(mpas_mul(factor, mpas_add(
+                rho_edge[lidx_v841(k, edge, nedges)],
+                rho_edge[lidx_v841(k - 1, edge, nedges)])), mpas_sub(
+                    vertical_velocity[lidx_v841(k, cell1, ncells)],
+                    vertical_velocity[lidx_v841(k, cell0, ncells)]));
+            lap = mpas_add(lap, flux);
+            const float sum_k = mpas_add(mpas_add(mpas_add(
+                kdiff[lidx_v841(k, cell0, ncells)],
+                kdiff[lidx_v841(k, cell1, ncells)]),
+                kdiff[lidx_v841(k - 1, cell0, ncells)]),
+                kdiff[lidx_v841(k - 1, cell1, ncells)]);
+            tend = mpas_add(tend, mpas_mul(mpas_mul(mpas_mul(
+                flux, del2[edge]), 0.25f), sum_k));
+        }
+        delsq_w[element] = lap;
+        tendency[element] = tend;
+    }
+}
+
+
+extern "C" __global__ void w_filter_lap4_v841_f32(
+    const float* delsq_w,
+    const float* del4,
+    const int* edges_on_cell,
+    const int* n_edges_on_cell,
+    const int* cells_on_edge,
+    const float* dc_edge,
+    const float* dv_edge,
+    const float* area_cell,
+    const float h4,
+    const int nlev,
+    const int ncells,
+    const int max_edges,
+    float* tendency
+) {
+    /* Rows 1..nlev-1 only, as the per-cell loop ran them. */
+    HORIZONTAL_ELEMENT_LOOP((nlev - 1) * ncells) {
+        const int cell = element % ncells;
+        const int k = 1 + element / ncells;
+        const int count = n_edges_on_cell[cell];
+        const int tid = lidx_v841(k, cell, ncells);
+        float tend = tendency[tid];
+        for (int slot = 0; slot < count; ++slot) {
+            const int edge = edges_on_cell[cell * max_edges + slot];
+            const int cell0 = cells_on_edge[2 * edge];
+            const int cell1 = cells_on_edge[2 * edge + 1];
+            const float factor = mpas_mul(mpas_mul(mpas_mul(mpas_mul(del4[edge],
+                mpas_mul(h4, mpas_div(1.0f, area_cell[cell]))), dv_edge[edge]),
+                cell_sign_v841(cell, edge, cells_on_edge)), mpas_div(1.0f, dc_edge[edge]));
+            tend = mpas_sub(tend, mpas_mul(factor, mpas_sub(
+                delsq_w[lidx_v841(k, cell1, ncells)],
+                delsq_w[lidx_v841(k, cell0, ncells)])));
+        }
+        tendency[tid] = tend;
+    }
+}
+
+
+extern "C" __global__ void momentum_filter_lap4_v841_f32(
+    const float* rho_edge,
+    const float* delsq_divergence,
+    const float* delsq_vorticity,
+    const float* del4,
+    const int* cells_on_edge,
+    const int* vertices_on_edge,
+    const float* dc_edge,
+    const float* dv_edge,
+    const float h4,
+    const float div_factor,
+    const int nlev,
+    const int ncells,
+    const int nedges,
+    const int nvertices,
+    float* tendency
+) {
+    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
+    if (edge >= nedges) return;
+    const int cell0 = cells_on_edge[2 * edge];
+    const int cell1 = cells_on_edge[2 * edge + 1];
+    const int vertex0 = vertices_on_edge[2 * edge];
+    const int vertex1 = vertices_on_edge[2 * edge + 1];
+    const float inv_dc = 1.0f / dc_edge[edge];
+    const float inv_dv = fminf(1.0f / dv_edge[edge], 4.0f * inv_dc);
+    const float scale = mpas_mul(del4[edge], h4);
+    // Native prepares these rounded geometry coefficients outside the level loop.
+    const float r_dc = mpas_mul(mpas_mul(scale, div_factor), inv_dc);
+    const float r_dv = mpas_mul(scale, inv_dv);
+    for (int k = 0; k < nlev; ++k) {
+        const int tid = lidx_v841(k, edge, nedges);
+        const float diffusion = mpas_mul(rho_edge[tid], mpas_sub(
+            mpas_mul(mpas_sub(
+                delsq_divergence[lidx_v841(k, cell1, ncells)],
+                delsq_divergence[lidx_v841(k, cell0, ncells)]), r_dc),
+            mpas_mul(mpas_sub(
+                delsq_vorticity[lidx_v841(k, vertex1, nvertices)],
+                delsq_vorticity[lidx_v841(k, vertex0, nvertices)]), r_dv)));
+        tendency[tid] = mpas_sub(tendency[tid], diffusion);
+    }
+}
+
+
+extern "C" __global__ void momentum_filter_seed_v841_f32(
+    const float* rho_edge, const float* divergence, const float* vorticity,
+    const float* kdiff, const float* del2, const int* cells_on_edge,
+    const int* vertices_on_edge, const float* dc_edge, const float* dv_edge,
+    const int nlev, const int ncells, const int nedges, const int nvertices,
+    float* delsq_u, float* tendency)
+{
+    const int edge = blockDim.x * blockIdx.x + threadIdx.x;
+    if (edge >= nedges) return;
+    const int c0 = cells_on_edge[2*edge], c1 = cells_on_edge[2*edge+1];
+    const int v0 = vertices_on_edge[2*edge], v1 = vertices_on_edge[2*edge+1];
+    const float inv_dc = mpas_div(1.0f, dc_edge[edge]);
+    const float inv_dv = mpas_min(mpas_div(1.0f, dv_edge[edge]), mpas_mul(4.0f, inv_dc));
+    for (int k=0; k<nlev; ++k) {
+        const int tid=lidx_v841(k,edge,nedges);
+        const float lap=mpas_sub(mpas_mul(mpas_sub(divergence[lidx_v841(k,c1,ncells)],divergence[lidx_v841(k,c0,ncells)]),inv_dc),mpas_mul(mpas_sub(vorticity[lidx_v841(k,v1,nvertices)],vorticity[lidx_v841(k,v0,nvertices)]),inv_dv));
+        const float kedge=mpas_mul(0.5f,mpas_add(kdiff[lidx_v841(k,c0,ncells)],kdiff[lidx_v841(k,c1,ncells)]));
+        delsq_u[tid]=lap;
+        // Native adds del2 directly to the saved pressure-gradient pool,
+        // then subtracts del4 from that already-rounded sum (F:721,803).
+        tendency[tid]=mpas_add(tendency[tid],mpas_mul(mpas_mul(mpas_mul(rho_edge[tid],kedge),lap),del2[edge]));
+    }
+}
+
 extern "C" __global__ void smagorinsky_v841_f32(
     const float *normal_velocity, const float *tangential_velocity,
     const int *edges_on_cell, const int *n_edges_on_cell,
@@ -154,14 +563,10 @@ extern "C" __global__ void smagorinsky_v841_f32(
             const float c2 = coef_c2[offset];
             const float s2 = coef_s2[offset];
             const float cs = coef_cs[offset];
-            dudx = mpas_add(dudx,
-                mpas_sub(mpas_mul(c2, u), mpas_mul(cs, v)));
-            dudy = mpas_add(dudy,
-                mpas_sub(mpas_mul(cs, u), mpas_mul(s2, v)));
-            dvdx = mpas_add(dvdx,
-                mpas_add(mpas_mul(cs, u), mpas_mul(c2, v)));
-            dvdy = mpas_add(dvdy,
-                mpas_add(mpas_mul(s2, u), mpas_mul(cs, v)));
+            dudx = mpas_sub(mpas_add(dudx, mpas_mul(c2, u)), mpas_mul(cs, v));
+            dudy = mpas_sub(mpas_add(dudy, mpas_mul(cs, u)), mpas_mul(s2, v));
+            dvdx = mpas_add(mpas_add(dvdx, mpas_mul(cs, u)), mpas_mul(c2, v));
+            dvdy = mpas_add(mpas_add(dvdy, mpas_mul(s2, u)), mpas_mul(cs, v));
         }
         const float d_11 = mpas_mul(2.0f, dudx);
         const float d_22 = mpas_mul(2.0f, dvdy);
@@ -281,6 +686,217 @@ extern "C" __global__ void pressure_gradient_v841_f32(
             mpas_sub(normal, terrain));
     }
 }
+
+#ifndef HEX_HOIST_CELL
+#define HEX_HOIST_CELL 10
+#endif
+#define HEX_CELL_CHUNK(rows) \
+    const int hex_rows = (rows); \
+    const int hex_chunks = (hex_rows + lpt - 1) / lpt; \
+    const int hex_element = blockDim.x * blockIdx.x + threadIdx.x; \
+    if (hex_element >= ncells * hex_chunks) return; \
+    const int cell = hex_element % ncells; \
+    const int hex_k0 = (hex_element / ncells) * lpt; \
+    const int hex_k1 = min(hex_rows, hex_k0 + lpt);
+
+extern "C" __global__ void cell_diagnostics_chunk_v841_f32(
+    const float *normal_velocity, const float *ke_edge,
+    const float *ke_vertex, const int *edges_on_cell,
+    const int *n_edges_on_cell, const int *cells_on_edge,
+    const int *vertices_on_cell, const int *cells_on_vertex,
+    const float *dv_edge, const float *inv_area_cell,
+    const float *kite_areas, const int nlev, const int ncells,
+    const int nedges, const int nvertices, const int max_edges,
+    const int vertex_degree, float *divergence, float *kinetic_energy,
+    const int lpt)
+{
+    HEX_CELL_CHUNK(nlev)
+    const int count = n_edges_on_cell[cell];
+    const float inv_area = inv_area_cell[cell];
+    const float ke_fact = 0.625f;
+    if (count > HEX_HOIST_CELL) {
+        for (int k = hex_k0; k < hex_k1; ++k) {
+            float div = 0.0f;
+            float ke = 0.0f;
+            for (int slot = 0; slot < count; ++slot) {
+                const int edge = edges_on_cell[cell * max_edges + slot];
+                div = mpas_add(div, mpas_mul(mpas_mul(
+                    cell_sign_v841(cell, edge, cells_on_edge), dv_edge[edge]),
+                    normal_velocity[lidx_v841(k, edge, nedges)]));
+                ke = mpas_add(ke, mpas_mul(
+                    0.25f, ke_edge[lidx_v841(k, edge, nedges)]));
+            }
+            div = mpas_mul(div, inv_area);
+            ke = mpas_mul(ke, inv_area);
+            ke = mpas_mul(ke, ke_fact);
+            for (int slot = 0; slot < count; ++slot) {
+                const int vertex = vertices_on_cell[cell * max_edges + slot];
+                const int kite = kite_slot_v841(
+                    vertex, cell, cells_on_vertex, vertex_degree);
+                if (kite >= 0) {
+                    float correction = mpas_mul(mpas_sub(1.0f, ke_fact),
+                        kite_areas[vertex * vertex_degree + kite]);
+                    correction = mpas_mul(correction,
+                        ke_vertex[lidx_v841(k, vertex, nvertices)]);
+                    correction = mpas_mul(correction, inv_area);
+                    ke = mpas_add(ke, correction);
+                }
+            }
+            const int index = lidx_v841(k, cell, ncells);
+            divergence[index] = div;
+            kinetic_energy[index] = ke;
+        }
+        return;
+    }
+    int ed[HEX_HOIST_CELL];
+    float sdv[HEX_HOIST_CELL];
+    int vx[HEX_HOIST_CELL];
+    float kc[HEX_HOIST_CELL];
+    bool kv[HEX_HOIST_CELL];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+        const bool live = slot < count;
+        const int edge = live ? edges_on_cell[cell * max_edges + slot] : 0;
+        ed[slot] = edge;
+        sdv[slot] = live ? mpas_mul(cell_sign_v841(cell, edge, cells_on_edge), dv_edge[edge]) : 0.0f;
+        const int vertex = live ? vertices_on_cell[cell * max_edges + slot] : 0;
+        vx[slot] = vertex;
+        const int kite = live ? kite_slot_v841(vertex, cell, cells_on_vertex, vertex_degree) : -1;
+        kv[slot] = kite >= 0;
+        kc[slot] = kite >= 0 ? mpas_mul(mpas_sub(1.0f, ke_fact),
+            kite_areas[vertex * vertex_degree + kite]) : 0.0f;
+    }
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        float div = 0.0f;
+        float ke = 0.0f;
+#pragma unroll
+        for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+            if (slot < count) {
+                div = mpas_add(div, mpas_mul(sdv[slot],
+                    normal_velocity[lidx_v841(k, ed[slot], nedges)]));
+                ke = mpas_add(ke, mpas_mul(
+                    0.25f, ke_edge[lidx_v841(k, ed[slot], nedges)]));
+            }
+        }
+        div = mpas_mul(div, inv_area);
+        ke = mpas_mul(ke, inv_area);
+        ke = mpas_mul(ke, ke_fact);
+#pragma unroll
+        for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+            if (slot < count && kv[slot]) {
+                float correction = mpas_mul(kc[slot],
+                    ke_vertex[lidx_v841(k, vx[slot], nvertices)]);
+                correction = mpas_mul(correction, inv_area);
+                ke = mpas_add(ke, correction);
+            }
+        }
+        const int index = lidx_v841(k, cell, ncells);
+        divergence[index] = div;
+        kinetic_energy[index] = ke;
+    }
+}
+
+extern "C" __global__ void pv_cell_chunk_v841_f32(
+    const float *pv_vertex, const int *vertices_on_cell,
+    const int *n_edges_on_cell, const int *cells_on_vertex,
+    const float *kite_areas, const float *inv_area_cell,
+    const int nlev, const int ncells, const int nvertices,
+    const int max_edges, const int vertex_degree, float *pv_cell,
+    const int lpt)
+{
+    HEX_CELL_CHUNK(nlev)
+    const int count = n_edges_on_cell[cell];
+    const float inv_area = inv_area_cell[cell];
+    if (count > HEX_HOIST_CELL) {
+        for (int k = hex_k0; k < hex_k1; ++k) {
+            float value = 0.0f;
+            for (int slot = 0; slot < count; ++slot) {
+                const int vertex = vertices_on_cell[cell * max_edges + slot];
+                const int kite = kite_slot_v841(
+                    vertex, cell, cells_on_vertex, vertex_degree);
+                if (kite >= 0) {
+                    float contribution = mpas_mul(
+                        kite_areas[vertex * vertex_degree + kite],
+                        pv_vertex[lidx_v841(k, vertex, nvertices)]);
+                    contribution = mpas_mul(contribution, inv_area);
+                    value = mpas_add(value, contribution);
+                }
+            }
+            pv_cell[lidx_v841(k, cell, ncells)] = value;
+        }
+        return;
+    }
+    int vx[HEX_HOIST_CELL];
+    float ka[HEX_HOIST_CELL];
+    bool kv[HEX_HOIST_CELL];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+        const bool live = slot < count;
+        const int vertex = live ? vertices_on_cell[cell * max_edges + slot] : 0;
+        vx[slot] = vertex;
+        const int kite = live ? kite_slot_v841(vertex, cell, cells_on_vertex, vertex_degree) : -1;
+        kv[slot] = kite >= 0;
+        ka[slot] = kite >= 0 ? kite_areas[vertex * vertex_degree + kite] : 0.0f;
+    }
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        float value = 0.0f;
+#pragma unroll
+        for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+            if (slot < count && kv[slot]) {
+                float contribution = mpas_mul(ka[slot],
+                    pv_vertex[lidx_v841(k, vx[slot], nvertices)]);
+                contribution = mpas_mul(contribution, inv_area);
+                value = mpas_add(value, contribution);
+            }
+        }
+        pv_cell[lidx_v841(k, cell, ncells)] = value;
+    }
+}
+
+extern "C" __global__ void mass_flux_divergence_chunk_v841_f32(
+    const float *rho_u, const int *edges_on_cell,
+    const int *n_edges_on_cell, const int *cells_on_edge,
+    const float *dv_edge, const float *inv_area_cell,
+    const int nlev, const int ncells, const int nedges,
+    const int max_edges, float *mass_divergence, const int lpt)
+{
+    HEX_CELL_CHUNK(nlev)
+    const int count = n_edges_on_cell[cell];
+    const float inv_area = inv_area_cell[cell];
+    if (count > HEX_HOIST_CELL) {
+        for (int k = hex_k0; k < hex_k1; ++k) {
+            float value = 0.0f;
+            for (int slot = 0; slot < count; ++slot) {
+                const int edge = edges_on_cell[cell * max_edges + slot];
+                value = mpas_add(value, mpas_mul(mpas_mul(
+                    cell_sign_v841(cell, edge, cells_on_edge), dv_edge[edge]),
+                    rho_u[lidx_v841(k, edge, nedges)]));
+            }
+            mass_divergence[lidx_v841(k, cell, ncells)] = mpas_mul(value, inv_area);
+        }
+        return;
+    }
+    int ed[HEX_HOIST_CELL];
+    float sdv[HEX_HOIST_CELL];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+        const bool live = slot < count;
+        const int edge = live ? edges_on_cell[cell * max_edges + slot] : 0;
+        ed[slot] = edge;
+        sdv[slot] = live ? mpas_mul(cell_sign_v841(cell, edge, cells_on_edge), dv_edge[edge]) : 0.0f;
+    }
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        float value = 0.0f;
+#pragma unroll
+        for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+            if (slot < count) {
+                value = mpas_add(value, mpas_mul(sdv[slot],
+                    rho_u[lidx_v841(k, ed[slot], nedges)]));
+            }
+        }
+        mass_divergence[lidx_v841(k, cell, ncells)] = mpas_mul(value, inv_area);
+    }
+}
 """
 
 
@@ -308,15 +924,22 @@ class CudaHorizontalV841(CudaHorizontal):
         )
         self._v841_kernels: dict[str, Any] = {}
         self._deformation_v841: dict[str, Any] | None = None
+        # Shared by the shallow non-LES launcher copy. Its strict compile
+        # options can differ, so retain one geometry table per compiler cache.
+        self._w_filter_geometry_v841: dict[Any, Any] = {}
 
     def _kernel_v841(self, name: str) -> Any:
         result = self._v841_kernels.get(name)
         if result is None:
-            result = self.kernel_cache.raw_kernel(
-                name,
-                _CUDA_SOURCE,
-                module_key="hexcore.cuda_horizontal_v841",
-            )
+            from .cuda_shape import resolve
+            dimensions = (("nlev", self.nlev), ("nedges", self.nedges),
+                          ("nvertices", self.nvertices), ("vertex_degree", self.vertex_degree)) if name == "vertex_diagnostics_v841_f32" else ()
+            if dimensions:
+                result = resolve(self.kernel_cache, name, _CUDA_SOURCE,
+                                 "hexcore.cuda_horizontal_v841", dimensions)
+            else:
+                result = self.kernel_cache.raw_kernel(
+                    name, _CUDA_SOURCE, module_key="hexcore.cuda_horizontal_v841")
             self._v841_kernels[name] = result
         return result
 
@@ -327,27 +950,60 @@ class CudaHorizontalV841(CudaHorizontal):
         blocks = (int(total) + threads - 1) // threads
         self._kernel_v841(name)((blocks,), (threads,), args)
 
+    def _w_mixing_geometry_v841(self) -> Any:
+        """Build static w-diffusion geometry once on this operator's stream."""
+        key = self.kernel_cache
+        factors = self._w_filter_geometry_v841.get(key)
+        if factors is None:
+            factors = self.cp.empty((self.max_edges, self.ncells, 4), dtype=self.cp.int32)
+            self._launch_v841(
+                "w_filter_geometry_v841_f32", self.max_edges * self.ncells,
+                (self.mesh.edges_on_cell, self.mesh.n_edges_on_cell,
+                 self.mesh.cells_on_edge, self.mesh.dc_edge, self.mesh.dv_edge,
+                 self.mesh.area_cell, np.int32(self.ncells),
+                 np.int32(self.max_edges), factors),
+            )
+            self._w_filter_geometry_v841[key] = factors
+        return factors
+
     def mass_flux_divergence(self, rho_u: Any) -> Any:
         rho_u = self._edge_field("rho_u", rho_u)
         out = self.cp.empty((self.nlev, self.ncells), dtype=self.cp.float32)
-        self._launch_v841(
-            "mass_flux_divergence_v841_f32",
-            self.nlev * self.ncells,
-            (
-                rho_u,
-                self.mesh.edges_on_cell,
-                self.mesh.n_edges_on_cell,
-                self.mesh.cells_on_edge,
-                self.mesh.dv_edge,
-                self.v841.inv_area_cell,
-                np.int32(self.nlev),
-                np.int32(self.ncells),
-                np.int32(self.nedges),
-                np.int32(self.max_edges),
-                out,
-            ),
+        arguments = (
+            rho_u,
+            self.mesh.edges_on_cell,
+            self.mesh.n_edges_on_cell,
+            self.mesh.cells_on_edge,
+            self.mesh.dv_edge,
+            self.v841.inv_area_cell,
+            np.int32(self.nlev),
+            np.int32(self.ncells),
+            np.int32(self.nedges),
+            np.int32(self.max_edges),
         )
+        self._launch_cell_chunked("mass_flux_divergence_chunk_v841_f32",
+                                  "mass_flux_divergence_v841_f32", arguments, (out,))
         return out
+
+    def _launch_cell_chunked(self, chunked: str, element: str, inputs: tuple[Any, ...],
+                             outputs: tuple[Any, ...]) -> None:
+        """Chunked hoisted form when selected (bits identical), else the element kernel."""
+        from . import cuda_edge_hoist
+        cp = self.cp
+        if not cuda_edge_hoist.enabled(self.nedges):
+            self._launch_v841(element, self.nlev * self.ncells, (*inputs, *outputs))
+            return
+        lpt = cuda_edge_hoist.levels_per_thread(
+            chunked, self.ncells, self.nlev, lambda value: self._launch_v841(
+                chunked, self.ncells * cuda_edge_hoist.chunks(self.nlev, value),
+                (*inputs, *outputs, np.int32(value))), cp)
+        self._launch_v841(chunked, self.ncells * cuda_edge_hoist.chunks(self.nlev, lpt),
+                          (*inputs, *outputs, np.int32(lpt)))
+        if cuda_edge_hoist.check_wanted(chunked, cp):
+            reference = tuple(cp.empty_like(value) for value in outputs)
+            self._launch_v841(element, self.nlev * self.ncells, (*inputs, *reference))
+            for value, expected in zip(outputs, reference):
+                cuda_edge_hoist.compare(chunked, value, expected, cp)
 
     def solve_diagnostics(
         self,
@@ -369,20 +1025,32 @@ class CudaHorizontalV841(CudaHorizontal):
         reconstruct_v = rk_step is None or rk_step == 3
         if reconstruct_v:
             tangential = cp.empty_like(normal)
-            self._launch(
-                "tangential_velocity_f32",
-                self.nedges,
-                (
-                    normal,
-                    self.mesh.edges_on_edge,
-                    self.mesh.n_edges_on_edge,
-                    self.mesh.weights_on_edge,
-                    np.int32(self.nlev),
-                    np.int32(self.nedges),
-                    np.int32(self.max_edges2),
-                    tangential,
-                ),
+            tangential_arguments = (
+                normal,
+                self.mesh.edges_on_edge,
+                self.mesh.n_edges_on_edge,
+                self.mesh.weights_on_edge,
+                np.int32(self.nlev),
+                np.int32(self.nedges),
+                np.int32(self.max_edges2),
             )
+            from . import cuda_edge_hoist
+            if cuda_edge_hoist.enabled(self.nedges):
+                lpt = cuda_edge_hoist.levels_per_thread(
+                    "tangential_velocity_hoist_v841_f32", self.nedges, self.nlev,
+                    lambda value: self._launch_v841(
+                        "tangential_velocity_hoist_v841_f32",
+                        self.nedges * cuda_edge_hoist.chunks(self.nlev, value),
+                        (*tangential_arguments, tangential, np.int32(value))), cp)
+                self._launch_v841("tangential_velocity_hoist_v841_f32",
+                                  self.nedges * cuda_edge_hoist.chunks(self.nlev, lpt),
+                                  (*tangential_arguments, tangential, np.int32(lpt)))
+                if cuda_edge_hoist.check_wanted("tangential_velocity_hoist_v841_f32", cp):
+                    element = cp.empty_like(tangential)
+                    self._launch("tangential_velocity_f32", self.nedges, (*tangential_arguments, element))
+                    cuda_edge_hoist.compare("tangential_velocity_hoist_v841_f32", tangential, element, cp)
+            else:
+                self._launch("tangential_velocity_f32", self.nedges, (*tangential_arguments, tangential))
         else:
             if cached_tangential_velocity is None:
                 raise ValueError("RK1/RK2 diagnostics require cached tangential velocity")
@@ -420,9 +1088,8 @@ class CudaHorizontalV841(CudaHorizontal):
         )
         divergence = cp.empty((self.nlev, self.ncells), dtype=cp.float32)
         kinetic_energy = cp.empty_like(divergence)
-        self._launch_v841(
-            "cell_diagnostics_v841_f32",
-            self.nlev * self.ncells,
+        self._launch_cell_chunked(
+            "cell_diagnostics_chunk_v841_f32", "cell_diagnostics_v841_f32",
             (
                 normal,
                 ke_edge,
@@ -441,10 +1108,16 @@ class CudaHorizontalV841(CudaHorizontal):
                 np.int32(self.nvertices),
                 np.int32(self.max_edges),
                 np.int32(self.vertex_degree),
-                divergence,
-                kinetic_energy,
             ),
+            (divergence, kinetic_energy),
         )
+        retain = retain_pv_diagnostics()
+        if not retain:
+            # The edge and vertex kinetic energies are inputs of the two
+            # launches above and of nothing else; release them before the PV
+            # fields are formed so the solve's own high-water drops by two
+            # fields.  Stream-ordered pool reuse keeps the launches safe.
+            del ke_edge, ke_vertex
         pv_edge = cp.empty_like(normal)
         self._launch(
             "pv_edge_base_f32",
@@ -458,13 +1131,21 @@ class CudaHorizontalV841(CudaHorizontal):
                 pv_edge,
             ),
         )
-        pv_cell = cp.zeros((self.nlev, self.ncells), dtype=cp.float32)
-        grad_normal = cp.zeros_like(normal)
-        grad_tangential = cp.zeros_like(normal)
+        if retain:
+            pv_cell = cp.zeros((self.nlev, self.ncells), dtype=cp.float32)
+            grad_normal = cp.zeros_like(normal)
+            grad_tangential = cp.zeros_like(normal)
+        elif apvm_upwinding > 0.0:
+            pv_cell = cp.zeros((self.nlev, self.ncells), dtype=cp.float32)
+            # pv_apvm_v841_f32 only WRITES the two gradients (it forms pv_edge
+            # from its own registers) and nothing reads them afterwards, so
+            # one write-only sink serves both outputs.
+            grad_normal = grad_tangential = cp.empty_like(normal)
+        else:
+            pv_cell = grad_normal = grad_tangential = None
         if apvm_upwinding > 0.0:
-            self._launch_v841(
-                "pv_cell_v841_f32",
-                self.nlev * self.ncells,
+            self._launch_cell_chunked(
+                "pv_cell_chunk_v841_f32", "pv_cell_v841_f32",
                 (
                     pv_vertex,
                     self.mesh.vertices_on_cell,
@@ -477,8 +1158,8 @@ class CudaHorizontalV841(CudaHorizontal):
                     np.int32(self.nvertices),
                     np.int32(self.max_edges),
                     np.int32(self.vertex_degree),
-                    pv_cell,
                 ),
+                (pv_cell,),
             )
             scale = np.float32(apvm_upwinding) * np.float32(dt)
             self._launch_v841(
@@ -503,6 +1184,9 @@ class CudaHorizontalV841(CudaHorizontal):
                     grad_tangential,
                 ),
             )
+        if not retain:
+            # pv_edge is complete; its intermediates leave with this frame.
+            pv_vertex = pv_cell = grad_normal = grad_tangential = None
         return CudaSolveDiagnostics(
             h_edge=rho_edge,
             normal_velocity=normal,
@@ -561,6 +1245,9 @@ class CudaHorizontalV841(CudaHorizontal):
         *,
         dt: float,
         config: Any | None = None,
+        cam_damping_levels: int = 4,
+        n_cells_solve: int | None = None,
+        initial_u_tendency: Any | None = None,
     ) -> CudaDryMixingTendencies:
         """v8.4.1 2-D Smagorinsky mixing on device.
 
@@ -662,10 +1349,17 @@ class CudaHorizontalV841(CudaHorizontal):
             ),
         )
 
+        if cfg.config_mpas_cam_coef > 0:
+            from .cuda_upper_damping_v841 import apply_cam_floor_cuda
+            apply_cam_floor_cuda(kdiff, length=length, coefficient=cfg.config_mpas_cam_coef,
+                levels=cam_damping_levels, solved=n_cells_solve, cache=self.kernel_cache)
         delsq_u = cp.empty_like(normal)
-        tend_u = cp.empty_like(normal)
-        self._launch(
-            "momentum_filter_lap2_f32",
+        tend_u = cp.empty_like(normal) if initial_u_tendency is None else cp.array(
+            self._edge_field("initial_u_tendency", initial_u_tendency), copy=True
+        )
+        launch_lap2 = self._launch if initial_u_tendency is None else self._launch_v841
+        launch_lap2(
+            "momentum_filter_lap2_f32" if initial_u_tendency is None else "momentum_filter_seed_v841_f32",
             self.nedges,
             (
                 edge_rho,
@@ -688,8 +1382,8 @@ class CudaHorizontalV841(CudaHorizontal):
         delsq_div = cp.zeros((self.nlev, self.ncells), dtype=cp.float32)
         delsq_vort = cp.zeros((self.nlev, self.nvertices), dtype=cp.float32)
         if h4 > np.float32(0.0):
-            self._launch(
-                "laplacian_divergence_f32",
+            self._launch_v841(
+                "laplacian_divergence_v841_f32",
                 self.ncells,
                 (
                     delsq_u,
@@ -705,8 +1399,8 @@ class CudaHorizontalV841(CudaHorizontal):
                     delsq_div,
                 ),
             )
-            self._launch(
-                "laplacian_vorticity_f32",
+            self._launch_v841(
+                "laplacian_vorticity_v841_f32",
                 self.nvertices,
                 (
                     delsq_u,
@@ -721,8 +1415,8 @@ class CudaHorizontalV841(CudaHorizontal):
                     delsq_vort,
                 ),
             )
-            self._launch(
-                "momentum_filter_lap4_f32",
+            self._launch_v841(
+                "momentum_filter_lap4_v841_f32",
                 self.nedges,
                 (
                     edge_rho,
@@ -745,8 +1439,8 @@ class CudaHorizontalV841(CudaHorizontal):
 
         delsq_theta = cp.empty_like(theta)
         tend_theta = cp.empty_like(theta)
-        self._launch(
-            "theta_filter_lap2_f32",
+        self._launch_v841(
+            "theta_filter_lap2_v841_f32",
             self.ncells,
             (
                 theta,
@@ -768,8 +1462,8 @@ class CudaHorizontalV841(CudaHorizontal):
             ),
         )
         if h4 > np.float32(0.0):
-            self._launch(
-                "theta_filter_lap4_f32",
+            self._launch_v841(
+                "theta_filter_lap4_v841_f32",
                 self.ncells,
                 (
                     delsq_theta,
@@ -790,8 +1484,8 @@ class CudaHorizontalV841(CudaHorizontal):
 
         delsq_w = cp.empty((self.nlev, self.ncells), dtype=cp.float32)
         tend_w = cp.zeros((self.nlev + 1, self.ncells), dtype=cp.float32)
-        self._launch(
-            "w_filter_lap2_f32",
+        self._launch_v841(
+            "w_filter_lap2_v841_f32",
             self.ncells,
             (
                 vertical,
@@ -803,7 +1497,7 @@ class CudaHorizontalV841(CudaHorizontal):
                 self.mesh.cells_on_edge,
                 self.mesh.dc_edge,
                 self.mesh.dv_edge,
-                self.mesh.area_cell,
+                self._w_mixing_geometry_v841(),
                 np.int32(self.nlev),
                 np.int32(self.ncells),
                 np.int32(self.nedges),
@@ -813,8 +1507,8 @@ class CudaHorizontalV841(CudaHorizontal):
             ),
         )
         if h4 > np.float32(0.0):
-            self._launch(
-                "w_filter_lap4_f32",
+            self._launch_v841(
+                "w_filter_lap4_v841_f32",
                 self.ncells,
                 (
                     delsq_w,

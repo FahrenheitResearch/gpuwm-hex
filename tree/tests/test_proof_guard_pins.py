@@ -313,7 +313,10 @@ def test_dirty_unrelated_file_is_recorded_loudly_and_execution_proceeds(
     assert "scratch.log" in loud
 
 
-def test_a_path_that_is_not_a_git_tree_refuses_by_name(tmp_path: Path) -> None:
+@pytest.mark.parametrize("git_missing", [False, True])
+def test_a_path_that_is_not_a_git_tree_refuses_by_name(
+    tmp_path: Path, monkeypatch, git_missing: bool
+) -> None:
     """The wall that survived the engine's packaging fix gets a sign on it.
 
     MEASURED 2026-08-28, in a virtualenv holding only the published 2.5.8
@@ -334,6 +337,8 @@ def test_a_path_that_is_not_a_git_tree_refuses_by_name(tmp_path: Path) -> None:
     runner = _load_runner()
     plain = tmp_path / "not-a-repository"
     plain.mkdir()
+    if git_missing:
+        monkeypatch.setenv("PATH", str(tmp_path / "no-executables"))
 
     with pytest.raises(RuntimeError) as error:
         runner.verify_arwen_checkout_git(plain)
@@ -349,8 +354,9 @@ def test_a_path_that_is_not_a_git_tree_refuses_by_name(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("git_missing", [False, True])
 def test_the_installed_engine_is_admitted_and_named_by_its_record(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, git_missing: bool
 ) -> None:
     """THE BREAKAGE THIS CLOSES: through 0.3.1 the installed engine, whose
     sixteen seam files all resolve from site-packages, was refused here with
@@ -370,13 +376,18 @@ def test_the_installed_engine_is_admitted_and_named_by_its_record(
         dist = distribution(engine_pin.DISTRIBUTION)
     except PackageNotFoundError:  # pragma: no cover
         pytest.skip("gpuwm is importable but carries no distribution metadata")
-    probe = subprocess.run(
-        ["git", "-C", str(installed), "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True,
-    )
-    if probe.returncode == 0:
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(installed), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        probe = None
+    if probe is not None and probe.returncode == 0:
         pytest.skip("gpuwm is installed from a git tree here; the git route applies")
     monkeypatch.setattr(runner, "checkout_manifest_for", lambda root: {})
+    if git_missing:
+        monkeypatch.setenv("PATH", str(tmp_path / "no-executables"))
 
     record = runner.verify_arwen_checkout_git(Path(installed))
     assert record["kind"] == "installed"

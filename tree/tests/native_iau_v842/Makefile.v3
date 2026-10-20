@@ -1,0 +1,21 @@
+# Correct-mode reference: the patched mpas_atm_iau.F (config_physics_mode) with ABI v3 pool stubs.
+# Sources mpas_atm_iau.F and mpas_constants.F are copied in by build_v3.sh.
+FC = gfortran
+FFLAGS = -O3 -ffp-contract=off -fno-tree-vectorize -fno-unsafe-math-optimizations -ffree-line-length-none -fconvert=big-endian -ffree-form -cpp -fPIC
+
+all: libiau_reference_v3.so
+
+framework_v3.o: framework_v3.f90
+	$(FC) $(FFLAGS) -c $<
+
+mpas_constants.o: mpas_constants.F framework_v3.o
+	$(FC) $(FFLAGS) -c $<
+
+mpas_atm_iau.o: mpas_atm_iau.F framework_v3.o mpas_constants.o
+	$(FC) $(FFLAGS) -c $<
+
+wrapper_v3.o: wrapper_v3.f90 mpas_atm_iau.o
+	$(FC) $(FFLAGS) -c $<
+
+libiau_reference_v3.so: framework_v3.o mpas_constants.o mpas_atm_iau.o wrapper_v3.o
+	$(FC) -shared -o $@ $^

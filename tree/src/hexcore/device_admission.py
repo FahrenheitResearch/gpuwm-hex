@@ -150,12 +150,14 @@ imports it before any refusal, on boxes with no CUDA lane at all.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Mapping
 
 __all__ = [
     "CARD_TIER_ROWS",
+    "ROLLBACK_ARMED_BYTES_PER_CELL",
+    "STACK_RESTATEMENT_BYTES_PER_CELL",
     "CONVENTION_MARGIN_BYTES",
     "CardProfile",
     "DEFAULT_HEADROOM_BYTES",
@@ -183,6 +185,7 @@ __all__ = [
     "native_device_floor_bytes",
     "radiation_chunk_columns",
     "required_free_bytes",
+    "harmonic_basis_bytes",
     "retired_affine_row_floor_bytes",
     "retired_converged_row_floor_bytes",
     "retired_linear_floor_bytes",
@@ -192,6 +195,126 @@ __all__ = [
 ]
 
 MIB = 1024**2
+
+
+@dataclass(frozen=True)
+class CoTenancyRow:
+    """Conservative resident-member limit, independent of forecast case names."""
+
+    mesh_kind: str
+    maximum_cells: int
+    maximum_levels: int
+    minimum_card_bytes: int
+    maximum_members: int
+
+
+# These are scheduling limits, not measured footprint fits. Admission still
+# charges the full existing solo floor for EVERY member, with no sharing credit.
+CO_TENANCY_ROWS = (
+    CoTenancyRow("point-cull", 50_000, 55, 0, 1),
+    CoTenancyRow("point-cull", 50_000, 55, 16 * 1024**3, 2),
+    CoTenancyRow("point-cull", 50_000, 55, 32 * 1024**3, 3),
+    CoTenancyRow("point-cull", 50_000, 55, 64 * 1024**3, 4),
+    # Global quasi-uniform meshes up to the 30 km x1.655362 (B5, the resident global ensemble).  The card
+    # thresholds sit under the nameplate sizes (a 32 GB RTX 5090 reports 31.8 GiB) so each card class
+    # gets its row; the floor sum below is what keeps a group inside the card's memory.
+    CoTenancyRow("global", 655_362, 55, 0, 1),
+    CoTenancyRow("global", 655_362, 55, 15 * 1024**3, 2),
+    CoTenancyRow("global", 655_362, 55, 30 * 1024**3, 3),
+    CoTenancyRow("global", 655_362, 55, 60 * 1024**3, 4),
+)
+
+
+def admit_co_tenancy(*, mesh_kind: str, cells: int, levels: int,
+                     members: int, card_bytes: int, free_bytes: int,
+                     solo_required_bytes: int,
+                     member_additional_bytes: tuple[int, ...] = ()) -> dict[str, Any]:
+    """Refuse before construction rather than OOM at a member's radiation step."""
+    values = (cells, levels, members, card_bytes, free_bytes, solo_required_bytes)
+    if any(type(value) is not int or value <= 0 for value in values):
+        raise ValueError("co-tenancy needs positive integer dimensions and memory sizes")
+    if member_additional_bytes and (len(member_additional_bytes) != members or
+            any(type(value) is not int or value < 0 for value in member_additional_bytes)):
+        raise ValueError("additional allocations need one nonnegative byte count per member")
+    rows = [row for row in CO_TENANCY_ROWS if row.mesh_kind == mesh_kind
+            and cells <= row.maximum_cells and levels <= row.maximum_levels
+            and card_bytes >= row.minimum_card_bytes]
+    limit = max((row.maximum_members for row in rows), default=1)
+    additional = sum(member_additional_bytes)
+    required = members * solo_required_bytes + additional
+    memory_limit = free_bytes // solo_required_bytes
+    if members > limit or required > free_bytes:
+        raise MemoryError(
+            f"co-tenancy refuses {members} members: table limit {limit}, "
+            f"memory limit {memory_limit} at {solo_required_bytes} bytes per member, "
+            f"required {required} bytes, available {free_bytes} bytes, "
+            f"shortfall {max(0, required - free_bytes)} bytes; prevents "
+            "CUDA out-of-memory during resident-member construction or the "
+            "first radiation workspace allocation; reduce members per card")
+    return {"mesh_kind": mesh_kind, "cells": cells, "levels": levels,
+            "members": members, "maximum_members": min(limit, memory_limit),
+            "table_maximum_members": limit,
+            "memory_limited_members": memory_limit,
+            "solo_required_bytes": solo_required_bytes,
+            "required_free_bytes": required, "measured_free_bytes": free_bytes,
+            "measured_total_bytes": card_bytes,
+            "member_additional_bytes": list(member_additional_bytes),
+            "basis": "sum of full solo admission floors; no unmeasured sharing credit"}
+
+
+def harmonic_basis_bytes(cells: int, degree: int) -> int:
+    """Exact float32 basis allocation for a closed spherical Voronoi mesh.
+
+    Euler's formula gives nVertices = 2*nCells - 4 on the trivalent dual.
+    MeshHarmonics stores all cell and vertex harmonics, excluding degree zero.
+    This prices an allocation, not a measured stochastic peak-memory fit.
+    """
+    if type(cells) is not int or cells < 4:
+        raise ValueError("a closed spherical Voronoi mesh needs at least four cells")
+    if type(degree) is not int or not 1 <= degree <= 512:
+        raise ValueError("harmonic degree must be 1..512")
+    return (3*cells - 4) * ((degree + 1)**2 - 1) * 4
+
+
+def stochastic_array_ledger(cells: int, levels: int, degree: int, *,
+                            extra_scales: int = 0, skeb: bool = False) -> dict[str, int]:
+    """Logical array floor for one stochastic member on a closed global mesh.
+
+    Counts the basis, retained mesh/member arrays, and named forcing arrays
+    live at the tendency-write kernels. Each member pays its own mesh
+    resource without a sharing credit. These are allocation shapes, not a
+    measured peak: construction scratch, intermediate expression outputs,
+    reduction/cuBLAS workspaces and allocator placement remain unpriced.
+    No mesh data or GPU context is needed to evaluate this stdlib-only sum.
+    """
+    basis = harmonic_basis_bytes(cells, degree)
+    if type(levels) is not int or levels < 1:
+        raise ValueError("stochastic levels must be a positive integer")
+    if type(extra_scales) is not int or not 0 <= extra_scales <= 5:
+        raise ValueError("stochastic extra scales must be 0..5")
+    if type(skeb) is not bool:
+        raise ValueError("stochastic skeb must be logical")
+    vertices, edges = 2*cells-4, 3*cells-6
+    points, modes, processes = cells+vertices, (degree+1)**2-1, 1+extra_scales
+    arrays = dict(
+        harmonic_basis=basis,
+        mesh_mode_degrees=8*modes,
+        mesh_topology=16*edges+12*vertices,
+        mesh_geometry=4*cells+12*edges,
+        member_tapers=4*levels*points,
+        member_spectral_coefficients=12*modes*processes,
+        member_spectral_weights=4*modes*processes,
+        member_pattern_outputs=12*points*processes,
+        forcing_sppt=4*points,
+    )
+    if skeb:
+        arrays.update(forcing_sink=4*levels*edges,
+                      forcing_dissipation=4*levels,
+                      forcing_streamfunction=4*vertices,
+                      forcing_curl=4*edges,
+                      forcing_norm=4,
+                      forcing_temperature=4*cells)
+    return arrays
 
 #: The vertical level count every measurement in this module was taken at.
 #: The tiled-workspace terms are functions of it; the per-cell slope and the
@@ -272,12 +395,65 @@ KNOWN_CARDS: Mapping[str, CardProfile] = MappingProxyType(
         "32gib-170sm": CardProfile("RTX 5090 (32,607 MiB, sm_120)", 170, 1536),
         "16gib-70sm": CardProfile("RTX 5070 Ti (16,303 MiB, sm_120)", 70, 1536),
         "10gib-68sm": CardProfile("RTX 3080 (10,240 MiB, sm_86, WDDM)", 68, 1536),
+        "96gib-188sm": CardProfile(
+            "RTX PRO 6000 Blackwell Server (97,887 MiB, sm_120)", 188, 1536
+        ),
     }
 )
 
 #: The card every measured row of record was taken on, and the card a
 #: derived row is derived FROM.
 REFERENCE_CARD = KNOWN_CARDS["32gib-170sm"]
+
+
+@dataclass(frozen=True)
+class CardCountRow:
+    """Scheduling policy, separate from the measured memory admission sum."""
+
+    key: str
+    min_cells: int
+    max_cells: int
+    min_card_bytes: int
+    max_card_bytes: int
+    counts: tuple[int, ...]
+
+
+# Descending counts use the visible rental allocation. A small mesh keeps
+# the existing single-card loop. Exact local halo sizes still pass the
+# shaped footprint admission before any device stack is constructed.
+CARD_COUNT_ROWS = (
+    CardCountRow("small-mesh", 1, 65_535, 0, 2**63 - 1, (1,)),
+    CardCountRow("medium-small-memory", 65_536, 131_071, 0, 24 * 1024**3 - 1, (8, 4, 2, 1)),
+    CardCountRow("medium-capacity-memory", 65_536, 131_071, 24 * 1024**3, 2**63 - 1, (1,)),
+    CardCountRow("large-small-memory", 131_072, 2**63 - 1, 0, 24 * 1024**3 - 1, (8, 4, 2, 1)),
+    CardCountRow("large-medium-memory", 131_072, 2**63 - 1, 24 * 1024**3, 48 * 1024**3 - 1, (8, 4, 2, 1)),
+    CardCountRow("large-capacity-memory", 131_072, 2**63 - 1, 48 * 1024**3, 2**63 - 1, (8, 4, 2, 1)),
+)
+
+
+def select_card_count(cells: int, card_memory_bytes: int, visible_cards: int) -> dict[str, Any]:
+    """Choose a table count without CUDA or a case-specific branch."""
+    if cells < 1 or card_memory_bytes < 0 or visible_cards < 1:
+        raise ValueError(
+            f"cannot schedule {cells} cells on {visible_cards} visible cards "
+            f"with {card_memory_bytes} memory bytes; a nonempty mesh and card allocation are required"
+        )
+    rows = [row for row in CARD_COUNT_ROWS
+            if row.min_cells <= cells <= row.max_cells
+            and row.min_card_bytes <= card_memory_bytes <= row.max_card_bytes]
+    if len(rows) != 1:
+        raise ValueError(f"card-count table has {len(rows)} rows for {cells} cells and {card_memory_bytes} card bytes")
+    row = rows[0]
+    count = next(count for count in row.counts if count <= visible_cards)
+    return {"row": row.key, "cells": int(cells), "card_memory_bytes": int(card_memory_bytes),
+            "visible_cards": int(visible_cards), "selected_cards": count,
+            "basis": "scheduling row; exact local footprint admission follows"}
+
+
+def single_card_rows(cells: int) -> bool:
+    """Whether every memory tier for this mesh selects the existing loop."""
+    rows = [row for row in CARD_COUNT_ROWS if row.min_cells <= cells <= row.max_cells]
+    return bool(rows) and all(row.counts == (1,) for row in rows)
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +637,39 @@ CONVENTION_MARGIN_BYTES = int(round(11.2 * MIB))
 #: quote an under-statement without saying so.
 PIN_RESTATEMENT_BYTES = int(round(484.0 * MIB))
 
+#: What a global row measured on the 2026-08 proof stack must be restated
+#: by, per cell, to price the stack the door runs today.  THE BREAKAGE IT
+#: PREVENTS (measured 2026-10-11, RTX PRO 6000 host, RTX PRO 6000, 188 SM, hex
+#: lane/hex-arbitrary-physics + engine 9f3f52565): a bare-defaults 30 km
+#: global run (655,362 cells) peaked 82,404 MiB on its process after the
+#: door priced it at 66,086 MiB from the 170 SM row; the door admitted it
+#: and, before the late-health fix, it ran out of card memory.  The proof
+#: rows were fitted on the x4 recorded schedule, which runs the monotonic
+#: scalar limiter OFF, before CUDA-graph subcycle staging and before New
+#: Tiedtke became the 30 km default; the bare MPAS-A defaults run all
+#: three.  The per-allocation hook at the peak put the limiter's work
+#: arrays alone at 11,580 MiB live (two species x level x edge, two
+#: species x interface x cell and six species x level x cell arrays, in the
+#: run that ran out of memory) and the graph's staged inputs
+#: at 7,018 MiB, all mesh-scaled.  The restatement is the measured 188 SM
+#: slope (:data:`_SHAPED_ROWS` ``global/188sm``) less the 170 SM proof
+#: slope; it is a property of the build, as the slope is, and is carried
+#: by every global row measured on the older stack and by every derived
+#: row.  Not measured on those cards: a ledger arm on each replaces it.
+STACK_RESTATEMENT_BYTES_PER_CELL = 124_655.2996 - 96_581.5833
+
+#: What arming the forecast rollback (``--stop-on-refusal``) adds, per cell.
+#: The plain forecast loop then keeps two committed boundaries for the late
+#: health gate and a per-step physics boundary export.  MEASURED
+#: 2026-10-11 on the 30 km global run above: the two-deep snapshot's own
+#: receipt reports 24,070,131,576 device bytes, and the per-allocation hook
+#: puts one seam export at 7,462.6 MiB (half of the two slots' 14,925.2
+#: MiB; the per-step physics export copies the same arrays).  31.9 GB over
+#: 655,362 cells.  THE BREAKAGE IT PREVENTS: an armed run admitted at the
+#: bare-run price dies part-way into its first steps, as the 30 km run did
+#: at 97 GB while it carried the two-deep snapshot unread.
+ROLLBACK_ARMED_BYTES_PER_CELL = (24_070_131_576 + 7_462.6 * MIB) / 655_362
+
 #: The CUDA per-thread local frame the widest LAUNCHED kernel carries, from
 #: the ledger's ``local_memory_model.max_local_size_bytes`` at the merged tip
 #: (``wsm6_column``, 7,216 B).  CUDA reserves one per-context backing store
@@ -475,6 +684,40 @@ WIDEST_LAUNCHED_LOCAL_FRAME_BYTES = 7_216
 # ---------------------------------------------------------------------------
 # the model
 # ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class StagePeakFit:
+    """A device high-water fit, including retained pool and outside-pool bytes.
+
+    The intercept belongs to this measured stage trend, not to the physical
+    core. Taking its maximum with the existing shaped row preserves the
+    smaller-mesh floor where a large-mesh trend extrapolates below it.
+    """
+
+    stage: str
+    cells: tuple[int, int]
+    peak_bytes: tuple[int, int]
+
+    @property
+    def bytes_per_cell(self) -> float:
+        return max(0.0, (self.peak_bytes[1] - self.peak_bytes[0])
+                   / (self.cells[1] - self.cells[0]))
+
+    @property
+    def intercept_bytes(self) -> float:
+        return max(peak - self.bytes_per_cell * cells
+                   for cells, peak in zip(self.cells, self.peak_bytes))
+
+    def predict_bytes(self, cells: int) -> float:
+        return self.intercept_bytes + self.bytes_per_cell * cells
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"stage": self.stage, "measured_cells": list(self.cells),
+                "measured_peak_bytes": list(self.peak_bytes),
+                "intercept_bytes": self.intercept_bytes,
+                "bytes_per_cell": self.bytes_per_cell,
+                "scope": "two measured sizes; extrapolated outside their interval"}
+
+
 @dataclass(frozen=True)
 class ShapedFootprintModel:
     """One card's, one configuration's footprint row -- core plus shape.
@@ -492,8 +735,27 @@ class ShapedFootprintModel:
     levels: int = MODEL_VERTICAL_LEVELS
     measured: bool = True
     derived_from: str | None = None
+    #: :data:`STACK_RESTATEMENT_BYTES_PER_CELL` on a row measured on the
+    #: 2026-08 proof stack; zero on a row measured on today's.
+    restated_bytes_per_cell: float = 0.0
+    #: :data:`ROLLBACK_ARMED_BYTES_PER_CELL` when the run arms the forecast
+    #: rollback (``--stop-on-refusal``); zero otherwise.
+    rollback_bytes_per_cell: float = 0.0
+    stage_peak_fits: tuple[StagePeakFit, ...] = ()
+    radiation_chunk_override: int | None = None
+    shortwave_arrays_override: int | None = None
 
     # -- the terms, each nameable on its own ------------------------------
+    @property
+    def effective_bytes_per_cell(self) -> float:
+        """Every per-cell term this row charges, summed."""
+
+        return (
+            float(self.bytes_per_cell)
+            + float(self.restated_bytes_per_cell)
+            + float(self.rollback_bytes_per_cell)
+        )
+
     def tiled_bytes(self, cells: int) -> int:
         return sum(
             ws.bytes_for(int(cells), self.card, self.levels)
@@ -509,22 +771,28 @@ class ShapedFootprintModel:
     def predict_bytes(self, cells: int) -> float:
         if cells <= 0:
             raise ValueError("cells must be positive")
-        return (
+        shaped = (
             float(self.core_bytes)
-            + float(self.bytes_per_cell) * int(cells)
+            + (self.effective_bytes_per_cell - self.rollback_bytes_per_cell) * int(cells)
             + float(self.tiled_bytes(int(cells)))
         )
+        peak = max((fit.predict_bytes(int(cells)) for fit in self.stage_peak_fits), default=shaped)
+        return max(shaped, peak) + self.rollback_bytes_per_cell * int(cells)
 
     # -- the margin, and what each part of it absorbs ----------------------
     def margin_terms(self) -> dict[str, dict[str, Any]]:
         """The margin, itemised.  Every entry names its breakage."""
 
+        columns = self.radiation_chunk_override or radiation_chunk_columns(self.card)
+        arrays = self.shortwave_arrays_override or SPCVMC_WK_ARRAYS
+        workspace = columns * SHORTWAVE_GPOINTS * arrays * (int(self.levels) + 2) * 4
         return {
             "arena_placement": {
-                "bytes": shortwave_workspace_bytes(self.card, self.levels),
+                "bytes": workspace,
+                "columns": columns,
+                "workspace_arrays": arrays,
                 "absorbs": (
-                    "the RRTMG shortwave spcvmc workspace -- the largest "
-                    "mesh-independent block in the footprint -- being mapped "
+                    "the RRTMG shortwave spcvmc workspace being mapped "
                     "fresh instead of served from the CuPy pool's free list "
                     "at the instant radiation runs"
                 ),
@@ -533,12 +801,18 @@ class ShapedFootprintModel:
                     "the first radiation call, minutes in, on a card the gate "
                     "had already admitted"
                 ),
-                "measured": (
+                "measured": ((
+                    "24 km census: 8,192 columns x 112 g-points x 16 arrays x "
+                    "57 levels x 4 bytes = 3,192 MiB, observed as one pool "
+                    "request; 22 km auto width is 7,936 columns. Holds the "
+                    "larger observed block for arena placement, a derived "
+                    "margin rather than another measured device peak"
+                ) if self.radiation_chunk_override is not None else (
                     "freeing 38.4 MiB EARLIER in the run moved x1.40962's pool "
                     "high-water 5,404.5 -> 7,111.7 MiB, +1,707.2 MiB, "
                     "reproduced across two runs one of which was on an idle "
                     "card (STATE.md, the construction-diagnostic hold)"
-                ),
+                )),
                 "scales_with": "the card's radiation chunk width",
             },
             "instrument_convention": {
@@ -578,7 +852,7 @@ class ShapedFootprintModel:
 
         margin = self.margin_bytes() if margin_bytes is None else int(margin_bytes)
         budget = int(budget_bytes) - margin
-        if budget <= 0 or self.bytes_per_cell <= 0.0:
+        if budget <= 0 or self.effective_bytes_per_cell <= 0.0:
             return 0
         if self.predict_bytes(1) > budget:
             return 0
@@ -598,10 +872,15 @@ class ShapedFootprintModel:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "shape": "core + sum(tiled workspaces at min(cells, tile)) + slope * cells",
+            "shape": ("max(shaped footprint, measured stage peaks) + rollback staging"
+                      if self.stage_peak_fits else
+                      "core + sum(tiled workspaces at min(cells, tile)) + slope * cells"),
             "core_bytes": float(self.core_bytes),
             "core_mib": float(self.core_bytes) / MIB,
             "bytes_per_cell": float(self.bytes_per_cell),
+            "restated_bytes_per_cell": float(self.restated_bytes_per_cell),
+            "rollback_bytes_per_cell": float(self.rollback_bytes_per_cell),
+            "effective_bytes_per_cell": self.effective_bytes_per_cell,
             "configuration": self.configuration,
             "levels": int(self.levels),
             "card": self.card.as_dict(),
@@ -610,7 +889,8 @@ class ShapedFootprintModel:
             "tiled_workspace_knee_cells": {
                 ws.name: ws.knee_cells(self.card) for ws in TILED_WORKSPACES
             },
-            "radiation_chunk_columns": radiation_chunk_columns(self.card),
+            "stage_peak_fits": [fit.as_dict() for fit in self.stage_peak_fits],
+            "radiation_chunk_columns": self.radiation_chunk_override or radiation_chunk_columns(self.card),
             "margin_bytes": self.margin_bytes(),
             "margin_terms": self.margin_terms(),
             "provenance": self.provenance,
@@ -639,6 +919,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
         "card": "32gib-170sm",
         "configuration": "global",
         "measured": True,
+        "stack": "proof-2026-08",
         "provenance": (
             "two-point fit on the per-allocation ledger session measured "
             "2026-08-26 on the proving RTX 5090 (170 SM) at the merged tip, "
@@ -657,6 +938,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
         "card": "16gib-70sm",
         "configuration": "global",
         "measured": True,
+        "stack": "proof-2026-08",
         "provenance": (
             "two-point fit on the per-allocation ledger session measured 2026-08-25 on "
             "the proving RTX 5070 Ti (70 SM) at hex 5252421 + engine "
@@ -678,6 +960,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
         "card": "10gib-68sm",
         "configuration": "global",
         "measured": True,
+        "stack": "proof-2026-08",
         "provenance": (
             "single-point core from the per-allocation ledger row measured 2026-08-25 on "
             "the desktop RTX 3080 (68 SM, sm_86, WDDM) at hex 5252421 + engine "
@@ -699,6 +982,10 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
         "card": "32gib-170sm",
         "configuration": "limited-area",
         "measured": True,
+        # The pinned regional record runs the limiter off and its five
+        # culls were measured whole-run at the door; nothing measured
+        # restates it.
+        "stack": "regional-2026-08",
         "provenance": (
             "ENVELOPE, NOT A FIT.  The per-allocation instrument has never "
             "been run on a regional mesh, so this core is the LARGEST residue "
@@ -720,11 +1007,202 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
             "cull replaces this whole row.  evidence/nest-ratio-20260827/"
         ),
     },
+    "global/188sm": {
+        "core_bytes": 2_771_989_299.0,
+        "bytes_per_cell": 124_655.2996,
+        "card": "96gib-188sm",
+        "configuration": "global",
+        "measured": True,
+        "stack": "bare-defaults-2026-10",
+        "provenance": (
+            "single-mesh row, split by the per-allocation hook, measured "
+            "2026-10-11 on an RTX PRO 6000 Blackwell Server (188 SM, "
+            "97,887 MiB) at hex lane/hex-arbitrary-physics + the "
+            "late-health fix, engine 9f3f52565, through the bare forecast "
+            "door: x1.655362 (655,362 cells, 55 levels), GFS 2026-10-03 "
+            "12Z, MPAS-A defaults (monotonic limiter, CUDA-graph "
+            "subcycles, New Tiedtke at 30 km).  The 6 h run (120 steps) "
+            "peaked 82,963 MiB on the card, 82,404 MiB above the card's "
+            "559 MiB idle floor; the 1 h run peaked 81,311.  CORE: at the "
+            "1 h run's device peak the hook found 2,127.2 MiB of live "
+            "blocks that are not a whole multiple of the cell, edge or "
+            "vertex count and 2,367 MiB of device memory outside the CuPy "
+            "pool (context, module images, local-memory backing store); "
+            "their sum less this card's tiled workspaces (1,850.6 MiB) is "
+            "the core.  SLOPE: the rest of the 6 h peak over the cell "
+            "count, which therefore carries the pool's cached blocks.  ONE "
+            "mesh: core and slope are separated by the ledger, not by a "
+            "second mesh; a second-mesh arm replaces the split"
+        ),
+    },
 }
 
 SHAPED_ROWS: Mapping[str, Mapping[str, Any]] = MappingProxyType(
     {key: MappingProxyType(dict(row)) for key, row in _SHAPED_ROWS.items()}
 )
+
+#: The global row the door prices TODAY's build with.  The four global rows
+#: above are measurements of earlier builds and stay as the record they are
+#: (their receipts, the restatement and the tests that refit them); none of
+#: them is the door's price for the global configuration any more.
+#:
+#: THE BREAKAGE IT PREVENTS.  The hex memory census cuts (branch
+#: hex/mem-census-cuts, 2026-10-16: census items 3, 4, 5, 7, 9 and 11 with
+#: the mesh, state-levels, acoustic, diagnostics, pool and io-halo memory
+#: lanes) cut route A's device peak to under half at 60 km.  Priced with the
+#: earlier rows the door refused every run the cuts made fit -- x1.163842 on
+#: an RTX 5090 with 18.4 GB free was refused at 24,832.6 MiB predicted while
+#: it peaks at 12,244 MiB -- and at the same time UNDER-priced the build it
+#: was fitted for: that build measured 27,882 MiB at x1.163842 against the
+#: 24,832.6 MiB the 170 SM row predicted, so a card with 26.6 GB free was
+#: admitted into an out-of-memory.
+#:
+#: MEASURED 2026-10-16 on the proving RTX 5090 (170 SM), route A
+#: (default ArWen physics) through the bare forecast door, one hour each, the
+#: run's own nvidia-smi row sampled every 500 ms, the same inputs and card for
+#: both arms:
+#:
+#:   ==========  ===============================  =================================
+#:   mesh        before: hex 3b6175b3 + engine    after: hex/mem-census-cuts e212d4a5
+#:               088511604c6 (graphs on)          + engine cb2a7f4af54 (eager)
+#:   ==========  ===============================  =================================
+#:   x1.40962    9,892 MiB (6 steps)              5,726 MiB
+#:   x1.163842   27,882 MiB (10 steps)            12,244 MiB
+#:   ==========  ===============================  =================================
+#:
+#: Every history word of every frame identical between the arms (46
+#: variables x 3 frames; 140,211,882 and 560,830,122 words).  The row is the
+#: two-point fit of the "after" arm the way every row here is fitted: the
+#: tiled workspaces (1,419.6 and 1,673.4 MiB) come off both points first.
+#: The core carries the card-sized radiation chunk and the CUDA local-memory
+#: store, so another card is DERIVED from this row by model_for_card's two
+#: card-scaled mechanisms, exactly as before.
+CURRENT_GLOBAL_ROW: Mapping[str, Any] = MappingProxyType({
+    "core_bytes": 2_326_008_761.0,
+    "bytes_per_cell": 53_454.1167,
+    "card": "32gib-170sm",
+    "configuration": "global",
+    "measured": True,
+    "stack": "census-cuts-2026-10",
+    "provenance": (
+        "two-point fit, hex/mem-census-cuts e212d4a5 + engine "
+        "lane/292-hex-memory cb2a7f4af54, RTX 5090 (170 SM), route A, bare "
+        "forecast door, 1 h: x1.40962 peaked 5,726 MiB and x1.163842 12,244 "
+        "MiB by this process's nvidia-smi row; the same runs on hex 3b6175b3 + "
+        "engine 088511604c6 peaked 9,892 and 27,882 MiB with every history "
+        "word identical.  Tiled workspaces subtracted before the fit.  "
+        "Measured 2026-10-16."
+    ),
+})
+
+#: What one same-host rank costs per LOCAL column on today's build (its own
+#: cells plus its K=3 halo), measured with two ranks on one RTX 5090
+#: (``--samehost-devices 0,0``), route A, 1 h, hex/mem-census-cuts e212d4a5:
+#: x1.40962 (21,553 + 21,557 local cells) peaked 6,054 MiB and x1.163842
+#: (83,946 + 83,940) 14,818 MiB, one process holding both ranks.  The fit
+#: (tiled workspaces per rank first) is 58,267.3 B per local cell and 1,082.8
+#: MiB per rank; a rank on its own card is charged that card's whole single-card
+#: core instead, which is larger.  The same 120 km pair on hex 3b6175b3 peaked
+#: 12,904 MiB, history words identical.
+#:
+#: THE BREAKAGE IT RETIRES, AND THE ONE IT STILL PREVENTS.  The 2026-10-12
+#: envelope (:data:`SAMEHOST_RANK_ENVELOPE_PEAK_BYTES`, 65,123 MiB at 334,756
+#: local columns) priced the same-host overhead the single-card census could
+#: not see: about 57.6 KB per column of construction-stream blocks stranded in
+#: an arena the stepping stream never reused and halo fields held to the end
+#: of the step.  The io-halo memory lane fixed both (merged in
+#: hex/mem-census-cuts), so the envelope stops being the price; a rank is still
+#: never priced below this measured same-host slope, which is what keeps the
+#: four-card 15 km run that died at step 43 refused on a build that still
+#: carries the overhead (that build no longer prices from this row).
+SAMEHOST_RANK_BYTES_PER_CELL = 58_267.3
+
+
+#: The largest per-card peak measured for ONE same-host rank on a 188 SM
+#: card, and the local column count it carried: 15 km x1.2621442 on 8 x RTX
+#: PRO 6000, 334,756 local columns per rank, 65,123 MiB (nvidia-smi, the
+#: largest of the 8 cards; hex 15km-speed branch d04c30d + native ozone
+#: bridge, the wide radiation chunk this tree runs).  The same rank size on
+#: two cards (30 km, 327,681 columns) peaked 57,533-61,345 MiB in four arms.
+#: Receipts: the 15 km speed sprint report of 2026-10-11
+#: ("Before and after") and evidence/g1/g1-30km-2card-table.md.
+SAMEHOST_RANK_ENVELOPE_PEAK_BYTES = 65_123 * MIB
+SAMEHOST_RANK_ENVELOPE_LOCAL_CELLS = 334_756
+
+
+def samehost_rank_model(model: ShapedFootprintModel) -> ShapedFootprintModel:
+    """Price one resident same-host rank from same-host measurements.
+
+    THE BREAKAGE IT PREVENTS (measured 2026-10-12, G3, 4 x RTX PRO 6000, hex
+    a4a9bab + engine 7008877b6): global 15 km on four cards, 664,586 local
+    columns per rank, bare door.  The previous pricing took the single-card
+    global/188sm row and SUBTRACTED 7,017 MiB of CUDA-graph staging that
+    same-host ranks do not allocate ("derived, not measured"); it predicted
+    76,385 MiB per rank, the door admitted, every card filled to 94.9-96.9 GB
+    by step 5 and rank 0 died out of memory at step 43 (pool 96,598,311,936
+    bytes, a 2,635,825,152-byte limiter temporary unmappable): at least
+    98,088 MiB with the 3.37 GiB measured outside the pool.  A same-host rank
+    is HEAVIER per column than the single-card loop, not lighter: one 30 km
+    rank of 655,362 columns runs out of memory at 97.7 GB where the
+    single-card door peaks at 83.8 GB (15km-speed lane).
+
+    The row: the single-card core and tiled workspaces, and a slope fitted
+    so the line passes through the largest same-host peak measured
+    (:data:`SAMEHOST_RANK_ENVELOPE_PEAK_BYTES`).  It is an ENVELOPE through
+    one rank size, used for bare and armed ranks alike: the one bare
+    same-host point (above) lies above the armed line minus the rollback
+    term, so bare ranks are not given the rollback discount.  It predicts
+    124,860 MiB at 664,586 columns (measured >= 98,088, refused either way
+    on a 96 GB card) and 63,842 MiB at 327,681 (measured 57,533-61,345).
+    A bare same-host fit at a second rank size replaces it.  Other cards
+    keep their rows: no same-host rank has been measured on them, and their
+    smaller pools strand less (30 km on four 32 GiB cards peaked 31.6 GiB).
+    """
+    if (model.configuration == "global"
+            and model.bytes_per_cell == CURRENT_GLOBAL_ROW["bytes_per_cell"]
+            and model.restated_bytes_per_cell == 0.0):
+        # Today's build (CURRENT_GLOBAL_ROW, measured or derived for this card):
+        # the rank carries the card's single-card core and tiled workspaces and
+        # the measured same-host slope per local column.
+        if model.bytes_per_cell >= SAMEHOST_RANK_BYTES_PER_CELL:
+            return model
+        return replace(model, bytes_per_cell=SAMEHOST_RANK_BYTES_PER_CELL,
+                       rollback_bytes_per_cell=0.0, measured=model.measured,
+                       derived_from=model.derived_from,
+                       provenance=model.provenance + "; SAME-HOST RANK: "
+                       f"{SAMEHOST_RANK_BYTES_PER_CELL:,.1f} B per local column, measured "
+                       "with two ranks on one RTX 5090 at x1.40962 and x1.163842 "
+                       "(hex/mem-census-cuts); bare and armed ranks priced alike")
+    row = SHAPED_ROWS["global/188sm"]
+    if (model.configuration != "global" or model.card.multiprocessors != 188
+            or model.bytes_per_cell != row["bytes_per_cell"]
+            or model.core_bytes != row["core_bytes"]):
+        return model
+    cells = SAMEHOST_RANK_ENVELOPE_LOCAL_CELLS
+    slope = (SAMEHOST_RANK_ENVELOPE_PEAK_BYTES - float(model.core_bytes)
+             - float(model.tiled_bytes(cells))) / cells
+    return replace(model, bytes_per_cell=slope, restated_bytes_per_cell=0.0,
+                   rollback_bytes_per_cell=0.0, measured=True,
+                   derived_from="samehost-rank-envelope/188sm",
+                   provenance=model.provenance + "; SAME-HOST RANK ENVELOPE: slope "
+                   f"{slope:,.1f} B/column through the largest measured same-host rank "
+                   f"peak ({SAMEHOST_RANK_ENVELOPE_PEAK_BYTES / MIB:,.0f} MiB at "
+                   f"{cells:,} local columns, 15 km on 8 cards); bare and armed "
+                   "ranks priced alike; one rank size, not a two-size fit")
+
+
+def _current_global_model() -> ShapedFootprintModel:
+    """The measured row of today's build (:data:`CURRENT_GLOBAL_ROW`)."""
+
+    row = CURRENT_GLOBAL_ROW
+    return ShapedFootprintModel(
+        core_bytes=float(row["core_bytes"]),
+        bytes_per_cell=float(row["bytes_per_cell"]),
+        card=KNOWN_CARDS[str(row["card"])],
+        configuration=str(row["configuration"]),
+        provenance=str(row["provenance"]),
+        measured=bool(row["measured"]),
+    )
 
 
 def _row_model(key: str) -> ShapedFootprintModel:
@@ -736,19 +1214,66 @@ def _row_model(key: str) -> ShapedFootprintModel:
         configuration=str(row["configuration"]),
         provenance=str(row["provenance"]),
         measured=bool(row["measured"]),
+        restated_bytes_per_cell=(
+            STACK_RESTATEMENT_BYTES_PER_CELL
+            if row["stack"] == "proof-2026-08"
+            else 0.0
+        ),
     )
 
 
-#: The row of record: the 170 SM card, the global configuration.  It is the
-#: DEFAULT and the derivation reference, not a universal answer -- the door
-#: reads the card and re-selects.
-FOOTPRINT_MODEL = _row_model("global/170sm")
+#: The row of record: the 170 SM card, the global configuration, today's
+#: build (:data:`CURRENT_GLOBAL_ROW`).  It is the DEFAULT and the derivation
+#: reference, not a universal answer -- the door reads the card and
+#: re-selects.  The 2026-08 proof row it replaced is ``_row_model("global/170sm")``.
+FOOTPRINT_MODEL = _current_global_model()
+
+
+# Whole-device stage high waters, including live and retained CuPy blocks,
+# diagnostic/GF temporaries and history capture. Re-derived by the regression
+# from tools/device_memory_ledger/admission-stage-peaks-20261017.json.
+# The 24 km case commits 60 steps; 22 km commits 360 with 3-hour history.
+LARGE_GLOBAL_STAGE_PEAK_BYTES = (
+    ('construct', 32_679_198_720, 38_960_168_960),
+    ('cuda_context', 32_907_788_288, 39_230_701_568),
+    ('dynamics.solve_diagnostics', 72_418_131_968, 91_107_950_592),
+    ('history.capture', 70_121_750_528, 85_101_707_264),
+    ('physics._run_cumulus', 73_825_320_960, 96_763_969_536),
+    ('physics._run_noahmp', 65_426_227_200, 88_067_080_192),
+    ('physics._run_radiation', 65_426_227_200, 88_067_080_192),
+    ('physics._run_sfclay', 65_426_227_200, 88_067_080_192),
+    ('physics._run_ysu', 65_426_227_200, 88_067_080_192),
+    ('step', 75_119_263_744, 96_763_969_536),
+)
+
+
+def _with_large_global_census(model: ShapedFootprintModel) -> ShapedFootprintModel:
+    if (model.card.multiprocessors != 188 or model.card.max_threads_per_sm != 1536
+            or model.levels != 55):
+        return model
+    return replace(model,
+        stage_peak_fits=tuple(StagePeakFit(stage, (1_022_592, 1_216_922), (a, b))
+                             for stage, a, b in LARGE_GLOBAL_STAGE_PEAK_BYTES),
+        radiation_chunk_override=8192, shortwave_arrays_override=16,
+        provenance=(
+            "MEASURED large-global stage envelope, 2026-10-17, 188 SM / 1536 threads, "
+            "55 levels, fast ArWen physics, one same-host rank, graphs off: "
+            "1,022,592 cells / 60 steps and 1,216,922 cells / 360 steps. "
+            "Includes dynamics diagnostics workspace, GF convection scratch, "
+            "retained CuPy pool blocks, outside-pool memory and history staging. "
+            "Maximum of two-point stage fits, extrapolated outside these sizes, "
+            "and the existing smaller-mesh shaped floor. The placement margin "
+            "prices the observed 8192-column, 16-array shortwave request. "
+            "Evidence: tools/device_memory_ledger/admission-stage-peaks-20261017.json. "
+            "Smaller-mesh floor provenance: " + model.provenance))
 
 
 def model_for_card(
     card: CardProfile | None = None,
     configuration: str = "global",
     levels: int = MODEL_VERTICAL_LEVELS,
+    *,
+    rollback_armed: bool = False,
 ) -> ShapedFootprintModel:
     """The footprint row for this card and configuration.
 
@@ -759,9 +1284,22 @@ def model_for_card(
     measured running.
     """
 
+    rollback = ROLLBACK_ARMED_BYTES_PER_CELL if rollback_armed else 0.0
     if card is None:
         card = REFERENCE_CARD
     key = row_key(configuration, card)
+    if configuration == "global":
+        # Today's build: measured on the 170 SM card (CURRENT_GLOBAL_ROW),
+        # DERIVED for every other card by the two card-scaled mechanisms
+        # below.  The earlier global rows in _SHAPED_ROWS priced earlier
+        # builds and stay as their record.
+        reference = _current_global_model()
+        if card.multiprocessors == reference.card.multiprocessors:
+            return replace(reference, card=card, levels=int(levels),
+                           rollback_bytes_per_cell=rollback)
+        return _with_large_global_census(_derived_model(
+            reference, row_key("global", REFERENCE_CARD), card,
+            configuration, levels, rollback))
     if key in _SHAPED_ROWS:
         model = _row_model(key)
         if levels != model.levels:
@@ -773,6 +1311,7 @@ def model_for_card(
                 provenance=model.provenance,
                 levels=int(levels),
                 measured=model.measured,
+                restated_bytes_per_cell=model.restated_bytes_per_cell,
             )
         # A row is measured on ONE card; if the caller hands us the same SM
         # count under a different name, the arithmetic is identical and the
@@ -785,6 +1324,8 @@ def model_for_card(
             provenance=model.provenance,
             levels=int(levels),
             measured=True,
+            restated_bytes_per_cell=model.restated_bytes_per_cell,
+            rollback_bytes_per_cell=rollback,
         )
 
     reference_key = row_key(configuration, REFERENCE_CARD)
@@ -795,6 +1336,14 @@ def model_for_card(
             f"{card.name!r}; add a measured row before admitting on it"
         )
     reference = _row_model(reference_key)
+    return _derived_model(reference, reference_key, card, configuration, levels, rollback)
+
+
+def _derived_model(reference: ShapedFootprintModel, reference_key: str,
+                   card: CardProfile, configuration: str, levels: int,
+                   rollback: float) -> ShapedFootprintModel:
+    """``reference`` rescaled to ``card`` by the two card-scaled mechanisms."""
+
     local_store_saving = WIDEST_LAUNCHED_LOCAL_FRAME_BYTES * (
         REFERENCE_CARD.resident_threads - card.resident_threads
     )
@@ -809,6 +1358,8 @@ def model_for_card(
     return ShapedFootprintModel(
         core_bytes=core,
         bytes_per_cell=reference.bytes_per_cell,
+        restated_bytes_per_cell=reference.restated_bytes_per_cell,
+        rollback_bytes_per_cell=rollback,
         card=card,
         configuration=configuration,
         levels=int(levels),

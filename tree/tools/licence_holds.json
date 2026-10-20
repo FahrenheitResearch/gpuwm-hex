@@ -1,0 +1,43 @@
+{
+  "schema": "gpuwm-hex.licence-holds/v1",
+  "about": "Public exports exclude UCAR Noah-MP v5 and UGWP under the release ruling of 2026-10-19. Private source builds retain these paths. ArWen physics is the default; held MPAS selections name their licence and missing public port. Paths are relative to the distribution root.",
+  "holds": [
+    {
+      "id": "ucar-noahmp-v5",
+      "upstream": "https://github.com/NCAR/noahmp, as MPAS-Model v8.4.2 carries it in src/core_atmosphere/physics/physics_noahmp",
+      "upstream_commit": "f34984b2c89353cf31c235b08d3b4acd96b37bb3",
+      "upstream_tag": "MPAS-Model v8.4.2",
+      "licence": "UCAR Noah-MP terms, physics_noahmp/LICENSE.txt sha256 bd58c64131e08711ea7eb436f7a9520187626e6dcd0550fd6947f3060697d212",
+      "reason": "The terms say: 'You shall not sell, license or transfer for a fee the Software, or any work that in any manner contains the Software.' Apache-2.0 grants the right to sell, and the public distribution must stay sellable (owner ruling 2026-10-14), so the hex port of Noah-MP v5.0 and everything that carries or derives from it stay in private builds.",
+      "release_when": "never on the current terms: UCAR would have to grant terms that permit sale, or a project ruling settles it",
+      "native_backend": "unaffected: config_lsm_backend='native-cpu' runs Noah-MP from the user's own MPAS build, and only with --licence-opt-in ucar-noahmp",
+      "refusal": "the forecast door refuses config_lsm_scheme='sf_noahmp' on an MPAS suite without --licence-opt-in ucar-noahmp, naming the terms and the permissive WRF-lineage Noah-MP v4.x of the ArWen suite; with the opt-in it refuses the hex-cuda backend in a distribution without the port by naming this hold (hexcore.licence_gate)",
+      "paths": [
+        "src/hexcore/mpasphys/noahmp_v842.py",
+        "src/hexcore/mpasphys/urban_v842.py",
+        "tests/noahmp_v842/",
+        "tests/urban_v842/",
+        "licenses/LICENSE-Noah-MP-UCAR.txt",
+        "licenses/NOTICE-Noah-MP-UCAR-private-builds.txt",
+        "src/hexcore/mpasphys/rrfs/noahmp.py",
+        "tests/noahmp_rrfs/"
+      ]
+    },
+    {
+      "id": "ugwp",
+      "upstream": "https://github.com/NOAA-GSL/UGWP",
+      "upstream_commit": "c1c893edcf171af5639af60e3a3a528816f6cc2b",
+      "licence": "UGWP licence hold, release ruling 2026-10-19",
+      "reason": "The release ruling explicitly excludes UGWP from the public export. The earlier US Government classification does not release this hold.",
+      "release_when": "An explicit project ruling lifts this hold.",
+      "paths": [
+        "src/hexcore/mpasphys/ugwp_oro_v842.py",
+        "src/hexcore/mpasphys/ugwp_ngw_v842.py",
+        "tests/ugwp_ngw_native/",
+        "tests/ugwp_oro_oracle/",
+        "tests/test_ugwp_ngw_v842.py",
+        "tests/test_mpas_ugwp_oro_v842.py"
+      ]
+    }
+  ]
+}

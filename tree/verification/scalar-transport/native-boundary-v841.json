@@ -1,0 +1,61 @@
+{
+  "source_commit": "91c5eac175eebeaf4206bacd5cb50c39dff3c152",
+  "source_url": "https://github.com/MPAS-Dev/MPAS-Model/blob/91c5eac175eebeaf4206bacd5cb50c39dff3c152/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L5541",
+  "copy_url": "https://github.com/MPAS-Dev/MPAS-Model/blob/91c5eac175eebeaf4206bacd5cb50c39dff3c152/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L5771",
+  "blocks_sha256": "41e491b85acd4ca01cd02509b996151315f076947a2be90c4a5063bbe1f1d72c",
+  "compiler": "ifx -O0 -fp-model=source -no-fma",
+  "masks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+  ],
+  "stage": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    0
+  ],
+  "before_copy": [
+    -1,
+    0,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "before_residual": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "native_residual_bits": [
+    1065353216,
+    1073741824,
+    1077936128,
+    1082130432,
+    0,
+    0,
+    1088421888
+  ],
+  "native_copy_bits": [
+    0,
+    0,
+    1088421888,
+    1082130432,
+    1084227584,
+    1086324736,
+    0
+  ]
+}

@@ -1,0 +1,64 @@
+METIS 5.1.0, as vendored by gpuwm-hex
+======================================
+
+Source: karypis.github.io/glaros/files/sw/metis/metis-5.1.0.tar.gz
+        sha256 76faebe03f6c963127dbb73c13eab58c9a3faeae48779f049066a21c087c5db2
+        (the hash spack's metis package pins for 5.1.0)
+Licence: Apache-2.0, LICENSE.txt in this directory (NOTICE section 15).
+Built by: tools/build_gpmetis.py into hexcore/libexec/hex_gpmetis (setup.py).
+Why: the automatic multi-card door needs a contiguous METIS partition, and a
+pip install had no gpmetis (hex global on 2x RTX PRO 6000, 2026-10-16,
+RESULTS.md defect 4).
+
+Taken: LICENSE.txt, include/metis.h, libmetis/*, GKlib/*.c and *.h, and the
+gpmetis program's files from programs/ (gpmetis.c, cmdline_gpmetis.c, io.c,
+stat.c, defs.h, proto.h, metisbin.h, struct.h).
+
+Left out: GKlib/getopt.c, GKlib/gkregex.c, GKlib/gkregex.h (LGPL-2.1 copies of
+GNU C Library code); GKlib/ms_stat.h, ms_stdint.h, ms_inttypes.h (included only
+by Microsoft compilers, which this build does not support; ms_stat.h has no
+notice of its own); GKlib/test, GKlib/conf, the CMake and make files, the
+other programs, the manual and the sample graphs.
+
+Changed (Apache-2.0 section 4(b)):
+1. include/metis.h: IDXTYPEWIDTH 32 -> 64 and REALTYPEWIDTH 32 -> 64, so that
+   idx_t and real_t match a spack metis@5.1.0+int64+real64 build. The file is
+   then byte-identical to that build's installed metis.h.
+2. programs/cmdline_gpmetis.c: the argument scan no longer calls GKlib's
+   gk_getopt_long_only (getopt.c is not carried). It accepts -name, --name,
+   -name=value, --name=value and -name value, and sets every parameter as
+   before; option prefixes (for example -cont for -contig) are no longer
+   accepted.
+
+Identity (measured 2026-10-16): hex_gpmetis built in the pinned
+manylinux_2_28 image (needs GLIBC 2.27 at most) and spack's
+/opt/software/.../metis-5.1.0-p3pbi3s.../bin/gpmetis (gcc 13.3, Ubuntu 24.04)
+were run with the door's options (-ptype=kway -objtype=cut -contig -seed=841
+-ncuts=4 -niter=20) on the graphs the door writes for x1.655362 (2, 4 and 8
+parts) and x1.163842 (2 and 4 parts). All five partition files are
+byte-identical (x1.655362, 2 parts: sha256 af41c71e232f0140...).
+
+3. GKlib/gk_mksort.h: rewritten from scratch for gpuwm-hex under Apache-2.0
+   (2026-10-16). The original header was adapted from the GNU C Library's
+   stdlib/qsort.c and carried its LGPL-2.1-or-later notice; a public hex
+   package ships third-party code only under BSD, MIT, Apache-2.0 or public
+   domain. The new GK_MKQSORT has the same interface and the same method
+   (median-of-three quicksort, small parts left to one insertion pass), and
+   places equal keys exactly where the original does:
+   - 200,000 random key/value arrays (sizes 0 to 2000 and 2^20, key ranges
+     with heavy ties, sorted, reversed, both sort directions), compiled at
+     -O3 and -O0: 0 arrays ordered differently from the original template.
+   - hex_gpmetis built with each header, door options (-ptype=kway
+     -objtype=cut -contig -seed=841 -ncuts=4 -niter=20): partition files
+     byte-identical for x1.163842 at 2 and 4 parts (sha256 1b50e433...,
+     22010f46...) and x1.655362 at 2, 4 and 8 parts (af41c71e...,
+     281e0c50..., 30cdec99...).
+4. GKlib/sort.c: its header comment now names gk_mksort.h instead of
+   glibc's qsort. No code changed.
+
+Licence scan (2026-10-16, every file in this directory): 87 files carry
+METIS/GKlib (Regents of the University of Minnesota, George Karypis's lab)
+and are Apache-2.0 under LICENSE.txt; gk_mksort.h is Apache-2.0 (gpuwm-hex);
+GKlib/random.c also holds, inside #ifdef USE_GKRAND (never defined, so not
+compiled), the MT19937-64 code of M. Matsumoto and T. Nishimura with its
+BSD-style notice kept in place. No file carries GPL or LGPL text.

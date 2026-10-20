@@ -218,13 +218,13 @@ is tested in `tests/test_local_timestep.py`.
    rates under `cells_qualified_by_spacing`. Fixed: that key is `None` for
    an explicit classing and the request goes out as `cells_requested`, so
    a receipt cannot present an instrument's choice as a property of the
-   mesh. (The classing receipts under `receipts/classing/` predate this and
+   mesh. (The classing receipts kept with the release evidence predate this and
    carry the old key.)
 
 The default path is untouched: with the switch off nothing in these
 modules runs, and the contract deck's kernel-set digest is the same on this
 change's tree as on the base tree, which is why the point cull's own contract
-receipt (`receipts/contract/hexpt-cull.contract.json`) admits both.
+receipt admits both.
 
 ## The instrument: an interface in the interior
 

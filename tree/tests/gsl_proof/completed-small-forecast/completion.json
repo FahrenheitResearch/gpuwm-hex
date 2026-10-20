@@ -1,0 +1,12 @@
+{
+  "schema": "i4-sheet-attempt-completion/v1",
+  "cpu_returncode": 0,
+  "forecast_revision": "22a2301875930a7251df7abc9fe43a2f1245b252",
+  "process_count": 1,
+  "actual_forecast_attempt_sha256": "ff71c3328379f67879f8038f81c7c6d3c2e9271038031181c3b25ae2b68daaca",
+  "config_sha256": "d1bf60a25e67ce8344d5b02d78f3887f325191a2c23ef357589436603714e113",
+  "cpu_helper_sha256": "e4a3e98622fe2ef5ac72f07a5810d8be2aaa594d83b5229d09077c82c03e6860",
+  "human_image_review_pending": true,
+  "original_output_retained": true,
+  "official_forecast_acceptance_claimed": false
+}

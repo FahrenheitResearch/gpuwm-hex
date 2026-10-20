@@ -1,0 +1,26 @@
+--- a/tree/tools/battery/cpu_files.txt
++++ b/tree/tools/battery/cpu_files.txt
+@@ -492,2 +492,5 @@
+ # Driver slot ABI storage/selection checks; no GPU or native fixture.
+ tests/test_mpasphys_device_pools_v842.py
++
++# LES selectors, native boundary ABI and configuration route; no card required.
++tests/test_mixing_v842_les.py
+--- a/tree/tools/battery/gpu_gates.txt
++++ b/tree/tools/battery/gpu_gates.txt
+@@ -102,2 +102,5 @@
+ tests/test_fct_v841.py
+ tests/test_upper_damping_v841.py
++
++# LES strict CUDA/native whole-module, RK boundary and subnormal regression.
++tests/test_mixing_v842_les.py
+--- a/tree/tests/test_tier_membership.py
++++ b/tree/tests/test_tier_membership.py
+@@ -138,4 +138,7 @@
+ #: makes "which tier owns this file" unanswerable.
+ DUAL_TIER_ALLOWED: dict[str, str] = {
++    "tests/test_mixing_v842_les.py":
++        "tier 1 takes LES selectors, native ABI and configuration routes; "
++        "tier 3 takes strict native/CUDA module, RK boundary and subnormal replays",
+     "tests/test_late_health_pipeline.py":
+         "tier 1 takes host rollback and receipt failures; tier 3 takes "

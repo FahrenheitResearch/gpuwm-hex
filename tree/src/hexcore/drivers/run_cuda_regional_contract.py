@@ -32,7 +32,11 @@ Usage on a card:
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
+import os
+import socket
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -168,6 +172,7 @@ class Bundle:
         start_time: Any = None,
     ) -> None:
         self.cp = cp
+        self._references = {}
         # Named paths take the bundle off the reference-dir layout entirely.
         # A cull of a mesh this program placed for itself does not live in the
         # 2026-08-25 record set's directory shape, and every regional anchor
@@ -182,6 +187,7 @@ class Bundle:
         if init is None or lbc_dir is None:
             raise SystemExit("--grid needs --init and --lbc-dir")
         self.grid_path = Path(grid)
+        self.init_path = Path(init)
         self.lbc_paths = sorted(str(p) for p in Path(lbc_dir).glob("lbc.*.nc"))
         if not self.lbc_paths:
             raise SystemExit(f"no lbc.*.nc under {lbc_dir}")
@@ -293,6 +299,16 @@ class Bundle:
             np.asarray(state.scalars, dtype=np.float32)
             + noise((1,) + cells, 1.0e-6)
         )
+
+    def reference(self, key, produce):
+        """One host result per input, shared with worker processes before CUDA."""
+        if key not in self._references:
+            self._references[key] = produce()
+        return self._references[key]
+
+    def state_at(self, name, start, delta):
+        return self.reference(("driving", name, start, np.float32(delta).tobytes()),
+            lambda: self.host_driving.state_at(name, start, delta))
 
     # -- device helpers ---------------------------------------------------
 
@@ -514,18 +530,17 @@ def deck_lbc_pool(ctx: Context) -> dict[str, Any]:
     )
     for field in ("ru", "rtheta_m", "rho_zz", "u"):
         payloads[f"state_at[{field}]"] = (
-            b.host_driving.state_at(field, b.start_time, delta_t),
+            b.state_at(field, b.start_time, delta_t),
             b.host(driving.state_at(field, b.start_time, delta_t)),
         )
     payloads["state_at[scalars]"] = (
-        b.host_driving.state_at("scalars", b.start_time, delta_t),
+        b.state_at("scalars", b.start_time, delta_t),
         b.host(driving.state_at("scalars", b.start_time, delta_t)),
     )
     return payloads
 
 
-def deck_speczone_tend(ctx: Context) -> dict[str, Any]:
-    b = ctx.b
+def _host_speczone_tend(b: Bundle):
     host_rho = b.tend_rho.copy()
     host_rt = b.tend_rt.copy()
     host_ru = b.tend_ru.copy()
@@ -540,6 +555,12 @@ def deck_speczone_tend(ctx: Context) -> dict[str, Any]:
         rt_driving_tend=b.host_driving.tendency("rtheta_m"),
         rho_driving_tend=b.host_driving.tendency("rho_zz"),
     )
+    return host_rho, host_rt, host_ru, host_rw
+
+
+def deck_speczone_tend(ctx: Context) -> dict[str, Any]:
+    b = ctx.b
+    host_rho, host_rt, host_ru, host_rw = b.reference("speczone_tend", lambda: _host_speczone_tend(b))
     d_rho = b.dev(b.tend_rho)
     d_rt = b.dev(b.tend_rt)
     d_ru = b.dev(b.tend_ru)
@@ -581,13 +602,12 @@ def deck_speczone_tend(ctx: Context) -> dict[str, Any]:
 
 def _driving_values(b: Bundle, delta_t: np.float32) -> dict[str, np.ndarray]:
     return {
-        name: b.host_driving.state_at(name, b.start_time, delta_t)
+        name: b.state_at(name, b.start_time, delta_t)
         for name in ("ru", "rtheta_m", "rho_zz", "u")
     }
 
 
-def deck_relaxzone_tend(ctx: Context) -> dict[str, Any]:
-    b = ctx.b
+def _host_relaxzone_tend(b: Bundle):
     delta_t = regional_v841.dynamics_time_offset(
         outer_dt=_DT,
         dynamics_split=3,
@@ -620,6 +640,12 @@ def deck_relaxzone_tend(ctx: Context) -> dict[str, Any]:
         rt_driving_values=values["rtheta_m"],
         rho_driving_values=values["rho_zz"],
     )
+    return values, theta_m, rho_zz, ru, host_rho, host_rt, host_ru
+
+
+def deck_relaxzone_tend(ctx: Context) -> dict[str, Any]:
+    b = ctx.b
+    values, theta_m, rho_zz, ru, host_rho, host_rt, host_ru = b.reference("relaxzone_tend", lambda: _host_relaxzone_tend(b))
     d_rho = b.dev(b.tend_rho)
     d_rt = b.dev(b.tend_rt)
     d_ru = b.dev(b.tend_ru)
@@ -688,8 +714,7 @@ def deck_relaxzone_tend(ctx: Context) -> dict[str, Any]:
     }
 
 
-def deck_speczone_overwrites(ctx: Context) -> dict[str, Any]:
-    b = ctx.b
+def _host_speczone_overwrites(b: Bundle):
     delta_t = regional_v841.dynamics_time_offset(
         outer_dt=_DT, dynamics_split=3, dynamics_substep=3,
         rk_timestep=regional_v841.rk_timestep_f32(
@@ -714,6 +739,12 @@ def deck_speczone_overwrites(ctx: Context) -> dict[str, Any]:
         ru_driving_values=values["ru"],
     )
     regional_v841.zero_speczone_w(masks=b.masks, w=host_w)
+    return values, host_u, host_ru, host_w
+
+
+def deck_speczone_overwrites(ctx: Context) -> dict[str, Any]:
+    b = ctx.b
+    values, host_u, host_ru, host_w = b.reference("speczone_overwrites", lambda: _host_speczone_overwrites(b))
     d_u = b.dev(b.saved.normal_velocity)
     d_ru = b.dev(b.state.rho_u)
     d_w = b.dev(b.saved.vertical_velocity)
@@ -741,11 +772,10 @@ def deck_speczone_overwrites(ctx: Context) -> dict[str, Any]:
     }
 
 
-def deck_reset_speczone(ctx: Context) -> dict[str, Any]:
-    b = ctx.b
+def _host_reset_speczone(b: Bundle):
     dt_f32 = np.float32(_DT)
-    rt_values = b.host_driving.state_at("rtheta_m", b.start_time, dt_f32)
-    rho_values = b.host_driving.state_at("rho_zz", b.start_time, dt_f32)
+    rt_values = b.state_at("rtheta_m", b.start_time, dt_f32)
+    rho_values = b.state_at("rho_zz", b.start_time, dt_f32)
     host_theta = np.ascontiguousarray(
         np.asarray(b.saved.theta_m, np.float32)
     ).copy()
@@ -765,6 +795,12 @@ def deck_reset_speczone(ctx: Context) -> dict[str, Any]:
     spec = b.masks.spec_cells
     base = np.asarray(b.reference_state.rho_theta_base, np.float32)
     host_perturbation[:, spec] = rt_values[:, spec] - base[:, spec]
+    return rt_values, rho_values, base, host_theta, host_rho_theta, host_perturbation
+
+
+def deck_reset_speczone(ctx: Context) -> dict[str, Any]:
+    b = ctx.b
+    rt_values, rho_values, base, host_theta, host_rho_theta, host_perturbation = b.reference("reset_speczone", lambda: _host_reset_speczone(b))
     d_theta = b.dev(b.saved.theta_m)
     d_rho_theta = b.dev(b.state.rho_theta)
     d_perturbation = b.dev(b.saved.rho_theta_perturbation)
@@ -787,10 +823,9 @@ def deck_reset_speczone(ctx: Context) -> dict[str, Any]:
     }
 
 
-def deck_scalar_boundary(ctx: Context) -> dict[str, Any]:
-    b = ctx.b
+def _host_scalar_boundary(b: Bundle):
     dt_rk = regional_v841.transport_rk_timestep_f32(outer_dt=_DT, rk_step=2)
-    driving = b.host_driving.state_at("scalars", b.start_time, dt_rk)
+    driving = b.state_at("scalars", b.start_time, dt_rk)
     host_adjust = b.scalars_stage.copy()
     regional_v841.bdy_adjust_scalars(
         b.mesh,
@@ -808,6 +843,12 @@ def deck_scalar_boundary(ctx: Context) -> dict[str, Any]:
     host_clamped = b.scalars_stage.copy()
     regional_v841.clamp_negative_scalars(host_clamped)
 
+    return dt_rk, driving, host_adjust, host_set, host_clamped
+
+
+def deck_scalar_boundary(ctx: Context) -> dict[str, Any]:
+    b = ctx.b
+    dt_rk, driving, host_adjust, host_set, host_clamped = b.reference("scalar_boundary", lambda: _host_scalar_boundary(b))
     ntracers = int(b.scalars_stage.shape[0])
     ten_dt = np.float32(np.float32(10.0) * np.float32(_DT))
     d_adjust = b.dev(b.scalars_stage)
@@ -925,23 +966,16 @@ def _acoustic_inputs(b: Bundle) -> tuple[Any, ...]:
     return offcentering, coefficients, forcing, state
 
 
+def _host_acoustic(b: Bundle):
+    from . import contract_hostprep
+    inputs = _acoustic_inputs(b)
+    return inputs, contract_hostprep.acoustic(b, inputs)
+
+
 def deck_acoustic(ctx: Context) -> dict[str, Any]:
     b = ctx.b
-    offcentering, coefficients, forcing, state = _acoustic_inputs(b)
-    host = advance_acoustic_step_v841(
-        b.mesh,
-        state,
-        forcing,
-        coefficients,
-        dts=_DTS,
-        small_step=2,
-        offcentering=offcentering,
-        fzm=np.asarray(b.vertical.fzm, np.float32),
-        fzp=np.asarray(b.vertical.fzp, np.float32),
-        rdzw=np.asarray(b.vertical.rdzw, np.float32),
-        specified_zone_edge=b.masks.spec_zone_mask_edge,
-        specified_zone_cell=b.masks.spec_zone_mask_cell,
-    )
+    inputs, host = b.reference("acoustic", lambda: _host_acoustic(b))
+    offcentering, coefficients, forcing, state = inputs
     cp = ctx.cp
     device_state = CudaAcousticState(
         ru_p=b.dev(state.ru_p),
@@ -1043,36 +1077,20 @@ def deck_acoustic(ctx: Context) -> dict[str, Any]:
     return payloads
 
 
+def _host_transport(b: Bundle):
+    from . import contract_hostprep
+    coefficients = build_advection_coefficients(
+        b.mesh, config_scalar_adv_order=3, n_vert_levels=b.nlev,
+        source_order_v841=True, allow_regional_sentinels=True)
+    velocity = np.ascontiguousarray(np.asarray(b.state.rho_u, np.float32))
+    return (coefficients, velocity, b.scalars_stage,
+            contract_hostprep.horizontal(b, coefficients), contract_hostprep.vertical(b))
+
+
 def deck_transport(ctx: Context) -> dict[str, Any]:
     b = ctx.b
-    coefficients = build_advection_coefficients(
-        b.mesh,
-        config_scalar_adv_order=3,
-        n_vert_levels=b.nlev,
-        source_order_v841=True,
-        allow_regional_sentinels=True,
-    )
-    velocity = np.ascontiguousarray(
-        np.asarray(b.state.rho_u, np.float32)
-    )
-    stage = b.scalars_stage
-    cells_on_edge64 = np.asarray(
-        b.mesh.arrays["cellsOnEdge"], dtype=np.int64
-    )
-    host_edges = _atmosphere_horizontal_edge_values(
-        stage,
-        velocity,
-        b.dv_edge,
-        np.where(cells_on_edge64 < 0, b.ncells, cells_on_edge64),
-        np.asarray(coefficients.adv_coefs, np.float32),
-        np.asarray(coefficients.adv_coefs_3rd, np.float32),
-        np.asarray(coefficients.n_adv_cells_for_edge, np.int64),
-        np.asarray(coefficients.adv_cells_for_edge, np.int64),
-        3,
-        0.25,
-        config_apply_lbcs=True,
-        bdy_mask_edge=np.asarray(b.masks.bdy_mask_edge, np.int64),
-    )
+    coefficients, velocity, stage, host_edges, host_vertical_flux = b.reference(
+        "transport", lambda: _host_transport(b))
     ntracers = int(stage.shape[0])
     d_edges = ctx.cp.zeros(
         (ntracers, b.nlev, b.nedges), dtype=ctx.cp.float32
@@ -1158,53 +1176,17 @@ def deck_transport(ctx: Context) -> dict[str, Any]:
     import hexcore.transport as transport_module
 
     device_vertical_flux = b.host(vertical_flux)
-    host_vertical_flux = np.asarray(
-        transport_module._atmosphere_vertical_flux(
-            stage[0],
-            ww_avg,
-            np.asarray(b.vertical.fzm, np.float32),
-            np.asarray(b.vertical.fzp, np.float32),
-            3,
-            0.25,
-        ),
-        np.float32,
-    )
     inherited = int(
         (
             host_vertical_flux.view(np.uint32)
             != device_vertical_flux[0].view(np.uint32)
         ).sum()
     )
-    original_flux = transport_module._atmosphere_vertical_flux
-
-    def _device_flux(*_args: Any, **_kwargs: Any) -> np.ndarray:
-        return device_vertical_flux[0]
-
-    transport_module._atmosphere_vertical_flux = _device_flux
-    try:
-        host_result = advance_scalars(
-            b.mesh,
-            old,
-            stage,
-            rho_old,
-            rho_new,
-            velocity,
-            ww_avg,
-            _DT,
-            coefficients=coefficients,
-            fzm=np.asarray(b.vertical.fzm, np.float32),
-            fzp=np.asarray(b.vertical.fzp, np.float32),
-            rdzw=np.asarray(b.vertical.rdzw, np.float32),
-            rk_step=3,
-            config_coef_3rd_order=0.25,
-            config_apply_lbcs=True,
-            bdy_mask_cell=np.asarray(b.masks.bdy_mask_cell, np.int64),
-            bdy_mask_edge=np.asarray(b.masks.bdy_mask_edge, np.int64),
-            advance_density=True,
-            inv_area_cell=b.inv_area_cell,
-        )
-    finally:
-        transport_module._atmosphere_vertical_flux = original_flux
+    from . import contract_hostprep
+    # Preserve the authority's device-flux substitution. A changed flux earns
+    # a different reference, including on the second run and mutation arm.
+    host_result = b.reference(("transport-finish", _sha(device_vertical_flux)),
+        lambda: contract_hostprep.finish(b, host_edges, device_vertical_flux))
 
     output = cp.empty_like(d_old)
     ctx.k.launch(
@@ -1350,6 +1332,15 @@ def _payload_records(payloads: dict[str, Any]) -> tuple[list[dict], bool]:
 
 
 def run_deck(deck: Deck, bundle: Bundle, cache: Any) -> dict[str, Any]:
+    attrs = {"deck": deck.name, "kernels": list(deck.kernels)}
+    _emit("prep.deck", "begin", attrs)
+    try:
+        return _run_deck(deck, bundle, cache)
+    finally:
+        _emit("prep.deck", "end", attrs)
+
+
+def _run_deck(deck: Deck, bundle: Bundle, cache: Any) -> dict[str, Any]:
     kernels = CudaRegionalKernels(cache)
     started = time.perf_counter()
 
@@ -1361,7 +1352,7 @@ def run_deck(deck: Deck, bundle: Bundle, cache: Any) -> dict[str, Any]:
     second = deck.run(second_ctx)
     second_records, second_ok = _payload_records(second)
 
-    dual_run = all(
+    dual_run = len(first_records) == len(second_records) and all(
         a.get("device_sha256") == b.get("device_sha256")
         for a, b in zip(first_records, second_records)
     )
@@ -1398,7 +1389,111 @@ def run_deck(deck: Deck, bundle: Bundle, cache: Any) -> dict[str, Any]:
     }
 
 
+_BUNDLE = None
+_LEDGER = None
+_LEDGER_WARNED = set()
+
+
+def _emit(stage, phase, attrs):
+    """Frozen C1 v1 wire schema. Logging never changes a contract verdict."""
+    path = os.environ.get("GPUWM_TIME_LEDGER") or _LEDGER
+    if not path:
+        return
+    try:
+        visible = (os.environ.get("GPUWM_CARD") or os.environ.get("GPU_MUTEX_CARDS", "").split(",")[0]
+                   or os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0])
+        card = int(visible) if visible.isdecimal() else None
+        record = {"v": 1, "t_utc": datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+            "t_mono": time.monotonic(), "host": socket.gethostname(),
+            "rental_id": os.environ.get("GPUWM_RENTAL_ID"),
+            "run_id": os.environ.get("GPUWM_RUN_ID"), "product": "hex",
+            "stage": stage, "phase": phase, "card": card,
+            "pid": os.getpid(), "attrs": attrs}
+        data = (json.dumps(record, separators=(",", ":"))+"\n").encode("utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            if os.write(fd, data) != len(data):
+                raise OSError("short append")
+        finally:
+            os.close(fd)
+    except Exception as error:
+        if str(path) not in _LEDGER_WARNED:
+            _LEDGER_WARNED.add(str(path))
+            try:
+                print(f"timeline append failed for {path}: {error}", file=sys.stderr)
+            except Exception:
+                pass
+
+
+def prepare_references(bundle, selected):
+    """Compute before any CUDA context exists, so fork shares read-only bytes."""
+    preparations = {
+        "speczone-tendencies": ("speczone_tend", _host_speczone_tend),
+        "relaxzone-tendencies": ("relaxzone_tend", _host_relaxzone_tend),
+        "speczone-overwrites": ("speczone_overwrites", _host_speczone_overwrites),
+        "reset-speczone-values": ("reset_speczone", _host_reset_speczone),
+        "scalar-boundary": ("scalar_boundary", _host_scalar_boundary),
+        "acoustic-regional": ("acoustic", _host_acoustic),
+        "transport-regional": ("transport", _host_transport),
+    }
+    for deck in selected:
+        if deck.name == "lbc-pool":
+            delta = regional_v841.dynamics_time_offset(outer_dt=_DT,
+                dynamics_split=3, dynamics_substep=2,
+                rk_timestep=regional_v841.rk_timestep_f32(outer_dt=_DT,
+                    dynamics_split=3, rk_step=2))
+            for name in ("ru", "rtheta_m", "rho_zz", "u", "scalars"):
+                bundle.state_at(name, bundle.start_time, delta)
+        else:
+            key, produce = preparations[deck.name]
+            bundle.reference(key, lambda: produce(bundle))
+
+
+def _initialize_worker(bundle, ledger):
+    global _BUNDLE, _LEDGER
+    _BUNDLE, _LEDGER = bundle, ledger
+
+
+def _worker(deck_name):
+    deck = next(deck for deck in DECKS if deck.name == deck_name)
+    attrs = {"deck": deck.name, "kernels": list(deck.kernels)}
+    _emit("prep.deck", "begin", attrs)
+    try:
+        from hexcore.cuda_backend import KernelCache, require_cuda
+        import cupy as cp
+        capability = require_cuda(min_compute=(12, 0))
+        _BUNDLE.cp = cp
+        return _run_deck(deck, _BUNDLE, KernelCache(capability=capability)), capability
+    finally:
+        _emit("prep.deck", "end", attrs)
+
+
+def run_selected(bundle, selected, workers, ledger):
+    if workers < 1:
+        raise ValueError("--workers must be positive")
+    if not selected:
+        raise ValueError("no contract decks selected")
+    _emit("prep.references", "begin", {})
+    try:
+        prepare_references(bundle, selected)
+    finally:
+        _emit("prep.references", "end", {})
+    # No CUDA API has run in the parent. Linux fork shares the prepared bundle;
+    # spawn transports the same bundle on platforms without fork.
+    method = "fork" if "fork" in multiprocessing.get_all_start_methods() else "spawn"
+    if workers == 1:
+        _initialize_worker(bundle, ledger)
+        results = [_worker(deck.name) for deck in selected]
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers, len(selected)),
+                mp_context=multiprocessing.get_context(method),
+                initializer=_initialize_worker, initargs=(bundle, ledger)) as pool:
+            results = list(pool.map(_worker, (deck.name for deck in selected)))
+    return [record for record, _ in results], results[0][1]
+
+
 def main() -> int:
+    global _LEDGER
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reference-dir", default=None)
     parser.add_argument("--grid", default=None)
@@ -1406,6 +1501,12 @@ def main() -> int:
     parser.add_argument("--lbc-dir", default=None)
     parser.add_argument("--out", required=True)
     parser.add_argument("--decks", default=None)
+    parser.add_argument("--workers", type=int, default=8,
+                        help="independent deck processes (default: 8)")
+    parser.add_argument("--host-reference-dir", type=Path,
+                        help="verified CPU references prepared outside the card hold")
+    parser.add_argument("--prepare-host-only", action="store_true",
+                        help="prepare the host references without creating a CUDA context")
     # THE LEDGER FIELDS (2026-08-27).  A cull the cascade placed this cycle
     # cannot be a row in a source file that was written before it existed, so
     # this receipt is what admits it -- checked by content against
@@ -1429,6 +1530,10 @@ def main() -> int:
              "file before the earliest one that exists refuses the cull by "
              "name (default: the reference record set's own start)")
     args = parser.parse_args()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _LEDGER = str(out.parent / "timeline.jsonl")
+    started = time.perf_counter()
 
     from hexcore.cuda_backend import KernelCache, require_cuda
     from hexcore.cuda_backend.compile_contract import source_sha256
@@ -1438,26 +1543,39 @@ def main() -> int:
         regional_boundary_mask_digest,
     )
 
-    capability = require_cuda(min_compute=(12, 0))
-    import cupy as cp
-
     reference = None if args.reference_dir is None else Path(args.reference_dir)
     bundle = Bundle(
         reference,
-        cp,
+        None,
         grid=None if args.grid is None else Path(args.grid),
         init=None if args.init is None else Path(args.init),
         lbc_dir=None if args.lbc_dir is None else Path(args.lbc_dir),
         start_time=args.start_time,
     )
-    cache = KernelCache(capability=capability)
-
     selected = DECKS
     if args.decks:
         wanted = {name.strip() for name in args.decks.split(",")}
+        unknown = wanted - {deck.name for deck in DECKS}
+        if unknown:
+            parser.error(f"unknown contract decks: {sorted(unknown)}")
         selected = tuple(d for d in DECKS if d.name in wanted)
 
-    records = [run_deck(deck, bundle, cache) for deck in selected]
+    if args.prepare_host_only:
+        if args.host_reference_dir is None:
+            parser.error("--prepare-host-only needs --host-reference-dir; the device half must have a bound CPU payload")
+        _emit("prep.references", "begin", {})
+        try:
+            prepare_references(bundle, selected)
+            from .contract_host_snapshot import save
+            record = save(bundle, selected, args.host_reference_dir)
+            out.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        finally:
+            _emit("prep.references", "end", {})
+        return 0
+    if args.host_reference_dir is not None:
+        from .contract_host_snapshot import load
+        load(bundle, selected, args.host_reference_dir)
+    records, capability = run_selected(bundle, selected, args.workers, _LEDGER)
     covered: set[str] = set()
     for deck in selected:
         covered.update(deck.kernels)
@@ -1478,6 +1596,8 @@ def main() -> int:
 
     receipt = {
         "schema": "mpas-port.cuda-regional-contract/v1",
+        "wall_seconds": round(time.perf_counter() - started, 3),
+        "workers": min(args.workers, len(selected)),
         # The ledger block.  Flat, at the top level, and named for what it
         # asserts rather than for where it came from: these are the fields
         # regional_admission reads when a cull presents its own deck instead

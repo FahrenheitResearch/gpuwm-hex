@@ -13,13 +13,15 @@ changes that a future, real ``run_mpas_column_batch`` counterparty must honor:
 * the three-dimensional ``refl10cm`` diagnostic is a required, named dBZ
   carrier for WSM6 and both Thompson variants;
 * ``bl_ugwp_gwdo`` is a valid v8.4.1 MPAS selector but remains a named refusal
-  because gpuwm publishes no gravity-wave physics slot; and
+  on THIS reference seam, which routes no drag; the v8.4.1 CUDA forecast runs
+  it as the engine's GSL drag behind the column-suite seam
+  (``hexcore.physics_suites``); and
 * ``pre_microphysics``/``post_microphysics`` are OpenACC transfer hooks only,
   not additional physical operators to reproduce in a resident backend.
 
-Frozen source: official MPAS-Model v8.4.1 tag object
-``2a934b5008a7446df96d550bf2e21466feaec686`` (commit
-``91c5eac175eebeaf4206bacd5cb50c39dff3c152``), chiefly
+Frozen source: official MPAS-Model v8.4.2 tag object
+``2eee75b147d83d67835cecfb30c6fb3793e3042b`` (commit
+``f34984b2c89353cf31c235b08d3b4acd96b37bb3``), chiefly
 ``mpas_atmphys_init.F:276-284``, ``mpas_atmphys_interface.F:562-595,
 701,857-1099,1141-1182``, ``mpas_atmphys_control.F:212-215``, and
 ``Registry.xml:2311-2314,2375-2380,2584-2598,2628-2634,3518-3522``.
@@ -47,9 +49,9 @@ FloatArray = NDArray[np.floating[Any]]
 _SUPPORTED_RKINDS = (np.dtype(np.float32), np.dtype(np.float64))
 
 V841_PHYSICS_SOURCE = (
-    "MPAS-A v8.4.1 tag-object=2a934b5008a7446df96d550bf2e21466feaec686; "
-    "commit=91c5eac175eebeaf4206bacd5cb50c39dff3c152; "
-    "archive-sha256=772f565c2bd66999492085eff8ffa0b9aa9a2edd1e7f2c0e5d1a8bedc1160861"
+    "MPAS-A v8.4.2 tag-object=2eee75b147d83d67835cecfb30c6fb3793e3042b; "
+    "commit=f34984b2c89353cf31c235b08d3b4acd96b37bb3; "
+    "archive-sha256=03e2d518c2f32eccbfa84a48d2c7efa223967819f4f72856f36b87c3b1a796f5"
 )
 
 
@@ -306,8 +308,11 @@ def resolve_mpas_physics_v841(
         _refuse(
             "config_gwdo_scheme",
             gwdo,
-            "gpuwm.core.physics.PHYSICS_SLOT_DISPATCH publishes no gravity-wave driver slot",
-            "config_gwdo_scheme='off' until gpuwm publishes a real UGWP column contract",
+            "this reference seam routes no drag, so its CPU column backend would "
+            "run none under this name; the v8.4.1 CUDA forecast runs it as the "
+            "engine's GSL drag (gwd_opt=3) behind the column-suite seam",
+            "config_gwdo_scheme='off' here, or the forecast door's "
+            "--physics-suite rrfs_v2_dev / --physics config_gwdo_scheme=bl_ugwp_gwdo",
         )
     return resolve_mpas_physics(
         config_physics_suite=config_physics_suite,

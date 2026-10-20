@@ -1,0 +1,50 @@
+{
+  "gfs/mynnsfc_driver__driver_sfclayer__L1396.s0000000001.e0000000001.r000000": {
+    "manifest_sha256": "73c74f801739a389f319011dc019a4bb69a1cfc6e7f5a78d1641dca74471fbcc",
+    "archive_sha256": "f0cf78a627a8a650255970e2a3e6d2d74be55c118c67332950f476b0155ab019",
+    "publication_sha256": "6694ed48bc5ebcac9da3b2987f459c84dcd6322e5edb425284484164f246fee7",
+    "passivity_sha256": "d148347d5f4f4d99ef5a0ed0b5fa24a65d55b0246c80e3d717a22f686cb81f3e"
+  },
+  "gfs/mynnsfc_driver__driver_sfclayer__L1396.s0000000003.e0000000003.r000000": {
+    "manifest_sha256": "6272030512c6cc6213098c4f2551e98d4c80436d5200c2921d299175a7f9c052",
+    "archive_sha256": "f0cf78a627a8a650255970e2a3e6d2d74be55c118c67332950f476b0155ab019",
+    "publication_sha256": "6694ed48bc5ebcac9da3b2987f459c84dcd6322e5edb425284484164f246fee7",
+    "passivity_sha256": "d148347d5f4f4d99ef5a0ed0b5fa24a65d55b0246c80e3d717a22f686cb81f3e"
+  },
+  "gfs/mynnsfc_driver__driver_sfclayer__L1430.s0000000001.e0000000001.r000000": {
+    "manifest_sha256": "8f6f611f1f8fcca13bb844f027207c9069998cb0f2bf3456016ede076728a5ef",
+    "archive_sha256": "f0cf78a627a8a650255970e2a3e6d2d74be55c118c67332950f476b0155ab019",
+    "publication_sha256": "6694ed48bc5ebcac9da3b2987f459c84dcd6322e5edb425284484164f246fee7",
+    "passivity_sha256": "d148347d5f4f4d99ef5a0ed0b5fa24a65d55b0246c80e3d717a22f686cb81f3e"
+  },
+  "gfs/mynnsfc_driver__driver_sfclayer__L1430.s0000000003.e0000000003.r000000": {
+    "manifest_sha256": "425cd15a490e59f57e4d601023c60c3738a8984d9862e1ee15ce6d05f00e0a23",
+    "archive_sha256": "f0cf78a627a8a650255970e2a3e6d2d74be55c118c67332950f476b0155ab019",
+    "publication_sha256": "6694ed48bc5ebcac9da3b2987f459c84dcd6322e5edb425284484164f246fee7",
+    "passivity_sha256": "d148347d5f4f4d99ef5a0ed0b5fa24a65d55b0246c80e3d717a22f686cb81f3e"
+  },
+  "rap.summer/mynnsfc_driver__driver_sfclayer__L1396.s0000000001.e0000000001.r000000": {
+    "manifest_sha256": "33f55399a0475349443a6199e14482fd81cfd23dde7a447b9d0ce3c5e85b9b94",
+    "archive_sha256": "82a79f658311f47147f2823c552d5c3a9749f7c81ca071dcfe6bf6cb61b60f77",
+    "publication_sha256": "9abc17e34272a3df2765bc64b2b982e9c9508b6109f1e737a997f4c23a42c81c",
+    "passivity_sha256": "ae91ad43fbec3c8d7ca06cebbecb7a6de66d15a9d65ec3dc7ac3ee2429fab8f3"
+  },
+  "rap.summer/mynnsfc_driver__driver_sfclayer__L1396.s0000000003.e0000000003.r000000": {
+    "manifest_sha256": "f64ad538f6d836e0d9387e2191934bd05cc87cf3feed6aa0721ccdaa0c42b46b",
+    "archive_sha256": "82a79f658311f47147f2823c552d5c3a9749f7c81ca071dcfe6bf6cb61b60f77",
+    "publication_sha256": "9abc17e34272a3df2765bc64b2b982e9c9508b6109f1e737a997f4c23a42c81c",
+    "passivity_sha256": "ae91ad43fbec3c8d7ca06cebbecb7a6de66d15a9d65ec3dc7ac3ee2429fab8f3"
+  },
+  "rap.summer/mynnsfc_driver__driver_sfclayer__L1430.s0000000001.e0000000001.r000000": {
+    "manifest_sha256": "d25fce623f5c8f6d37c8e5f3bfda5407475e90e684089372dd34b8a2c16dfd6c",
+    "archive_sha256": "82a79f658311f47147f2823c552d5c3a9749f7c81ca071dcfe6bf6cb61b60f77",
+    "publication_sha256": "9abc17e34272a3df2765bc64b2b982e9c9508b6109f1e737a997f4c23a42c81c",
+    "passivity_sha256": "ae91ad43fbec3c8d7ca06cebbecb7a6de66d15a9d65ec3dc7ac3ee2429fab8f3"
+  },
+  "rap.summer/mynnsfc_driver__driver_sfclayer__L1430.s0000000003.e0000000003.r000000": {
+    "manifest_sha256": "edf0de6635615ab0e3c51db9352611a480b54de7daae82702110198637b1e476",
+    "archive_sha256": "82a79f658311f47147f2823c552d5c3a9749f7c81ca071dcfe6bf6cb61b60f77",
+    "publication_sha256": "9abc17e34272a3df2765bc64b2b982e9c9508b6109f1e737a997f4c23a42c81c",
+    "passivity_sha256": "ae91ad43fbec3c8d7ca06cebbecb7a6de66d15a9d65ec3dc7ac3ee2429fab8f3"
+  }
+}

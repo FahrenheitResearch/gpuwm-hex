@@ -1,0 +1,77 @@
+{
+  "schema": "ysu-real-replay-inputs-v1",
+  "cases": [
+    {
+      "name": "december",
+      "manifest_sha256": "0a946f79c20f35ba8ebbb3b1a64dfc838964f42b6fdb38512b7d56fa3a6afc85",
+      "dump_root_sha256": "f06403830a35d740b21807df55b557eae8d184c5238d4ea8b20a09abb498e604",
+      "captures": 4
+    },
+    {
+      "name": "large",
+      "manifest_sha256": "57c24849ec0430660cffe674b8c15e1a70ef6e6985fa32205bfb0bc577dad28b",
+      "dump_root_sha256": "1558e6ef81382d6683c0c854477bccb80878bfc8fa0c78cd43a6b6cf587ba27d",
+      "captures": 1
+    },
+    {
+      "name": "march-times",
+      "manifest_sha256": "47a55e52926ca15ddd5f64e6513b39a310dc0950410eaf27df86f319003a19aa",
+      "dump_root_sha256": "7e8340df78fc649868e1b387b68be5ac4737f7f5a9bd3bd2ef2f77ea023d470e",
+      "captures": 3
+    },
+    {
+      "name": "small",
+      "manifest_sha256": "7527458985a8e24ed88ccfd11d8a6e862763bc543797643c9e310be395a88302",
+      "dump_root_sha256": "710ee793a0d5e21f63520aba30f4b138f0ca9ca81d4741a4b61a006ca59a37bb",
+      "captures": 1
+    },
+    {
+      "name": "x1.10242-2022-12-22_12.00.00",
+      "manifest_sha256": "2709ec8833b4b3328eb95cce9bc1992402f3e2c554bb3f248fcc522ed0a2a5ba",
+      "dump_root_sha256": "9aed25f9a7616b38ce480425dca4a6aa2552ee232779f376a83e218d162ad06e",
+      "captures": 1
+    },
+    {
+      "name": "x1.10242-2023-03-31_12.00.00",
+      "manifest_sha256": "9e7113b29c8d60a90165765273a1d3c31f1edfffd94cf1e3ac8fb2a4c6ff839c",
+      "dump_root_sha256": "e53887bbcbbb6a0a544a64757b9ac8c5cbf31b87253ac394ae649e2c69e1e1f9",
+      "captures": 1
+    },
+    {
+      "name": "x1.2562-2022-12-22_12.00.00-single",
+      "manifest_sha256": "82200eb5912d36ddc95de001c7f455c958ed2f495d0e019d1e4206ca95b79981",
+      "dump_root_sha256": "f6b48ad13adbbb01cd11a4babe8c6ae31b394ed4769552c957afdd0e6659aeef",
+      "captures": 1
+    },
+    {
+      "name": "x1.2562-2022-12-22_12.00.00-topdown",
+      "manifest_sha256": "8a4fd4766c0f34615abde616cc12479440f046fa47c71390532d3935c76ada6c",
+      "dump_root_sha256": "f3b21db33e89e8c80795532fb8452cec30e4f48a60e2df8888060ea9693de982",
+      "captures": 1
+    },
+    {
+      "name": "x1.2562-2023-03-31_12.00.00-single",
+      "manifest_sha256": "bfe5f7c9b813ddafce5cace8f4e421cc99f50f95b26faf6170bdad890fcab9d7",
+      "dump_root_sha256": "b6a626c157f9f7738e74307f68138375a7b5594571aa75e5a67139300e839864",
+      "captures": 1
+    },
+    {
+      "name": "x1.2562-2023-03-31_12.00.00-topdown",
+      "manifest_sha256": "4bb11324f8ebbee2aad9470d84a62e1b04db2ec267bab5857e52c752b68298fa",
+      "dump_root_sha256": "8954f73ae34d0f3b42ff64c49081c6b67528cf5141bcde502f23b634e54a077d",
+      "captures": 1
+    },
+    {
+      "name": "x1.40962-2022-12-22_12.00.00",
+      "manifest_sha256": "660e630a49557819fd0589b5b5c8aa0012f8c738cd79b04923013a5c53b06bf7",
+      "dump_root_sha256": "19beb54d8448343dfd93bde720f0df95bba2710d10cbcd623a1b0a90e69b7e36",
+      "captures": 1
+    }
+  ],
+  "helpers": {
+    "real-tools/column_oracle_replay.py": "5d95792eed945743c8b563cc85411f5aa3a91107e5307f24e2898a39dead4a8b",
+    "real-tools/oracle_words": "3d5281b8bafba097912e4e7d26f5885e231ecb4492544fc1af8ede9b7c824411",
+    "real-tools/oracle_io.so": "d774ec287b558ddb6e5d70ef23c6a46e5696b26f6903223516fb77e75aa3479f"
+  },
+  "scope": "16 stated real native captures; 11 roots; both dates, 3 meshes, both mixing choices and multiple forecast calls; every wrapper output including status/string storage"
+}

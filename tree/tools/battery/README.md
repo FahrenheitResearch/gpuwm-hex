@@ -14,7 +14,7 @@ gate that was supposed to run has not been running for a month.
 ## Tier 1 — `cpu_files.txt` — runs anywhere
 
 ```sh
-PYTHONPATH=src python -m pytest -q -m "not gpu and not bigcard and not assets" \
+PYTHONPATH=src python -m pytest -q -rs -m "not gpu and not bigcard and not assets" \
     $(grep -v '^#' tools/battery/cpu_files.txt)
 ```
 
@@ -23,6 +23,11 @@ GitHub-hosted runner runs on every push and pull request, and it is the tier
 that catches what a public cut can actually break: the packaging declaration,
 the front doors' argument surfaces and refusals, the proof-guard ordering and
 pin structure, the multi-GPU partition executor's pure logic.
+
+`test_native_dry_agreement.py` also runs one NumPy dry step when the
+rebuildable native reference is present. Set `HEX_NATIVE_DRY_REFERENCE`
+to the work root produced by `gpuwm-hex verify-dycore`. Without it, `-rs`
+prints the missing-reference reason and the command that creates it.
 
 It deliberately does not import CuPy. Any test whose module or function
 reaches CuPy is auto-marked `gpu` by `tests/conftest.py` — by AST, not by

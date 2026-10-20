@@ -1,0 +1,74 @@
+{
+  "schema": "mpas.mm5-real-replay-inputs/v1",
+  "scope": "Nine retained sealed real native tap capture sets: both MM5 variants, x1.2562 and x1.10242, both dates, plus f1 mesoscale_reference capture. First captured step, primary and sea calls; not every call in the 24h forecasts.",
+  "native_mpi_ranks": 1,
+  "cases": [
+    {
+      "path": "scratch/native-case-2562-2023-03-31/dumps-sf_monin_obukhov",
+      "manifest_sha256": "0f2cfff74f10c5d4b91a84fb528ed9c6d9dceac198eec23caacbbaf5d2552084",
+      "dump_root_sha256": "d6fe1d36c275a644f9333fe25b72d5d48b230693bc5ea0435a7f27d5132f799d",
+      "native_calls": 2,
+      "public_group": 2
+    },
+    {
+      "path": "scratch/native-case-2562-2023-03-31/dumps-sf_monin_obukhov_rev",
+      "manifest_sha256": "85aed6484fe1efd4fbfc5065e9e4e2e52e490b7862395e79e68349f6de68ffba",
+      "dump_root_sha256": "133590ee1dd931a26cf22e29306068e6f8234d0411741a298068c1495ed6e7dc",
+      "native_calls": 2,
+      "public_group": 3
+    },
+    {
+      "path": "scratch/native-case-2562-2022-12-22/dumps-sf_monin_obukhov",
+      "manifest_sha256": "bd4b564d9f3e91d8476e4f0823a4b9ecf047894644c1ef0bb90b0ba4b3c3b43e",
+      "dump_root_sha256": "64dd7b206a4931d957ba7d1bff16f9a0baa9acc696780977813bf8ad553889b3",
+      "native_calls": 2,
+      "public_group": 4
+    },
+    {
+      "path": "scratch/native-case-2562-2022-12-22/dumps-sf_monin_obukhov_rev",
+      "manifest_sha256": "e780dca23c6c603689c32d26acff9d17bd5e8f651e1537d02a906e6d2c5290b7",
+      "dump_root_sha256": "5557bc5a4b941d66ec48484c4a71feaa83fbcbb74c8a0dfb024c9405a5ce7df8",
+      "native_calls": 2,
+      "public_group": 5
+    },
+    {
+      "path": "scratch/f1-mesoscale-mm5",
+      "manifest_sha256": "0f5472885560ee4973bfa442fd08de9cd4525b2cd62e6ee9695f74aab929cdbd",
+      "dump_root_sha256": "cc81d605a182fe96b1b6a1b73d8aeccac867751696db5edb540647c457a03c9a",
+      "native_calls": 2,
+      "public_group": 6
+    },
+    {
+      "path": "scratch/native-case-10242-2022-12-22/dumps-sf_monin_obukhov",
+      "manifest_sha256": "603ccd406a421a08a62a7fdacc6c7b72a63b0fad86a706c6cf835e13b8c7d108",
+      "dump_root_sha256": "f83e0cbddaee2b27967edeb2252c269c3b4fecf33959d6e2a774606ae5a88b0d",
+      "native_calls": 2,
+      "public_group": 9
+    },
+    {
+      "path": "scratch/native-case-10242-2022-12-22/dumps-sf_monin_obukhov_rev",
+      "manifest_sha256": "4d8d1540e82c96260b899e381711b3453223faa96d9851551ff0b27be1a0fb7c",
+      "dump_root_sha256": "8c0dae1c1aca050ccb1ffdb342a2c813bcecee30451fbe13ebe536cc13c45756",
+      "native_calls": 2,
+      "public_group": 10
+    },
+    {
+      "path": "scratch/native-case-10242-2023-03-31/dumps-sf_monin_obukhov",
+      "manifest_sha256": "73ad7589fafbfc1bfe51e4925cfdb4a611023c68e71388ddc6a28e3e98176144",
+      "dump_root_sha256": "7e3b6333cd999b6af3e5e03528de26a033eb89caf1d7c4ddc2cabfbee6541870",
+      "native_calls": 2,
+      "public_group": 11
+    },
+    {
+      "path": "scratch/native-case-10242-2023-03-31/dumps-sf_monin_obukhov_rev",
+      "manifest_sha256": "1cf96c43f13a92abb348bc15ac51e46b79b891ba1bc9296ff86945f13eeb1ee7",
+      "dump_root_sha256": "369c846019add639024753645be92e0bd0fcdb85105e4b1d348be6b3cfe4ac89",
+      "native_calls": 2,
+      "public_group": 12
+    }
+  ],
+  "helpers": {
+    "scratch/tap_columns": "cfb3b3ea71309cfd6ad0bd227c5f8243393609532ea595c7edb16c46362a0f73",
+    "scratch/oracle_words_f1_current": "ab537a291cf34bb8f4bcc4e728dd47d3d115174aca765ff1e1225b366012944a"
+  }
+}

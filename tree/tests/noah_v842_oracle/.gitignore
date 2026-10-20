@@ -1,0 +1,16 @@
+*.o
+*.mod
+*.so
+*.gcno
+*.gcda
+*.gcov
+*.F
+*.TBL
+host.cpp
+
+table_decode
+pack_real_init
+dump_transport
+pack_real_driver
+io_replay.F90
+private_helpers.F90

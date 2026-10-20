@@ -1,0 +1,28 @@
+[
+  {
+    "id": "ecmwf-local-total-precipitation",
+    "quantity": "precipitation",
+    "center_id": 98,
+    "local_table_version": 1,
+    "discipline": 0,
+    "category": 1,
+    "parameter": 193,
+    "level_type": 1,
+    "source_units": "m",
+    "units": "mm",
+    "multiplier": 1000.0,
+    "authority": "https://codes.ecmwf.int/grib/param-db/228"
+  },
+  {
+    "id": "surface-geopotential-to-height",
+    "quantity": "terrain",
+    "discipline": 0,
+    "category": 3,
+    "parameter": 4,
+    "level_type": 1,
+    "source_units": "m2 s-2",
+    "units": "m",
+    "multiplier": 0.10197162129779283,
+    "authority": "WMO GRIB2 parameter 0/3/4 and standard gravity 9.80665 m s-2"
+  }
+]

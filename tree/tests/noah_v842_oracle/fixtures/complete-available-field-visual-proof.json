@@ -1,0 +1,200 @@
+{
+  "schema": "p16-noah-complete-available-field-visual-proof-v1",
+  "time_utc": "2026-10-14T01:27:06.811186+00:00",
+  "process_count": 1,
+  "duration_hours": 24,
+  "model_commit": "77e9b400f9d1f214b4275ab8fa999e7933afbf2a",
+  "production_sha256": "6b4e9299215dbbac03b7e4197151d2ca435b4b6c62242a2186d2d6a3d314654f",
+  "complete_decks": 12,
+  "actual_images_opened": 264,
+  "requested_images": 288,
+  "native_unavailable_requested_images": 24,
+  "all_available_actual_images_opened": true,
+  "all_requested_products_available": false,
+  "scope": "All actual native-available Rust images personally opened. Eight suite decks have24 images each; four single-Noah decks have18 each. Native-unavailable precipitation/reflectivity remain explicit; no synthetic zero images or numerical exclusions. Visual evidence supplements the unchanged complete24h/MPI1 word proof and does not establish a combined landing-gate pass.",
+  "dependencies": {
+    "inspection_progress": {
+      "path": "receipts/noah-visual-inspection-progress.json",
+      "sha256": "82981ce8ec8daefb3d6d6ee1e595a8703616a5eb562cf201b9863cf0980bffc0"
+    },
+    "accepted_word_matrix": {
+      "path": "receipts/noah-headroom-complete-twelve-deck-matrix.json",
+      "sha256": "ac3c0e3cfc6c0dcdd47faa415d2a84a6269e308930459af42dc1aeda3f004bef"
+    },
+    "product_availability": {
+      "path": "receipts/noah-sheet-product-availability.json",
+      "sha256": "bcaa086f9a3690bba84811739de1d7ed993e2d898500233a6a67872bd63b1789"
+    },
+    "render_controller": {
+      "path": "receipts/noah-native-product-render-controller.json",
+      "sha256": "317457191f5fe9d5e07748fb827de5141d14764ffcd6993cb9d921aff65e117c"
+    }
+  },
+  "render_matrix_sha256": "e092029a4d7d5f5288859708e33bc5946a9fa750e3f80485c2cb5cec6b9713a4",
+  "cases": [
+    {
+      "label": "gnu-strict-x1.2562-2023-03-31_12.00.00-convection_permitting-rank1-provider8149-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/gnu-strict-x1.2562-2023-03-31_12.00.00-convection_permitting-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "869abd18d04d1b0c68bb894382f9d407cd873722f50fe60cc255a681145036ee",
+      "actual_images_opened": 24,
+      "native_unavailable_maps": {}
+    },
+    {
+      "label": "gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "41be748f09efb1a973ae281ed39b2124401579802272703c058f85ade79caab1",
+      "actual_images_opened": 24,
+      "native_unavailable_maps": {}
+    },
+    {
+      "label": "gnu-strict-x1.2562-2022-12-22_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/gnu-strict-x1.2562-2022-12-22_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "ef41168e5e180a44c3ba8b10653d67bad60b666c83ffdeac9d28372d844729b4",
+      "actual_images_opened": 24,
+      "native_unavailable_maps": {}
+    },
+    {
+      "label": "gnu-strict-x1.2562-2022-12-22_12.00.00-convection_permitting-rank1-provider8149-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/gnu-strict-x1.2562-2022-12-22_12.00.00-convection_permitting-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "4663999f89d561089674cd1a655d140fc9f2cdcfa715178423c756b934731b28",
+      "actual_images_opened": 24,
+      "native_unavailable_maps": {}
+    },
+    {
+      "label": "gnu-strict-x1.10242-2023-03-31_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/gnu-strict-x1.10242-2023-03-31_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "fcef84d07a4d96771ba30f19cfc839e115df11b60b81c426c74b03ef5bbb0071",
+      "actual_images_opened": 24,
+      "native_unavailable_maps": {}
+    },
+    {
+      "label": "gnu-strict-x1.10242-2023-03-31_12.00.00-convection_permitting-rank1-provider8149-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/gnu-strict-x1.10242-2023-03-31_12.00.00-convection_permitting-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "20911dfc450e0d2bddb77521d43b3648cbf1d830be4322a6dc290d7fd9333c08",
+      "actual_images_opened": 24,
+      "native_unavailable_maps": {}
+    },
+    {
+      "label": "gnu-strict-x1.10242-2022-12-22_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/gnu-strict-x1.10242-2022-12-22_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "083b8217424fff58701f89d1156127111f2680a5719d72b882e335d0a1e6276a",
+      "actual_images_opened": 24,
+      "native_unavailable_maps": {}
+    },
+    {
+      "label": "gnu-strict-x1.10242-2022-12-22_12.00.00-convection_permitting-rank1-provider8149-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/gnu-strict-x1.10242-2022-12-22_12.00.00-convection_permitting-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "9085bfb48d76d8f26fbba524699bac00c24dcfa66ef0bbc7be480da0f6df28e4",
+      "actual_images_opened": 24,
+      "native_unavailable_maps": {}
+    },
+    {
+      "label": "x1.2562-2023-03-31_12.00.00-single-noah-host-b-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/x1.2562-2023-03-31_12.00.00-single-noah-host-b-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "0b4d98092b0899284e6c00d5e50e598a19c7e77e069fdf0c4e9dfa460ec1ec4e",
+      "actual_images_opened": 18,
+      "native_unavailable_maps": {
+        "precip-total-since-start": {
+          "absent_native_fields": [
+            "rainc",
+            "rainnc",
+            "rainsh"
+          ],
+          "reason": "None of the native forecast inventory fields required by this Rust product is present; no synthetic image is permitted."
+        },
+        "composite-reflectivity": {
+          "absent_native_fields": [
+            "qc",
+            "qg",
+            "qi",
+            "qr",
+            "qs",
+            "refl10cm"
+          ],
+          "reason": "None of the native forecast inventory fields required by this Rust product is present; no synthetic image is permitted."
+        }
+      }
+    },
+    {
+      "label": "x1.2562-2022-12-22_12.00.00-single-noah-host-b-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/x1.2562-2022-12-22_12.00.00-single-noah-host-b-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "75ec555bfc07ed3a16a0de9eb788dc5ebfa75fbecaa8e191777c40dc31080257",
+      "actual_images_opened": 18,
+      "native_unavailable_maps": {
+        "precip-total-since-start": {
+          "absent_native_fields": [
+            "rainc",
+            "rainnc",
+            "rainsh"
+          ],
+          "reason": "None of the native forecast inventory fields required by this Rust product is present; no synthetic image is permitted."
+        },
+        "composite-reflectivity": {
+          "absent_native_fields": [
+            "qc",
+            "qg",
+            "qi",
+            "qr",
+            "qs",
+            "refl10cm"
+          ],
+          "reason": "None of the native forecast inventory fields required by this Rust product is present; no synthetic image is permitted."
+        }
+      }
+    },
+    {
+      "label": "x1.10242-2023-03-31_12.00.00-single-noah-host-b-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/x1.10242-2023-03-31_12.00.00-single-noah-host-b-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "ddd297d46f62e3754f59f172f388f0e6a4cbe9da3ddc4f98c50450f699f6f9b9",
+      "actual_images_opened": 18,
+      "native_unavailable_maps": {
+        "precip-total-since-start": {
+          "absent_native_fields": [
+            "rainc",
+            "rainnc",
+            "rainsh"
+          ],
+          "reason": "None of the native forecast inventory fields required by this Rust product is present; no synthetic image is permitted."
+        },
+        "composite-reflectivity": {
+          "absent_native_fields": [
+            "qc",
+            "qg",
+            "qi",
+            "qr",
+            "qs",
+            "refl10cm"
+          ],
+          "reason": "None of the native forecast inventory fields required by this Rust product is present; no synthetic image is permitted."
+        }
+      }
+    },
+    {
+      "label": "x1.10242-2022-12-22_12.00.00-single-noah-host-b-snowpatch-headroom-attempt5",
+      "inspection": "receipts/sheets/x1.10242-2022-12-22_12.00.00-single-noah-host-b-snowpatch-headroom-attempt5/inspection.json",
+      "sha256": "cc3a8b804665ce413bb614696e39a03aa35670b95ed040985d8a5e10f286b7d8",
+      "actual_images_opened": 18,
+      "native_unavailable_maps": {
+        "precip-total-since-start": {
+          "absent_native_fields": [
+            "rainc",
+            "rainnc",
+            "rainsh"
+          ],
+          "reason": "None of the native forecast inventory fields required by this Rust product is present; no synthetic image is permitted."
+        },
+        "composite-reflectivity": {
+          "absent_native_fields": [
+            "qc",
+            "qg",
+            "qi",
+            "qr",
+            "qs",
+            "refl10cm"
+          ],
+          "reason": "None of the native forecast inventory fields required by this Rust product is present; no synthetic image is permitted."
+        }
+      }
+    }
+  ]
+}

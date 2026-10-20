@@ -33,6 +33,7 @@ from dataclasses import fields as dataclass_fields, is_dataclass, replace
 from typing import Any, Mapping
 
 import numpy as np
+import threading
 
 from .partition_assets_v841 import PartitionLayout
 
@@ -41,6 +42,7 @@ CELL_VALUED = frozenset(
     {
         "cellsOnCell",
         "cellsOnEdge",
+        "cellsOnEdgeSentinel",
         "cellsOnVertex",
         "advCellsForEdge",
         "adv_cells_for_edge",
@@ -109,18 +111,43 @@ def _entity_axis(
                 return dim, axis
         return None, None
     matches = [
-        dim
+        (dim, axis)
+        for axis in range(array.ndim)
         for dim, size in counts.items()
-        if array.ndim and array.shape[-1] == size
+        if array.shape[axis] == size
     ]
+    trailing = [match for match in matches if match[1] == array.ndim - 1]
+    if len(trailing) == 1:
+        return trailing[0]
     if len(matches) == 1:
-        return matches[0], array.ndim - 1
+        return matches[0]
     if len(matches) > 1:
         raise PartitionCensusError(
             f"{name}: shape {array.shape} is ambiguous between {matches}; "
             "declare variable_dimensions"
         )
     return None, None
+
+
+def _gather_entity_axis(
+    array: np.ndarray, index: np.ndarray, axis: int, global_count: int, *, name: str
+) -> tuple[np.ndarray, bool]:
+    """Gather real entities and retain an existing one-past garbage element."""
+
+    extent = array.shape[axis]
+    padded = extent == global_count + 1
+    if extent not in (global_count, global_count + 1):
+        raise PartitionCensusError(
+            f"{name}: entity axis extent {extent} is not {global_count} or its native padded extent"
+        )
+    selected = np.asarray(index, dtype=np.int64)
+    if padded:
+        selected = np.concatenate((selected, np.asarray([global_count], dtype=np.int64)))
+    return np.ascontiguousarray(np.take(array, selected, axis=axis)), padded
+
+
+def _with_garbage_inverse(inverse: np.ndarray, local_count: int) -> np.ndarray:
+    return np.concatenate((inverse, np.asarray([local_count], dtype=inverse.dtype)))
 
 
 def build_local_mesh(
@@ -151,7 +178,23 @@ def build_local_mesh(
         **{name: "nVertices" for name in VERTEX_VALUED},
     }
 
-    variable_dimensions = dict(getattr(global_mesh, "variable_dimensions", {}) or {})
+    source_mesh = getattr(global_mesh, "base", global_mesh)
+    source_mesh = getattr(source_mesh, "partition_source_mesh", source_mesh)
+    variable_dimensions = dict(
+        getattr(global_mesh, "variable_dimensions", None)
+        or getattr(source_mesh, "variable_dimensions", {})
+        or {}
+    )
+    source_dimensions = dict(getattr(global_mesh, "dimensions", {}) or {})
+    source_counts = {dim: int(source_dimensions.get(dim, extent)) for dim, extent in counts.items()}
+    for dim, extent in source_counts.items():
+        if extent not in (counts[dim], counts[dim] + 1):
+            raise PartitionCensusError(f"{dim}: source mesh extent does not match the partition globals")
+    remap_inverse = {
+        dim: _with_garbage_inverse(inverse, index_of[dim].size)
+        if source_counts[dim] == counts[dim] + 1 else inverse
+        for dim, inverse in g2l.items()
+    }
     arrays: dict[str, np.ndarray] = {}
     clamp_report: dict[str, np.ndarray] = {}
     census: list[dict[str, Any]] = []
@@ -159,20 +202,17 @@ def build_local_mesh(
     for name, value in dict(global_mesh.arrays).items():
         array = np.asarray(value)
         dim, axis = _entity_axis(
-            name, array, variable_dimensions.get(name), counts
+            name, array, variable_dimensions.get(name), source_counts
         )
         if dim is None:
             arrays[name] = array
             census.append({"name": name, "entity": None, "shape": list(array.shape)})
             continue
-        if axis != 0 and axis != array.ndim - 1:
-            gathered = np.take(array, index_of[dim], axis=axis)
-        else:
-            gathered = np.take(array, index_of[dim], axis=axis)
-        gathered = np.ascontiguousarray(gathered)
+        assert axis is not None
+        gathered, padded = _gather_entity_axis(array, index_of[dim], axis, counts[dim], name=name)
         target = value_class.get(name)
         if target is not None and name not in NOT_REMAPPED:
-            gathered, clamped = _remap_values(gathered, g2l[target], name=name)
+            gathered, clamped = _remap_values(gathered, remap_inverse[target], name=name)
             clamp_report[name] = clamped
         arrays[name] = gathered
         census.append(
@@ -183,21 +223,24 @@ def build_local_mesh(
                 "remapped_to": value_class.get(name),
                 "shape": list(gathered.shape),
                 "dtype": str(gathered.dtype),
+                "native_garbage_preserved": padded,
             }
         )
 
-    dimensions = dict(getattr(global_mesh, "dimensions", {}) or {})
+    dimensions = dict(source_dimensions)
     dimensions.update(
         {
-            "nCells": layout.n_local_cells,
-            "nEdges": layout.n_local_edges,
-            "nVertices": layout.n_local_vertices,
+            dim: int(index_of[dim].size) + int(source_counts[dim] == counts[dim] + 1)
+            for dim in counts
         }
     )
     local = Mesh(
         arrays=arrays,
         dimensions=dimensions,
-        attrs=dict(getattr(global_mesh, "attrs", {}) or {}),
+        attrs={
+            **dict(getattr(source_mesh, "attrs", {}) or {}),
+            **dict(getattr(global_mesh, "attrs", {}) or {}),
+        },
         grid_attrs=dict(getattr(global_mesh, "grid_attrs", {}) or {}),
         static_attrs=dict(getattr(global_mesh, "static_attrs", {}) or {}),
         variable_dimensions=variable_dimensions,
@@ -208,6 +251,14 @@ def build_local_mesh(
         ),
     )
     local.partition_layout = layout
+    local.partition_layout_v841 = layout
+    local.partition_source_mesh = source_mesh
+    for dim, kind in (("nCells", "cell"), ("nEdges", "edge"), ("nVertices", "vertex")):
+        if source_counts[dim] == counts[dim] + 1:
+            local_count = int(index_of[dim].size)
+            plural = "vertices" if kind == "vertex" else f"{kind}s"
+            setattr(local, f"n_{plural}_solve", local_count)
+            setattr(local, f"garbage_{kind}", local_count)
     local.partition_census = census
     local.partition_clamp_report = {
         name: int(np.count_nonzero(mask)) for name, mask in clamp_report.items()
@@ -233,7 +284,7 @@ def verify_row_completeness(
         counts = local_mesh.arrays.get(count_name)
         if counts is None:
             return np.ones((n_rows, width), dtype=bool)
-        counts = np.asarray(counts).astype(np.int64, copy=False)
+        counts = np.asarray(counts).astype(np.int64, copy=False)[:n_rows]
         return np.arange(width)[None, :] < counts[:, None]
 
     observed: dict[str, np.ndarray] = {}
@@ -263,7 +314,7 @@ def verify_row_completeness(
             mask = clamp_report.get(name)
             if mask is None:
                 continue
-            mask = np.asarray(mask)
+            mask = np.asarray(mask)[:n_rows]
             if mask.ndim == 1:
                 bad |= mask
                 continue
@@ -350,18 +401,17 @@ def slice_prepared_host(
         object.__setattr__(result, "partition_slice_report", report)
     except Exception:  # pragma: no cover - immutable containers
         pass
-    _LAST_REPORT.clear()
-    _LAST_REPORT.extend(report)
+    _REPORT_LOCAL.rows = list(report)
     return result
 
 
-_LAST_REPORT: list[dict[str, Any]] = []
+_REPORT_LOCAL = threading.local()
 
 
 def prepared_slice_report() -> list[dict[str, Any]]:
     """Field list (name, entity dim, shape, remap class) of the last slice."""
 
-    return list(_LAST_REPORT)
+    return list(getattr(_REPORT_LOCAL,"rows",[]))
 
 
 def _slice_any(
@@ -378,13 +428,18 @@ def _slice_any(
     key = id(value)
     if key in seen:
         return seen[key]
-    if isinstance(value, Mesh):
+    if isinstance(value, Mesh) or (
+        hasattr(value, "arrays") and hasattr(value, "dimensions")
+        and hasattr(value, "garbage_cell")
+    ):
         sliced = build_local_mesh(value, layout)
         seen[key] = sliced
         report.append({"path": path, "kind": "Mesh", "entity": "mesh"})
         return sliced
     if isinstance(value, np.ndarray):
-        return _slice_array(value, layout, path.rsplit(".", 1)[-1], path, report)
+        sliced = _slice_array(value, layout, path.rsplit(".", 1)[-1], path, report)
+        seen[key] = sliced
+        return sliced
     if isinstance(value, Mapping):
         out = {
             name: _slice_any(item, layout, seen, f"{path}.{name}" if path else str(name), report)
@@ -415,12 +470,19 @@ def _slice_any(
                 object.__setattr__(out, name, new)
         seen[key] = out
         return out
-    if hasattr(value, "__dict__"):
+    slot_names = set()
+    for cls in type(value).__mro__:
+        slots = cls.__dict__.get("__slots__", ())
+        slot_names.update((slots,) if isinstance(slots, str) else slots)
+    slot_names.difference_update(("__dict__", "__weakref__"))
+    if hasattr(value, "__dict__") or slot_names:
         import copy as _copy
 
         out = _copy.copy(value)
         seen[key] = out
-        for name, current in list(vars(value).items()):
+        attributes = dict(vars(value)) if hasattr(value, "__dict__") else {}
+        attributes.update({name: getattr(value, name) for name in slot_names if hasattr(value, name)})
+        for name, current in list(attributes.items()):
             if name.startswith("__"):
                 continue
             new = _slice_any(
@@ -460,26 +522,24 @@ def _slice_array(
     # never a guess.  Non-entity extents (levels, stencil widths) can never
     # equal a global entity count.
     pairs = [
-        (axis, dim)
+        (axis, dim, padded)
         for axis in range(array.ndim)
         for dim, size in counts.items()
-        if array.shape[axis] == size
+        for padded in (False, True)
+        if array.shape[axis] == size + int(padded)
     ]
     if not pairs:
         return array
-    trailing = [(axis, dim) for axis, dim in pairs if axis == array.ndim - 1]
+    trailing = [pair for pair in pairs if pair[0] == array.ndim - 1]
     if len(trailing) == 1:
-        axis, dim = trailing[0]
+        axis, dim, padded = trailing[0]
     elif len(pairs) == 1:
-        axis, dim = pairs[0]
+        axis, dim, padded = pairs[0]
     else:
         raise PartitionCensusError(
             f"{path}: shape {array.shape} matches entity extents ambiguously: {pairs}"
         )
-    if axis == array.ndim - 1:
-        gathered = np.ascontiguousarray(array[..., index_of[dim]])
-    else:
-        gathered = np.ascontiguousarray(np.take(array, index_of[dim], axis=axis))
+    gathered, padded = _gather_entity_axis(array, index_of[dim], axis, counts[dim], name=path)
     target = None
     if name in CELL_VALUED:
         target = "nCells"
@@ -493,6 +553,10 @@ def _slice_array(
             "nEdges": layout.edge_g2l,
             "nVertices": layout.vertex_g2l,
         }[target]()
+        # Regional stencils use the one-past global cell index even before
+        # their own edge axis is padded.  Preserve that explicit garbage id.
+        if padded or name in ("advCellsForEdge", "adv_cells_for_edge"):
+            g2l = _with_garbage_inverse(g2l, index_of[target].size)
         gathered, _ = _remap_values(gathered, g2l, name=path)
     report.append(
         {
@@ -502,6 +566,7 @@ def _slice_array(
             "global_shape": list(array.shape),
             "local_shape": list(gathered.shape),
             "dtype": str(gathered.dtype),
+            "native_garbage_preserved": padded,
         }
     )
     return gathered

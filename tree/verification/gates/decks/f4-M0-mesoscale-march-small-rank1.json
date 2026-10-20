@@ -1,0 +1,305 @@
+{
+  "schema": "mpas-verification-deck-v1",
+  "pin_set": "c50400d2d26d38991fe231e8b3dc3d87e25bb1efd21c8d356a33eb9f3c385f90",
+  "mesh": "x1.2562",
+  "date": "2023-03-31_12:00:00",
+  "id": "f4-M0-mesoscale-march-small-rank1",
+  "role": "M0",
+  "suite": "mesoscale_reference",
+  "physics": "on",
+  "inputs": {
+    "namelist": {
+      "path": "../data/work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1/namelist.atmosphere",
+      "sha256": "0ba868eba17fc78e7395edaf887dd50f212408b63ecd24dbcefb7a779871acc8"
+    },
+    "streams": {
+      "path": "../data/work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1/streams.atmosphere",
+      "sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    "init": {
+      "path": "../data/ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.init.nc",
+      "sha256": "567d3732d86d1a263062a3e17ffbd5c1a8272b548d0894d0a8432aecdaeb2b6a"
+    }
+  },
+  "auxiliary_inputs": {
+    "stream_list.atmosphere.diag_ugwp": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/stream_list.atmosphere.diag_ugwp",
+      "sha256": "f77aa1c70b62a9f103558ec0a218fe6b17dc7278838fc51067bbd11ceefa755b"
+    },
+    "stream_list.atmosphere.surface": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/stream_list.atmosphere.surface",
+      "sha256": "3c96efc6b68da29fff73176365e176a1640957cd79993134fc96566350322b17"
+    },
+    "stream_list.atmosphere.diagnostics": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/stream_list.atmosphere.diagnostics",
+      "sha256": "6c01818a8e258035f71c19534b0427eecd1480b6ca1802de5f38a2f66aede9f9"
+    },
+    "stream_list.atmosphere.output": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/stream_list.atmosphere.output",
+      "sha256": "cb741eb039b0d17597a252ef1ab2003ecda2b8253263faae93969def1c82701e"
+    },
+    "LANDUSE.TBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/LANDUSE.TBL",
+      "sha256": "7f661318ff5f06aed6b4b5508e4d077dc794cff03d5fb4447fe59c88d0ed2ece"
+    },
+    "SOILPARM.TBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/SOILPARM.TBL",
+      "sha256": "1e2275a32d8cd3b48ca693d22c0816df0013f83b6594ac632716361db337d58f"
+    },
+    "RRTMG_LW_DATA.DBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/RRTMG_LW_DATA.DBL",
+      "sha256": "c93ec6190e16ecbb5bb4fe31e1b1ea4924c3b88a741779749f6eaec1acf989fc"
+    },
+    "OZONE_LAT.TBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/OZONE_LAT.TBL",
+      "sha256": "761597f3454b99e3dbf15d2621b1ede88269948e96e47f4695b79fabd3cc6348"
+    },
+    "CAM_ABS_DATA.DBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/CAM_ABS_DATA.DBL",
+      "sha256": "91ee3079e43a6d908256fe3d1bd4bc5f3ac5662d2a8a1ed6ac9685be0555ad87"
+    },
+    "RRTMG_LW_DATA": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/RRTMG_LW_DATA",
+      "sha256": "bcfdee24b63a4c909522a329b8e16c539f0173c7e5aea2caf933ab4fe28c5c97"
+    },
+    "CCN_ACTIVATE_DATA": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/CCN_ACTIVATE_DATA",
+      "sha256": "f2b8d3916560f9046f89f8ac5f32c5292a1800498fd75301e422f147c82a3dbd"
+    },
+    "CAM_AEROPT_DATA.DBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/CAM_AEROPT_DATA.DBL",
+      "sha256": "9782ca59f2ebd12128e23f775e74665d7eb3dc386f53aaa053adfd926a388049"
+    },
+    "RRTMG_SW_DATA": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/RRTMG_SW_DATA",
+      "sha256": "a7d25f5b4d33be8629cbef7ecacc1ff413bf398a021297793e843ba1cc627baf"
+    },
+    "RRTMG_SW_DATA.DBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/RRTMG_SW_DATA.DBL",
+      "sha256": "5a6a0e0ba830b41519889f8c4a2be771437db56ea4f7526bc0798332b06234a5"
+    },
+    "OZONE_DAT.TBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/OZONE_DAT.TBL",
+      "sha256": "2a13ee25809672e0419e40062c1fc753580adbf604bfc67a9166ef77c815dbc0"
+    },
+    "OZONE_PLEV.TBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/OZONE_PLEV.TBL",
+      "sha256": "df26a938273b22d2d04ec52b7297827a316cac0061fab020519241cdc0e61d48"
+    },
+    "GENPARM.TBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/GENPARM.TBL",
+      "sha256": "9c02832a0e4a2ecaf47fcee485539aad95cd732c379c5c258161a88eb3d25ea2"
+    },
+    "VEGPARM.TBL": {
+      "path": "../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/VEGPARM.TBL",
+      "sha256": "ed5478afbe49af51492256c1eb6cf88b3948590308525b32df1ddec28687b40e"
+    },
+    "MP_THOMPSON_QRacrQG_DATA.DBL": {
+      "path": "../data/ref/native/0f0b3b7a1d5164ea820268646240a1e91b63e51aa3e6ab652909641d7a1fd6d2/MP_THOMPSON_QRacrQG_DATA.DBL",
+      "sha256": "3762e7f77abde1248a64e650372dd71505e20478173bfc7ca04b8fda424b1872"
+    },
+    "MP_THOMPSON_QIautQS_DATA.DBL": {
+      "path": "../data/ref/native/0f0b3b7a1d5164ea820268646240a1e91b63e51aa3e6ab652909641d7a1fd6d2/MP_THOMPSON_QIautQS_DATA.DBL",
+      "sha256": "9d270e5364b0c3e0a1f80d3251d67e673206e7203fadc905a16774bd3f43acf1"
+    },
+    "MP_THOMPSON_QRacrQS_DATA.DBL": {
+      "path": "../data/ref/native/0f0b3b7a1d5164ea820268646240a1e91b63e51aa3e6ab652909641d7a1fd6d2/MP_THOMPSON_QRacrQS_DATA.DBL",
+      "sha256": "5880b9d3b6bbe936101ab1db5316659f5563136371c36da47b14c13d23fbf9ee"
+    },
+    "MP_THOMPSON_freezeH2O_DATA.DBL": {
+      "path": "../data/ref/native/0f0b3b7a1d5164ea820268646240a1e91b63e51aa3e6ab652909641d7a1fd6d2/MP_THOMPSON_freezeH2O_DATA.DBL",
+      "sha256": "081ced9efcfd7c4034616435fa9d29a36bc5cc1b6f0b0edfee56260ea73c9edf"
+    },
+    "x1.2562.graph.info": {
+      "path": "../data/ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.graph.info",
+      "sha256": "5923ce6b401b6d8bb95cb00aee9d119915a6b50239824bb64133d264bca9e0b4"
+    },
+    "x1.2562.ugwp_oro_data.nc": {
+      "path": "../data/ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.ugwp_oro_data.nc",
+      "sha256": "a4f694258593762af71698df89684f3a3bff0fd9184ac8b247ce6d03c9e925ba"
+    },
+    "x1.2562.grid.nc": {
+      "path": "../data/ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.grid.nc",
+      "sha256": "8a825312a713bbe959c33ed03c2b503e5ec626238de6b15a686cd0ad5b40c986"
+    }
+  },
+  "native": {
+    "path": "../data/work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1/PUBLICATION.json",
+    "sha256": "fb582d5e24475c184c320967c092cb7f5bdc0ade0297bfa5517c52d07dc263b6"
+  },
+  "hex_command": [
+    "gpuwm-hex",
+    "forecast",
+    "--mesh",
+    "x1.2562",
+    "--grid",
+    "{deck_dir}/../data/ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.grid.nc",
+    "--init",
+    "{init}",
+    "--physics-namelist",
+    "{namelist}",
+    "--streams",
+    "{streams}",
+    "--physics-backend",
+    "mpasphys",
+    "--native-physics-library",
+    "{resource:native-library}",
+    "--native-pool-reader",
+    "{resource:pool-reader}",
+    "--mpas-source",
+    "{resource:mpas-source}",
+    "--stream-list-directory",
+    "{deck_dir}/../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef",
+    "--native-physics-tables",
+    "{resource:thompson-tables}",
+    "--out",
+    "{out}"
+  ],
+  "duration_steps": 72,
+  "expected_samples": {
+    "diag_ugwp": [
+      0,
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24,
+      27,
+      30,
+      33,
+      36,
+      39,
+      42,
+      45,
+      48,
+      51,
+      54,
+      57,
+      60,
+      63,
+      66,
+      69,
+      72
+    ],
+    "diagnostics": [
+      0,
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24,
+      27,
+      30,
+      33,
+      36,
+      39,
+      42,
+      45,
+      48,
+      51,
+      54,
+      57,
+      60,
+      63,
+      66,
+      69,
+      72
+    ],
+    "output": [
+      0,
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24,
+      27,
+      30,
+      33,
+      36,
+      39,
+      42,
+      45,
+      48,
+      51,
+      54,
+      57,
+      60,
+      63,
+      66,
+      69,
+      72
+    ],
+    "restart": [
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24,
+      27,
+      30,
+      33,
+      36,
+      39,
+      42,
+      45,
+      48,
+      51,
+      54,
+      57,
+      60,
+      63,
+      66,
+      69,
+      72
+    ],
+    "surface": [
+      0,
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24,
+      27,
+      30,
+      33,
+      36,
+      39,
+      42,
+      45,
+      48,
+      51,
+      54,
+      57,
+      60,
+      63,
+      66,
+      69,
+      72
+    ]
+  },
+  "ranks": 1,
+  "process_count": 1,
+  "hex_support_inputs": {
+    "native-library": {
+      "resource": "native-library"
+    },
+    "pool-reader": {
+      "resource": "pool-reader"
+    }
+  }
+}

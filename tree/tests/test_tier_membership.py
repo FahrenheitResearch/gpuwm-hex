@@ -67,6 +67,17 @@ TIER_LISTS: dict[str, str] = {
     "tier 3 (gpu / bigcard)": "gpu_gates.txt",
 }
 
+#: A tier list that exists only in the maintainers' own checkout: the tests of
+#: the home pool's queue, host and archive tooling, which is not distributed.
+#: The public export leaves out the list and every file on it together, so a
+#: public checkout has neither the list nor its files and the census below is
+#: unchanged there; a home checkout counts them like any other tier.
+OPTIONAL_TIER_LISTS: dict[str, str] = {
+    "home pool tooling (not distributed)": "home_files.txt",
+}
+TIER_LISTS.update({label: name for label, name in OPTIONAL_TIER_LISTS.items()
+                   if (BATTERY / name).is_file()})
+
 
 def _entries(name: str) -> list[str]:
     """The pytest members of one tier list.
@@ -137,12 +148,39 @@ def test_every_test_file_on_disk_is_named_by_a_tier(test_file: str) -> None:
 #: purpose -- an entry silently gaining a second tier doubles a leg's cost and
 #: makes "which tier owns this file" unanswerable.
 DUAL_TIER_ALLOWED: dict[str, str] = {
+    "tests/test_fct_horizontal_scale_fusion.py":
+        "tier 1 takes host hook and admission checks; tier 3 takes fused device equality",
+    "tests/test_stochastic.py":
+        "tier 1 takes controls, member seeds and admission; tier 3 takes "
+        "mesh harmonics, GPU statistics, exact words and forcing carriers",
+    "tests/test_stochastic_verification.py":
+        "tier 1 takes paired daily receipt validation; tier 3 takes "
+        "real-device weighted spread/RMSE and common support reductions",
+    "tests/test_late_health_pipeline.py":
+        "tier 1 takes host rollback and receipt failures; tier 3 takes "
+        "real-device two-slot stream ordering and carrier restoration",
+    "tests/test_step_gate_batch.py":
+        "tier 1 takes refusal output policy; tier 3 takes pinned CUDA "
+        "word transport and endpoint envelope refusals",
+    "tests/test_upper_damping_v841.py": "CPU tier holds Rust/native bits and real configuration doors; card tier holds CUDA/native upper damping bits",
+    "tests/test_fct_v841.py": "CPU tier replays real native nonzero transport; device tier holds bitwise replay, production dispatch and regional pool masks",
+    "tests/test_rk2_v841.py": "CPU tier holds native schedule bits and coefficient reuse; device tier holds scalar density bits and repeated device steps",
+    "tests/test_ntiedtke_column_row.py": "CPU tier holds the New Tiedtke row's constructor admission and engine source pin; device tier runs the row's seam on synthetic columns",
     "tests/test_cuda_v841_full_physics_x4.py":
         "tier 1 takes its constructor audits, contract pins and surface "
         "classification; tier 2 takes its four asset-touching members",
     "tests/test_device_capacity.py":
         "tier 1 proves only that the big-card preflight SKIPS with a measured "
         "number rather than passing vacuously; tier 3 runs it on the card",
+    "tests/test_cuda_seam_device_snapshot.py":
+        "tier 1 takes the fake-engine schema, detached-copy and allocation "
+        "fallback checks; tier 3 takes the real-device alias and restore checks",
+    "tests/test_partition_samehost_transport_v841.py":
+        "tier 1 takes synthetic packets, route selection and fake completion "
+        "fences; tier 3 takes explicitly assigned same-card and cross-card copies",
+    "tests/test_cuda_graph_tables.py":
+        "tier 1 takes fake allocator and descriptor residency checks; tier 3 "
+        "takes retained descriptor tables during actual CUDA capture",
 }
 
 
@@ -199,3 +237,42 @@ def test_no_tier_list_names_the_same_file_twice(tier: str) -> None:
     assert not repeated, (
         f"{tier} names {repeated} more than once; the leg runs them twice and "
         "the amendment history reads as two decisions where there was one.")
+
+
+def test_collection_classifies_each_source_once_and_refreshes_between_calls(tmp_path, monkeypatch):
+    import conftest as tiers
+
+    class Item:
+        def __init__(self, path, name):
+            self.fspath, self.name, self.markers = path, name, []
+
+        def add_marker(self, marker):
+            self.markers.append(marker)
+
+        def get_closest_marker(self, name):
+            return next((m for m in self.markers if m.name == name), None)
+
+    source = tmp_path / "module.py"
+    source.write_text("def device():\n import cupy\ndef cpu():\n pass\ndef authority():\n default_authority_paths()\n")
+    monkeypatch.setattr(tiers, "NO_LOCAL_GPU", True)
+    monkeypatch.setattr(tiers, "_missing_authorities", lambda: ["absent"])
+    monkeypatch.setattr(tiers, "_authority_relative_paths", lambda: ["absent"])
+    monkeypatch.setattr(tiers, "_bigcard_reason", lambda: None)
+    calls = []
+    original = tiers._cupy_scope
+
+    def classify(text):
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(tiers, "_cupy_scope", classify)
+    items = [Item(source, name) for name in ["device[a]", "device[b]", "cpu", "authority"]]
+    tiers.pytest_collection_modifyitems(None, items)
+    assert [[m.name for m in item.markers] for item in items] == [
+        ["gpu", "skip"], ["gpu", "skip"], [], ["assets", "skip"]]
+    assert len(calls) == 1
+    source.write_text("import cupy\ndef cpu():\n pass\n")
+    item = Item(source, "cpu")
+    tiers.pytest_collection_modifyitems(None, [item])
+    assert [m.name for m in item.markers] == ["gpu", "skip"]
+    assert len(calls) == 2

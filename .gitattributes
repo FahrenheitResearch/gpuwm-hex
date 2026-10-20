@@ -47,3 +47,7 @@
 *.npy   binary
 *.npz   binary
 *.rwg   binary
+
+# These JSON envelopes hold compressed cubins. Binary patches keep compiler
+# pack updates bounded instead of repeating their entire base64 lines.
+tree/src/hexcore/data/kernel-pack*.json -diff

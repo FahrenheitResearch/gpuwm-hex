@@ -39,7 +39,7 @@ The rows this manual works from, and what each one is for:
 | mesh | cells | spacing | dt | provenance of the static | forecast status |
 | --- | --- | --- | --- | --- | --- |
 | `x1.40962` | 40,962 | ~120 km uniform | 120 s | native `init_atmosphere` v8.2.0 (NCAR-published) | proven green (this manual's quickstart ran it) |
-| `x4.163842` | 163,842 | 92→25 km variable | 120 s | native `init_atmosphere` v8.4.1 | proven green; the byte-identity anchor case |
+| `x4.163842` | 163,842 | 92→25 km variable | 120 s | native `init_atmosphere` v8.4.1 | full-physics consistency and hex self-reproducibility reference; not a native dry-step agreement test |
 | `u96.64002` | 64,002 | ~96 km uniform | 120 s | generated: `rw_mpas_mesh` GP(80,0) + unified `rw_mpas_static` | proven green — the first generated mesh to complete a full-physics forecast |
 | `v20.80.151649` | 151,649 | 20 km in 80 km graded | 120 s | generated: hierarchical Goldberg ladder + unified `rw_mpas_static` | proven green — 6 h full physics; regenerates bit-identical to its registered bytes |
 | `v16.66.195629` | 195,629 | 16.5 km in 66 km graded | 100 s | as above | proven green — 36/36 steps at 100 s, the finest graded mesh to complete a forecast |
@@ -111,7 +111,7 @@ icosahedral Goldberg grid at the resolution you ask for and builds the
 matching static in the same run, with no native toolchain anywhere in the
 loop. (This door was not present on the published gpuwm 2.5.2 wheel; it
 arrives with the 2.5.3 bundle, well below the floor this distribution's
-declared `gpuwm>=2.8.0,<2.8.1` range requires. The commands below were proven from a `gpuwm` checkout.)
+declared `gpuwm>=2.9.0,<2.10` range requires. The commands below were proven from a `gpuwm` checkout.)
 
 **See what a card can hold:**
 

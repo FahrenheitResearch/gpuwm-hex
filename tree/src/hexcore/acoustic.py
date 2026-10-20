@@ -227,11 +227,19 @@ def edge_signs_on_cells(mesh: object) -> FloatArray:
     edges = _mesh_array(mesh, "edgesOnCell").astype(np.int64, copy=False)
     cells = _mesh_array(mesh, "cellsOnEdge").astype(np.int64, copy=False)
     signs = np.zeros(edges.shape, dtype=np.float64)
-    for cell in range(counts.size):
-        for slot in range(int(counts[cell])):
-            edge = int(edges[cell, slot])
-            if edge >= 0:
-                signs[cell, slot] = 1.0 if cells[edge, 0] == cell else -1.0
+    # Whole-array form of the per-slot loop (2.5 s of Python per call on the
+    # 20 km mesh, rented box 2026-10-13): the slots below nEdgesOnCell of each cell,
+    # a missing (negative) edge left at zero, +1 where the cell is the edge's
+    # first endpoint and -1 otherwise.  A count past the row width or an edge
+    # past cellsOnEdge raises IndexError, as the loop's indexing did.
+    if counts.size and int(counts.max()) > edges.shape[1]:
+        raise IndexError("nEdgesOnCell names more slots than edgesOnCell holds")
+    used = np.arange(edges.shape[1])[None, :] < counts[:, None]
+    cell, slot = np.nonzero(used)
+    edge = edges[cell, slot]
+    present = edge >= 0
+    cell, slot, edge = cell[present], slot[present], edge[present]
+    signs[cell, slot] = np.where(cells[edge, 0] == cell, 1.0, -1.0)
     return signs
 
 

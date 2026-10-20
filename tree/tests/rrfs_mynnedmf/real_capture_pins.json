@@ -1,0 +1,41 @@
+{
+  "schema": "r6-complete-native-capture-inventory-v1",
+  "captures": [
+    {
+      "capture": "mynnedmf_driver__driver_pbl__L1593.s0000000001.e0000000001.r000000",
+      "source_manifest_sha256": "813388780eeee8f0c1d0443a38955fbc7f6f4bd972a69957990c569911366c44",
+      "source_dump_root_sha256": "e73a7ecd807565609e512af87f9bbfa670de8f010593f0841fb786e64c6928d7",
+      "publication_sha256": "6694ed48bc5ebcac9da3b2987f459c84dcd6322e5edb425284484164f246fee7",
+      "complete_archive_sha256": "f0cf78a627a8a650255970e2a3e6d2d74be55c118c67332950f476b0155ab019",
+      "inventory_sha256": "fb58cc638fd797fe1e789eba21d48a6ee41274aa16f84aa2de476215409d16a4",
+      "post_records": 78
+    },
+    {
+      "capture": "mynnedmf_driver__driver_pbl__L1593.s0000000003.e0000000003.r000000",
+      "source_manifest_sha256": "f50a9c1ae69c9500585a4ee8e100cd4c18d71a6bb2fa0b916bd4d1b34278e037",
+      "source_dump_root_sha256": "83c04a933a32d608af2875e43564ed892628234953bb83a6d89d0a2be3a2c2c0",
+      "publication_sha256": "6694ed48bc5ebcac9da3b2987f459c84dcd6322e5edb425284484164f246fee7",
+      "complete_archive_sha256": "f0cf78a627a8a650255970e2a3e6d2d74be55c118c67332950f476b0155ab019",
+      "inventory_sha256": "8805bec781e717e38f6167a0d73b352016e114c8d26d863ac1bfe4a163da9859",
+      "post_records": 73
+    },
+    {
+      "capture": "mynnedmf_driver__driver_pbl__L1593.s0000000001.e0000000001.r000000",
+      "source_manifest_sha256": "dd546c23f9dc5675d92774d689c09ab42e5d28130445cde7bd21f4adfb33b900",
+      "source_dump_root_sha256": "dd44e500acd2fd4c668c889e733b0e784c43f6f207a730dd98ff9ae407ac4446",
+      "publication_sha256": "9abc17e34272a3df2765bc64b2b982e9c9508b6109f1e737a997f4c23a42c81c",
+      "complete_archive_sha256": "82a79f658311f47147f2823c552d5c3a9749f7c81ca071dcfe6bf6cb61b60f77",
+      "inventory_sha256": "30a3ede908239606be36ea72aa9f2b7bbd397db305a97d2383a16dcac8aa0123",
+      "post_records": 78
+    },
+    {
+      "capture": "mynnedmf_driver__driver_pbl__L1593.s0000000003.e0000000003.r000000",
+      "source_manifest_sha256": "4790343c6379fd1b8a8c61484fc42dff3f3fe922a2e6786e77daaf269fa46544",
+      "source_dump_root_sha256": "e529c505f2bb9072c8f3fadc945a13cd70bd29e410d4939e0e291651ff01ff62",
+      "publication_sha256": "9abc17e34272a3df2765bc64b2b982e9c9508b6109f1e737a997f4c23a42c81c",
+      "complete_archive_sha256": "82a79f658311f47147f2823c552d5c3a9749f7c81ca071dcfe6bf6cb61b60f77",
+      "inventory_sha256": "79c88ba15ffa60993081c204f6283c08e4cb8389fcccfc8d51156bfcffbf984e",
+      "post_records": 73
+    }
+  ]
+}

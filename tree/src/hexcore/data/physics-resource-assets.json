@@ -1,0 +1,367 @@
+{
+  "assets": [
+    {
+      "bytes": 3884553,
+      "files": {
+        "thompson-strict/aerosol/auxiliary.bin": {
+          "bytes": 7210480,
+          "executable": false,
+          "sha256": "25d8d171fed2641f2bb2350b5d16bac2fa04f10f2283e2fad59283e87078f305"
+        }
+      },
+      "name": "physics-resources-thompson-strict-aerosol-auxiliary.bin.zip",
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "2805f95261bdd6d515be4c28664331eba62b4f2d720599fc70321a9420dc06e9"
+    },
+    {
+      "bytes": 34173,
+      "files": {
+        "thompson-strict/tables/MP_THOMPSON_QIautQS_DATA.DBL": {
+          "bytes": 84504,
+          "executable": false,
+          "sha256": "9d270e5364b0c3e0a1f80d3251d67e673206e7203fadc905a16774bd3f43acf1"
+        }
+      },
+      "name": "physics-resources-thompson-strict-tables-MP_THOMPSON_QIautQS_DATA.DBL.zip",
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "444760a6fe8f6c9f28773099533fa09c0f00d53e3f6a451dbd5526adeef987f3"
+    },
+    {
+      "bytes": 38992100,
+      "files": {
+        "thompson-strict/tables/MP_THOMPSON_QRacrQG_DATA.DBL": {
+          "bytes": 51518256,
+          "executable": false,
+          "sha256": "3762e7f77abde1248a64e650372dd71505e20478173bfc7ca04b8fda424b1872"
+        }
+      },
+      "name": "physics-resources-thompson-strict-tables-MP_THOMPSON_QRacrQG_DATA.DBL.zip",
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "017b088d8fb7a7303f156a60d6c27a1010424d7ec21174850ddc467790696f17"
+    },
+    {
+      "bytes": 23594990,
+      "files": {
+        "thompson-strict/tables/MP_THOMPSON_QRacrQS_DATA.DBL": {
+          "bytes": 33118944,
+          "executable": false,
+          "sha256": "5880b9d3b6bbe936101ab1db5316659f5563136371c36da47b14c13d23fbf9ee"
+        }
+      },
+      "name": "physics-resources-thompson-strict-tables-MP_THOMPSON_QRacrQS_DATA.DBL.zip",
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "37be5bee791bc163a50d61a72929743886084fa207c8d362551babdf61cff71a"
+    },
+    {
+      "bytes": 195485574,
+      "files": {
+        "thompson-strict/tables/MP_THOMPSON_freezeH2O_DATA.DBL": {
+          "bytes": 254944848,
+          "executable": false,
+          "sha256": "081ced9efcfd7c4034616435fa9d29a36bc5cc1b6f0b0edfee56260ea73c9edf"
+        }
+      },
+      "name": "physics-resources-thompson-strict-tables-MP_THOMPSON_freezeH2O_DATA.DBL.zip",
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "09529ef66e6fa3b370ad1d6532fbe44cf09806e1dbea195e56bc1c6c2787df87"
+    },
+    {
+      "bytes": 3874354,
+      "files": {
+        "thompson-strict/tables/auxiliary.bin": {
+          "bytes": 7210480,
+          "executable": false,
+          "sha256": "8d80a02edfddd9ce07a659c2310ca37bbeae6062a04abe47a4ddb664676e79c5"
+        }
+      },
+      "name": "physics-resources-thompson-strict-tables-auxiliary.bin.zip",
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "4624cb1ebd78e0cef735ba936ca22e8d875a2bf93d5252a65c6a2f06414a9701"
+    }
+  ],
+  "content": "tables-only",
+  "generation_image": "quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae",
+  "licence": {
+    "generated_tables": "MPAS BSD-3-Clause; see package licenses/LICENSE-MPAS-BSD-3-Clause.txt",
+    "native_code": "excluded, including all GNU runtime closures and generators",
+    "noahmp": "excluded; explicit local source-build opt-in only",
+    "upstream_tables": "upstream-pinned fetches, not bundled in ZIPs"
+  },
+  "numerics": "identical data for fast/strict, MPAS-A and RRFS",
+  "platform": "portable-data",
+  "release_assets": {
+    "repository": "FahrenheitResearch/gpuwm-hex",
+    "tag": "physics-resources-v0.4.1"
+  },
+  "resources": {
+    "thompson-tables": {
+      "path": "thompson-strict/tables",
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "e12ccde40318acc82503d2631e4e423fd8000a29a9842d7e96eddb29ec7735ec"
+    }
+  },
+  "schema": "gpuwm-hex.physics-resource-assets/v1",
+  "upstream_files": [
+    {
+      "bytes": 20580056,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "CAM_ABS_DATA.DBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/CAM_ABS_DATA.DBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "91ee3079e43a6d908256fe3d1bd4bc5f3ac5662d2a8a1ed6ac9685be0555ad87",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/CAM_ABS_DATA.DBL"
+    },
+    {
+      "bytes": 18208,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "CAM_AEROPT_DATA.DBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/CAM_AEROPT_DATA.DBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "9782ca59f2ebd12128e23f775e74665d7eb3dc386f53aaa053adfd926a388049",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/CAM_AEROPT_DATA.DBL"
+    },
+    {
+      "bytes": 35288,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "CCN_ACTIVATE_DATA",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/CCN_ACTIVATE_DATA"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "f2b8d3916560f9046f89f8ac5f32c5292a1800498fd75301e422f147c82a3dbd",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/CCN_ACTIVATE_DATA"
+    },
+    {
+      "bytes": 459,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "COMPATIBILITY",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/COMPATIBILITY"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "b95d5f50d5fab6768d0953379b11bd843f0c6bdc720d37dcdc4ec8ca3a2ab592",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/COMPATIBILITY"
+    },
+    {
+      "bytes": 261,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "GENPARM.TBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/GENPARM.TBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "9c02832a0e4a2ecaf47fcee485539aad95cd732c379c5c258161a88eb3d25ea2",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/GENPARM.TBL"
+    },
+    {
+      "bytes": 40650,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "LANDUSE.TBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/LANDUSE.TBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "7f661318ff5f06aed6b4b5508e4d077dc794cff03d5fb4447fe59c88d0ed2ece",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/LANDUSE.TBL"
+    },
+    {
+      "bytes": 543744,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "OZONE_DAT.TBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/OZONE_DAT.TBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "2a13ee25809672e0419e40062c1fc753580adbf604bfc67a9166ef77c815dbc0",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/OZONE_DAT.TBL"
+    },
+    {
+      "bytes": 536,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "OZONE_LAT.TBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/OZONE_LAT.TBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "761597f3454b99e3dbf15d2621b1ede88269948e96e47f4695b79fabd3cc6348",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/OZONE_LAT.TBL"
+    },
+    {
+      "bytes": 708,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "OZONE_PLEV.TBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/OZONE_PLEV.TBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "df26a938273b22d2d04ec52b7297827a316cac0061fab020519241cdc0e61d48",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/OZONE_PLEV.TBL"
+    },
+    {
+      "bytes": 847552,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "RRTMG_LW_DATA",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/RRTMG_LW_DATA"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "bcfdee24b63a4c909522a329b8e16c539f0173c7e5aea2caf933ab4fe28c5c97",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/RRTMG_LW_DATA"
+    },
+    {
+      "bytes": 1694976,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "RRTMG_LW_DATA.DBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/RRTMG_LW_DATA.DBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "c93ec6190e16ecbb5bb4fe31e1b1ea4924c3b88a741779749f6eaec1acf989fc",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/RRTMG_LW_DATA.DBL"
+    },
+    {
+      "bytes": 680368,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "RRTMG_SW_DATA",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/RRTMG_SW_DATA"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "a7d25f5b4d33be8629cbef7ecacc1ff413bf398a021297793e843ba1cc627baf",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/RRTMG_SW_DATA"
+    },
+    {
+      "bytes": 1360572,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "RRTMG_SW_DATA.DBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/RRTMG_SW_DATA.DBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "5a6a0e0ba830b41519889f8c4a2be771437db56ea4f7526bc0798332b06234a5",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/RRTMG_SW_DATA.DBL"
+    },
+    {
+      "bytes": 6557,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "SOILPARM.TBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/SOILPARM.TBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "1e2275a32d8cd3b48ca693d22c0816df0013f83b6594ac632716361db337d58f",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/SOILPARM.TBL"
+    },
+    {
+      "bytes": 23037,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "VEGPARM.TBL",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/VEGPARM.TBL"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "ed5478afbe49af51492256c1eb6cf88b3948590308525b32df1ddec28687b40e",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/VEGPARM.TBL"
+    },
+    {
+      "bytes": 4,
+      "commit": "c57dbc7be629802c6e848770a9e44b9bc602be41",
+      "name": "VERSION",
+      "origin": "MPAS-Dev/MPAS-Data",
+      "paths": [
+        "mpas-data/c57dbc7be629/VERSION"
+      ],
+      "pin_sets": [
+        "v8.4.2",
+        "rrfs"
+      ],
+      "sha256": "6b2f8967cfa688bcc0052d65fec13a20b25faba699f169b030941c87dcd0b725",
+      "url": "https://raw.githubusercontent.com/MPAS-Dev/MPAS-Data/c57dbc7be629802c6e848770a9e44b9bc602be41/atmosphere/physics_wrf/files/VERSION"
+    }
+  ]
+}

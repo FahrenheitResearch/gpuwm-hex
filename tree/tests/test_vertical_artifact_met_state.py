@@ -131,3 +131,77 @@ def test_fixed_time_dimension_refuses_by_name(template):
         dataset.createDimension("Time", 3)
         with pytest.raises(vertical_spec.VerticalSpecError, match="Time"):
             vertical_spec._declare_met_state_schema(dataset)
+
+
+@pytest.mark.parametrize("format", [
+    "NETCDF3_64BIT_OFFSET", "NETCDF3_64BIT_DATA", "NETCDF4",
+])
+def test_existing_extra_records_keep_their_implicit_fill(tmp_path, format):
+    path = tmp_path / "two-record-template.nc"
+    with netCDF4.Dataset(path, "w", format=format) as dataset:
+        for name, size in (("nCells", N_CELLS), ("nEdges", N_EDGES),
+                           ("nVertLevels", N_LEV), ("nVertLevelsP1", N_LEV + 1)):
+            dataset.createDimension(name, size)
+        dataset.createDimension("Time", None)
+        carrier = dataset.createVariable("retained", "i4", ("Time",))
+        carrier[:] = [17, 29]
+        vertical_spec._declare_met_state_schema(dataset)
+    with netCDF4.Dataset(path) as dataset:
+        dataset.set_auto_mask(False)
+        assert dataset["retained"][:].tolist() == [17, 29]
+        fill = np.float32(netCDF4.default_fillvals["f4"])
+        for name, *_ in vertical_spec.MET_STATE_VARIABLES + vertical_spec.ZERO_STATE_VARIABLES:
+            assert np.all(dataset[name][0] == np.float32(0)), name
+            assert np.all(dataset[name][1] == fill), name
+        assert dataset["Time"][:].tolist() == [0.0, float(fill)]
+
+
+@pytest.mark.parametrize("format", [
+    "NETCDF3_64BIT_OFFSET", "NETCDF3_64BIT_DATA", "NETCDF4",
+])
+@pytest.mark.parametrize("records", [0, 1, 2])
+def test_batched_schema_keeps_complete_file_bytes(tmp_path, format, records):
+    """Batching must retain layout, attributes, carried records and implicit fill."""
+    import shutil
+
+    template = tmp_path / "template.nc"
+    with netCDF4.Dataset(template, "w", format=format) as dataset:
+        for name, size in (("nCells", N_CELLS), ("nEdges", N_EDGES),
+                           ("nVertLevels", N_LEV), ("nVertLevelsP1", N_LEV + 1)):
+            dataset.createDimension(name, size)
+        dataset.createDimension("Time", None)
+        retained = dataset.createVariable("retained", "i4", ("Time",))
+        retained.units = "unitless"
+        retained[:] = np.arange(records) + 17
+
+    outputs = [tmp_path / "ordinary.nc", tmp_path / "batched.nc"]
+    for index, output in enumerate(outputs):
+        shutil.copyfile(template, output)
+        opened = (netCDF4.Dataset(output, "r+") if index == 0 else
+                  vertical_spec._open_artifact_dataset(netCDF4.Dataset, output))
+        with opened as dataset:
+            vertical_spec._declare_met_state_schema(
+                dataset, start_time="2026-09-03_00:00:00")
+        with netCDF4.Dataset(output) as dataset:
+            dataset.set_auto_mask(False)
+            assert dataset["retained"][:records].tolist() == (
+                np.arange(records) + 17).tolist()
+            if records > 1:
+                fill = np.float32(netCDF4.default_fillvals["f4"])
+                for name, *_ in (vertical_spec.MET_STATE_VARIABLES +
+                                 vertical_spec.ZERO_STATE_VARIABLES):
+                    assert np.all(dataset[name][1:] == fill), name
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
+
+
+def test_batched_schema_closes_after_invalid_template(template):
+    with netCDF4.Dataset(template, "r+") as dataset:
+        dataset.createDimension("Time", None)
+        dataset.createVariable("theta", "f4", ("Time", "nCells"))
+    with pytest.raises(vertical_spec.VerticalSpecError, match="theta"):
+        with vertical_spec._open_artifact_dataset(netCDF4.Dataset, template) as dataset:
+            vertical_spec._declare_met_state_schema(dataset)
+    # The failing definition phase releases the file and preserves its data.
+    with netCDF4.Dataset(template) as dataset:
+        assert np.all(dataset["ter"][:] == 0)
+        assert dataset["theta"].dimensions == ("Time", "nCells")

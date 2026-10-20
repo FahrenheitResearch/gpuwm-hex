@@ -7,7 +7,7 @@ WHY THIS EXISTS, and the concrete breakage it removes.
 byte, and that tool writes exactly two global attributes into the regional
 file -- ``on_a_sphere`` and ``sphere_radius``.  Everything else in the
 parent's header is dropped.  That is correct and it is an anchor: the cull is
-byte-identical to the native tool on all three reference culls and nothing
+matching the native tool's recorded arrays on all three reference culls and nothing
 here may move it.
 
 ``rw_mpas_lbc`` reads its child's header for twelve lineage attributes

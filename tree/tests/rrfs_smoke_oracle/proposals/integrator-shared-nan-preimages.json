@@ -1,0 +1,14 @@
+{
+  "proposed_only": true,
+  "protected_headers_edited": false,
+  "preimages": {
+    "glibc_flt32.cuh": {
+      "sha256": "b647335d355aefb5d9ece1726ff23667a01f09c8b263c136bd8a94764e904d4f",
+      "proposed_sha256": "03be8c23b309304fba899beb8557cba4088c4d71c9e10c49ef4c72e5a8f59c12"
+    },
+    "flt32_expf_fma.cuh": {
+      "sha256": "755e2529eeead9a3a9099bfe67af703b5c378aad7d3face562a11b6f436e8424",
+      "proposed_sha256": "968b8c762e84d3134c060399fe3fe2f772bdedf8f90048b07c8b0f4d3a2bd0ff"
+    }
+  }
+}

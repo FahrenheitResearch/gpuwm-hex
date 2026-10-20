@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import dataclasses
+from contextlib import contextmanager
 import importlib.util
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import weakref
 
 import numpy as np
 import pytest
@@ -14,6 +16,31 @@ from _layout import PACKAGE_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER_PATH = PACKAGE_DIR / "drivers" / "run_cuda_v841_full_physics_x4.py"
+
+
+
+@pytest.fixture(autouse=True)
+def fake_phase_release(monkeypatch: pytest.MonkeyPatch):
+    """NumPy transaction fakes must not query a real CUDA stream.
+
+    The memory-release implementation has its own stand-in CuPy contract tests
+    in test_device_memory_release.py. This file exercises transaction ownership
+    and rollback with host arrays, including when real CuPy is installed.
+    """
+    from hexcore import device_memory_release
+
+    boundaries: list[tuple[str, str]] = []
+
+    @contextmanager
+    def phase(name: str):
+        boundaries.append(("enter", name))
+        try:
+            yield
+        finally:
+            boundaries.append(("exit", name))
+
+    monkeypatch.setattr(device_memory_release, "phase_release", phase)
+    return boundaries
 
 
 def _load_runner() -> object:
@@ -84,14 +111,30 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
 
     runner = _load_runner()
     assert runner.EXECUTION_SOURCE_PINS == {
+        "src/hexcore/diagnostic_export.py": "6665cddccda8a968c1913f53ac804827bc4e6d9ee2ff5e457d7f0474dd6f8b36",
+        "src/hexcore/snapshot_transfer.py": "7064e74719933894c9d92dbfe06190b404801cd72ecc5e4fe2447b66124c5efb",
+        "src/hexcore/history_ready.py": "287840b7ece3cb97185340f3e161c997bbfd9a11233ff5da4198cca42e1f9523",
+        "src/hexcore/history_writer.py": "b0b6f8d27fce8478f0d78d3c4cc73bdc12bf5f4a625b7f45515b8f1206fd64a1",
+        "src/hexcore/cuda_arwen_helper_scope_v2.py": "cf179cb9e5650d5db36ccb8d60905a88140b360da9d54c6d8f94a8e032e00e07",
+        "src/hexcore/radiation_source_sets.json": "f0357c3b4613f2cd136d62f5cd2391d034d471acc59d6f956683082cc1fdc5a2",
+        "src/hexcore/data/profiles/engine-helper-sets.v1.json": "d4b070d3432951bf1f028419298762fd2901deda0a9374e3351757370ee1676a",
+        "src/hexcore/step_anchors.py": (
+            "31201be7d3692dc07ed2c9689c2a9d0211236e3f68d7484b68df018426dc4e0e"
+        ),
+        "src/hexcore/data/dycore-step-anchors.v1.json": (
+            "f9a102a3f4fd848e95bf9fabe5a5ccd0579ba01de739de9e7da8e4ed7930e62d"
+        ),
+        "src/hexcore/native/upper_damping.rs": "5483b2c1e7da45317ffe4213c5879b583070d9e28d591ec52a9c697a052e81f1",
+        "src/hexcore/upper_damping_v841.py": "c77cb8a360cb25f6eabf1aca6b9c50abb41e9fe603511aefc9c0c6df9117f4e1",
+        "src/hexcore/cuda_upper_damping_v841.py": "04f0b5b450c088575e589de943b7b44fff10b442d01ae0c0acc0a5e848748545",
         "src/hexcore/cuda_physics_prep_v841.py": (
-            "3bd2d6a1a0217f4a91c70f0179e9dfebe210426a4f3ab6e0d48b6e29a7855f72"
+            "cfa57a7c014e22df930457637c9de975d111925753bef15133c21d9f4b0fccdf"
         ),
         "src/hexcore/cuda_gwdo_v841.py": (
-            "5b9dd5980e33d7a0b1760281bc1553c93fa5f4c4395f7b107c8d61dabe1b9f23"
+            "af22e7a450d1bbdf1a1dc9dcdf2a7a9d0da13f7d230751941cdf0a3418f0f00b"
         ),
         "src/hexcore/cuda_physics_v841.py": (
-            "fed89ae26008b48a305f75af4db24c215cf5952d0ae28c67bbd05a5b925a569b"
+            "a8ca96d41d3cc79fa148caf8cbf60a020e626ee39a82fa33a4e791417ac1bd23"
         ),
         # Re-frozen 2026-08-26 for the convection ruling: the physics cadence
         # table reports convection: None when no scheme is selected; and again
@@ -103,11 +146,19 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # the public copy, because the copy carries these pins with it and one
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
+        # Re-frozen 2026-10-05 for the startup lane (host-preparation cache);
+        # the rationale lives beside the runner's pin.
         "src/hexcore/cuda_driver.py": (
-            "cb914d37558d65fc20582a1257e75fec0599e05d2af41044f79a8d8166d628b4"
+            "433a0e51eb948d7235fbab3aa7605c4f6135056e6c717abbbbaa0e6972fc1c0c"
+        ),
+        # New pin (startup lane, 2026-10-05): the frozen driver executes host
+        # preparation through this module; the rationale lives beside the
+        # runner's pin.
+        "src/hexcore/prep_cache.py": (
+            "891dd40787ac41848b4ecc36d337aabf139009402fbb7099cf6c395394c5d797"
         ),
         "src/hexcore/cuda_backend/recovery.py": (
-            "66d023c9921c97961892d918620b50d58162bb215e71a495522a3d2a9baf54bc"
+            "9765e0d72853a2af1d4d7acf18db45e2c09e9a89ed3098e392a8ec8ebaab98ab"
         ),
         # Re-frozen for the regional CPU authority lane, again
         # for timestep admission, and again 2026-08-26 for the
@@ -118,7 +169,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/config_v841.py": (
-            "fdbb45990de9b4e77cbb1987e2b960554764d4c5f2a43dd7a28470e7502a8fc0"
+            "686740e58450f02655a54d3219490a41ac0cdb6e2aa9af07ffc31bd5255a393a"
         ),
         # New pin (convection ruling, 2026-08-26): the frozen config admits
         # config_convection_scheme from this module and the timestep registry
@@ -129,8 +180,10 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # the public copy, because the copy carries these pins with it and one
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
+        # Re-frozen 2026-10-11: variable-resolution meshes decided per cell;
+        # the rationale lives beside the runner's pin.
         "src/hexcore/convection_admission.py": (
-            "e4b2101a63a7a6bf577744f27b53a4eb8b36e3f82f8239ae544ac5d8f9bd126f"
+            "874b0351d61f554e6bfe3d7d0dfbd8bfbe3ecea26fa06abc202f9a164137b27e"
         ),
         # New pin (the timestep-anchor campaign): the frozen config ADMITS config_dt from this
         # module, so the pinned config's meaning depends on these bytes.
@@ -149,8 +202,11 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # the public copy, because the copy carries these pins with it and one
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
+        # Re-frozen 2026-10-14 (release hygiene N7): the 75 s anchor's evidence
+        # citations name the lab host neutrally; the rationale lives beside the
+        # runner's pin.
         "src/hexcore/dt_admission.py": (
-            "8c4e1c45e89511409bef8f072f282f2ee01392238bfad8e59c38d6b299750078"
+            "a6c6b96ac32f5f1b079ce887f4be44ebb552b0c5848a3f71f0a44373a04a537c"
         ),
         # New pin (surface/PBL cadence, 2026-08-26): this module decides
         # config_bldt_seconds, a knob the frozen registry keys on; the
@@ -161,7 +217,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/pbl_cadence.py": (
-            "e3f5b865cb1b29b9031138b1630495862f0de67c207ffb416febeac04756a247"
+            "7564e462c14739e684d941e0552a087f0c96afaa5ec30aaaef5f9f976ba23621"
         ),
         # Re-frozen 2026-08-28 for the 2.5.8 engine repin: 77f831b rewrote
         # this module's own ARWEN_SOURCE_MANIFEST/ARWEN_BUILD_COMMIT and did
@@ -172,38 +228,48 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # export became declinable (default armed).  The rationale lives
         # beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "6a0c9401b71ef460fbd1de0b56a88c2701f46c43e0ba5e5d7227b35d4e18e440"
+            "7ade3174e32558f6045be17927dfea3bd975f4483df479ed374d7239c53262ca"
+        ),
+        # New pin 2026-10-05 (New Tiedtke row); the rationale lives beside the
+        # runner's pin.
+        "src/hexcore/cuda_ntiedtke_column_v841.py": (
+            "d5433a2ec3f45ec48462ecadea60e6cf4d2c1d1f2a11c56a5f2480da9c63d25a"
+        ),
+        "src/hexcore/cuda_seam_snapshot_v841.py": (
+            "095d0d3f52c1e5bed736c8b1a2fae515d2ffec233defcb03ef2d493d8ce2c2fe"
         ),
         # Re-frozen for the regional CPU authority lane; the
         # rationale lives beside the runner's pin.
         "src/hexcore/mixing.py": (
-            "7b5f9f8ac8f93f66e180d85f90ba3181eac2547c0ef7146b752eb5dd2c1a6433"
+            "1fd749a6c2a8599acf9bac7b2fc9764c0cb8ceb428be50b19a4e93e3a094d554"
         ),
-        # Re-frozen for the regional CPU authority lane; the
+        # Re-frozen for the regional CPU authority lane, and again
+        # 2026-10-05 for the startup lane (host-preparation cache); the
         # rationale lives beside the runner's pin.
         "src/hexcore/mixing_v841.py": (
-            "c5007fa65ddcf67759a7b89e24f2bef615c6a3201d0e8dd2affabd43138e7865"
+            "9d65837c5b42516865150193d647534f8acfd429612cd22a3899146ebd8b319b"
         ),
         "src/hexcore/cuda_horizontal.py": (
-            "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5"
+            "d4e4face383eab6f19f21598613b7bd58e37eb75e067b7b9e817060a2ec015cd"
         ),
         "src/hexcore/cuda_horizontal_v841.py": (
-            "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455"
+            "0f26e1e54ab4935aa4ce9c25d189d15b76b046e84dd015e15d2326c3a6bddf7d"
         ),
+        # Current d15ea3482cc5 cache-key correction; archived proofs unchanged.
         "src/hexcore/cuda_transport_v841.py": (
-            "6ac4eece4ed080e7f76a2239b11dc59c984501ee52db900e35e5d74762f78252"
+            "32720d050fe1fa002c983f30dce85b823edf39b593c3811aa562de43e0a86255"
         ),
         "src/hexcore/cuda_transport.py": (
-            "0cf68d55d00a094590d23ec0c7af6bae8595b2b954c2cdc8efc3e9eff49c112a"
+            "013ed46f8ef3bcc1a445b2e81135e262c23c49950e52e5b62b22e4274644b15e"
         ),
         "src/hexcore/cuda_fp32.py": (
             "ba6b962cac42454846b96d87bba73ef3ceedbf69cdf8ae6a7f880b31f25cc28e"
         ),
         "src/hexcore/partition_assets_v841.py": (
-            "affae3ab52f39a1be861e82230496a82233833db933f1a7ba482c9a3e2ee9248"
+            "61141b2d886bf45a1277eb64c60ed4a5517990ed708ce32899b0dcbeed25fcde"
         ),
         "src/hexcore/partition_local_mesh_v841.py": (
-            "f24e949f1d39c834d7ff1f16e93fce941422ef92e00a89fb884be1a95fea73d9"
+            "2b114c0e05748dee245381e522cdfb9d27a90b142bdf55289484d376ded86fb6"
         ),
         "src/hexcore/partition_state_v841.py": (
             "a504e6f5c5abc2014d40e4a8e3e89885f97d6456ff428c585fbaf57910eccbe8"
@@ -214,7 +280,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
             "b544707943ab75ce27e1972a7a57dd9a3eeed7aa23b2fa332e92594983de97e4"
         ),
         "src/hexcore/partition_executor_v841.py": (
-            "6343fe0f89f39d81b3ef0d61343330c2ad09f59e00295ceedc090c3e4a61879c"
+            "09e5a13e21a22087442e5834d0af0b7f6dd4716d92af3327d0914959df1907c7"
         ),
         "src/hexcore/partition_net_v841.py": (
             "30b0988b2d40bbda8d68be1ec236564ea87bb6690bfdcd08370eea12ca11753b"
@@ -788,7 +854,7 @@ def _transaction_callables(log: list[str], *, recovery_fails: bool = False):
     return couple, clamp, recover
 
 
-def test_composite_transaction_order_is_atomic_and_staged() -> None:
+def test_composite_transaction_order_is_atomic_and_staged(fake_phase_release) -> None:
     runner = _load_runner()
     log: list[str] = []
     couple, clamp, recover = _transaction_callables(log)
@@ -814,6 +880,10 @@ def test_composite_transaction_order_is_atomic_and_staged() -> None:
         "adapter_commit",
     ]
     assert result.committed.atmosphere.state.time_seconds == 120.0
+    assert fake_phase_release == [
+        ("enter", "arwen:phase1"), ("exit", "arwen:phase1"),
+        ("enter", "arwen:phase2"), ("exit", "arwen:phase2"),
+    ]
 
 
 def test_composite_transaction_aborts_both_owners_before_publication() -> None:
@@ -834,6 +904,143 @@ def test_composite_transaction_aborts_both_owners_before_publication() -> None:
         )
     assert log[-2:] == ["driver_abort", "adapter_abort"]
     assert "driver_commit" not in log
+
+
+@pytest.mark.parametrize("recovery_fails", [False, True])
+@pytest.mark.parametrize("parked", [False, True])
+def test_composite_releases_consumed_carriers_before_next_phase(
+    recovery_fails: bool, parked: bool,
+) -> None:
+    runner = _load_runner()
+    log: list[str] = []
+    refs = {}
+
+    class Carrier:
+        pass
+
+    def edges(*_):
+        result = Carrier()
+        result.rho_edge = np.ones((1, 1), dtype=np.float32)
+        result.normal_velocity = np.ones((1, 1), dtype=np.float32)
+        refs["edges"] = weakref.ref(result)
+        refs["rho_edge"] = weakref.ref(result.rho_edge)
+        refs["normal_velocity"] = weakref.ref(result.normal_velocity)
+        return result
+
+    class Backend(_FakeBackend):
+        def begin_step(self, **kwargs):
+            super().begin_step(**kwargs)
+            raw = Carrier()
+            refs["raw"] = weakref.ref(raw)
+            return raw
+
+        def finish_step(self, **kwargs):
+            assert refs["held"]() is None
+            super().finish_step(**kwargs)
+            update = Carrier()
+            update.theta = np.ones((1, 1), dtype=np.float32)
+            update.surface = {"rainnc": np.zeros((1,), dtype=np.float32)}
+            update.radii = {"effc": np.zeros((1, 1), dtype=np.float32)}
+            refs["update"] = weakref.ref(update)
+            refs["update_theta"] = weakref.ref(update.theta)
+            refs["surface"] = weakref.ref(update.surface["rainnc"])
+            refs["radius"] = weakref.ref(update.radii["effc"])
+            return update
+
+    class Driver(_FakeDriver):
+        def step_device_with_physics(self, held):
+            assert all(refs[name]() is None for name in (
+                "edges", "rho_edge", "normal_velocity", "raw"))
+            assert refs["held"]() is held
+            return super().step_device_with_physics(held)
+
+        def commit_post_wsm6_candidate(self, candidate, recovery):
+            assert refs["update"]() is None
+            assert refs["update_theta"]() is None
+            assert recovery.surface_updates["rainnc"] is refs["surface"]()
+            assert recovery.effective_radii["effc"] is refs["radius"]()
+            return super().commit_post_wsm6_candidate(candidate, recovery)
+
+    class Park:
+        is_parked = False
+
+        def park(self, *, shared_roots):
+            assert shared_roots[1] is refs["raw"]()
+            assert shared_roots[2] is refs["held"]()
+            assert shared_roots[3] is refs["edges"]()
+            self.is_parked = True
+
+        def unpark(self):
+            self.is_parked = False
+
+    def couple(raw, **kwargs):
+        assert raw is refs["raw"]()
+        assert kwargs["rho_edge"] is refs["rho_edge"]()
+        held = Carrier()
+        refs["held"] = weakref.ref(held)
+        log.append("couple")
+        return held
+
+    def forcing(held, *_, **kwargs):
+        assert held is refs["held"]()
+        assert kwargs["normal_velocity"] is refs["normal_velocity"]()
+        assert kwargs["rho_edge"] is refs["rho_edge"]()
+
+    driver = Driver(log)
+    driver.horizontal.recover_edge_fields = edges
+    _, clamp, recover_original = _transaction_callables(
+        log, recovery_fails=recovery_fails)
+
+    def recover(state, update, **kwargs):
+        assert refs["update"]() is update
+        assert refs["update_theta"]() is update.theta
+        recover_original(state, update, **kwargs)
+        return SimpleNamespace(
+            state=state, surface_updates=dict(update.surface),
+            effective_radii=dict(update.radii))
+
+    kwargs = dict(
+        driver=driver, backend=Backend(log), scalar_names=runner.SCALAR_NAMES,
+        physics_geometry=object(), kernel_cache=object(),
+        previous_surface_updates=None, couple=couple, clamp=clamp,
+        recover=recover, held_forcing=forcing,
+        physics_park=Park() if parked else None,
+    )
+    if recovery_fails:
+        with pytest.raises(runner.CompositeTransactionError,
+                           match="aborted without publication"):
+            runner.execute_composite_step(**kwargs)
+        assert log[-2:] == ["driver_abort", "adapter_abort"]
+    else:
+        runner.execute_composite_step(**kwargs)
+        assert log[-2:] == ["driver_commit", "adapter_commit"]
+
+
+def test_physics_ownership_refresh_precedes_phase_two_and_is_atomic() -> None:
+    runner = _load_runner()
+    log = []
+    couple, clamp, recover = _transaction_callables(log)
+    def refresh(atmosphere):
+        assert atmosphere.state.time_seconds == 120.0
+        log.append("physics_owner_truth")
+    runner.execute_composite_step(
+        driver=_FakeDriver(log), backend=_FakeBackend(log),
+        scalar_names=runner.SCALAR_NAMES, physics_geometry=object(),
+        kernel_cache=object(), previous_surface_updates=None,
+        couple=couple, clamp=clamp, recover=recover, before_phase_two=refresh)
+    assert log.index("clamp") < log.index("physics_owner_truth") < log.index("phase2")
+    assert log.index("phase2") < log.index("driver_commit")
+    log.clear()
+    def refuse(_):
+        raise RuntimeError("physics halo ownership failed")
+    with pytest.raises(runner.CompositeTransactionError):
+        runner.execute_composite_step(
+            driver=_FakeDriver(log), backend=_FakeBackend(log),
+            scalar_names=runner.SCALAR_NAMES, physics_geometry=object(),
+            kernel_cache=object(), previous_surface_updates=None,
+            couple=couple, clamp=clamp, recover=recover, before_phase_two=refuse)
+    assert log[-2:] == ["driver_abort", "adapter_abort"]
+    assert "phase2" not in log and "driver_commit" not in log
 
 
 def test_composite_transaction_accepts_verified_finish_automatic_rollback() -> None:

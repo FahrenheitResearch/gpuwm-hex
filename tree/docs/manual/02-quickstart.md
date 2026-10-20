@@ -33,55 +33,42 @@ individual gpuwm source files by SHA-256. A bare install reached an engine the
 pin refused, and the forecast door refused at launch with a digest mismatch
 that named neither the version that works nor the fact that pip chose it.
 
-The declaration now carries a bounded range, `gpuwm>=2.8.0,<2.8.1`, so pip
-resolves the engine that works and refuses the one that does not. Three things
-follow that are worth knowing rather than discovering:
-
-- **2.8.0 is the only published engine that matches**, re-measured
-  2026-09-29 against every published 2.5.x, 2.6.x, 2.7.x and 2.8.x release.
-  The range is one version wide because one version qualifies. (2.7.4, the
-  whole range the previous release admitted, fails the re-pinned manifest
-  by eight files; 2.7.5 fails it by seven, 2.7.6 and 2.7.7 by six.)
-- **A newer gpuwm will not be resolved either.** The ceiling sits at the
-  first engine this port has not measured against the manifest, so a future
-  2.8.1 is excluded exactly as 2.7.4 is. That is deliberate: an unmeasured
-  engine is what produced the defect, and the ceiling has earned its keep
-  three times: while 0.3.1 pinned 2.7.4, the engine published 2.7.5,
-  2.7.6, 2.7.7 and 2.8.0 and an install of 0.3.1 kept resolving 2.7.4; the
-  same held for 0.3.0 over 2.7.4 and for 0.2.3 over the 2.7 line.
-- **If you already have a different gpuwm in the environment**, `gpuwm-hex
-  doctor` compares the installed engine's bytes against the pin and names
-  both the version it found and the version to install. It is a byte check,
-  not a version check, and it runs by default. On a conforming install it
-  reads `gpuwm 2.8.0: 16 of 16 pinned files are in this install and all 16
-  match` (measured 2026-09-29 against the published 2.8.0 wheel, in a fresh
-  virtualenv holding only the published wheels).
+gpuwm-hex 0.4.0 declares `gpuwm>=2.9.0,<2.10`, the whole 2.9 minor, so
+installing it never downgrades an engine you already have. An engine inside
+that range whose radiation helper set this release has not measured is refused
+at the forecast door by name, with the version to install. The range is
+derived from the measured table in `hexcore.engine_pin`, not typed (README,
+*The engine pin*). The next minor is excluded until it is measured.
+`gpuwm-hex doctor` checks installed bytes and names a differing engine. The
+run transcripts below are dated evidence from earlier engines.
 
 Then add the CUDA lane:
 
 ```sh
-pip install "gpuwm-hex[gpu]"     # or, spelled out, "gpuwm-hex[gpu-cu13]"
+pip install "gpuwm-hex[gpu]"     # or, spelled out, "gpuwm-hex[gpu-cu12]"
 ```
 
-**There is one right answer here and it is CUDA 13.** Every GPU door in this
-port goes through `require_cuda`, which refuses a CUDA runtime below `13000`
-by name, so `cupy-cuda13x` is the only wheel the port can execute on. The
-`[gpu-cu12]` extra still resolves — it is in 0.1.0's published metadata — and
-a CuPy installed through it imports, allocates, runs cuBLAS and compiles an
-NVRTC kernel, and is then refused at forecast launch with
-`CudaRefusal: cuda.runtime_version=12090 < required 13000`. Do not use it.
+**A CUDA 12 or a CUDA 13 driver runs this port.** `[gpu]` installs
+`cupy-cuda12x`, which runs on either, because a driver runs its own CUDA
+major and every older one. On a CUDA 13 driver you may instead install
+`"gpuwm-hex[gpu-cu13]"` (`cupy-cuda13x`), the toolchain the byte-identity
+results in this release were measured with. Do not install `[gpu-cu13]` on a
+CUDA 12 driver: it imports, and then every device call stops with
+`cudaErrorInsufficientDriver`.
 
-Check the driver, because a CUDA-13 wheel needs a driver that serves CUDA 13:
+Check the driver:
 
 ```sh
 nvidia-smi        # the CUDA version in the header is your driver's major
 ```
 
 (On recent drivers that header field is spelled `CUDA UMD Version` — driver
-610.74 reads `CUDA UMD Version: 13.3`. A driver below 13 cannot open this
+610.74 reads `CUDA UMD Version: 13.3`. A driver below CUDA 12 cannot open this
 port's CUDA lane at all, and no pip command changes that; `gpuwm-hex doctor`
-reads the driver itself and says so rather than offering an install that
-cannot work.)
+reads the driver itself, names the extra for it, and says so rather than
+offering an install that cannot work. A compute capability 12.0 card, such as
+an RTX PRO 6000 or an RTX 50-series card, needs CUDA 12.8 or newer; both
+extras install that.)
 
 Confirm what landed:
 
@@ -156,7 +143,7 @@ gpuwm you have: the transcript above was taken against the published gpuwm
 2.5.2 wheel, whose bundle carries `rw_wrfbatch` and **not** `rw_mpas_init`
 or `rw_mpas_convert` — which is exactly the shortfall the doctor reports
 there. The four MPAS bridge binaries enter the bundle at gpuwm 2.5.3, and
-this distribution's declared range is `gpuwm>=2.8.0,<2.8.1` (the floor is
+this distribution's declared range is `gpuwm>=2.9.0,<2.10` (the floor is
 far past 2.5.3, for the seam bytes the port pins): a conforming install cannot
 land on the engine that transcript was taken from. Doctor
 asks the gpuwm you actually have what its bundle declares, so it never sends

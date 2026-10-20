@@ -16,10 +16,12 @@ model integrate their own state with the cadence as their step
 (``dtturbl = bldt``).  Nothing about the hold is implemented here; the seam
 passes the cadence to the engine's sealed constructor and the engine's
 ``PhysicsDriver`` does what it does for every ARW run with a positive
-``bldt``.  Radiation is on its own fixed cadence
-(:data:`hexcore.dt_admission.RADIATION_CADENCE_SECONDS`) and was never
-welded to ``dt``; the decision records it beside the surface/PBL cadence so
-a receipt names every physics call rate the run uses.
+``bldt``.  Radiation is on its own cadence (the run's ``--radiation-seconds``,
+MPAS-A's 1800 s by default, :data:`hexcore.mpas_defaults.DEFAULT_RADIATION_SECONDS`)
+and was never welded to ``dt``; the decision records it beside the
+surface/PBL cadence so a receipt names every physics call rate the run uses.
+The weld is also MPAS-A's own default: ``config_pbl_interval = 'none'``
+(Registry.xml:2331) sets ``dt_pbl = dt`` (mpas_atmphys_manager.F:541-542).
 
 WHY IT IS A KNOB AT ALL.  At the 5 s a sub-kilometre mesh declares the weld
 calls the stack 720 times an hour against the 30 the proven 120 s
@@ -91,8 +93,10 @@ WELDED: str = "auto"
 #: the proven timestep because the two are welded there.
 PROVEN_SURFACE_PBL_SECONDS: float = dt_admission.PROVEN_DT_SECONDS
 
-#: The radiation cadence every configuration runs, independent of ``dt``.
-RADIATION_SECONDS: float = dt_admission.RADIATION_CADENCE_SECONDS
+#: The radiation cadence a run gets when it names none: MPAS-A's
+#: config_radtlw_interval/config_radtsw_interval default, 00:30:00.  Callers
+#: pass the run's own cadence; this is only the default.
+RADIATION_SECONDS: float = 1800.0
 
 #: The receipt schema.  v2 (2026-09-13): the decision records the held
 #: steps, the first-hour call count, the radiation cadence beside the

@@ -1,6 +1,6 @@
 """GPU-native variable-resolution atmospheric model core.
 
-A CUDA port of the MPAS-Atmosphere v8.4.1 dynamical core, with a NumPy CPU
+A CUDA port of the MPAS-Atmosphere v8.4.2 dynamical core, with a NumPy CPU
 authority beside it for the operators that are verified against
 source-extracted fixtures.
 

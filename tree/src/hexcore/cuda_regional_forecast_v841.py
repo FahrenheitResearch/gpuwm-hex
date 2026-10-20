@@ -136,6 +136,14 @@ def _pad_axis(array: Any, axis: int, value: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+def regional_garbage_donor(attrs: Mapping[str, Any], count: int) -> int:
+    """Keep a declared physical donor when entity numbering changes."""
+    donor = attrs.get("regional_garbage_donor_cell", count - 1)
+    if isinstance(donor, (bool, np.bool_)) or not isinstance(donor, (int, np.integer)) or not 0 <= donor < count:
+        raise ValueError("regional garbage donor must identify a real cell; prevents lending an absent physics column")
+    return int(donor)
+
+
 class PaddedRegionalHostMesh:
     """A host mesh view carrying native's garbage element explicitly.
 
@@ -163,6 +171,32 @@ class PaddedRegionalHostMesh:
         self.garbage_cell = padded.garbage_cell
         self.garbage_edge = padded.garbage_edge
         self.garbage_vertex = padded.garbage_vertex
+        layout = getattr(mesh, "partition_layout_v841", None)
+        self.partition_source_mesh = getattr(mesh, "partition_source_mesh", mesh)
+        if layout is None:
+            self.regional_garbage_donor_cell = regional_garbage_donor(
+                getattr(mesh, "attrs", {}), padded.garbage_cell)
+        else:
+            donor_global = regional_garbage_donor(
+                getattr(self.partition_source_mesh, "attrs", {}), int(layout._global_cells))
+            donor_local = int(layout.cell_g2l()[donor_global])
+            if donor_local < 0:
+                raise ValueError(
+                    "partition lacks the canonical regional garbage donor; "
+                    "build layouts with replicated_cells containing the declared global donor"
+                )
+            self.regional_garbage_donor_cell = donor_local
+            self.partition_layout_v841 = layout
+            # The driver validator checks padded row extents.  The garbage
+            # rows are allocation, not topology; the real layout remains
+            # unchanged for ownership and halo exchange.
+            from types import SimpleNamespace
+            self.partition_layout = SimpleNamespace(
+                partition=layout.partition,
+                cell_row_complete=np.concatenate((layout.cell_row_complete, [False])),
+                edge_row_complete=np.concatenate((layout.edge_row_complete, [False])),
+                vertex_row_complete=np.concatenate((layout.vertex_row_complete, [False])),
+            )
 
         base_dimensions = dict(getattr(mesh, "dimensions", {}) or {})
         arrays: dict[str, np.ndarray] = dict(padded.arrays)
@@ -501,7 +535,7 @@ def regional_padded_advection_coefficients(
 # ---------------------------------------------------------------------------
 
 
-def pad_regional_physics_column(array: Any) -> np.ndarray:
+def pad_regional_physics_column(array: Any, *, donor_cell: int | None = None) -> np.ndarray:
     """Append one garbage column that DUPLICATES the last real one.
 
     Every other pad in this module carries native's pool value, because the
@@ -536,8 +570,11 @@ def pad_regional_physics_column(array: Any) -> np.ndarray:
     data = np.ascontiguousarray(np.asarray(array))
     if data.ndim < 1 or data.shape[-1] < 1:
         raise ValueError("a physics column carrier needs at least one column")
+    donor = regional_garbage_donor(
+        {} if donor_cell is None else {"regional_garbage_donor_cell": donor_cell},
+        int(data.shape[-1]))
     return np.ascontiguousarray(
-        np.concatenate([data, data[..., -1:]], axis=-1)
+        np.concatenate([data, data[..., donor:donor + 1]], axis=-1)
     )
 
 
@@ -546,6 +583,7 @@ def pad_regional_physics_host(
     gwdo_host: Mapping[str, Any],
     *,
     n_cells_solve: int,
+    donor_cell: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Put the ArWen constructor and the GWDO statics on the padded extent.
 
@@ -574,7 +612,7 @@ def pad_regional_physics_host(
             # z_interface_nominal_m is a column PROFILE, not a per-column
             # carrier; its last axis is nVertLevels+1 and it is shared.
             continue
-        padded_values[name] = pad_regional_physics_column(value)
+        padded_values[name] = pad_regional_physics_column(value, donor_cell=donor_cell)
         padded_names.append(name)
     padded_values["n_columns"] = solve + 1
     padded_gwdo = dict(gwdo_host)
@@ -583,7 +621,7 @@ def pad_regional_physics_host(
         array = np.asarray(value)
         if array.ndim != 1 or int(array.shape[-1]) != solve:
             continue
-        padded_gwdo[name] = pad_regional_physics_column(array)
+        padded_gwdo[name] = pad_regional_physics_column(array, donor_cell=donor_cell)
         gwdo_names.append(name)
     receipt = {
         "convention": "duplicate-last-real-column",
@@ -599,6 +637,9 @@ def pad_regional_physics_host(
             "lane holds, which every physics table refuses"
         ),
     }
+    if donor_cell is not None:
+        receipt["convention"] = "duplicate-declared-physical-column"
+        receipt["donor_cell"] = int(donor_cell)
     return padded_values, padded_gwdo, receipt
 
 
@@ -1027,7 +1068,8 @@ class PaddedRegionalDrivingState(DeviceRegionalDrivingState):
         rho = upload("lbc_rho")
         theta = upload("lbc_theta")
         scalars = cp.ascontiguousarray(
-            cp.stack([upload(name) for name in self._scalar_names], axis=0)
+            cp.stack([upload(name) if name in admitted.fields else self._missing_scalar(j)
+                      for j,name in enumerate(self._scalar_names)], axis=0)
         )
         qv = cp.ascontiguousarray(scalars[0])
         rho_zz = cp.empty(self._cell_shape, dtype=cp.float32)
@@ -1111,6 +1153,12 @@ def advance_acoustic_step_regional_cuda_v841(
             out.ru_p, out.ru_avg, runtime.acoustic_invalid,
         ),
     )
+    from .cuda_acoustic_fusion_v841 import fusion_enabled, advance_cell
+    if fusion_enabled():
+        advance_cell(runtime, mesh, out, forcing, coefficients, context,
+                     nlev=nlev, ncells=ncells, nedges=nedges, max_edges=max_edges,
+                     dts=dts, small_step=small_step, fzm=fzm, fzp=fzp, rdzw=rdzw)
+        return out
     runtime.shared_launch(
         "acoustic_prepare_v841",
         ncells,
@@ -1170,10 +1218,12 @@ def advance_scalars_regional_cuda_v841(
     fzp: Any,
     rdzw: Any,
     rk_step: int,
+    config_time_integration_order: int = 3,
     config_coef_3rd_order: float,
     validation_flag: Any,
+    scalar_tendency: Any | None = None,
 ) -> Any:
-    """The regional split scalar transport, F:4764-4861.
+    """The regional split scalar transport; mpas_atm_time_integration.F:4764-4945.
 
     Two of the four kernels are L5's regional variants: the edge-value
     three-way zone split (full stencil, mask-4/5 first-order upwind, ring-6/7
@@ -1216,7 +1266,8 @@ def advance_scalars_regional_cuda_v841(
         ),
     )
     weight = np.float32(
-        1.0 / 3.0 if rk_step == 1 else 0.5 if rk_step == 2 else 1.0
+        1.0 / 3.0 if rk_step == 1 and config_time_integration_order == 3
+        else 0.5 if rk_step in (1, 2) else 1.0
     )
     target = cp.empty_like(rho_zz_old)
     runtime.shared_transport_v841_launch(
@@ -1225,6 +1276,12 @@ def advance_scalars_regional_cuda_v841(
         (np.int32(nlev * ncells), weight, rho_zz_old, rho_zz_new, target),
     )
     runtime.validate_density(target, validation_flag)
+    # MPAS-A v8.4.2 mpas_atm_time_integration.F:4893-4898 adds the
+    # held physics source after horizontal divergence on every RK stage.
+    source = (cp.zeros_like(scalar_old) if scalar_tendency is None
+              else cp.ascontiguousarray(scalar_tendency))
+    if source.dtype != cp.float32 or source.shape != scalar_old.shape:
+        raise ValueError("regional scalar tendency must match native scalar storage")
     output = cp.empty_like(scalar_old)
     runtime.kernels.launch(
         "transport_standard_finish_regional_v841",
@@ -1235,7 +1292,7 @@ def advance_scalars_regional_cuda_v841(
             runtime.bdy_mask_cell, mesh.n_edges_on_cell, mesh.edges_on_cell,
             mesh.edge_sign_on_cell, context.inv_area_cell, uh_avg,
             edge_values, vertical_flux, rdzw, scalar_old, rho_zz_old, target,
-            cp.zeros_like(scalar_old), scalar_stage, output,
+            source, scalar_stage, output,
         ),
     )
     return output, target
@@ -1271,6 +1328,7 @@ class CudaRegionalRuntimeV841:
         config_apply_lbcs: bool,
         outer_dt: float,
         dynamics_split: int,
+        time_integration_order: int = 3,
         n_vert_levels: int,
         kernel_cache: Any,
         device_atmosphere: DeviceAtmosphere,
@@ -1285,8 +1343,9 @@ class CudaRegionalRuntimeV841:
         self.cp = cp
         dtype = np.dtype(np.float32)
         self.masks_host = derive_regional_masks(mesh, dtype)
+        source_mesh = getattr(mesh, "partition_source_mesh", mesh)
         regional_bdy_checks(
-            self.masks_host,
+            self.masks_host if source_mesh is mesh else derive_regional_masks(source_mesh, dtype),
             config_apply_lbcs=bool(config_apply_lbcs),
             lbc_input_interval_valid=True,
         )
@@ -1298,6 +1357,7 @@ class CudaRegionalRuntimeV841:
         self.nlev = int(n_vert_levels)
         self.outer_dt = float(outer_dt)
         self.dynamics_split = int(dynamics_split)
+        self.time_integration_order = int(time_integration_order)
         self.config_relax_zone_divdamp_coef = float(config_relax_zone_divdamp_coef)
         self.kernels = CudaRegionalKernels(kernel_cache)
 
@@ -1370,6 +1430,10 @@ class CudaRegionalRuntimeV841:
             kernels=self.kernels,
             scalar_names=scalar_names,
         )
+        layout = getattr(mesh, "partition_layout_v841", None)
+        if layout is not None:
+            from .partition_regional_v841 import PartitionLbcPoolV841
+            self.driving._pool = PartitionLbcPoolV841(self.driving._pool, layout)
         self.clock = start_time
         self._started = False
         self._offsets = _StageOffsets()
@@ -1487,6 +1551,7 @@ class CudaRegionalRuntimeV841:
                 outer_dt=self.outer_dt,
                 dynamics_split=self.dynamics_split,
                 rk_step=int(rk_step),
+                order=self.time_integration_order,
             ),
         )
 
@@ -1506,7 +1571,12 @@ class CudaRegionalRuntimeV841:
         theta_m: Any,
         rho_zz: Any,
         rk_step: int,
+        rt_diabatic_tend: Any | None = None,
     ) -> None:
+        """Boundary stages from mpas_atm_time_integration.F:7906-8198.
+
+        Physics callers supply the diabatic tendency pool cleared at F:7949.
+        """
         nlev = self.nlev
         ncells = int(tend_rho.shape[-1])
         nedges = int(tend_ru.shape[-1])
@@ -1531,6 +1601,19 @@ class CudaRegionalRuntimeV841:
                 self.driving.tendency("ru"), tend_ru,
             ),
         )
+        if rt_diabatic_tend is not None:
+            # mpas_atm_time_integration.F:7949: clear only the specified
+            # zone, reusing the existing elementwise zero kernel. No CUDA
+            # translation-unit change or extra host transfer is needed.
+            self.kernels.launch(
+                "regional_zero_speczone_w_v841",
+                max(nlev * masks.n_spec_cells, 1),
+                (
+                    np.int32(nlev), np.int32(ncells),
+                    np.int32(masks.n_spec_cells), masks.spec_cells,
+                    rt_diabatic_tend,
+                ),
+            )
         values_ru = self.driving_values("ru", rk_step)
         values_rt = self.driving_values("rtheta_m", rk_step)
         values_rho = self.driving_values("rho_zz", rk_step)
@@ -1702,7 +1785,8 @@ class CudaRegionalRuntimeV841:
         """``atm_srk3:2688-2717``."""
 
         dt_rk = transport_rk_timestep_f32(
-            outer_dt=self.outer_dt, rk_step=int(rk_step)
+            outer_dt=self.outer_dt, rk_step=int(rk_step),
+            order=self.time_integration_order,
         )
         driving = self.driving.state_at("scalars", self.clock, dt_rk)
         masks = self.masks
@@ -1788,27 +1872,13 @@ class CudaRegionalRuntimeV841:
         )
 
     def _driven_tracer_count(self, scalars: Any) -> int:
-        """How many leading species the boundary stream actually drives.
+        """Bound the configured native boundary scalar inventory.
 
-        THE BREAKAGE THIS PREVENTS, MEASURED on r4.75.11020 (2026-08-26):
-        the two boundary scalar kernels were launched over the MODEL's
-        species count and indexed the driving array with it.  A dry regional
-        run carries one passive qv and the stream carries one, so the two
-        counts agreed and nothing was ever wrong.  A full-physics run carries
-        six WSM6 species, and rw_mpas_lbc writes three (qv, qc, qr) -- the
-        parent's regional history has no ice -- so the nudge read five planes
-        PAST THE END of the driving array and wrote whatever was there into
-        qc..qg at every one of the 1,560 cells with bdyMask > 1.  The
-        forecast committed one step, and the second reported
-        |w| = 179.1 m/s at boundary ring 5 with theta_m ten times its
-        step-1 maximum.
-
-        The species the stream carries are nudged; the species it does not
-        carry are left to the model, which is what native does with a stream
-        that declares fewer scalars than the microphysics runs.  A stream
-        carrying MORE species than the model is refused: there would be
-        driving data for a species nothing integrates, and silently dropping
-        it would make the receipt name a forcing the run did not apply.
+        MPAS-A v8.4.2 Registry.xml:2150-2196; mpas_atm_boundaries.F:398-419.
+        Missing stream variables retain native allocated/recycled pool values;
+        they still participate in the specified and relaxation boundary loops.
+        A configured inventory wider than the model would index beyond its
+        scalar array, the measured r4.75.11020 failure this check prevents.
         """
 
         model = int(scalars.shape[0])
@@ -2006,21 +2076,17 @@ def open_regional_forecast_v841(
     kernel_cache: Any = None,
     measure_garbage: bool = False,
     scalar_names: Sequence[str] = ("lbc_qv",),
+    les_dissipation: Any = None,
 ) -> Any:
-    """Open one anchored regional configuration on the card.
+    """Open one regional configuration on the card, recording its anchor.
 
-    The earned-anchor gate is the FIRST thing this does, before a byte moves
-    to the device: an unregistered regional configuration is refused by name,
-    exactly as ``cuda_driver._refuse_regional_execution`` refuses a culled
-    mesh handed to the global front door.  A regional run that produced
-    numbers no receipt could be checked against is the breakage the gate
-    prevents.
-
-    The assembly itself lives in :func:`assemble_regional_driver_v841`, which
-    the anchor-MINTING instrument calls directly.  That split is deliberate:
-    the evidence a row names has to be produced before the row exists, so the
-    bypass is an instrument in ``tools/``, announced by the tool, and never a
-    parameter of the door users reach.
+    RETIRED 2026-10-10 as a gate (owner ruling).  This used to refuse every regional configuration whose class
+    held no forecast mint, and the only way past it was a measurement
+    instrument that swapped this function for the assembler.  It now asks
+    the same question, records the answer on the driver
+    (``driver.regional_v841.anchor``: the admitted row, or
+    ``{"matched": False, "reason": ...}``) for the receipt, and assembles the
+    run either way.
 
     THIS IS THE SITE THAT KNOWS THE CONFIGURATION, and since the 2026-08-27
     re-keying that matters.  An anchor has two halves keyed two different
@@ -2033,24 +2099,26 @@ def open_regional_forecast_v841(
     """
 
     from .cuda_backend.regional_admission import require_regional_anchor
-    from .cuda_driver import ConfigurationRefusal, regional_bdy_mask_digest
+    from .cuda_driver import regional_bdy_mask_digest
 
-    masks = derive_regional_masks(mesh, np.dtype(np.float32))
-    mesh_row = _mesh_value(mesh, "registry_row")
+    # An internal partition cut is not a new physical regional boundary.
+    # Admission measures the source geometry; construction uses its exact
+    # local entity view, with the physical masks and native pool retained.
+    source_mesh = getattr(mesh, "partition_source_mesh", mesh)
+    masks = derive_regional_masks(source_mesh, np.dtype(np.float32))
+    mesh_row = _mesh_value(source_mesh, "registry_row")
     try:
         anchor = require_regional_anchor(
             None if mesh_row is None else str(mesh_row),
-            bdy_mask_sha256=regional_bdy_mask_digest(mesh),
+            bdy_mask_sha256=regional_bdy_mask_digest(source_mesh),
             n_cells=int(masks.n_cells),
-            boundary_zone_width=_measured_zone_width(mesh),
+            boundary_zone_width=_measured_zone_width(source_mesh),
             n_vert_levels=int(np.asarray(getattr(state, "rho")).shape[0]),
-            finest_edge_m=_measured_finest_edge_m(mesh),
+            finest_edge_m=_measured_finest_edge_m(source_mesh),
             dt_seconds=float(config.config_dt),
         )
     except RuntimeError as error:
-        raise ConfigurationRefusal(
-            "config_apply_lbcs", True, str(error), "a registered regional anchor"
-        ) from error
+        anchor = {"matched": False, "reason": str(error)}
     driver = assemble_regional_driver_v841(
         mesh,
         state,
@@ -2065,6 +2133,7 @@ def open_regional_forecast_v841(
         kernel_cache=kernel_cache,
         measure_garbage=measure_garbage,
         scalar_names=tuple(scalar_names),
+        les_dissipation=les_dissipation,
     )
     driver.regional_v841.anchor = anchor
     return driver
@@ -2085,6 +2154,7 @@ def assemble_regional_driver_v841(
     kernel_cache: Any = None,
     measure_garbage: bool = False,
     scalar_names: Sequence[str] = ("lbc_qv",),
+    les_dissipation: Any = None,
 ) -> Any:
     """Build the regional device driver.  Carries NO admission decision."""
 
@@ -2149,6 +2219,7 @@ def assemble_regional_driver_v841(
         device_coefficients,
         kernel_cache=cache,
         v841_context=context,
+        les_dissipation=les_dissipation,
     )
     if driver.mixing_config_v841 is not None:
         driver.deformation_weights_receipt_v841 = (
@@ -2165,8 +2236,14 @@ def assemble_regional_driver_v841(
         start_time=start_time,
         config_h_scale_with_mesh=bool(config.config_h_ScaleWithMesh),
         config_apply_lbcs=bool(config.config_apply_lbcs),
+        # Registry.xml:284 default is retained until the shared config schema
+        # exposes the regional coefficient; consume it as soon as it does.
+        config_relax_zone_divdamp_coef=float(
+            getattr(config, "config_relax_zone_divdamp_coef", 6.0)
+        ),
         outer_dt=float(config.config_dt),
         dynamics_split=int(config.config_dynamics_split_steps),
+        time_integration_order=int(config.config_time_integration_order),
         n_vert_levels=n_vert_levels,
         kernel_cache=cache,
         device_atmosphere=device_atmosphere,

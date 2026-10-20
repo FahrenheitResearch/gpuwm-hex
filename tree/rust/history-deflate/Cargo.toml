@@ -1,0 +1,16 @@
+[package]
+name = "gpuwm-hex-history-deflate"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+name = "hex_history_deflate"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3
+
+[workspace]

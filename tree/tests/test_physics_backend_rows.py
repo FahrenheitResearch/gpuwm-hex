@@ -47,7 +47,11 @@ def _row(name: str) -> admission.PhysicsBackendRow:
 def fresh_table(monkeypatch):
     """The table as a fresh process sees it, restored afterwards."""
 
-    monkeypatch.setattr(admission, "_ROWS", {admission.DEFAULT_BACKEND: admission.FROZEN_WSM6_COLUMN_ROW})
+    monkeypatch.setattr(
+        admission,
+        "_ROWS",
+        {name: admission.backend_rows()[name] for name in admission.IN_TREE_ROWS},
+    )
     monkeypatch.setattr(admission, "_providers_loaded", False)
     monkeypatch.setattr(admission, "_provider_failures", [])
 
@@ -71,7 +75,7 @@ def test_the_table_names_no_provider_module():
 
 def test_no_provider_resolves_the_frozen_row_only(fresh_table):
     fresh_table([])
-    assert admission.registered_backend_names() == (admission.DEFAULT_BACKEND,)
+    assert admission.registered_backend_names() == tuple(sorted(admission.IN_TREE_ROWS))
     assert admission.resolve_backend() is admission.FROZEN_WSM6_COLUMN_ROW
     assert admission.row_provider_failures() == ()
 

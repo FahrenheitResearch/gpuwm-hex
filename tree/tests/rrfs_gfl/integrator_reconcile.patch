@@ -1,0 +1,126 @@
+--- a/tree/src/hexcore/mpasphys/device_pools_v842.py
++++ b/tree/src/hexcore/mpasphys/device_pools_v842.py
+@@ -46,7 +46,7 @@
+         if name not in self.values:self.values[name]=_PoolViews(self,name)
+         return self.values[name]
+ 
+-    def field(self, pool, name):
++    def field(self, pool, name, *, resident=False):
+         """Pack solve cells, retain native halos; mpas_atmphys_interface.F:304-305."""
+         key=pool,name,self.level if pool=='state' else 1
+         if key in self.buffers:return self.buffers[key][1]
+@@ -59,7 +59,7 @@
+         if key in self.buffers:return self.buffers[key][1]
+         host=self.native.get_field(pool,row['pool_name'],level=key[2])
+         entity=next((d for d in row['dimensions'] if d in ('nCells','nEdges','nVertices')),None)
+-        selection=(...,slice(0,self.session.layout.dimensions[entity+'Solve'])) if entity else (...,)
++        selection=(...,slice(0,self.session.layout.dimensions[entity+'Solve'])) if entity and not resident else (...,)
+         packed=self.cp.ascontiguousarray(self.cp.asarray(host[selection]))
+         self.buffers[key]=(host,packed,selection)
+         return packed
+@@ -71,18 +71,44 @@
+         value=self.native.get_variable(name)
+         if value is None:raise RuntimeError(f'native prepared array {name} is not allocated before CUDA slot')
+         host,lower=value
+-        if host.ndim not in (2,3) or host.shape[-1]!=1 or lower[0]!=1:
++        if host.ndim not in (2,3,4) or host.shape[2 if host.ndim==4 else -1]!=1 or lower[0]!=1:
+             raise ValueError(f'native prepared {name} must have its declared i[,k],one-j bounds')
+         count=self.session.layout.dimensions['nCellsSolve']
+         # Surface globals are i,j; profiles are i,k,j. MPAS vars.F:934-942.
+-        view=host[:count,:,0].T if host.ndim==3 else host[:count,0]
++        view=host[:count,:,0,:].transpose(2,1,0) if host.ndim==4 else host[:count,:,0].T if host.ndim==3 else host[:count,0]
+         packed=self.cp.ascontiguousarray(self.cp.asarray(view))
+         self.buffers[key]=(host,packed,lower)
+         return packed
+ 
++    def resident_pool(self, name):
++        """RRFS GFL convection reads both resident halo rings."""
++        return _ResidentPoolViews(self,name)
++
++    def exchange_halo_group(self, name):
++        """Commit CUDA carriers, exchange the native group, refresh its halos."""
++        members=self.halo_groups[name]
++        self.cp.cuda.get_current_stream().synchronize()
++        for field in members:
++            pool,key=self.native._registered[field]
++            host,packed,selection=self.buffers[pool,key,1]
++            host[selection]=packed.get()
++            self.native.put_field(pool,key,host,level=1,nlevels=self.native._fields[pool,key][2])
++        self.native.exchange_halo_group(name)
++        for field in members:
++            pool,key=self.native._registered[field]
++            host,packed,selection=self.buffers[pool,key,1]
++            updated=self.native.get_field(pool,key,level=1)
++            host[...]=updated
++            packed[...] = self.cp.asarray(updated[selection])
++
+     def begin(self, call, descriptor):
+         """Bind a slot after native preparation; mpas_atmphys_driver.F:209-365."""
+         self.buffers.clear();self.values.clear()
++        self.halo_groups={g['name']:tuple(g['fields']) for g in descriptor.get('halo_groups',())}
++        for group in descriptor.get('halo_groups',()):
++            if group['name'] not in self.native._groups:
++                self.native.exchange_group(group['name'],group['fields'],level=group['time_level'],
++                                           halo_layers=group['halo_layers'])
+         self.level=2 if call.slot=='microphysics' else 1
+         self.values['constants']=_ConstantViews(self.native,descriptor.get('constant_aliases',{}))
+         for pool, aliases in descriptor.get("profile_pools", {}).items():
+@@ -101,7 +127,9 @@
+         for key,(host,packed,selection) in self.buffers.items():
+             value=packed.get() if hasattr(packed,'get') else packed
+             if key[0]=='prepared':
+-                if host.ndim==3:
++                if host.ndim==4:
++                    host[:value.shape[2],:,0,:]=value.transpose(2,1,0)
++                elif host.ndim==3:
+                     host[:value.shape[1],:,0]=value.T
+                 else:
+                     host[:value.shape[0],0]=value
+@@ -145,6 +173,12 @@
+         return self.owner.prepared(name)
+ 
+ 
++class _ResidentPoolViews(_PoolViews):
++    """Full resident entity arrays for a halo-aware slot boundary."""
++    def __getitem__(self,name):
++        return self.owner.field(self.pool,name,resident=True)
++
++
+ class _ProfileViews(_PreparedViews):
+     """Driver argument aliases; mpas_atmphys_driver_sfclayer.F:1016-1047."""
+     def __init__(self,owner,aliases):
+--- a/tree/src/hexcore/data/profiles/mpas-physics-suites.v1.json
++++ b/tree/src/hexcore/data/profiles/mpas-physics-suites.v1.json
+@@ -1887,7 +1887,31 @@
+           "cu_ntiedtke": "driver_convection",
+           "cu_grell_freitas_li": "driver_convection"
+         },
+-        "backend_selector": "config_convection_backend"
++        "backend_selector": "config_convection_backend",
++        "cuda_entries": {
++          "cu_grell_freitas_li": {
++            "module": "rrfs.cu_gfl_bf6a4b0",
++            "call": "run_slot",
++            "bind": "bind_native_pools",
++            "halo_groups": [
++              {
++                "name": "physics:sub3d_cuten",
++                "time_level": 1,
++                "halo_layers": [
++                  2
++                ],
++                "fields": [
++                  "sigma_deep",
++                  "sigma_deep_far",
++                  "sub3d_rucuten",
++                  "sub3d_rvcuten",
++                  "sub3d_rthcuten",
++                  "sub3d_rqvcuten"
++                ]
++              }
++            ]
++          }
++        }
+       },
+       "pbl": {
+         "selector": "config_pbl_scheme",

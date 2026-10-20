@@ -30,3 +30,82 @@
 # pins are well formed before anyone spends 6.9 GiB fetching files.
 
 tests/test_cuda_v841_full_physics_x4.py
+
+# MPAS v8.4.2 port foundation (integrator, 2026-10-12): need the native MPAS reference (strict build, published decks,
+# pinned sources under MPAS_REF or MPAS_PHYSICS_REFERENCE_DIR).
+tests/test_mpasphys_native_dispatch_v842.py
+
+# MPAS v8.4.2 port foundation (integrator, 2026-10-12): need the native MPAS reference (strict build, published decks,
+# pinned sources under MPAS_REF or MPAS_PHYSICS_REFERENCE_DIR).
+tests/test_mpasphys_numeric_v842.py
+
+# MPAS v8.4.2 port foundation (integrator, 2026-10-12): need the native MPAS reference (strict build, published decks,
+# pinned sources under MPAS_REF or MPAS_PHYSICS_REFERENCE_DIR).
+tests/test_mpasphys_published_decks_v842.py
+
+# MPAS v8.4.2 port foundation (integrator, 2026-10-12): need the native MPAS reference (strict build, published decks,
+# pinned sources under MPAS_REF or MPAS_PHYSICS_REFERENCE_DIR).
+tests/test_mpasphys_source_pins_v842.py
+
+# Native Registry, providers and real-door stream contracts.
+tests/test_mpasphys_pool_v842.py
+tests/test_mpasphys_forecast_v842.py
+tests/test_mpasphys_table_resources_v842.py
+
+# MPAS v8.4.2 foundation: diagnostics against published native outputs
+tests/test_mpasphys_diagnostics_v842.py
+
+# p21-rad-shared: strict native oracle and Rust transport artifacts
+tests/radshared_v842/test_oracle_words.py
+
+# p21-rad-shared: native tagged Rust transport fault controls
+tests/radshared_v842/test_native_tagged_transport.py
+# Register the pre-existing native-flux replay artifact test found by the tier audit.
+tests/test_identity_extend.py
+
+# r4-rrfs-physics-driver: pinned fork native witnesses and CUDA replay.
+tests/test_mpasphys_driver_rrfs.py
+tests/test_mpasphys_alarm_rrfs.py
+tests/test_mpasphys_integration_rrfs.py
+# o3-diag-convective: real f1 native tap CUDA module replay
+tests/test_mpas_convective_tap_v842.py
+# p3-thompson: strict native whole-column and actual ABI storage witnesses.
+tests/test_thompson_v842.py
+tests/test_thompson_native_binding.py
+# p16-noah: whole strict native module, pinned source and written-word proof guards.
+tests/test_noah_v842.py
+
+# r3-rrfs-dycore: full pinned native routines and Rust initialization bridges.
+tests/test_initialization_rrfs_native.py
+tests/test_core_rrfs_native.py
+
+# r3-rrfs-dycore: authenticated fork Registry and complete dycore capture overlay.
+tests/test_rrfs_registry_native.py
+tests/test_rrfs_dycore_tap_native.py
+# o1-streams-restart: strict native source, real captures and published files.
+tests/test_streams_native_campaign_v842.py
+tests/test_streams_native_clock_v842.py
+tests/test_streams_native_forecast_v842.py
+tests/test_streams_native_pool_v842.py
+tests/test_streams_native_registry_v842.py
+tests/test_streams_native_seek_v842.py
+tests/test_streams_native_tap_v842.py
+# d4-lam-identity: native tap boundary pool replay
+tests/test_regional_native_v842_tap.py
+# p17-noahmp: strict native IEEE oracles compile pinned MPAS source (through the build queue on a shared host).
+
+# r4-rrfs-physics-driver: real pristine-native lifecycle and schedule
+tests/test_mpasphys_lifecycle_rrfs.py
+# r4-rrfs-physics-driver real complete control configuration replay
+tests/test_mpasphys_control_real_rrfs.py
+# (the r4 real-capture handoff replays and the r2 native backend tests are on home_files.txt:
+# they replay the home pool's sealed banks and load the held RRFS native backend)
+
+
+
+
+
+
+
+# r13-gfl: actual native MPI1 empty-ring six-field transport.
+tests/test_rrfs_gfl_empty_halo_layers.py

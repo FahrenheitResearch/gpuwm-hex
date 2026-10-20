@@ -15,13 +15,14 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .errors import ConfigurationRefusal
+from .rkind_libm import sinf_rkind
 
 FloatArray = NDArray[np.floating[Any]]
 
 V841_OFFCENTERING_SOURCE = (
-    "MPAS-A v8.4.1 mpas_atm_core.F::atm_compute_damping_coefs; "
-    "tag-object=2a934b5008a7446df96d550bf2e21466feaec686; "
-    "commit=91c5eac175eebeaf4206bacd5cb50c39dff3c152"
+    "MPAS-A v8.4.2 mpas_atm_core.F::atm_compute_damping_coefs; "
+    "tag-object=2eee75b147d83d67835cecfb30c6fb3793e3042b; "
+    "commit=f34984b2c89353cf31c235b08d3b4acd96b37bb3"
 )
 
 
@@ -145,7 +146,7 @@ def build_v841_acoustic_offcentering(
         if height >= upper:
             return maximum_r
         z = (height - lower) / transition_width
-        return minimum_r + np.sin(half * pi * z) ** 2 * (
+        return minimum_r + sinf_rkind(np.asarray(half * pi * z)) ** 2 * (
             maximum_r - minimum_r
         )
 

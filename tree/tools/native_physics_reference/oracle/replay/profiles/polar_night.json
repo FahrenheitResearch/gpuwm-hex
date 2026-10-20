@@ -1,0 +1,14 @@
+{
+  "precision": "real32",
+  "assignments": {
+    "xlat": "90.0_real32",
+    "declin": "-0.4091_real32"
+  },
+  "pre_assertions": [
+    "all(xlat==90.0_real32)",
+    "declin<0.0_real32"
+  ],
+  "post_assertions": [
+    "all(coszr<0.0_real32)"
+  ]
+}

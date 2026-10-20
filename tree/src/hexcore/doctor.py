@@ -8,9 +8,10 @@ The things that do the work do not:
   ``rw_wrfbatch``) are built from the gpuwm ``tools/rustwx`` workspace
   and staged onto a machine -- ``gpuwm fetch-bridges`` is the one
   command that does it;
-* the CUDA lane needs the CuPy wheel for CUDA 13 -- the major every GPU
-  door here refuses below -- and no pip extra can check what the box's
-  driver actually serves, so this module reads it and says;
+* the CUDA lane needs a CuPy wheel whose CUDA major the box's driver
+  serves (CUDA 12 or 13; the GPU doors refuse a runtime below 12000), and
+  no pip extra can check what the driver actually serves, so this module
+  reads it and says;
 * the card itself: every architecture this install's NVRTC compiles for
   runs, anchored or not, and this module names the card, its compute
   capability and its anchor status, or the one refusal a card can meet;
@@ -358,8 +359,8 @@ def check_gpu_runtime() -> list[Finding]:
     major.  ``render``'s compact view, which is what ``doctor`` prints by
     default, filters comment lines out and keeps the FIRST command, so the
     one line a user actually saw was ``pip install "gpuwm-hex[gpu-cu12]"``.
-    On a CUDA-13 box that installs a CuPy every GPU door in this port
-    refuses: ``cuda.runtime_version=12090 < required 13000``.  Doctor then
+    Under the 13000 floor of the time, that installed a CuPy every GPU door
+    refused: ``cuda.runtime_version=12090 < required 13000``.  Doctor then
     reported ``verified`` on that same CuPy, because it imported.
 
     So this check reads three things instead of one: the runtime floor
@@ -369,12 +370,30 @@ def check_gpu_runtime() -> list[Finding]:
     forecast door would raise, before a card is ever opened, which is the
     difference between failing early by name and failing at the first real
     device call.
+
+    THE SECOND DEFECT, measured on an RTX PRO 6000 whose driver serves CUDA
+    12.8: ``[gpu]`` then installed cupy-cuda13x, which imports and reports
+    runtime 13020 -- above the floor -- so this check said ``verified`` and
+    doctor printed "Every check passed", while every device call on that box
+    stopped with ``cudaErrorInsufficientDriver``.  A CuPy whose CUDA major is
+    newer than the driver's is now a GAP naming that error, and every remedy
+    names the extra for the major the driver serves.
     """
 
     floor = cuda_runtime_floor()
     floor_major = None if floor is None else floor // 1000
     box_major = _driver_cuda_major()
-    matching = _GPU_EXTRA_BY_MAJOR.get(floor_major) if floor_major else None
+    # The extra for the major this driver serves; with the driver unread, the
+    # `gpu` alias, whose CUDA 12 wheel opens a card on a CUDA 12 or 13 driver.
+    if (
+        box_major is not None
+        and floor_major is not None
+        and box_major >= floor_major
+        and box_major in _GPU_EXTRA_BY_MAJOR
+    ):
+        matching = _GPU_EXTRA_BY_MAJOR[box_major]
+    else:
+        matching = "gpu"
     evidence: dict[str, object] = {
         "required_runtime_version": "unreadable" if floor is None else floor,
         "driver_cuda_major": "unknown" if box_major is None else box_major,
@@ -423,14 +442,16 @@ def check_gpu_runtime() -> list[Finding]:
                 )
             ]
         install = f'  pip install "{DISTRIBUTION_NAME}[{matching}]"'
-        why = (
-            f"  # this port's CUDA doors require runtime {floor}, so the CUDA-"
-            f"{floor_major}\n  # wheel is the only one they admit"
-        )
         if box_major is not None:
-            why += f"; this box's driver serves CUDA {box_major}\n"
+            why = (
+                f"  # this box's driver serves CUDA {box_major}, so the CUDA-"
+                f"{box_major} wheel\n"
+            )
         else:
-            why += "\n"
+            why = (
+                "  # the driver's CUDA major was not read; the CUDA 12 wheel "
+                "runs on a\n  # CUDA 12 or CUDA 13 driver\n"
+            )
         return [
             Finding(
                 subject="cupy (the CUDA lane)",
@@ -477,6 +498,36 @@ def check_gpu_runtime() -> list[Finding]:
                     f"required {floor}\n"
                     f"  # remove the wrong-major wheel FIRST -- pip will leave "
                     f"both\n"
+                    f"  # installed and import order, not intent, picks the "
+                    f"winner\n"
+                    f"{removal}\n"
+                    f'  pip install "{DISTRIBUTION_NAME}[{matching}]"'
+                ),
+                evidence=evidence,
+            )
+        ]
+    if box_major is not None and runtime // 1000 > box_major:
+        wheels = _installed_cupy_wheels()
+        evidence["installed_cupy_distributions"] = ", ".join(wheels) or "unknown"
+        removal = (
+            f"  pip uninstall -y {' '.join(wheels)}"
+            if wheels
+            else f"  pip uninstall -y cupy-cuda{runtime // 1000}x"
+        )
+        return [
+            Finding(
+                subject="cupy (the CUDA lane)",
+                status=MISSING,
+                detail=(
+                    f"cupy imports but carries CUDA runtime {runtime}, and this "
+                    f"box's driver serves CUDA {box_major}: every device call "
+                    f"stops with cudaErrorInsufficientDriver"
+                ),
+                remedy=(
+                    f"  # the wheel's CUDA major is newer than the driver's; "
+                    f"install the\n"
+                    f"  # wheel for CUDA {box_major}, removing this one FIRST -- "
+                    f"pip leaves both\n"
                     f"  # installed and import order, not intent, picks the "
                     f"winner\n"
                     f"{removal}\n"
@@ -702,7 +753,7 @@ def _check_seam_bytes(installed: str) -> Finding:
             detail=(
                 "gpuwm is installed but its files could not be located on "
                 "disk, so the seam bytes were not compared.  The forecast "
-                "lane verifies them again at launch and refuses by name."
+                "hashes them at launch and records the result in its receipt."
             ),
         )
     try:
@@ -719,22 +770,21 @@ def _check_seam_bytes(installed: str) -> Finding:
 
     total = len(engine_pin.seam_manifest())
     if inspection.misdeclared:
+        # INFO, not a blocking gap, since 2026-10-10: the byte match is
+        # evidence a receipt records (engine_pin.identity_of) and the
+        # forecast runs on this install.
         return Finding(
             subject=_SEAM_SUBJECT,
-            status=MISSING,
+            status=INFO,
             detail=(
                 f"gpuwm {installed} is installed and its {inspection.checked} "
                 f"seam files are, byte for byte, the measured row of the "
                 f"admitted engine gpuwm {inspection.engine}.  An admitted "
                 "engine is keyed by its version string and its bytes "
-                "together, so this install is neither that engine nor the "
-                f"pin ({wanted}); the forecast lane refuses it at launch."
+                "together, so a forecast on this install runs and its "
+                f"receipt names it as gpuwm {installed} with no measured "
+                f"row, not as that engine and not as the pin ({wanted})."
             ),
-            remedy=(
-                f"  # install the build as it was measured, declaring gpuwm "
-                f"{inspection.engine}, or:\n{engine_pin.remedy(installed)}"
-            ),
-            required=True,
             evidence={
                 "installed": installed,
                 "bytes_of": inspection.engine,
@@ -768,18 +818,21 @@ def _check_seam_bytes(installed: str) -> Finding:
         )
 
     named = installed or engine_pin.version_from_moved(inspection.moved) or "this"
+    # INFO, not a blocking gap, since 2026-10-10 (owner ruling): this finding used to say "the forecast lane
+    # refuses at launch", and it did.  A byte difference from the measured
+    # engine names no breakage, so the forecast runs and its receipt records
+    # the moved files (engine_pin.identity_of).
     return Finding(
         subject=_SEAM_SUBJECT,
-        status=MISSING,
+        status=INFO,
         detail=(
-            f"gpuwm {named} is installed and this port pins {wanted}: "
-            f"{len(inspection.moved)} of {inspection.checked} checkable seam "
-            f"files differ.  The forecast lane refuses at launch; the two "
-            f"front doors that drive Rust binaries are unaffected.  Moved: "
+            f"gpuwm {named} is installed and the engine this port was "
+            f"measured against is {wanted}: {len(inspection.moved)} of "
+            f"{inspection.checked} checkable seam files differ.  The "
+            "forecast runs on this install and its receipt records the "
+            "difference (arwen_engine_pin).  Moved: "
             + ", ".join(inspection.moved)
         ),
-        remedy=engine_pin.remedy(installed),
-        required=True,
         evidence={
             "installed": installed,
             "wanted": wanted,
@@ -899,7 +952,7 @@ def _check_checkout_reach() -> Finding:
 
 
 def check_engines() -> list[Finding]:
-    """The three Rust binaries, and the one command that stages all of them."""
+    """Required Rust binaries and the command that stages them."""
 
     findings: list[Finding] = []
     # Asked once, of the INSTALLED gpuwm, and reported plainly: whether the
@@ -952,7 +1005,23 @@ def check_engines() -> list[Finding]:
                 evidence={"resolution_order": engines.resolution_order(spec)},
             )
         )
+    findings.append(_check_observation_scorer())
     return findings
+
+
+def _check_observation_scorer() -> Finding:
+    """The observation scorer: absent only from a build of the sdist without a gpuwm checkout."""
+
+    from . import observation_scorecard
+
+    subject = "hex_obs_scorecard (the observation scorer)"
+    try:
+        path = observation_scorecard.binary("hex_obs_scorecard")
+    except FileNotFoundError as error:
+        return Finding(subject=subject, status=MISSING, required=False,
+                       detail=f"{error}.  Forecasts still run; `gpuwm-hex score` and the forecast's "
+                              "automatic scorecard record NOT_MEASURED.")
+    return Finding(subject=subject, status=VERIFIED, detail=f"found: {path}", evidence={"path": path})
 
 
 def check_assets() -> list[Finding]:
@@ -975,6 +1044,58 @@ def check_assets() -> list[Finding]:
     ]
 
 
+def check_on_demand_assets() -> list[Finding]:
+    """Report pinned cache bytes without fetching or changing the cache."""
+    from . import assets
+    try:
+        return [Finding(subject=row['name'],
+                        status=MISSING if row['status'] == 'invalid' else VERIFIED if row['status'] == 'staged' else INFO,
+                        detail=row['detail'], required=row['status'] == 'invalid',
+                        remedy=f"gpuwm-hex fetch-assets --only {row['name']}" if row['status'] != 'staged' else None,
+                        evidence={'path': row['path'], 'sha256': row['sha256']})
+                for row in assets.staged_rows()]
+    except (OSError, ValueError, KeyError) as error:
+        return [Finding(subject='on-demand assets', status=MISSING, required=True,
+                        detail=str(error), remedy='reinstall gpuwm-hex')]
+
+
+def check_physics_resources() -> list[Finding]:
+    """Report MPAS cache readiness without fetching, compiling or opening a GPU."""
+    from .mpasphys import resources_build as resources
+    from .mpasphys import resources_fetch
+
+    remedy = 'gpuwm-hex physics-resources fetch'
+    subjects = {'thompson-tables': 'MPAS physics DATA (Thompson + upstream tables)',
+                'physics-resources': 'MPAS physics packet',
+                'pool-reader': 'MPAS physics pool reader'}
+    try:
+        installed = resources.read_installed()['resources']
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return [Finding(subject=subject, status=MISSING, required=True,
+                        detail=f'invalid physics resource record: {error}', remedy=remedy)
+                for subject in subjects.values()]
+    findings = []
+    for key, subject in subjects.items():
+        if key not in installed:
+            findings.append(Finding(subject=subject, status=INFO,
+                                    detail='not staged; the MPAS route fetches resources on first use',
+                                    remedy=remedy,
+                                    evidence={'installed_record': str(resources.installed_record_path())}))
+            continue
+        try:
+            path = resources.resolve_resource(key)
+            evidence = resources_fetch.verify_installed_data() if key == 'thompson-tables' else {
+                'path': str(path), 'sha256': installed[key]['sha256']}
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            findings.append(Finding(subject=subject, status=MISSING, required=True,
+                                    detail=str(error), remedy=remedy))
+        else:
+            findings.append(Finding(subject=subject, status=VERIFIED,
+                                    detail='installed bytes match their recorded SHA-256 pins',
+                                    evidence=evidence))
+    return findings
+
+
 def collect() -> list[Finding]:
     """Every finding, in the order a reader should meet them."""
 
@@ -986,6 +1107,8 @@ def collect() -> list[Finding]:
     findings.extend(check_gpu_architecture())
     findings.extend(check_engines())
     findings.extend(check_assets())
+    findings.extend(check_on_demand_assets())
+    findings.extend(check_physics_resources())
     return findings
 
 
@@ -1080,7 +1203,9 @@ def add_doctor_parser(commands: argparse._SubParsersAction) -> None:
 
 
 def run_doctor(arguments: argparse.Namespace) -> int:
-    findings = collect()
+    from .assets import inspection_only
+    with inspection_only():
+        findings = collect()
     if getattr(arguments, "json", False):
         print(
             json.dumps(

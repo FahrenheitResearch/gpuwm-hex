@@ -1,0 +1,13 @@
+{
+  "schema": "mpas-oracle-entry-storage-v1",
+  "requests": [
+    {
+      "path": "src/core_atmosphere/physics/physics_wrf/module_ra_cam.F",
+      "module": "module_ra_cam",
+      "routine": "camrad",
+      "variables": ["tauxcl", "tauxci"],
+      "source": "module_ra_cam.F:364-365,660,678-679",
+      "reason": "Automatic cloud optical-depth storage is an input when native radiation leaves words unwritten before copying them to taucldc/taucldi. Capture allocator-return contents before any native executable statement."
+    }
+  ]
+}

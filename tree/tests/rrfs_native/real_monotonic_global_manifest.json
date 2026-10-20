@@ -1,0 +1,518 @@
+{
+  "schema": "rrfs-dycore-real-capture/v1",
+  "source_commit": "1d6e370e7b43a332074809f170532a216c2212fb",
+  "records": [
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.adv_coefs.bin",
+      "bytes": 461720,
+      "sha256": "7634f533034e90353c85ae8a6f8e5823d4eec0863099c62ad6a313a80af44647"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.adv_coefs_3rd.bin",
+      "bytes": 461720,
+      "sha256": "26d58f9933d3ec8d3eaceb4a3cd4904a2c24aba4bb0b02e1d24e796d42d1df3f"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.advance_density.bin",
+      "bytes": 864,
+      "sha256": "25bc0371e8e81ad3b125ab205b50bb9f2a6e6fb81265312b09d7d39b50025a82"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.advance_density.present0.bin",
+      "bytes": 864,
+      "sha256": "f33450abe9d6c8cf30f377ce6bfff699aa14eebb0e6c01bc72c259a26bced58f"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.advcellsforedge.bin",
+      "bytes": 461720,
+      "sha256": "66987395ed1933817aa6327578155597ccad20a3b00e926496d97a28b2875dfd"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.bdymaskcell.bin",
+      "bytes": 11112,
+      "sha256": "689b47b572f2e41c5b1a340212f7218bb8a90edceef73e96db92e549cc120245"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.bdymaskedge.bin",
+      "bytes": 31584,
+      "sha256": "b52bb7e49ffc7003b7d69da3800abf9a25916938c10ca59c8d38f546fd3ebf9f"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.cellend.bin",
+      "bytes": 864,
+      "sha256": "4ae79fd0d1d57be58b019e44b39758a0acedef1423aa7319b77ac0d6b83b7c00"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.cellsolveend.bin",
+      "bytes": 864,
+      "sha256": "cc28e6651181a8fe2dc17e860acf2d499baa89a64c995f458e3095d61877f49c"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.cellsolvestart.bin",
+      "bytes": 864,
+      "sha256": "1cd7273223c57c33b9de4e30e6d2362f8ab5454a35ea8ddd15813cbd9abc811c"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.cellsoncell.bin",
+      "bytes": 103380,
+      "sha256": "10edff46e91d91c486309dc0005a191bcd96d11bc13317511308aa66403d2d44"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.cellsonedge.bin",
+      "bytes": 62308,
+      "sha256": "37dff5cb19202d89cb7ab3c6414c7a2b795b843c1bd724664d6ce829a33620c7"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.cellstart.bin",
+      "bytes": 864,
+      "sha256": "c822ee7481a808bf011b179aacf65e5fe701327f324440a3d7887d56675f6971"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.coef_3rd_order.bin",
+      "bytes": 864,
+      "sha256": "2e070ca017e981cb29ef098f940c224c4e6b11725c79f12985c75ceeca2cd8d8"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.dt.bin",
+      "bytes": 864,
+      "sha256": "8a5dffb825f3e7c3f0c9fb7a742c5142f870d25b62793c5ddec51383bd7601ab"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.dvedge.bin",
+      "bytes": 31584,
+      "sha256": "671a37323ce0ef8d276ae78acb2323ab9fd45af4bac41a74cf736e3cf5283390"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.edgeend.bin",
+      "bytes": 864,
+      "sha256": "58474347a222f8065faca3b4311f7fe17650f7fc3fb84f97a58800dc0d967277"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.edgesoncell.bin",
+      "bytes": 103380,
+      "sha256": "126662babc2da4579195cd8e4717ea97c6c639da5ecb07cb36226bfd35b4267b"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.edgesoncell_sign.bin",
+      "bytes": 103380,
+      "sha256": "159084a549a407b174538a1576dc24fa9222ac03919ee9aa7533320b581c53d5"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.edgestart.bin",
+      "bytes": 864,
+      "sha256": "92fa5125de7b01a4f0900cb11a152457a082b3ace24b0a34874a44ac55d14dab"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.field_name.bin",
+      "bytes": 867,
+      "sha256": "c6b9260a9e50f934d31c1e2a7bb90ba2d6d949f15f0364655db9e5067035f674"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.flux_arr.bin",
+      "bytes": 1813576,
+      "sha256": "a9008a8fc46144b2b5f79835b78b671abac107a8635836775bfd6d6526607fb8"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.flux_tmp.bin",
+      "bytes": 1813576,
+      "sha256": "1fafbe1ca4936f8cbde0cd7c70252e421bbd386bb0a27ca2048f0531e6fa35f0"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.flux_upwind_tmp.bin",
+      "bytes": 1813576,
+      "sha256": "695956ba0467b73059520a80715be17502d92cb011eeead3e3917f5a23141f3e"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.fnm.bin",
+      "bytes": 1096,
+      "sha256": "3a33aa468d5e595d1b130f2075c6e192494783a5712785914bd040cae82d25b2"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.fnp.bin",
+      "bytes": 1096,
+      "sha256": "08fccb25640277f44c73cbd43d54e1f96cb5d7aa41e2c7c6c55803a0b596edff"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.invareacell.bin",
+      "bytes": 11112,
+      "sha256": "67516ad6c5289f7c0fed867005386afbdd6ea7e6c29cb71db60212dd9ac964a7"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.nadvcellsforedge.bin",
+      "bytes": 31584,
+      "sha256": "dd8bedbd9ad07e34253c18d5fb48d44f2ee5c82bb87018a66f50b503cdb28669"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.ncells.bin",
+      "bytes": 864,
+      "sha256": "1ddca53e69ec3c49afd565ae02b81fc737be64d3ab64bc0eabd635532d20a92e"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.ncellssolve.bin",
+      "bytes": 864,
+      "sha256": "9cc1ac68c4e276814a9d78b37a980bc120948852bf4733fca25d64f7eccb468c"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.nedges.bin",
+      "bytes": 864,
+      "sha256": "1ed1f8d5c4c4109f727eb67dcd6713d09401d08c6119b48cfdc88e3e56f0cb02"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.nedgesoncell.bin",
+      "bytes": 11112,
+      "sha256": "3b838452932d3b66f50aa4c882d031fced8b90e5f80965901c09f63a5b872603"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.num_scalars.bin",
+      "bytes": 864,
+      "sha256": "9b32120aad0b82248794d221e860cd45019cb58b2b46f7ae6c1d48160200639f"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.rdnw.bin",
+      "bytes": 1096,
+      "sha256": "6553a276c814142516ad688bf45f7e60d532db00f1190efdef31b407843de30c"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.rho_zz_int.bin",
+      "bytes": 605728,
+      "sha256": "917e001d151e8bce029411a7d313ea41812365e8c8483672b943a9bea80baeed"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.rho_zz_int.present0.bin",
+      "bytes": 864,
+      "sha256": "7b990b90c84bddc186c7e13f6897b31d7ecb622250904296742b52ade80a98c2"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.rho_zz_new.bin",
+      "bytes": 615980,
+      "sha256": "32eca73b9b042bd9b4e603ba24a8027244e49bf0d9b8b3a9308f378135ff5c90"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.rho_zz_old.bin",
+      "bytes": 615980,
+      "sha256": "15f24b54de87333b04044d4b92b6b94098f60c88fb2cf00d15559266012798f4"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.s_max.bin",
+      "bytes": 615980,
+      "sha256": "021071dd23706d47abdd87d171741b8d6c86a6f107beadd6b7d96edcc0539606"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.s_min.bin",
+      "bytes": 615980,
+      "sha256": "481525c0d711a27ed3c807882aa99c796b2f39d2098d3ed40974e1db3c29a007"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.scalar_new.bin",
+      "bytes": 615980,
+      "sha256": "525cf8eece101957d1d3cfc56d8e16631986a6b6bd0c5f7f7442c2276f8e897a"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.scalar_old.bin",
+      "bytes": 615980,
+      "sha256": "9e66fd7de215d33115b19959a1b6bd354f2208c4c9db516a0240e0d3b3fcad34"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.scalar_tend.bin",
+      "bytes": 7874396,
+      "sha256": "b6aaf50730eee924a161182d0e6e335f5dd5abc19c638b0fbc45324e3506f201"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.scalars_new.bin",
+      "bytes": 7874396,
+      "sha256": "22e3de68d10b347a254c4293c02d4dadd8825ec1e0bbe48802573b4dab9607e4"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.scalars_old.bin",
+      "bytes": 7874396,
+      "sha256": "8fea9fbd63ae96612f0ffc2bc69cfc5c539f7fff2a4e4fe313ae5964c89d4736"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.scale_arr.bin",
+      "bytes": 1220848,
+      "sha256": "39eb5ab64bea66f5ef0ec6165a28f4d0c6dcf9b3424f356517c09cc0d3bc8e86"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.uhavg.bin",
+      "bytes": 1813576,
+      "sha256": "498a64c0ac3fe6ebf9fbe9a2c23230f547c9a98659b0d981449eb5e16a5beeb9"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.wdtn.bin",
+      "bytes": 626232,
+      "sha256": "e40006feedd5eda1c6a40dfe2f8b08cc42d00dd7b78697bb61045d15ef7e7c79"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.argument.wwavg.bin",
+      "bytes": 626232,
+      "sha256": "1723fedadb2d15927cb3180adba4878f0edc83945910ca636eae08a9b3512d32"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.dimension.nvertlevels.bin",
+      "bytes": 864,
+      "sha256": "a935f5a0ab7541e0b0ee79f9a89d0d374a6f7929a420b0686c65cdd7757488cf"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.post.module.config_apply_lbcs.bin",
+      "bytes": 864,
+      "sha256": "36e801f98153c8f394cf798e59ca8ec8320ca8f7b26ec9eccbeb0edf90367d89"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.adv_coefs.bin",
+      "bytes": 461720,
+      "sha256": "38d1af6fa56f321c7a2243496af7c9db09a81f51f699ff75e1957c8c34fb0907"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.adv_coefs_3rd.bin",
+      "bytes": 461720,
+      "sha256": "02f5f6c96557c5f577a1b149bffc00bed522935ba58b569c5a0de523661ac276"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.advance_density.bin",
+      "bytes": 864,
+      "sha256": "21c889557c7daaacaf4eb31f78e8a9cdd132544502564c4d06f657f6f554232a"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.advance_density.present0.bin",
+      "bytes": 864,
+      "sha256": "8c0529296a06c877fe4727658cdb27bb6109ef4a8984159a62b5a804096b859b"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.advcellsforedge.bin",
+      "bytes": 461720,
+      "sha256": "3efcedd5d04f3e99e79a056f122bcda449d499d339c404aa32151224f4700e90"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.bdymaskcell.bin",
+      "bytes": 11112,
+      "sha256": "5f3bcdbf858701731ff2838e13892e7d83fa6af16f1e4ed3090c74eec974645c"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.bdymaskedge.bin",
+      "bytes": 31584,
+      "sha256": "8a3eaed89a043a2cf146b3df3a47e73acfaa0e6f784179253971e55755da1619"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.cellend.bin",
+      "bytes": 864,
+      "sha256": "928bcc5d9962e9df222b499d0c0362242d4be20cf99ddca6e3e11fa13deb9dc0"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.cellsolveend.bin",
+      "bytes": 864,
+      "sha256": "d81e61e1a7ff8a502c6544420c9141474eb38f5083e0c714bfc41ba20ca3aecb"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.cellsolvestart.bin",
+      "bytes": 864,
+      "sha256": "291570cb9e3ac9bd428d86dac8f0e8202f9f5c6e11eb70e2896c71b2729878c6"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.cellsoncell.bin",
+      "bytes": 103380,
+      "sha256": "3d53c492961e9d95f2037394ab1896aa795cc7fe75c9b5a08e1842a11611f240"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.cellsonedge.bin",
+      "bytes": 62308,
+      "sha256": "ecfadf7349792cd36f6a83608aba1530396905612ba2d05776b22ed77b956beb"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.cellstart.bin",
+      "bytes": 864,
+      "sha256": "c7fdb2c3d48dcaee5f631c54a93536a6a5bec94692bb21e86314f951518e3e97"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.coef_3rd_order.bin",
+      "bytes": 864,
+      "sha256": "f80889c0704b0ae59045a897d0b92f455f1deec5fcde735922f0e8ffc135da80"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.dt.bin",
+      "bytes": 864,
+      "sha256": "327fb073d2c98bcebeabd8d93895b02027294386aa17b6b93e0115c3c0433461"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.dvedge.bin",
+      "bytes": 31584,
+      "sha256": "d0ecd4a8d0f51a69e73d8274cc9fe00158f2105d90615be435f5840306dd1e66"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.edgeend.bin",
+      "bytes": 864,
+      "sha256": "0cbd01389c830fbe4e21531d389d2b5c9fd75ab05fe376cb1e29766de28911e6"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.edgesoncell.bin",
+      "bytes": 103380,
+      "sha256": "3ddbb4aa16d28e1f1803f0263259fbc50a94876edd49f6c05c0ca7be363eabde"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.edgesoncell_sign.bin",
+      "bytes": 103380,
+      "sha256": "a7257648ae98497759d68ebefbcfbc4f9e8acc22d2302efc2b4a32ac91b467cc"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.edgestart.bin",
+      "bytes": 864,
+      "sha256": "a1f6bce72b562e193c8ed5be08ba7324e26cb6d91488ccb63f11b8e5f9713a37"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.field_name.bin",
+      "bytes": 867,
+      "sha256": "5f9a8ad364bb0d898fd873904a89177111b95aec5876df6c1faa259cbd587da3"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.flux_arr.bin",
+      "bytes": 1813576,
+      "sha256": "cd43c886d4a2e76f1b5a6f498e97a3c1bde318240c3e7f0d32715f3bc47f02ca"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.flux_tmp.bin",
+      "bytes": 1813576,
+      "sha256": "cc8eeef6c3353d2546d63d8b99692bc71870d13a85bc1d1ac9388cdb3afe7064"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.flux_upwind_tmp.bin",
+      "bytes": 1813576,
+      "sha256": "00679a3c1f86a50f5317db5fb8c0aad4dc95694b0ba96401f5e89f131a79f689"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.fnm.bin",
+      "bytes": 1096,
+      "sha256": "b4c747d88029920743c7592bc48f6488f123b6cc06b3f3ef204c03c6d9471bf8"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.fnp.bin",
+      "bytes": 1096,
+      "sha256": "8c700b2607d396739a5a60c93956484a64c3818cca40969eef94c2241a4f39c3"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.invareacell.bin",
+      "bytes": 11112,
+      "sha256": "bfd524962971840e4b137f31da5a4a2d3e03a1380884e9d1446f1ec8631f1a80"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.nadvcellsforedge.bin",
+      "bytes": 31584,
+      "sha256": "ed2b85d447d5a5c1fccced2a5530b8a9a1a507eaad27b635e939636d2501157a"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.ncells.bin",
+      "bytes": 864,
+      "sha256": "3fc92f82be411c1805276c0e1af165660aaf703f6c3136ae11489c662d61a4e8"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.ncellssolve.bin",
+      "bytes": 864,
+      "sha256": "fb72d04d2a590dd7c64f2fae6b992ffaec782ab3c8b42f7c7817a8fbc8ddaef9"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.nedges.bin",
+      "bytes": 864,
+      "sha256": "c8b3502a5c828f9981e020fe5ad68e1df0a987ee2b3755ca36642eed31cb23ca"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.nedgesoncell.bin",
+      "bytes": 11112,
+      "sha256": "b7aa7c0477a95c8fe5c454b3755b46fabb9ef949e752671e7aa42e77936976fc"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.num_scalars.bin",
+      "bytes": 864,
+      "sha256": "f95d2ccfd66515c6227e44339b60dca634cd031ddfefdce9bdd774ae26aef518"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.rdnw.bin",
+      "bytes": 1096,
+      "sha256": "475f307c6a0b2219e9524c1aa65a3ef12f8da0dfbc0ef1ad74724c7f3724e4b1"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.rho_zz_int.bin",
+      "bytes": 605728,
+      "sha256": "fad91d53a7f69a4380a2bdfe547022823d01558a45b5c44f7861ac35b0a41499"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.rho_zz_int.present0.bin",
+      "bytes": 864,
+      "sha256": "2f592062d469f73b3ba94c7b38d27e021bf945e7106000a6a58219101afe1134"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.rho_zz_new.bin",
+      "bytes": 615980,
+      "sha256": "3d5a27a6b03e210eb492ab4bf1736c3e512e0b744790a1ed6ef717d7a39ed719"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.rho_zz_old.bin",
+      "bytes": 615980,
+      "sha256": "e2240d1c4eb6e94daecbd4beb4155040ae7395513f6d088518de6baeee4434c7"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.s_max.bin",
+      "bytes": 615980,
+      "sha256": "d1d85a8bfc929fc2e4b8be67ef8ed79630f744f2f9b9a905a7e1d5ab3fd090ea"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.s_min.bin",
+      "bytes": 615980,
+      "sha256": "4327982ec02f92819c6fbdc586a59c151ed6e1747cbca12b505005b0bb303f66"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.scalar_new.bin",
+      "bytes": 615980,
+      "sha256": "196e9f7e20caa91feaff53511e3de687f80764dfd94bc5efb706c9f1663b60c6"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.scalar_old.bin",
+      "bytes": 615980,
+      "sha256": "08bffa74224ed3f081625a645f936555736d4c178651f8579a781426bc1647a6"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.scalar_tend.bin",
+      "bytes": 7874396,
+      "sha256": "6096bd7c44bcfcfc237af76bf238f27832092305b546905b07ba2ff6c50a184d"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.scalars_new.bin",
+      "bytes": 7874396,
+      "sha256": "de4e9e7990501ece447a27e9a3193439d2a045ed35cd26b96252f821ea6e0170"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.scalars_old.bin",
+      "bytes": 7874396,
+      "sha256": "6f3c7a79c6d2debf214e7a1b8aee707774924ad4fce5a2a6e32fab26b09af4a5"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.scale_arr.bin",
+      "bytes": 1220848,
+      "sha256": "9e5ccc4f782dca2104c42e33e5ce9270a548a01a503e1aef0441f0cc1922aa69"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.uhavg.bin",
+      "bytes": 1813576,
+      "sha256": "ece694651c5c6c90490490182f61853827171c122fd6c958324ae94c8009899e"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.wdtn.bin",
+      "bytes": 626232,
+      "sha256": "24708996c5603a4006c3f72eab8fe7221f1b35c0aff3adf88ced7d2ef6ea402d"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.argument.wwavg.bin",
+      "bytes": 626232,
+      "sha256": "ae8f6a27d9dfc0213cd60941cbc25ab5c1bb3e05407110c5dcc1dd32ca9200d2"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.dimension.nvertlevels.bin",
+      "bytes": 864,
+      "sha256": "ab557031e53fa26799421ff0d44ace24985ebcdeb7df87bbd7b61e224661c1e0"
+    },
+    {
+      "path": "dycore__atm_advance_scalars_mono_work.s0000000001.e0000000001.r000000.pre.module.config_apply_lbcs.bin",
+      "bytes": 864,
+      "sha256": "53e004db3e3f19e7744baeadfcdf3e9e5c866b614ea445a27584647f6e342936"
+    }
+  ],
+  "record_count": 102,
+  "bytes": 79113902
+}

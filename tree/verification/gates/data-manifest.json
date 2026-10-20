@@ -1,0 +1,310 @@
+{
+  "schema": "hex-gate-data-manifest-v1",
+  "layout": "paths are relative to verification/gates/data/",
+  "files": {
+    "headline/hl-3/headline-slots-99038ad0a4e0a0246bd9ddbe88a97e53e1fbc32008ebadcc0b5d3e257db1a144.txt": {
+      "sha256": "99038ad0a4e0a0246bd9ddbe88a97e53e1fbc32008ebadcc0b5d3e257db1a144",
+      "bytes": 312,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "ref/MPAS-Model-v8.4.2/src/core_atmosphere/Registry.xml": {
+      "sha256": "c2eff7d95ec3867af69a945908955076d5f97dfe943f2d25ad756d98b94d86b3",
+      "bytes": 218345,
+      "kind": "pinned MPAS-A source file (fetch MPAS-Model at the pinned commit)"
+    },
+    "ref/cases/x1.10242/2023-03-31_12.00.00/init-explicit-dry-v1/x1.10242.graph.info": {
+      "sha256": "9a7fe6833408b6170df0357efc497256d9755117711e93b160cc2016b592d6ef",
+      "bytes": 563229,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.10242/2023-03-31_12.00.00/init-explicit-dry-v1/x1.10242.grid.nc": {
+      "sha256": "729a77fddd829ad5206661a9478d8473454552e3b3c5a1af768f4128e188295c",
+      "bytes": 14014372,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.10242/2023-03-31_12.00.00/init-explicit-dry-v1/x1.10242.init.nc": {
+      "sha256": "8a88c068aee008166837f7dec5a534ac7a83ddb726641b68e5eae624ae2771f1",
+      "bytes": 93242876,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.10242/2023-03-31_12.00.00/init-explicit-dry-v1/x1.10242.ugwp_oro_data.nc": {
+      "sha256": "abbe9822e3ea1953cd97580bf6dba86839e0841472c7084beb0e0dc36b4493ed",
+      "bytes": 950432,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.2562/2023-03-31_12.00.00/init-explicit-dry-v1/x1.2562.graph.info": {
+      "sha256": "5923ce6b401b6d8bb95cb00aee9d119915a6b50239824bb64133d264bca9e0b4",
+      "bytes": 140827,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.2562/2023-03-31_12.00.00/init-explicit-dry-v1/x1.2562.grid.nc": {
+      "sha256": "8a825312a713bbe959c33ed03c2b503e5ec626238de6b15a686cd0ad5b40c986",
+      "bytes": 3508132,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.2562/2023-03-31_12.00.00/init-explicit-dry-v1/x1.2562.init.nc": {
+      "sha256": "9ffa45baaa2d73c612dbc1b068acbd5148dab78bdc602ffc3936ea83dccea2a7",
+      "bytes": 23416316,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.2562/2023-03-31_12.00.00/init-explicit-dry-v1/x1.2562.ugwp_oro_data.nc": {
+      "sha256": "a4f694258593762af71698df89684f3a3bff0fd9184ac8b247ce6d03c9e925ba",
+      "bytes": 336032,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.graph.info": {
+      "sha256": "5923ce6b401b6d8bb95cb00aee9d119915a6b50239824bb64133d264bca9e0b4",
+      "bytes": 140827,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.grid.nc": {
+      "sha256": "8a825312a713bbe959c33ed03c2b503e5ec626238de6b15a686cd0ad5b40c986",
+      "bytes": 3508132,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.init.nc": {
+      "sha256": "567d3732d86d1a263062a3e17ffbd5c1a8272b548d0894d0a8432aecdaeb2b6a",
+      "bytes": 23416316,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/cases/x1.2562/2023-03-31_12.00.00/init-modis20-v2/x1.2562.ugwp_oro_data.nc": {
+      "sha256": "a4f694258593762af71698df89684f3a3bff0fd9184ac8b247ce6d03c9e925ba",
+      "bytes": 336032,
+      "kind": "init or case input (rebuild: tools/native_physics_reference cache_cases.py / gpuwm-hex init)"
+    },
+    "ref/field-inventories/G1-explicit-dry-v1/x1.10242-2023-03-31-none-rank1/PUBLICATION.json": {
+      "sha256": "013c14ff7ede4002f24190c736cde26485cb4b5bb4610b45f776fd1a7bb72355",
+      "bytes": 439,
+      "kind": "native reference publication (rebuild: tools/native_dry_reference, tools/native_physics_reference)"
+    },
+    "ref/field-inventories/G1-explicit-dry-v1/x1.2562-2023-03-31-none-rank1/PUBLICATION.json": {
+      "sha256": "85355c82f516df84f7d1662e09130644188ddc61548b4e77e7d3ba888364d310",
+      "bytes": 438,
+      "kind": "native reference publication (rebuild: tools/native_dry_reference, tools/native_physics_reference)"
+    },
+    "ref/native/0f0b3b7a1d5164ea820268646240a1e91b63e51aa3e6ab652909641d7a1fd6d2/MP_THOMPSON_QIautQS_DATA.DBL": {
+      "sha256": "9d270e5364b0c3e0a1f80d3251d67e673206e7203fadc905a16774bd3f43acf1",
+      "bytes": 84504,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/0f0b3b7a1d5164ea820268646240a1e91b63e51aa3e6ab652909641d7a1fd6d2/MP_THOMPSON_QRacrQG_DATA.DBL": {
+      "sha256": "3762e7f77abde1248a64e650372dd71505e20478173bfc7ca04b8fda424b1872",
+      "bytes": 51518256,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/0f0b3b7a1d5164ea820268646240a1e91b63e51aa3e6ab652909641d7a1fd6d2/MP_THOMPSON_QRacrQS_DATA.DBL": {
+      "sha256": "5880b9d3b6bbe936101ab1db5316659f5563136371c36da47b14c13d23fbf9ee",
+      "bytes": 33118944,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/0f0b3b7a1d5164ea820268646240a1e91b63e51aa3e6ab652909641d7a1fd6d2/MP_THOMPSON_freezeH2O_DATA.DBL": {
+      "sha256": "081ced9efcfd7c4034616435fa9d29a36bc5cc1b6f0b0edfee56260ea73c9edf",
+      "bytes": 254944848,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef": {
+      "directory": true,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/CAM_ABS_DATA.DBL": {
+      "sha256": "91ee3079e43a6d908256fe3d1bd4bc5f3ac5662d2a8a1ed6ac9685be0555ad87",
+      "bytes": 20580056,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/CAM_AEROPT_DATA.DBL": {
+      "sha256": "9782ca59f2ebd12128e23f775e74665d7eb3dc386f53aaa053adfd926a388049",
+      "bytes": 18208,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/CCN_ACTIVATE_DATA": {
+      "sha256": "f2b8d3916560f9046f89f8ac5f32c5292a1800498fd75301e422f147c82a3dbd",
+      "bytes": 35288,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/GENPARM.TBL": {
+      "sha256": "9c02832a0e4a2ecaf47fcee485539aad95cd732c379c5c258161a88eb3d25ea2",
+      "bytes": 261,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/LANDUSE.TBL": {
+      "sha256": "7f661318ff5f06aed6b4b5508e4d077dc794cff03d5fb4447fe59c88d0ed2ece",
+      "bytes": 40650,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/OZONE_DAT.TBL": {
+      "sha256": "2a13ee25809672e0419e40062c1fc753580adbf604bfc67a9166ef77c815dbc0",
+      "bytes": 543744,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/OZONE_LAT.TBL": {
+      "sha256": "761597f3454b99e3dbf15d2621b1ede88269948e96e47f4695b79fabd3cc6348",
+      "bytes": 536,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/OZONE_PLEV.TBL": {
+      "sha256": "df26a938273b22d2d04ec52b7297827a316cac0061fab020519241cdc0e61d48",
+      "bytes": 708,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/RRTMG_LW_DATA": {
+      "sha256": "bcfdee24b63a4c909522a329b8e16c539f0173c7e5aea2caf933ab4fe28c5c97",
+      "bytes": 847552,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/RRTMG_LW_DATA.DBL": {
+      "sha256": "c93ec6190e16ecbb5bb4fe31e1b1ea4924c3b88a741779749f6eaec1acf989fc",
+      "bytes": 1694976,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/RRTMG_SW_DATA": {
+      "sha256": "a7d25f5b4d33be8629cbef7ecacc1ff413bf398a021297793e843ba1cc627baf",
+      "bytes": 680368,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/RRTMG_SW_DATA.DBL": {
+      "sha256": "5a6a0e0ba830b41519889f8c4a2be771437db56ea4f7526bc0798332b06234a5",
+      "bytes": 1360572,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/SOILPARM.TBL": {
+      "sha256": "1e2275a32d8cd3b48ca693d22c0816df0013f83b6594ac632716361db337d58f",
+      "bytes": 6557,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/VEGPARM.TBL": {
+      "sha256": "ed5478afbe49af51492256c1eb6cf88b3948590308525b32df1ddec28687b40e",
+      "bytes": 23037,
+      "kind": "MPAS-Data / MPAS physics table (fetch at the pinned MPAS-Data commit; never redistributed)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/stream_list.atmosphere.diag_ugwp": {
+      "sha256": "f77aa1c70b62a9f103558ec0a218fe6b17dc7278838fc51067bbd11ceefa755b",
+      "bytes": 211,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/stream_list.atmosphere.diagnostics": {
+      "sha256": "6c01818a8e258035f71c19534b0427eecd1480b6ca1802de5f38a2f66aede9f9",
+      "bytes": 1444,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/stream_list.atmosphere.output": {
+      "sha256": "cb741eb039b0d17597a252ef1ab2003ecda2b8253263faae93969def1c82701e",
+      "bytes": 750,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef/stream_list.atmosphere.surface": {
+      "sha256": "3c96efc6b68da29fff73176365e176a1640957cd79993134fc96566350322b17",
+      "bytes": 9,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f2-verify-mpas/G2-M0-gate-decks/convection.json": {
+      "sha256": "f649506086839a984a547c27604951a2c844abebb3feb8ed7f57b2e5537b1f58",
+      "bytes": 10794,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-convection_permitting-rank1/PUBLICATION.json": {
+      "sha256": "58cb5715ce1cecd821b72c567c66b48ba5057e15babcab00c27025afa6eb382e",
+      "bytes": 19052,
+      "kind": "native reference publication (rebuild: tools/native_dry_reference, tools/native_physics_reference)"
+    },
+    "work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-convection_permitting-rank1/namelist.atmosphere": {
+      "sha256": "5c6512c6ef2035fa8691b9fd0577480c109b0b257799330e239a3f58dfa18a7a",
+      "bytes": 460,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-convection_permitting-rank1/streams.atmosphere": {
+      "sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b",
+      "bytes": 2134,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1/PUBLICATION.json": {
+      "sha256": "fb582d5e24475c184c320967c092cb7f5bdc0ade0297bfa5517c52d07dc263b6",
+      "bytes": 19048,
+      "kind": "native reference publication (rebuild: tools/native_dry_reference, tools/native_physics_reference)"
+    },
+    "work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1/namelist.atmosphere": {
+      "sha256": "0ba868eba17fc78e7395edaf887dd50f212408b63ecd24dbcefb7a779871acc8",
+      "bytes": 458,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f2-verify-mpas/n1out/G2-native-cache/gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1/streams.atmosphere": {
+      "sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b",
+      "bytes": 2134,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f2-verify-mpas/receipts/reviewed-medium-dycore.json": {
+      "sha256": "97a939cadd9cccf982ca81571ef87c6a5b635135da9bfb20907da47efdf61680",
+      "bytes": 1396727,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f2-verify-mpas/receipts/reviewed-medium-none.json": {
+      "sha256": "b613823aa0954c60dd300f1cb13844832b405d56ff582822373a51dc73fd4cfa",
+      "bytes": 1394739,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f2-verify-mpas/receipts/reviewed-small-dycore.json": {
+      "sha256": "ccb110ff505fb10ce6c85623bd4b8d67c07811ae8f80a2378878ca2498b7b672",
+      "bytes": 3483026,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f2-verify-mpas/receipts/reviewed-small-none.json": {
+      "sha256": "3148680fb13df03289526b3c8e5adf351c000c45c681c6104c84ac9f58a91775",
+      "bytes": 3481037,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f2-verify-mpas/restore-native/explicit-dry-medium/PUBLICATION.json": {
+      "sha256": "f80d37934ef8d9d1403d90966208926319a224418ad4d482552c04573d60bb55",
+      "bytes": 7367,
+      "kind": "native reference publication (rebuild: tools/native_dry_reference, tools/native_physics_reference)"
+    },
+    "work/f2-verify-mpas/restore-native/explicit-dry-medium/namelist.atmosphere": {
+      "sha256": "eb6d7eeb7b8e71c2399c937561370091e57263494746e37f68731b20c9da9309",
+      "bytes": 443,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f2-verify-mpas/restore-native/explicit-dry-medium/streams.atmosphere": {
+      "sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5",
+      "bytes": 2137,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f2-verify-mpas/restore-native/explicit-dry-small/PUBLICATION.json": {
+      "sha256": "4b3f0c4a25998e4233028f963b2bc4da5d3bd969bede626095ef568bbc104953",
+      "bytes": 19067,
+      "kind": "native reference publication (rebuild: tools/native_dry_reference, tools/native_physics_reference)"
+    },
+    "work/f2-verify-mpas/restore-native/explicit-dry-small/namelist.atmosphere": {
+      "sha256": "c959be5b197e90c907af493285ec14774a7c73d7c150e806b674170ffdde0ef7",
+      "bytes": 443,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f2-verify-mpas/restore-native/explicit-dry-small/streams.atmosphere": {
+      "sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b",
+      "bytes": 2134,
+      "kind": "MPAS run-time configuration (from the pinned native deck)"
+    },
+    "work/f4-physics-driver/receipts/M0-clean-eight-deck-matrix-v842.json": {
+      "sha256": "74268d4e14d7aa2cb213d3611c7574a14a51752cc63137e6c7a7603bebbb5f3f",
+      "bytes": 12997,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f4-physics-driver/receipts/reproduce-convection-deck.json": {
+      "sha256": "601f1a132988a89988f0cf7e58740e211311e284ad0b9a2417f47ee90c049688",
+      "bytes": 10608,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f4-physics-driver/receipts/reproduce-mesoscale-deck.json": {
+      "sha256": "005abde227fff60f1577f84733d3122f900ca46c203d867a0bb7da0f21c6bd03",
+      "bytes": 10572,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f4-physics-driver/receipts/reproduction-c27efe9f78da40df9cecd0127dd40f50-convection-forecast.json": {
+      "sha256": "605b77f4611bba5ea15ce822d1743e9303021c90a18b2abf133f98cc06347d34",
+      "bytes": 5931822,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    },
+    "work/f4-physics-driver/receipts/reproduction-c27efe9f78da40df9cecd0127dd40f50-mesoscale-forecast.json": {
+      "sha256": "918b3b5ded77ef70e52b9eabadff7acd0e3f7567ab0b49963c67bbfe8dafab21",
+      "bytes": 5524781,
+      "kind": "reference artifact (rebuild from the recipes in tools/)"
+    }
+  }
+}

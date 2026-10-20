@@ -1,0 +1,34 @@
+# The MPAS route's Registry pool reader, built into the gpuwm-hex wheel by
+# setup.py and placed in hexcore/libexec beside the table decoders.
+#
+# THE BREAKAGE THIS PREVENTS: every MPAS physics suite (the all-GPU ones too)
+# decodes its Registry pools through rw_mpas_physics_pool
+# (hexcore.mpasphys.pool_v842.decode_registry_pools), and the only builds were
+# a lane scratch binary and the gpuwm integrate branch, which no released
+# engine carries, so `--native-pool-reader` had to name a file on one host.
+#
+# Source, byte for byte (SHA-256 888155db1042e36ac54c47921c29c7f82aa7a86b26edc0795e6dbec97af58a45,
+# held by tests/test_physics_route_resources.py):
+#   src/bin/rw_mpas_physics_pool.rs   gpuwm 24b6f08c48db3199051280f5a874ef33b41a5762
+#                                     tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_physics_pool.rs
+# Dependencies are the versions gpuwm's Cargo.lock pins at that commit, with the
+# rw-mpas crate's serde_json feature set.  It links netCDF-C (libnetcdf); the
+# manylinux build links the pinned static classic library through LIBRARY_PATH,
+# the same way as gpuwm-hex-netcdf-copy.
+[package]
+name = "hex-physics-pool"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+autobins = false
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+sha2 = "0.10.9"
+
+[[bin]]
+name = "rw_mpas_physics_pool"
+path = "src/bin/rw_mpas_physics_pool.rs"

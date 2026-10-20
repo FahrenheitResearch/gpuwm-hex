@@ -38,6 +38,7 @@ exact.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -59,13 +60,28 @@ BUILDERS = {
     "gpuwm.core.rrtmg_lw": ("_gpu_module", ()),
     "gpuwm.core.rrtmg_mcica": ("_mcica_gpu_module", ()),
     "gpuwm.core.gf": ("_gf_module", (55,)),
-    "gpuwm.core.ysu": ("_ysu_module", ()),
     # The registry route: gpuwm.core.kernels.load_module("wsm6") is how the
     # engine builds the module holding the POST-CUT widest launched frame
     # (wsm6_column, 7,216 B -- STATE.md section 5).  The per-module builder
     # attrs above cannot reach it because wsm6 has no module-level builder.
     "gpuwm.core.kernels": ("load_module", ("wsm6",)),
 }
+
+
+def load_probe_module(module_path):
+    """Return the compiled module and the source used by its loader."""
+    if module_path == "gpuwm.core.ysu":
+        from gpuwm import wrf_exact, ysu_generations
+        from gpuwm.core import kernels
+
+        name, defines = ysu_generations.ysu_kernel_selection(
+            ysu_generations.YSU_DEFAULT_GENERATION, strict=wrf_exact.ENABLED)
+        module = (kernels.load_module_int_defines(name, defines) if defines
+                  else kernels.load_module(name))
+        return module, kernels.module_source(name)
+    provider = importlib.import_module(module_path)
+    builder, arguments = BUILDERS[module_path]
+    return getattr(provider, builder)(*arguments), kernel_source(provider, arguments)
 
 
 def kernel_source(mod, builder_args=()):
@@ -203,11 +219,8 @@ def one(argv):
     pre = None
     if args.prelaunch:
         pm, pk, pt = (args.prelaunch.split(":") + ["128"])[:3]
-        pmod = __import__(pm, fromlist=["*"])
-        pb, pa = BUILDERS[pm]
-        pobj = getattr(pmod, pb)(*pa)
+        pobj, psrc = load_probe_module(pm)
         pfn = pobj.get_function(pk)
-        psrc = kernel_source(pmod, pa)
         pargs, _pk = build_args(cp, np, signature(psrc, pk))
         b0 = nvsmi_process_mib(pid)
         pfn((4096,), (int(pt),), pargs)
@@ -215,12 +228,9 @@ def one(argv):
         pre = {"kernel": pk, "threads": int(pt),
                "reservation_mib": round((nvsmi_process_mib(pid) or 0) - (b0 or 0), 1)}
 
-    mod = __import__(args.module, fromlist=["*"])
-    builder, bargs = BUILDERS[args.module]
-    obj = getattr(mod, builder)(*bargs)
+    obj, src = load_probe_module(args.module)
     fn = obj.get_function(args.kernel)
     attrs = func_attributes(cp, fn)
-    src = kernel_source(mod, bargs)
     params = signature(src, args.kernel)
     out = {"module": args.module, "kernel": args.kernel, "attrs": attrs,
            "params": len(params or [])}
@@ -359,12 +369,10 @@ def first_zero_local_kernel(checkout, mod_path):
     cmd = [sys.executable, "-c", (
         "import sys,json;sys.path.insert(0,%r);sys.path.insert(0,%r);"
         "import cupy as cp;"
-        "from reservation_probe import BUILDERS, kernel_source;"
+        "from reservation_probe import load_probe_module;"
         "from kernel_reservation import func_attributes;"
         "import re;"
-        "m=__import__(%r,fromlist=['*']);"
-        "b,a=BUILDERS[%r];o=getattr(m,b)(*a);"
-        "src=kernel_source(m);"
+        "o,src=load_probe_module(%r);"
         "names=re.findall(r'extern\\s+\"C\"\\s+__global__\\s+void\\s+([A-Za-z_]\\w*)',src);"
         "out=None\n"
         "for n in names:\n"
@@ -375,7 +383,7 @@ def first_zero_local_kernel(checkout, mod_path):
         "    if (func_attributes(cp,k).get('local_size_bytes') or 0)==0:\n"
         "        out=n;break\n"
         "print(json.dumps(out))"
-    ) % (str(HERE), checkout, mod_path, mod_path)]
+    ) % (str(HERE), checkout, mod_path)]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     try:
         return json.loads(r.stdout.strip().splitlines()[-1])

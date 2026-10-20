@@ -1,0 +1,13 @@
+GRIB1| Level| From |  To  | metgrid  | metgrid | metgrid                                  |GRIB2|GRIB2|GRIB2|GRIB2|
+Param| Type |Level1|Level2| Name     | Units   | Description                              |Discp|Catgy|Param|Level|
+-----+------+------+------+----------+---------+------------------------------------------+-----------------------+
+ 235 |  1   |   0  |      | SKINTEMP | K       | Skin temperature                         |  0  |  0  | 17  |  1  |
+ 172 |  1   |   0  |      | LANDSEA  | 0/1 Flag| Land/Sea flag                            |  2  |  0  |  0  |  1  |
+ 141 |  1   |   0  |      | SNOW_EC  | m       |                                          |  0  |  1  | 254 |  1  |
+     |  1   |   0  |      | SNOW     | kg m-2  | Water equivalent of accumulated snow     |     |     |     |     |
+  33 |  1   |   0  |      | SNOW_DEN | kg m-3  | Snow density                             |  0  |  1  | 61  |  1  |
+  31 |  1   |   0  |      | SEAICE   | fraction| Sea-ice area fraction                    | 10  |  2  |  0  |  1  |
+  34 |  1   |   0  |      | SST      | K       | Sea-surface temperature                  | 10  |  3  |  0  |  1  |
+     |  1   |   0  |      | SNOWH    | m       | Physical snow depth                      |     |     |     |     |
+-----+------+------+------+----------+---------+------------------------------------------+-----------------------+
+# Snow depth is SWE / snow density, through the existing ECMWF decoder rule.

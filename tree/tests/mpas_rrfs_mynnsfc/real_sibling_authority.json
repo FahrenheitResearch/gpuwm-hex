@@ -1,0 +1,14 @@
+{
+  "scope": "strict native fork, x1.2562 March optional initialized input, suite none/bl_mynn/sf_mynn, MPI1, both surface wrapper calls at steps1 and3",
+  "captures": [
+    "sfclay_mynn__driver_sfclayer__L1327.s0000000001.e0000000001.r000000",
+    "sfclay_mynn__driver_sfclayer__L1327.s0000000003.e0000000003.r000000",
+    "sfclay_mynn__driver_sfclayer__L1358.s0000000001.e0000000001.r000000",
+    "sfclay_mynn__driver_sfclayer__L1358.s0000000003.e0000000003.r000000"
+  ],
+  "manifest_sha256": "687e817e97dfa2146726b1b7f2f0a63085a2c7dfefec4542c3b528429ed763c8",
+  "scientific_passivity_summary_sha256": "bb5a8225c728abfdb5fb57fd469f344552d8935b8501eaa6ecb5bcb28b55b536",
+  "native_run_input_authority_sha256": "e84f8ff8c2c6643fbbc4ebeaa386e25628e94192295baa92a0573911ede1ac54",
+  "native_binary_sha256": "0b822cc7e2d76455a056f8914609cdc740b10ec5722fe0b7a22a3955f8087739",
+  "instrumented_binary_sha256": "14d79a6a7a2d46606595fdbebe4d33fc0a0fb0e2a8186649fa11c6a049b0973a"
+}

@@ -35,6 +35,12 @@ from .errors import MpasPortError
 SURFACE_LEVEL_TAG = 200100.0
 _PROFILE_FIELDS = {"TT", "RH", "SPECHUMD", "GHT", "PRES", "PRESSURE", "UU", "VV"}
 _SOIL_PREFIXES = ("ST", "SM", "SOILT", "SOILM")
+_REQUIRED_MET_FIELDS = (
+    ("LANDSEA", "coastal soil and sea-ice interpolation would use the wrong surface type",
+     "Use a Vtable that emits LANDSEA"),
+    ("SOILHGT", "source terrain would remain zero, changing the terrain correction of skin and soil temperatures",
+     "Declare the derived SOILHGT Vtable output and supply source terrain; a cycle-invariant terrain-only donor must share the primary mask's grid"),
+)
 
 _STATIC_VARIABLES = (
     "latCell",
@@ -106,11 +112,10 @@ def _refuse(message: str) -> None:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    # The real SHA-256, computed once per file version (hexcore.file_digest),
+    # so the forecast door that reads this init next does not hash it again.
+    from .file_digest import sha256_file as file_version_sha256
+    return file_version_sha256(path)
 
 
 def _utc_now() -> str:
@@ -219,11 +224,9 @@ def scan_met_file(met: Path, *, nfglevels: int, start_time: str) -> MetInventory
             f"{met} is not readable as a WPS intermediate file: {error}. Re-run ungrib "
             "or select its actual output; a truncated source cannot produce a trustworthy init"
         )
-    if "LANDSEA" not in names:
-        _refuse(
-            f"the intermediate file {met} carries no LANDSEA field; coastal soil and sea-ice "
-            "interpolation would use the wrong surface type. Use a Vtable that emits LANDSEA"
-        )
+    for field, breakage, remedy in _REQUIRED_MET_FIELDS:
+        if field not in names:
+            _refuse(f"the intermediate file {met} carries no {field} field; {breakage}. {remedy}")
     if SURFACE_LEVEL_TAG not in profile_levels:
         _refuse(
             f"no profile level in {met} is tagged {SURFACE_LEVEL_TAG:.1f}; the case-7 "
@@ -368,6 +371,181 @@ class VerticalSource:
     summary: dict[str, Any]
     vertical_spec: Path | None = None
     vertical_artifact_receipt: Path | None = None
+    #: Held while a shared cached artifact is stamped with this run's clock
+    #: (exclusive) and read by the engine (shared); released by run_init_command.
+    lock: Any = None
+
+
+#: Bumped whenever the cached artifact's contents would change for the same
+#: grid, static, spec and declarations (key input, not a version claim).
+VERTICAL_CACHE_SCHEMA = "gpuwm-hex.vertical-cache/v2"
+
+#: Run declarations the cached artifact carries only as fixed-width global
+#: attributes, so they are stamped per run instead of entering the key.
+#:
+#: THE BREAKAGE THIS PREVENTS, MEASURED (two rented hosts, 2026-10-12, 30 km
+#: x1.655362): config_nfglevels and config_nfgsoillevels are facts of the
+#: SOURCE's first-guess ladder (GFS 34, IFS 15, GEFS 32, ERA5 38, ICON 19 with
+#: 8 soil levels), and with them in the key every source rebuilt the same
+#: vertical arrays into its own 5.9 GB file -- five artifacts and 35 GB for
+#: one mesh, which put a box under the GPU mutex's 80 GB free-disk guard.
+#: The arrays depend on the grid, static and vertical spec alone; the
+#: producer writes these values with setncattr and reads them nowhere.  Only
+#: declarations whose encoded width cannot change (a text clock of fixed
+#: length, int32) are stamped: rewriting a classic-format header in place is
+#: safe only at constant size, so text and YES/NO declarations stay in the key.
+STAMPED_DECLARATIONS = ("config_start_time", "config_nfglevels", "config_nfgsoillevels")
+
+
+def vertical_cache_dir(arguments: argparse.Namespace) -> Path | None:
+    """Where constructed vertical artifacts are kept between inits, or None.
+
+    THE BREAKAGE THIS PREVENTS, MEASURED (8-card RTX PRO 6000 host, 2026-10-10, 15 km x1.2621442):
+    every init rebuilt the same vertical artifact -- 231 s of the 448 s init,
+    128 s of it hashing arrays for the artifact receipt -- and wrote it again
+    as a 24.6 GB file beside the init, although it depends only on the grid,
+    static, vertical spec and run declarations, none of which change between
+    cycles on a mesh.  The one per-cycle value it carries, config_start_time,
+    is stamped into the cached file in place under a lock before the engine
+    reads it, so the init the engine writes carries the same attributes and
+    the same variable bytes as a freshly constructed one.
+
+    ``--vertical-cache DIR`` or ``GPUWM_HEX_VERTICAL_CACHE``; default
+    ``$GPUWM_HEX_CACHE_ROOT/vertical`` or ``~/.cache/gpuwm-hex/vertical``;
+    ``off`` builds a fresh artifact beside the init as before.  An explicit
+    ``--vertical-artifact`` is always built fresh.
+    """
+
+    if getattr(arguments, "vertical_artifact", None) is not None:
+        return None
+    text = getattr(arguments, "vertical_cache", None) or os.environ.get("GPUWM_HEX_VERTICAL_CACHE", "")
+    text = str(text)
+    if text.lower() in ("off", "0", "none"):
+        return None
+    if text:
+        return Path(text).expanduser().absolute()
+    root = os.environ.get("GPUWM_HEX_CACHE_ROOT")
+    return (Path(root) if root else Path.home() / ".cache" / "gpuwm-hex") / "vertical"
+
+
+def _vertical_cache_key(arguments: argparse.Namespace) -> tuple[str, dict[str, Any]]:
+    from .vertical_spec import VerticalSpec
+    from .rust_geometry import geometry_engine
+
+    here = Path(__file__).parent
+    declarations = dict(run_declarations(arguments))
+    for stamped in STAMPED_DECLARATIONS:  # stamped per run, see STAMPED_DECLARATIONS
+        declarations.pop(stamped)
+    _, geometry_binary_sha = geometry_engine()
+    material = {
+        "schema": VERTICAL_CACHE_SCHEMA,
+        "grid_sha256": _sha256(Path(arguments.grid).expanduser().absolute()),
+        "static_sha256": _sha256(Path(arguments.static).expanduser().absolute()),
+        "vertical_spec_canonical_sha256": VerticalSpec.from_file(
+            Path(arguments.vertical_spec).expanduser().resolve(strict=True)).sha256(),
+        "declarations": {key: declarations[key] for key in sorted(declarations)},
+        "producer_sources": {name: _sha256(here / name)
+                             for name in ("vertical_spec.py", "vector.py", "rust_geometry.py", "mesh.py")},
+        "geometry_binary_sha256": geometry_binary_sha,
+        "port_version": _port_version(),
+    }
+    key = hashlib.sha256(json.dumps(material, sort_keys=True).encode("utf-8")).hexdigest()
+    return key, material
+
+
+def _stamped_already(artifact: Path, declarations: dict[str, Any]) -> dict[str, Any] | None:
+    """The stamp record when the cached artifact already carries this run's declarations, else None (read-only)."""
+    from netCDF4 import Dataset
+
+    stamp: dict[str, Any] = {}
+    with Dataset(artifact, mode="r") as dataset:
+        held = set(dataset.ncattrs())
+        for key in STAMPED_DECLARATIONS:
+            before = dataset.getncattr(key) if key in held else None
+            before = before.item() if hasattr(before, "item") else before
+            if before != declarations[key]:
+                return None
+            stamp[f"{key}_before"] = before
+            stamp[key] = declarations[key]
+    return stamp
+
+
+def _stamp_run_declarations(artifact: Path, declarations: dict[str, Any]) -> dict[str, Any]:
+    """Set the cached artifact's per-run declarations to this run's, in place."""
+    from netCDF4 import Dataset
+    from .vertical_spec import encode_config_attribute
+
+    stamp: dict[str, Any] = {}
+    with Dataset(artifact, mode="r+") as dataset:
+        held = set(dataset.ncattrs())
+        for key in STAMPED_DECLARATIONS:
+            value = declarations[key]
+            before = dataset.getncattr(key) if key in held else None
+            before = before.item() if hasattr(before, "item") else before
+            if before != value:
+                dataset.setncattr(key, encode_config_attribute(value))
+            stamp[f"{key}_before"] = before
+            stamp[key] = value
+    return stamp
+
+
+def _cached_vertical_source(arguments: argparse.Namespace, cache: Path, summary: dict[str, Any]) -> VerticalSource:
+    from .file_lock import lock as _flock, unlock as _funlock
+    from .vertical_spec import materialize_vertical_artifact
+
+    started = time.time()
+    key, material = _vertical_cache_key(arguments)
+    cache.mkdir(parents=True, exist_ok=True)
+    artifact = cache / f"{key[:24]}.vertical.nc"
+    receipt = artifact.with_name(artifact.name + ".receipt.json")
+    complete = artifact.with_name(artifact.name + ".complete")
+    lock = (cache / f"{key[:24]}.lock").open("a+")
+    # Readers share the artifact; only a build or a re-stamp is exclusive.
+    # THE BREAKAGE THIS PREVENTS, MEASURED (home RTX 5090 host, unified image
+    # 2026-10-16, 6 GEFS members at 120 km): every member init held this lock
+    # exclusively for its whole rw_mpas_init run, although all six stamp the
+    # same cycle and first-guess ladder, so --init-jobs ran the inits one at a
+    # time.  A run whose declarations the artifact already carries now holds
+    # it shared while the engine reads; a run that must stamp takes it
+    # exclusively (after readers of other declarations finish), stamps, then
+    # re-checks under the shared lock (flock conversion is not atomic).
+    declarations = run_declarations(arguments)
+    hit: bool | None = None
+    stamp: dict[str, Any] | None = None
+    try:
+        while True:
+            _flock(lock, shared=True)
+            ready = complete.is_file() and artifact.is_file() and receipt.is_file()
+            hit = ready if hit is None else hit
+            held = _stamped_already(artifact, declarations) if ready else None
+            if held is not None:
+                stamp = stamp or held
+                break
+            _funlock(lock)
+            _flock(lock)
+            if not (complete.is_file() and artifact.is_file() and receipt.is_file()):
+                for stale in (artifact, receipt, complete):
+                    stale.unlink(missing_ok=True)
+                materialize_vertical_artifact(
+                    grid=arguments.grid, static=arguments.static, spec_path=arguments.vertical_spec,
+                    output=artifact, receipt_path=receipt, run_config=declarations)
+                complete.write_text(json.dumps(material, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            stamp = _stamp_run_declarations(artifact, declarations)
+            _funlock(lock)
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+    except BaseException:
+        lock.close()
+        raise
+    summary = {
+        **summary,
+        "vertical_artifact": payload["output"],
+        "vertical_spec_canonical_sha256": payload["inputs"]["vertical_spec"]["canonical_sha256"],
+        "vertical_invariants": payload["invariants"],
+        "vertical_cache": {"dir": str(cache), "key": key, "hit": hit, "seconds": round(time.time() - started, 3),
+                           **stamp},
+    }
+    return VerticalSource(mode="constructed", capsule=artifact, reference=artifact, summary=summary,
+                          vertical_spec=arguments.vertical_spec, vertical_artifact_receipt=receipt, lock=lock)
 
 
 def select_vertical_mode(arguments: argparse.Namespace) -> str:
@@ -433,7 +611,7 @@ def run_declarations(arguments: argparse.Namespace) -> dict[str, Any]:
         "config_start_time": arguments.start_time,
         "config_nfglevels": int(arguments.nfglevels),
         "config_nfgsoillevels": int(arguments.nfgsoillevels),
-        "config_nsoillevels": 4,
+        "config_nsoillevels": 9 if getattr(arguments, "land_surface", "noah") == "ruc" else 4,
         "config_use_spechumd": arguments.use_spechumd == "yes",
         "config_frac_seaice": arguments.frac_seaice == "yes",
         "config_extrap_airtemp": arguments.extrap_airtemp,
@@ -498,6 +676,9 @@ def prepare_vertical_source(arguments: argparse.Namespace) -> VerticalSource:
         )
 
     summary = check_static_and_grid(arguments.static, arguments.grid)
+    cache = vertical_cache_dir(arguments)
+    if cache is not None:
+        return _cached_vertical_source(arguments, cache, summary)
     from .vertical_spec import materialize_vertical_artifact
 
     out: Path = arguments.out
@@ -553,10 +734,16 @@ def add_init_parser(commands: Any) -> None:
         ),
     )
     parser.add_argument("--met", type=Path, help="WPS intermediate file, or a directory holding exactly one")
+    parser.add_argument("--sfc-met", type=Path, help="optional surface WPS input; enables config_input_sst")
+    parser.add_argument("--seaice-met", type=Path, help="optional fractional sea-ice WPS input")
     parser.add_argument("--static", type=Path, help="generated/published static file")
     parser.add_argument("--grid", type=Path, default=None, help="grid file; required in native-free mode")
     parser.add_argument("--vertical-spec", type=Path, default=None, help="versioned JSON declaration for native-free construction")
-    parser.add_argument("--vertical-artifact", type=Path, default=None, help="durable constructed artifact path (default: <out>.vertical.nc)")
+    parser.add_argument("--vertical-artifact", type=Path, default=None, help="durable constructed artifact path, built fresh (default: the vertical cache)")
+    parser.add_argument("--vertical-cache", default=None, metavar="DIR",
+                        help="keep constructed vertical artifacts here between inits (default "
+                             "$GPUWM_HEX_VERTICAL_CACHE, else $GPUWM_HEX_CACHE_ROOT/vertical or "
+                             "~/.cache/gpuwm-hex/vertical; 'off' builds one beside the init)")
     parser.add_argument("--capsule", type=Path, default=None, help="explicit compatibility-only native init-class capsule")
     parser.add_argument("--reference", type=Path, default=None, help="explicit compatibility-only native reference")
     parser.add_argument("--out", type=Path, help="init NetCDF to write")
@@ -575,6 +762,10 @@ def add_init_parser(commands: Any) -> None:
     parser.add_argument("--oned-underflow", choices=("preserve", "reproduce-ifx-ftz"))
     parser.add_argument("--engine", type=Path, default=None, help="rw_mpas_init executable (default $RW_MPAS_INIT)")
     parser.add_argument("--receipt", type=Path, default=None, help="provenance receipt path")
+    parser.add_argument("--land-surface", choices=("noah", "noahmp", "ruc"), default=None,
+                        help="target soil geometry; defaults to the physics suite, or Noah")
+    parser.add_argument("--physics-suite", default=None, help="initialize this suite's soil and complete species row")
+    parser.add_argument("--wif-climatology", type=Path, default=None, help="explicit WIF dataset; missing or invalid named input refuses")
     parser.set_defaults(handler=run_init_command)
 
 
@@ -620,6 +811,9 @@ def _validate_spec_switch_agreement(arguments: argparse.Namespace) -> None:
 def run_init_command(arguments: argparse.Namespace) -> int:
     started = time.time()
     _require_switches(arguments)
+    from .init_physics import init_selection
+    selection = init_selection(getattr(arguments,"physics_suite",None), getattr(arguments,"land_surface",None))
+    arguments.land_surface = selection["land_surface"]
     _validate_spec_switch_agreement(arguments)
 
     out: Path = arguments.out.expanduser().absolute()
@@ -675,7 +869,36 @@ def run_init_command(arguments: argparse.Namespace) -> int:
         "--model-version", str(_port_version()),
         "--git-version", f"gpuwm-hex-{_port_version()}",
     ]
-    completed = subprocess.run(argv, capture_output=True, text=True)
+    if arguments.land_surface != "noah":
+        argv.extend(("--land-surface", arguments.land_surface))
+    # The inputs do not change while the engine reads them, so their digests
+    # are taken on other cores while it runs instead of after it (the
+    # constructed artifact alone is 24.6 GB at 15 km).
+    from concurrent.futures import ThreadPoolExecutor
+    input_paths = {"met": met, "static": arguments.static}
+    for role, switch in (("sfc_met", "sfc-met"), ("seaice_met", "seaice-met")):
+        source = getattr(arguments, role, None)
+        if source is not None:
+            source = resolve_met_source(Path(source).expanduser()).resolve(strict=True)
+            argv.extend(("--" + switch, str(source)))
+            input_paths[role] = source
+    if arguments.grid:
+        input_paths["grid"] = arguments.grid
+    if vertical.mode == "constructed":
+        input_paths.update(vertical_spec=vertical.vertical_spec, vertical_artifact=vertical.capsule,
+                           vertical_artifact_receipt=vertical.vertical_artifact_receipt)
+    else:
+        input_paths.update(capsule=vertical.capsule, reference=vertical.reference)
+    try:
+        with ThreadPoolExecutor(max_workers=len(input_paths), thread_name_prefix="init-digest") as pool:
+            described_futures = {role: pool.submit(_described, Path(path)) for role, path in input_paths.items()}
+            completed = subprocess.run(argv, capture_output=True, text=True)
+            described = {role: future.result() for role, future in described_futures.items()}
+    finally:
+        if vertical.lock is not None:
+            # Released only after the engine read the stamped artifact and
+            # its digest was taken; another run may stamp it now.
+            vertical.lock.close()
     if completed.returncode != 0:
         sys.stderr.write(completed.stderr)
         sys.stderr.write(
@@ -697,6 +920,32 @@ def run_init_command(arguments: argparse.Namespace) -> int:
             f"the engine reported success but {out} does not exist; rebuild the current rw_mpas_init "
             "or inspect an ABI mismatch between door and engine"
         )
+    expected_soil = 9 if arguments.land_surface == "ruc" else 4
+    from netCDF4 import Dataset as _InitDataset
+    with _InitDataset(out) as _written:
+        written_soil = len(_written.dimensions["nSoilLevels"]) if "nSoilLevels" in _written.dimensions else None
+    if written_soil != expected_soil:
+        # An rw_mpas_init that predates --land-surface parses and ignores it,
+        # writing Noah's four layers under a RUC declaration; RUC then steps
+        # on a soil column it does not have.
+        _refuse(
+            f"rw_mpas_init wrote {written_soil} soil levels where --land-surface "
+            f"{arguments.land_surface} needs {expected_soil}; the engine binary predates suite soil "
+            "geometry. Rebuild or re-stage rw_mpas_init from gpuwm 2.9.0 or later"
+        )
+    aerosol_receipt = None
+    if selection["scalar_names"]:
+        from .init_physics import initialize_species
+        try:
+            aerosol_receipt = initialize_species(engine, out, selection, arguments)
+        except BaseException as error:
+            # The engine's file is complete only once the suite's species are
+            # in it. Left behind, it opens cleanly and starts the suite
+            # without its aerosols, so a failed completion removes it.
+            out.unlink(missing_ok=True)
+            if isinstance(error, ValueError):
+                _refuse(f"physics initialization did not complete and {out} was removed: {error}")
+            raise
     declarations = stamp_run_declarations(out, run_declarations(arguments))
     carried_clock = declarations["already_present"].get("config_start_time")
     if carried_clock is not None and str(carried_clock) != arguments.start_time:
@@ -710,22 +959,24 @@ def run_init_command(arguments: argparse.Namespace) -> int:
     from . import __version__
 
     inputs: dict[str, Any] = {
-        "met": _described(met),
-        "static": _described(arguments.static),
-        "grid": _described(arguments.grid) if arguments.grid else None,
+        "met": described["met"],
+        "sfc_met": described.get("sfc_met"),
+        "seaice_met": described.get("seaice_met"),
+        "static": described["static"],
+        "grid": described.get("grid"),
     }
     if vertical.mode == "constructed":
-        inputs["vertical_spec"] = _described(vertical.vertical_spec)  # type: ignore[arg-type]
-        inputs["vertical_artifact"] = _described(vertical.capsule)
-        inputs["vertical_artifact_receipt"] = _described(vertical.vertical_artifact_receipt)  # type: ignore[arg-type]
+        inputs["vertical_spec"] = described["vertical_spec"]
+        inputs["vertical_artifact"] = described["vertical_artifact"]
+        inputs["vertical_artifact_receipt"] = described["vertical_artifact_receipt"]
         inputs["capsule"] = None
         inputs["reference"] = None
     else:
         inputs["vertical_spec"] = None
         inputs["vertical_artifact"] = None
         inputs["vertical_artifact_receipt"] = None
-        inputs["capsule"] = _described(vertical.capsule)
-        inputs["reference"] = _described(vertical.reference)
+        inputs["capsule"] = described["capsule"]
+        inputs["reference"] = described["reference"]
 
     receipt = {
         "schema": "gpuwm-hex.init-provenance/v2",
@@ -752,6 +1003,7 @@ def run_init_command(arguments: argparse.Namespace) -> int:
         },
         "engine_argv": argv,
         "engine_receipt": engine_receipt,
+        "physics_initialization": aerosol_receipt,
         "run_declarations": declarations,
         "output": _described(out),
         "door_seconds": round(time.time() - started, 3),
@@ -778,4 +1030,55 @@ def run_init_command(arguments: argparse.Namespace) -> int:
             indent=2,
         )
     )
+    return 0
+
+
+# MPAS-A v8.4.2 mpas_init_atm_surface.F:29-394; data processing is Rust.
+_SURFACE_ABI = 'rw_mpas_init --mode surface-update --sfc-prefix PREFIX --static STATIC.nc --out SURFACE.nc --start-time YYYY-MM-DD_HH:MM:SS --stop-time YYYY-MM-DD_HH:MM:SS --fg-interval SECONDS --surface-interval SECONDS [--receipt JSON]'
+
+
+def add_surface_update_parser(commands: argparse._SubParsersAction) -> None:
+    parser = commands.add_parser(
+        "surface-update", help="build MPAS SST and sea-ice update records"
+    )
+    parser.add_argument("--engine", type=Path)
+    parser.add_argument("--sfc-prefix", type=Path, required=True)
+    parser.add_argument("--static", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--start-time", required=True)
+    parser.add_argument("--stop-time", required=True)
+    parser.add_argument("--fg-interval", type=int, required=True)
+    parser.add_argument("--surface-interval", type=int, required=True)
+    parser.add_argument("--receipt", type=Path)
+    parser.set_defaults(handler=run_surface_update_command)
+
+
+def run_surface_update_command(arguments: argparse.Namespace) -> int:
+    engine = resolve_engine(arguments.engine)
+    try:
+        probe = subprocess.run(
+            [str(engine), "--mode", "surface-update", "--abi"],
+            capture_output=True, text=True, check=False,
+        )
+        if probe.returncode or probe.stdout.strip() != _SURFACE_ABI:
+            _refuse(
+                "the init engine lacks the case-8 surface ABI; rebuild rw_mpas_init "
+                "with the i5-init-sfc-update delivery before supplying inputs"
+            )
+        command = [str(engine), "--mode", "surface-update"]
+        for flag in (
+            "sfc-prefix", "static", "out", "start-time", "stop-time",
+            "fg-interval", "surface-interval", "receipt",
+        ):
+            value = getattr(arguments, flag.replace("-", "_"))
+            if value is not None:
+                if isinstance(value, Path):
+                    value = value.expanduser()
+                command.extend(["--" + flag, str(value)])
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError as error:
+        _refuse(f"cannot run surface-update engine {engine}: {error}")
+    if result.returncode:
+        _refuse(result.stderr.strip() or "surface-update engine failed without a diagnostic")
+    print(result.stdout.strip())
     return 0

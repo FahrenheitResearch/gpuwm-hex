@@ -39,14 +39,19 @@ EXPECTED_SOURCE_SHA256 = {
     # substituted with hexcore, so no elision this table guards moved at all --
     # which the tests below check by name rather than assert.  Re-derived by
     # tools/repin_source_tables.py, never by hand.
+    # Re-derived 2026-10-17 for the optional final-acoustic output callback.
+    # It retains original device allocations for due restart streams without
+    # changing dynamics arithmetic or the read-only lifetimes checked below.
+    # Re-derived 2026-10-19 after f65ab11c specialized immutable kernel
+    # dimensions. The read-only velocity alias checks below still apply.
     SRC / "cuda_driver.py": (
-        "cb914d37558d65fc20582a1257e75fec0599e05d2af41044f79a8d8166d628b4"
+        "433a0e51eb948d7235fbab3aa7605c4f6135056e6c717abbbbaa0e6972fc1c0c"
     ),
     SRC / "cuda_horizontal.py": (
-        "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5"
+        "d4e4face383eab6f19f21598613b7bd58e37eb75e067b7b9e817060a2ec015cd"
     ),
     SRC / "cuda_horizontal_v841.py": (
-        "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455"
+        "0f26e1e54ab4935aa4ce9c25d189d15b76b046e84dd015e15d2326c3a6bddf7d"
     ),
 }
 

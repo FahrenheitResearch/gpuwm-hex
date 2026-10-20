@@ -1,0 +1,45 @@
+--- a/tree/src/hexcore/verify_mpas.py
++++ b/tree/src/hexcore/verify_mpas.py
+@@ -774,6 +774,42 @@
+             raise VerificationRefusal("deck has no Rust-rendered evidence frame bindings")
+         receipt["render"] = render_evidence(deck["render"], deck_path.parent, work)
+         receipt["passed"] = receipt["passed"] and not receipt["render"]["failures"]
++    # Produce the mandated Rust difference sheets while this fresh forecast
++    # still exists; run() retires compared output immediately afterwards.
++    if config := deck.get("difference_sheets"):
++        publication = file_ref(config["native_publication"], deck_path.parent)
++        sheets_out = Path(config["output_directory"]).resolve()
++        tool = shutil.which("mpas-sheets")
++        manifest = sheets_out / "sheets.json"
++        errors = []
++        if tool is None:
++            errors.append("mpas-sheets unavailable")
++        else:
++            sheets_out.mkdir(parents=True, exist_ok=True)
++            command = [tool, "--deck", str(deck_path), "--hex-dir", str(out),
++                       "--native-publication", str(publication), "--out", str(sheets_out),
++                       "--leads", config.get("leads", "6,12,24"), "--label", deck["id"]]
++            with (sheets_out / "renderer.log").open("w") as log:
++                status = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
++                                        check=False).returncode
++            if status:
++                errors.append(f"mpas-sheets exited {status}")
++        if not manifest.is_file():
++            errors.append("difference sheet manifest absent")
++        elif not errors:
++            sheets = read_json(manifest)
++            leads = [int(v) for v in config.get("leads", "6,12,24").split(",")]
++            rows = sheets.get("leads", [])
++            if ([row["lead"] for row in rows] != leads or
++                    any(row["failures"] or row["skips"] or len(row["panels"]) != 8 or
++                        any(not (sheets_out / p["file"]).is_file() for p in row["panels"])
++                        for row in rows)):
++                errors.append("requested eight-map difference sheets incomplete")
++        receipt["difference_sheets"] = {
++            "path": str(manifest), "sha256": digest(manifest) if manifest.is_file() else None,
++            "tool_sha256": digest(Path(tool)) if tool else None, "failures": errors}
++        receipt["failures"].extend(errors)
++        receipt["passed"] = receipt["passed"] and not errors
+     return receipt
+ 
+ 

@@ -21,27 +21,30 @@ the refusal text itself is the index below.
 ## Install and environment
 
 **`MISSING cupy (the CUDA lane)`** — you installed the base package without
-a CUDA extra, or with the wrong one. `pip install "gpuwm-hex[gpu]"`, which
-is `gpu-cu13`: every GPU door here refuses a CUDA runtime below `13000`, so
-that is the only wheel this port runs on.
+a CUDA extra. `pip install "gpuwm-hex[gpu]"`, which is `gpu-cu12` and runs on
+a CUDA 12 or CUDA 13 driver; doctor names the extra for the driver it reads
+(`gpu-cu13` on a CUDA 13 driver).
 
 **`MISSING cupy (the CUDA lane): cupy imports but carries CUDA runtime
-12090`** — a CuPy built for CUDA 12 is installed. It imports cleanly, probes
-cleanly, runs cuBLAS, and is then refused by name at forecast launch with
-`CudaRefusal: cuda.runtime_version=12090 < required 13000`. Doctor prints
-the removal first because pip leaves both wheels installed and import order,
-not intent, picks the winner:
+13020, and this box's driver serves CUDA 12`** — `cupy-cuda13x` is installed
+on a CUDA 12 driver. It imports, and every device call then stops with
+`cudaErrorInsufficientDriver`. Doctor prints the removal first because pip
+leaves both wheels installed and import order, not intent, picks the winner:
 
 ```
-  pip uninstall -y cupy-cuda12x
-  pip install "gpuwm-hex[gpu-cu13]"
+  pip uninstall -y cupy-cuda13x
+  pip install "gpuwm-hex[gpu-cu12]"
 ```
 
-**`MISSING cupy (the CUDA lane): this box's driver serves CUDA 12`** — not a
-pip problem. `cupy-cuda13x` needs a driver serving CUDA 13, and the CUDA-12
-wheel is refused by the runtime floor, so no install command opens the CUDA
-lane on this machine. Update the NVIDIA driver, or run the CUDA lane on a
-machine that has one. Doctor deliberately offers no `pip install` line here.
+**`cudaErrorInsufficientDriver: CUDA driver version is insufficient for CUDA
+runtime version`** at a forecast — the same case, met at the door instead of
+in doctor. Same remedy.
+
+**`MISSING cupy (the CUDA lane): this box's driver serves CUDA 11`** — not a
+pip problem. Both wheels need a driver serving CUDA 12 or newer, so no
+install command opens the CUDA lane on this machine. Update the NVIDIA
+driver, or run the CUDA lane on a machine that has one. Doctor deliberately
+offers no `pip install` line here.
 
 **`MISSING rw_mpas_init ... not found on any rung`** (likewise
 `rw_mpas_convert`, `rw_wrfbatch`) — the Rust engines are not staged. The
@@ -194,22 +197,40 @@ installed`** — you pointed `--gpuwm-checkout` at an unpacked tarball or a
 copied `site-packages`. Neither names the bytes it holds (no commit, no pip
 record). Leave the flag unset, or clone the tag.
 
-**`the gpuwm at ... is gpuwm 2.5.8, and this port's physics seam is
-pinned to gpuwm 2.8.0`**: the installed engine, or the tree passed as
-`--gpuwm-checkout`, is a real gpuwm at the wrong version. The refusal names
-both versions, lists which of the sixteen pinned files moved, and prints the
-bounded `pip install` that closes it, with a `git clone --depth 1 --branch
-v<version>` as the optional alternative.
+**A gpuwm other than the one this port was measured against** runs (since
+2026-10-10). The door used to refuse with `the gpuwm at ... is gpuwm X, and
+this port's physics seam is pinned to gpuwm 2.8.7`; a different engine
+version names no breakage, so the refusal is retired. The one engine refusal
+left is an engine whose radiation helper set no row of this release admits:
+it names the installed version, the version this release was measured on and
+both remedies (`pip install "gpuwm==X"`, or the gpuwm-hex release that admits
+the installed engine). The run's receipt
+records the comparison under `arwen_engine_pin`: the version the engine
+declares, the version this port was measured against, whether the sixteen
+seam files match (`matches_measured_row`), and which moved or are absent.
+`gpuwm-hex doctor` prints the same comparison as an information line, not a
+blocking gap. The x4 full-physics proof still requires the exact measured
+bytes for its measured physics seam. It measures hex self-reproducibility
+and broad native full-physics consistency. Native dry-step agreement uses
+`verify-dycore`: 0 differing words against the strict native, per-field limits
+against an optimised one.
 
-The same comparison runs at install time. `gpuwm-hex doctor` hashes the
-pinned files that live inside `site-packages` — at 2.5.8 that is all sixteen,
-and a conforming install reads `16 of 16 pinned files are in this install and
-all 16 match` — and reports **`MISSING gpuwm seam bytes`** on a wrong engine,
-with the same two versions and the same
-remedy — so a wrong engine is a report you get before a run, not a digest
-mismatch you meet after one. Before 2026-08-27 there was no such check: the
-report said *Every check passed* and exited 0 while the forecast lane was
-dead.
+**`the gpuwm at ... carries no gpuwm/core/mpas_column_batch.py`**: the tree
+is not a gpuwm the physics seam can call. Leave `--gpuwm-checkout` unset to
+run on the installed engine, or point it at a gpuwm source tree.
+
+**`unstable mesh/timestep combination refused before CUDA allocation`**: the
+message gives one or both Courant numbers, measured from the mesh's own
+smallest `dcEdge`, and ends with the remedies that apply. The acoustic limit
+is the forward-backward limit of the sub-step on the hexagonal grid; above
+it a sound wave grows, and more `--acoustic-substeps` or a smaller `--dt`
+closes it. The advective bound is an estimate: it assumes a largest wind
+(125 m/s unless the mesh row or `--max-wind` says otherwise) and carries a
+one-dimensional limit to a hexagon by a swept-area factor. The message says
+which wind the requested step is good for; if the case's winds stay below
+that, pass `--max-wind` with the case's own bound. The `--dt` it recommends
+is the largest whole-second step under both limits that divides the
+radiation interval.
 
 **`--out ... exists`** / **`--scratch ... exists`** — both must be fresh.
 A second run into an existing output tree can be read as the first one's
@@ -297,16 +318,17 @@ delivered tree; use the default sibling or point it elsewhere.
 ## When output exists but looks wrong
 
 That is not a refusal — it is chapter 3.3. Check the declared divergences
-before suspecting your run: higher explicit rain, a condensate surplus and an
-upper-level warm drift are the declared, measured differences from native
-physics, with their referees named. And chapter 6.4: reading the receipt's
+before suspecting your run: on the default ArWen physics route, higher explicit
+rain, a condensate surplus and an upper-level warm drift are the declared,
+measured differences from native MPAS physics, with their referees named. The
+MPAS suites do not carry them. And chapter 6.4: reading the receipt's
 nonclaims tells you what the run never promised.
 
 **Precipitation needs its own paragraph, because the two referees disagree in
-sign and the older one is the retired one.** Against native MPAS-A this port's
-domain-mean precipitation runs about **15 % dry** — a global mean against
-another model, and model parity was retired as a goal on 2026-08-20. Against
-observations, which is the verification of record, it is the other way round:
+sign and only one of them is the ArWen route's referee.** Against native
+MPAS-A the ArWen route's domain-mean precipitation runs about **15 % dry**: a
+global mean against another model's physics. Against observations, which is
+the verification of record for ArWen's physics, it is the other way round:
 scored on 2026-08-25 against NCEP/EMC Stage-IV hourly QPE over CONUS, the port
 is **wet in all four cases** (+0.0247 mm/h paired, 95 % [+0.0041, +0.0606]),
 and its frequency bias at 1 mm/h is above one in three of the four

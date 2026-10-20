@@ -1,0 +1,19 @@
+{
+  "scope": "strict native reconstructed full driver matches all481374actual captured native output words; original host no-builtin powf matches every481374actual captured CUDA output word; preserve first-differing snowmelt column",
+  "native_source": "module_sf_noahlsm.F:3282",
+  "process_count": 1,
+  "original_source_sha256": "c4efdf509ba4c3d3c9ab2b4e942484465bdf33f3f50b937afb7c00c3fb27373c",
+  "capture_sha256": "975dc2f02737da32fee96d640b9638b9810d9a0f5461f126c6028445a01f6313",
+  "reconstructed_metadata_sha256": "5204e9fa9f8459c914de16b54260b8531894fafff9580f97380f153bb5f264a3",
+  "strict_native_library_sha256": "88e380ca8384eb9164f9c43026c01c505aaae3ed33e2a123394bf9ef05ad3789",
+  "host_powf_witness_sha256": "db5168e54f4c8a23e4dc1da272eeec6385f72b98b1582cff3619cecc6c9ee5ec",
+  "candidate_host_witness_sha256": "809c4974c8f222d470e18f900e766941aedaa0ea37fb077ae89051e0df545f20",
+  "files": {
+    "input.f32": "1dd0bce20290e8e9d1f35dd8310a35d1ef52af7a8b13cf0b544b4a3512d7d36e",
+    "input.i32": "cb5098dae06bad26cc179119dcdf7e24fc5f11e148db3081d713e5565f3a19a8",
+    "native.f32": "37c708111daae118b4dd30e405bf8d54228e4df76cd3cae8b99c6582a05a069e",
+    "native.i32": "cb5098dae06bad26cc179119dcdf7e24fc5f11e148db3081d713e5565f3a19a8",
+    "original-cuda.f32": "d587c9496b9f762b61560d904070cacf3ae77c6b3b7558fc580fa0aa82e60bf6",
+    "tables.bin": "7fe92bbc614bbf69a1191d08d25b065895273dc7adc4781e126d7b2b4af9bcd9"
+  }
+}

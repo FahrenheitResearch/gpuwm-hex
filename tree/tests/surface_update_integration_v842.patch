@@ -1,0 +1,249 @@
+--- a/tree/src/hexcore/mpasphys/driver_v842.py
++++ b/tree/src/hexcore/mpasphys/driver_v842.py
+@@ -9,7 +9,7 @@
+ 
+ from __future__ import annotations
+ 
+-from dataclasses import asdict, dataclass
++from dataclasses import asdict, dataclass, field
+ from enum import StrEnum
+ from fractions import Fraction
+ import re
+@@ -57,6 +57,7 @@
+     selectors: Mapping[str, str]
+     options: Mapping[str, Any]
+     backends: Mapping[str, Backend]
++    service_backends: Mapping[str, Backend] = field(default_factory=dict)
+ 
+     # Active native selector; mpas_atmphys_control.F:310-319.
+     def active(self, slot: str) -> bool:
+@@ -100,7 +101,8 @@
+     def receipt(self) -> dict[str, Any]:
+         return {"schema": SCHEMA, "suite": self.suite,
+                 "selectors": dict(self.selectors), "options": dict(self.options),
+-                "backends": {s: str(b) for s, b in self.backends.items()}}
++                "backends": {s: str(b) for s, b in self.backends.items()},
++                "service_backends": {s: str(b) for s, b in self.service_backends.items()}}
+ 
+ 
+ def resolve_namelist(text: str, *, backends: Mapping[str, str] | None = None,
+@@ -165,8 +167,18 @@
+                 selectors[slot], selectors[slot])
+     chosen = {s: Backend(default_backend) for s in selectors}
+     backend_names = {r["backend_selector"]: s for s, r in spec["slots"].items()}
++    services = spec.get("services", {})
++    chosen_services = {name: Backend(row["default_backend"])
++                       for name, row in services.items()}
++    service_names = {row["backend_selector"]: name for name, row in services.items()}
+     supplied_backends = groups.get(spec["backend_namelist_group"], {})
+     for key, value in supplied_backends.items():
++        if key in service_names:
++            name = service_names[key]
++            if value not in services[name]["backends"]:
++                raise ValueError(f"unsupported {name} service backend {value!r}")
++            chosen_services[name] = Backend(value)
++            continue
+         if key not in backend_names:
+             raise ValueError(f"unknown MPAS slot backend option {key!r}")
+         chosen[backend_names[key]] = Backend(value)
+@@ -178,7 +190,8 @@
+             raise ValueError(f"conflicting MPAS slot backend selections for {slot}")
+         chosen[slot] = Backend(backend)
+     return DriverConfig(suite, MappingProxyType(selectors),
+-                        MappingProxyType(options), MappingProxyType(chosen))
++                        MappingProxyType(options), MappingProxyType(chosen),
++                        MappingProxyType(chosen_services))
+ 
+ 
+ def route_namelist(text: str) -> DriverConfig | None:
+@@ -666,9 +679,12 @@
+         options = dict(c.execution_options)
+         if slot == "gwdo" and c.active("ngw") and not c.native_embedded("ngw"):
+             options["config_ngw_scheme"] = False
++        service = next((name for name, row in load_table()["mpasphys_v842"].get("services", {}).items()
++                        if slot is None and operation in row["operations"]), None)
++        glue_backend = c.service_backends.get(service, Backend.NATIVE_CPU)
+         call = SlotCall(operation if slot is None else slot,
+                         "driver" if slot is None else c.selectors[slot],
+-                        Backend.NATIVE_CPU if slot is None else c.backends[slot],
++                        glue_backend if slot is None else c.backends[slot],
+                         step, time, float(self.manager.scheme_dt.get(slot, self.manager.dt)),
+                         flags, pools, MappingProxyType(options))
+         self.calls.append({"operation": operation, "slot": call.slot,
+--- a/tree/src/hexcore/data/profiles/mpas-physics-suites.v1.json
++++ b/tree/src/hexcore/data/profiles/mpas-physics-suites.v1.json
+@@ -1830,6 +1830,25 @@
+         "value": 864000.0
+       }
+     },
+-    "backend_namelist_group": "hex_mpasphys"
++    "backend_namelist_group": "hex_mpasphys",
++    "services": {
++      "surface_update": {
++        "backend_selector": "config_surface_update_backend",
++        "default_backend": "native-cpu",
++        "backends": [
++          "native-cpu",
++          "hex-cuda"
++        ],
++        "module": "hexcore.mpasphys.surface_update_v842",
++        "operations": [
++          "physics_update_surface",
++          "physics_update_sst",
++          "physics_update_sstskin",
++          "physics_update_deepsoiltemp",
++          "update_radiation_diagnostics",
++          "update_convection_step2"
++        ]
++      }
++    }
+   }
+ }
+--- a/tree/src/hexcore/mpasphys/forecast_v842.py
++++ b/tree/src/hexcore/mpasphys/forecast_v842.py
+@@ -78,6 +78,7 @@
+                 raise ValueError(f'physics override requires KEY=VALUE: {override}')
+             spec = load_table()['mpasphys_v842']
+             backend_options = {row['backend_selector'] for row in spec['slots'].values()}
++            backend_options.update(row['backend_selector'] for row in spec.get('services', {}).values())
+             group = spec['backend_namelist_group'] if key.strip().casefold() in backend_options else 'physics'
+             parsed = parse_fortran_namelist(f'&{group}\n{key}={value}\n/')[group]
+             groups.setdefault(group, {}).update(parsed)
+@@ -166,7 +167,11 @@
+     sources = [Path(v).resolve() for k in ('grid','static','init','orographic_statistics')
+                if (v:=getattr(arguments,k,None)) is not None]
+     bindings = stream_input_bindings(getattr(arguments,'stream_input',None))
+-    sources = list(dict.fromkeys((*sources,*bindings.values())))
++    # Timed surface input is first read in the forecast loop, after startup
++    # output; mpas_atm_core.F:198-210,655-724,779-806. Preserve init SST/xice
++    # during pool hydration and install timed records only on their alarms.
++    startup_bindings = (path for name, path in bindings.items() if name != 'surface')
++    sources = list(dict.fromkeys((*sources,*startup_bindings)))
+     layout = decode_registry_pools(Path(reader).resolve(),Path(source).resolve(),config,text,sources,
+                                    scratch/'native-pools')
+     streams=read_streams(streams_path,layout,getattr(arguments,'stream_list_directory',None))
+--- a/tree/src/hexcore/mpasphys/session_v842.py
++++ b/tree/src/hexcore/mpasphys/session_v842.py
+@@ -41,7 +41,8 @@
+                  post_transport: Callable[[Any], Any],
+                  registry: SlotRegistry | None = None,
+                  cuda_device: Any | None = None,
+-                 cuda_resources: Path | None = None):
++                 cuda_resources: Path | None = None,
++                 surface_record_reader: Callable | None = None):
+         self.native, self.layout = native, layout
+         self.config = config
+         self.gwdo_before = {}
+@@ -77,6 +78,14 @@
+             from .device_pools_v842 import NativeDevicePoolViews, register_cuda_slots
+             self.device_pools=NativeDevicePoolViews(self,cuda_device)
+             register_cuda_slots(slots,config,self.device_pools,cuda_resources)
++        self.surface_service = None
++        if config.service_backends.get("surface_update") == "hex-cuda":
++            if cuda_device is None:
++                raise RuntimeError("surface CUDA service requires its resident device binding")
++            from .surface_update_v842 import NativeSurfaceService
++            self.surface_service = NativeSurfaceService(self, cuda_device,
++                read_surface_record=surface_record_reader)
++            self.hooks.external.update(self.surface_service.callbacks())
+         self.driver = PhysicsDriver(config, PhysicsManager(config, dt,
+                                      streams=stream_intervals), slots, self.hooks)
+         self._initialized = False
+@@ -138,12 +147,21 @@
+         This is pool storage only. Private scheme SAVE/derived state is still
+         owned by f3's checkpoint provider; this method claims no complete restart.
+         """
+-        return {f'{pool}.{name}.{level}':self.native.get_field(pool,name,level=level)
++        result = {f'{pool}.{name}.{level}':self.native.get_field(pool,name,level=level)
+                 for (pool,name),(_,_,levels) in self.native._fields.items()
+                 for level in range(1,levels+1)}
++        if self.surface_service is not None:
++            result["surface_service"] = self.surface_service.restart_state()
++        return result
+ 
+     def restore(self, fields: Mapping[str, Any]) -> None:
+         """Restore explicit native time levels; mpas_atmphys_init.F:174-396."""
++        fields = dict(fields)
++        state = fields.pop('surface_service', None)
++        if (state is None) != (self.surface_service is None):
++            raise ValueError('surface service restart state/backend differs')
++        if state is not None and state.get('february') not in (28, 29):
++            raise ValueError('surface service restart February differs')
+         expected = {f'{pool}.{name}.{level}'
+                     for (pool,name),(_,_,levels) in self.native._fields.items()
+                     for level in range(1,levels+1)}
+@@ -157,3 +175,5 @@
+         for key,value in fields.items():
+             pool,name,level=key.rsplit('.',2)
+             self.put(pool,name,value,level=int(level))
++        if state is not None:
++            self.surface_service.restore_restart_state(state)
+--- a/tree/src/hexcore/mpasphys/runtime_v842.py
++++ b/tree/src/hexcore/mpasphys/runtime_v842.py
+@@ -340,12 +340,33 @@
+                     raise ValueError(f'native table destination already differs: {target}')
+                 if not target.exists():target.symlink_to(table.resolve())
+                 receipt['table_sha256'][table.name]=hashlib.sha256(table.read_bytes()).hexdigest()
++    surface_record_reader = None
++    if config.service_backends.get('surface_update') == 'hex-cuda' and config.options['config_sst_update']:
++        from .surface_update_v842 import RustSurfaceRecordReader
++        resource_path = getattr(arguments, 'physics_resources', None)
++        if resource_path is None:
++            raise ValueError('surface update requires --physics-resources with a pinned Rust reader_library')
++        resource_path = Path(resource_path).resolve()
++        resource = json.loads(resource_path.read_text())['surface_update']['reader_library']
++        reader_library = Path(resource['path'])
++        if not reader_library.is_absolute():
++            reader_library = resource_path.parent / reader_library
++        reader_library = reader_library.resolve()
++        if hashlib.sha256(reader_library.read_bytes()).hexdigest() != resource['sha256']:
++            raise ValueError('surface update Rust reader_library SHA256 differs')
++        surface = next(s for s in streams if s.name == 'surface' and 'input' in s.directions)
++        surface_file = Path(surface.input_file or expand_input_filename(surface.filename, start)).resolve()
++        surface_record_reader = RustSurfaceRecordReader(reader_library, surface_file,
++                                                        n_cells=layout.dimensions['nCells'])
++        receipt['surface_input'] = dict(path=str(surface_file), sha256=hashlib.sha256(surface_file.read_bytes()).hexdigest(),
++                                       reader_library=str(reader_library), reader_sha256=resource['sha256'], reads=[])
+     with NativePhysics(library,test_only=True) as native:
+         coupling=None
+         session=NativePhysicsSession(native,layout,payload,config,dt=dt,start=start,stop=stop,
+             stream_intervals={s.name:(s.input_interval if s.name=='surface' else s.output_interval) for s in streams},
+             post_transport=lambda call:coupling.prepare_transport(call),cuda_device=dycore.cp,
+-            cuda_resources=getattr(arguments,'physics_resources',None))
++            cuda_resources=getattr(arguments,'physics_resources',None),
++            surface_record_reader=surface_record_reader)
+         receipt['missing_fields']=_configure_streams(native,streams,out,layout)
+         coupling=ResidentNativeCoupling(session,dycore,geometry,names)
+         if not layout.configs['config_do_restart']:
+@@ -384,6 +405,15 @@
+                         log.write(json.dumps(dict(step=step,calls=session.driver.calls))+'\n')
+                 coupling.synchronize(dycore.atmosphere)
+                 write_native_output(native,streams,step=step,receipt=receipt)
++                if session.surface_service is not None:
++                    receipt['surface_service'] = session.surface_service.receipt()
++                    if surface_record_reader is not None and surface_record_reader.last_record is not None:
++                        record = surface_record_reader.last_record
++                        reads = receipt['surface_input']['reads']
++                        if not reads or reads[-1]['record'] != record:
++                            reads.append(dict(record=record, timestamp=surface_record_reader.times[record].strftime('%Y-%m-%d_%H:%M:%S'),
++                                              model_clock=session.arguments.calendar['current_date'], step=step,
++                                              callback_execution=receipt['surface_service']['operations']['physics_update_sst']))
+                 (out/'native-physics-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+             session.driver.finalize(session)
+     receipt['completed']=True
+--- a/tree/src/hexcore/verify_mpas.py
++++ b/tree/src/hexcore/verify_mpas.py
+@@ -717,6 +717,13 @@
+             "comparator": str(binary), "comparator_sha256": digest(binary),
+             "hex_command": command, "hex_output_sha256": {str(p.relative_to(out)): digest(p)
+                 for p in sorted(expected_files | extras) if p.is_file()}}}
++    runtime_path = out / 'native-physics-receipt.json'
++    if runtime_path.is_file():
++        runtime = read_json(runtime_path)
++        if 'surface_service' in runtime:
++            receipt['surface_service'] = runtime['surface_service']
++            receipt['provenance']['surface_runtime_receipt_sha256'] = digest(runtime_path)
++            receipt['provenance']['surface_input'] = runtime.get('surface_input')
+     if args.render:
+         if not deck.get("render"):
+             raise VerificationRefusal("deck has no Rust-rendered evidence frame bindings")

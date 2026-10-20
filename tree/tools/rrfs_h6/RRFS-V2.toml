@@ -1,0 +1,77 @@
+schema = "woof.dycore-settings/v1"
+profile = "rrfs-v2"
+mesh = "conus12km"
+source_workflow_commit = "85ea55c0c64a07e1891bcd8e050441e09d30b5ec"
+source_mpas_commit = "1d6e370e7b43a332074809f170532a216c2212fb"
+execution_dycore_commit = "91c5eac175eebeaf4206bacd5cb50c39dff3c152"
+namelist_url = "https://github.com/NOAA-EMC/rrfs-workflow/blob/85ea55c0c64a07e1891bcd8e050441e09d30b5ec/parm/hrrrv5/namelist.atmosphere#L1-L26"
+mesh_settings_url = "https://github.com/NOAA-EMC/rrfs-workflow/blob/85ea55c0c64a07e1891bcd8e050441e09d30b5ec/workflow/config_resources/config.meshdep#L31-L35"
+
+# These are arguments to the existing generic forecast builder.
+[forecast]
+dt_seconds = 60.0
+time_integration_order = 2
+acoustic_substeps = 2
+radiation_seconds = 1800.0
+surface_pbl_seconds = 60.0
+horiz_mixing = "2d_smagorinsky"
+monotonic = true
+cam_coefficient = 2.0
+cam_damping_levels = 8
+rayleigh_u = true
+damping_start_m = 16000.0
+apply_lbcs = true
+convection_scheme = "cu_grell_freitas"
+
+# Apply this table to the constructed configuration, then validate it.
+# Upstream v8.4.1 reads config_epssm and ignores it with its native warning.
+[dycore]
+config_dt = 60.0
+config_time_integration_order = 2
+config_split_dynamics_transport = true
+config_number_of_sub_steps = 2
+config_dynamics_split_steps = 3
+config_horiz_mixing = "2d_smagorinsky"
+config_visc4_2dsmag = 0.05
+config_scalar_advection = true
+config_monotonic = true
+config_coef_3rd_order = 0.25
+config_epssm = 0.1
+config_smdiv = 0.1
+config_mpas_cam_coef = 2.0
+config_rayleigh_damp_u = true
+config_zd = 16000.0
+config_xnutr = 0.2
+config_number_cam_damping_levels = 8
+config_apply_lbcs = true
+config_len_disp = 0.0
+config_smagorinsky_coef = 0.125
+config_number_rayleigh_damp_u_levels = 6
+config_rayleigh_damp_u_timescale_days = 5.0
+
+[vertical]
+interfaces = 60
+layers = 59
+top_m = 25878.712
+declaration = "verification/vertical-specs/rrfs-l60-v1.json"
+invariant_date = "20260319"
+# The native invariant stream RRFS v2 configures (workflow: <mesh>.invariant.nc_L60_<model>).
+# MPAS-A reads the vertical grid from it, not from init.nc; the runner passes it to the driver
+# as --invariant, looked up beside --grid unless --invariant names another file.
+invariant = "conus12km.invariant.nc_L60_GFS"
+
+[mesh_dates]
+grid_static_orography = "20251017"
+graph_partitions = "20250321"
+
+[run]
+start_time = "2026-10-03_12:00:00"
+hours = 6.0
+history_every_minutes = 60.0
+lateral_boundary_interval_seconds = 3600.0
+
+[scope]
+claim = "Hex accepts RRFS v2's dycore settings as written."
+physics = "WOOF physics retain their existing source family."
+differences = ["v8.4.1 dycore arithmetic instead of workflow-pinned 8.3.1-noaa", "WSM6 instead of TEMPO", "Grell-Freitas instead of new Tiedtke", "YSU instead of MYNN-EDMF", "YSU gravity-wave drag instead of UGWP", "NoahMP with four soil layers instead of RUC with nine", "WOOF surface-layer and radiation implementations"]
+qualification = "Settings and operator contracts. Coupled native endpoint comparison and forecast skill require their own measurements."

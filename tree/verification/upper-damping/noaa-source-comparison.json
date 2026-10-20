@@ -1,0 +1,70 @@
+{
+  "noaa831_commit": "1d6e370e7b43a332074809f170532a216c2212fb",
+  "upstream841_commit": "91c5eac175eebeaf4206bacd5cb50c39dff3c152",
+  "identical_operator_expressions": true,
+  "expressions": 6,
+  "sources": [
+    {
+      "file": "noaa831-time-integration.F",
+      "sha256": "560eee0c5198bdef80c0b91f53d98c43f4ad5c35e45b3446e8bb21b479a44ebe",
+      "sites": [
+        {
+          "line": 5458,
+          "expression": "visc2cam=4.0*2.0833*config_len_disp*config_mpas_cam_coef"
+        },
+        {
+          "line": 5459,
+          "expression": "visc2cam=visc2cam*(1.0-real(nvertlevels-k)/real(config_number_cam_damping_levels))"
+        },
+        {
+          "line": 5460,
+          "expression": "kdiff(k,icell)=max(kdiff(k,icell),visc2cam)"
+        },
+        {
+          "line": 5839,
+          "expression": "rayleigh_coef_inverse=1.0/(real(config_number_rayleigh_damp_u_levels)*(config_rayleigh_damp_u_timescale_days*seconds_per_day))"
+        },
+        {
+          "line": 5844,
+          "expression": "rayleigh_damp_coef(k)=real(k-(nvertlevels-config_number_rayleigh_damp_u_levels))*rayleigh_coef_inverse"
+        },
+        {
+          "line": 5854,
+          "expression": "tend_u(k,iedge)=tend_u(k,iedge)-rho_edge(k,iedge)*u(k,iedge)*rayleigh_damp_coef(k)"
+        }
+      ]
+    },
+    {
+      "file": "upstream841-time-integration.F",
+      "sha256": "937e3191a646b0f3f14aaf1678f57b0d6880574f06e402a5053ff6ed12ab706b",
+      "sites": [
+        {
+          "line": 6401,
+          "expression": "visc2cam=4.0*2.0833*config_len_disp*config_mpas_cam_coef"
+        },
+        {
+          "line": 6402,
+          "expression": "visc2cam=visc2cam*(1.0-real(nvertlevels-k)/real(config_number_cam_damping_levels))"
+        },
+        {
+          "line": 6403,
+          "expression": "kdiff(k,icell)=max(kdiff(k,icell),visc2cam)"
+        },
+        {
+          "line": 6611,
+          "expression": "rayleigh_coef_inverse=1.0/(real(config_number_rayleigh_damp_u_levels)*(config_rayleigh_damp_u_timescale_days*seconds_per_day))"
+        },
+        {
+          "line": 6616,
+          "expression": "rayleigh_damp_coef(k)=real(k-(nvertlevels-config_number_rayleigh_damp_u_levels))*rayleigh_coef_inverse"
+        },
+        {
+          "line": 6626,
+          "expression": "tend_u(k,iedge)=tend_u(k,iedge)-rho_edge(k,iedge)*u(k,iedge)*rayleigh_damp_coef(k)"
+        }
+      ]
+    }
+  ],
+  "renaming": "upstream eddy_visc_horz corresponds to NOAA kdiff",
+  "scope": "CAM floor and Rayleigh horizontal-wind damping expressions only"
+}

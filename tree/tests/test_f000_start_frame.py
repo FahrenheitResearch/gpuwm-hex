@@ -217,20 +217,26 @@ def test_start_humidity_loader(tmp_path):
 
 def test_the_driver_completes_the_start_frame_before_anything_reads_it():
     source = inspect.getsource(forecast.execute_forecast)
-    capture = source.index("proof.capture_snapshot(")
-    complete = source.index("complete_f000_surface_diagnostics(snapshot")
-    assert capture < complete
+    # The consumer is defined before the producer, but runs only after capture
+    # (and after its transfer event on the asynchronous path).
+    finish = source[source.index("def finish_capture("):source.index("def capture(step")]
+    capture = source[source.index("def capture(step"):]
+    complete = finish.index("complete_f000_surface_diagnostics(snapshot")
+    assert capture.index("proof.capture_snapshot(") < capture.index("finish_capture(step, snapshot)")
+    assert capture.index("snapshot.result()") < capture.index("finish_capture(step, completed)")
     for reader in (
         "proof.physical_snapshot_gate(",
         "proof._snapshot_hash_projection(snapshot)",
         "_snapshot_q2_hash(snapshot)",
         "proof.write_snapshot_netcdf(",
     ):
-        assert complete < source.index(reader), reader
-    assert "if step == 0:" in source[capture:complete + 80]
+        assert complete < finish.index(reader), reader
+    assert "if step == 0:" in finish[:complete]
 
 
 def test_the_host_carries_the_start_humidity():
     source = inspect.getsource(forecast.prepare_forecast_host)
-    assert "load_f000_start_humidity(paths[\"init\"])" in source
+    # the call may be wrapped in the preparation timer (_timed_preparation)
+    assert ("load_f000_start_humidity(paths[\"init\"])" in source
+            or "load_f000_start_humidity, paths[\"init\"])" in source)
     assert '"f000_start_humidity": f000_start_humidity' in source

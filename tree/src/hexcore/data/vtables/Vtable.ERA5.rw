@@ -1,0 +1,49 @@
+GRIB1| Level| From |  To  | metgrid  | metgrid | metgrid                                  |GRIB2|GRIB2|GRIB2|GRIB2|
+Param| Type |Level1|Level2| Name     | Units   | Description                              |Discp|Catgy|Param|Level|
+-----+------+------+------+----------+---------+------------------------------------------+-----------------------+
+ 130 | 100  |   *  |      | TT       | K       | Temperature                              |  0  |  0  |  0  | 100 |
+ 131 | 100  |   *  |      | UU       | m s-1   | U                                        |  0  |  2  |  2  | 100 |
+ 132 | 100  |   *  |      | VV       | m s-1   | V                                        |  0  |  2  |  3  | 100 |
+ 157 | 100  |   *  |      | RH       | %       | Relative Humidity                        |  0  |  1  |  1  | 100 |
+ 133 | 100  |   *  |      | SPECHUMD | kg kg-1 | Specific Humidity                        |  0  |  1  |  0  | 100 |
+ 129 | 100  |   *  |      | GEOPT    | m2 s-2  |                                          |  0  |  3  |  4  | 100 |
+     | 100  |   *  |      | HGT      | m       | Height                                   |     |     |     |     |
+ 167 |  1   |   0  |      | TT       | K       | Temperature at 2 m                       |  0  |  0  |  0  | 103 |
+ 168 |  1   |   0  |      | DEWPT    | K       | Dewpoint at 2 m                          |  0  |  0  |  6  | 103 |
+ 165 |  1   |   0  |      | UU       | m s-1   | U at 10 m                                |  0  |  2  |  2  | 103 |
+ 166 |  1   |   0  |      | VV       | m s-1   | V at 10 m                                |  0  |  2  |  3  | 103 |
+ 134 |  1   |   0  |      | PSFC     | Pa      | Surface Pressure                         |  0  |  3  |  0  |  1  |
+ 151 |  1   |   0  |      | PMSL     | Pa      | Sea-level Pressure                       |  0  |  3  |  0  | 101 |
+ 235 |  1   |   0  |      | SKINTEMP | K       | Skin temperature                         |  0  |  0  | 17  |  1  |
+ 129 |  1   |   0  |      | SOILGEO  | m2 s-2  |                                          |  0  |  3  |  4  |  1  |
+     |  1   |   0  |      | SOILHGT  | m       | Terrain height of source analysis        |     |     |     |     |
+ 172 |  1   |   0  |      | LANDSEA  | 0/1 Flag| Land/Sea flag                            |  2  |  0  |  0  |  1  |
+ 141 |  1   |   0  |      | SNOW_EC  | m       |                                          |  0  |  1  | 254 |  1  |
+     |  1   |   0  |      | SNOW     | kg m-2  | Water equivalent of accumulated snow     |     |     |     |     |
+  33 |  1   |   0  |      | SNOW_DEN | kg m-3  | Snow density                             |  0  |  1  | 61  |  1  |
+  31 |  1   |   0  |      | SEAICE   | fraction| Sea-ice area fraction                    | 10  |  2  |  0  |  1  |
+  34 |  1   |   0  |      | SST      | K       | Sea-surface temperature                  | 10  |  3  |  0  |  1  |
+ 139 | 112  |   0  |   7  | ST000007 | K       | T of 0-7 cm ground layer                 |  2  |  3  | 18  | 106 |
+ 170 | 112  |   7  |  28  | ST007028 | K       | T of 7-28 cm ground layer                |  2  |  3  | 18  | 106 |
+ 183 | 112  |  28  | 100  | ST028100 | K       | T of 28-100 cm ground layer              |  2  |  3  | 18  | 106 |
+ 236 | 112  | 100  | 255  | ST100289 | K       | T of 100-289 cm ground layer             |  2  |  3  | 18  | 106 |
+  39 | 112  |   0  |   7  | SM000007 | fraction| Soil moisture of 0-7 cm ground layer     |  2  |  0  | 25  | 106 |
+  40 | 112  |   7  |  28  | SM007028 | fraction| Soil moisture of 7-28 cm ground layer    |  2  |  0  | 25  | 106 |
+  41 | 112  |  28  | 100  | SM028100 | fraction| Soil moisture of 28-100 cm ground layer  |  2  |  0  | 25  | 106 |
+  42 | 112  | 100  | 255  | SM100289 | fraction| Soil moisture of 100-289 cm ground layer |  2  |  0  | 25  | 106 |
+-----+------+------+------+----------+---------+------------------------------------------+-----------------------+
+#  ERA5 reanalysis (Copernicus CDS, reanalysis-era5-pressure-levels plus
+#  reanalysis-era5-single-levels, GRIB as the CDS serves it), 0.25 degree.
+#  Authored from the WPS Vtable.ECMWF rows for the ECMWF t128 parameter
+#  table.  CDS ERA5 surface fields are GRIB1 level type 1 (2 m and 10 m
+#  fields included, as WPS Vtable.ECMWF has them); soil is level type 112
+#  with the layer bounds in cm (the 100-289 cm layer is coded 100-255
+#  because a GRIB1 octet cannot carry 289).
+#  Pressure-level height is published as geopotential: GEOPT is scratch and
+#  the blank HGT selector declares the writer's GEOPT / 9.81 output.  Terrain
+#  is the surface geopotential (SOILGEO scratch, SOILHGT declared output),
+#  exactly as the IFS open-data table does.  Snow is sd in metres of water
+#  equivalent (SNOW_EC, x1000 rule) with the published snow density.
+#  2 m humidity is dewpoint; the ecmwf map-source rule derives RH.
+#  Sea-ice area fraction (ci) and SST are published, unlike the IFS
+#  open-data step-0 product.

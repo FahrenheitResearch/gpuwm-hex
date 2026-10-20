@@ -1,0 +1,16 @@
+{
+  "gwdo_ugwp": {
+    "ugwpv1_ngw_run": {
+      "scheme": "ugwp_ngw",
+      "argument_axes": {
+        "ugrs": [1, 2], "vgrs": [1, 2], "tgrs": [1, 2], "q1": [1, 2],
+        "prsl": [1, 2], "prslk": [1, 2], "prsi": [1, 2], "zl": [1, 2], "zi": [1, 2],
+        "rublten": [1, 2], "rvblten": [1, 2], "rthblten": [1, 2],
+        "dudt_ngw": [1, 2], "dvdt_ngw": [1, 2], "dtdt_ngw": [1, 2],
+        "xlatd": [1, 0], "raincv": [1, 0], "rainncv": [1, 0],
+        "jindx1_tau": [1, 0], "jindx2_tau": [1, 0],
+        "ddy_j1tau": [1, 0], "ddy_j2tau": [1, 0]
+      }
+    }
+  }
+}

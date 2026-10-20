@@ -43,6 +43,7 @@ from .errors import MpasPortError
 
 __all__ = [
     "LBC_REQUIRED_VARIABLES",
+    "LBC_OPTIONAL_SCALAR_VARIABLES",
     "LbcAdmissionError",
     "LbcFile",
     "LbcFileError",
@@ -59,12 +60,26 @@ __all__ = [
 #: file this port understands.
 LBC_REQUIRED_VARIABLES: Dict[str, Tuple[str, ...]] = {
     "lbc_qv": ("Time", "nCells", "nVertLevels"),
-    "lbc_qc": ("Time", "nCells", "nVertLevels"),
-    "lbc_qr": ("Time", "nCells", "nVertLevels"),
     "lbc_u": ("Time", "nEdges", "nVertLevels"),
     "lbc_w": ("Time", "nCells", "nVertLevelsP1"),
     "lbc_rho": ("Time", "nCells", "nVertLevels"),
     "lbc_theta": ("Time", "nCells", "nVertLevels"),
+}
+
+# MPAS-A v8.4.2 Registry.xml:2162-2196: additional allocated scalar
+# packages. File presence is independent of the configured pool inventory.
+LBC_OPTIONAL_SCALAR_VARIABLES: Dict[str, Tuple[str, ...]] = {
+    "lbc_qc": ("Time", "nCells", "nVertLevels"),
+    "lbc_qr": ("Time", "nCells", "nVertLevels"),
+    "lbc_qi": ("Time", "nCells", "nVertLevels"),
+    "lbc_qs": ("Time", "nCells", "nVertLevels"),
+    "lbc_qg": ("Time", "nCells", "nVertLevels"),
+    "lbc_ni": ("Time", "nCells", "nVertLevels"),
+    "lbc_nr": ("Time", "nCells", "nVertLevels"),
+    "lbc_nc": ("Time", "nCells", "nVertLevels"),
+    "lbc_nifa": ("Time", "nCells", "nVertLevels"),
+    "lbc_nwfa": ("Time", "nCells", "nVertLevels"),
+    "lbc_tke": ("Time", "nCells", "nVertLevels"),
 }
 
 _XTIME_FORMAT = "%Y-%m-%d_%H:%M:%S"
@@ -93,26 +108,51 @@ def _parse_xtime(raw: object, path: Path) -> datetime:
         ) from error
 
 
+def _open_lbc(path: Path):
+    """Open one boundary file through the engine's Rust NetCDF reader.
+
+    ``gpuwm.netcdf_bridge`` drives ``rw_netcdf``: no Python NetCDF library
+    touches these bytes (the 2.5.0 Python boundary), and nothing here holds a
+    native library object, so a same-host rank worker may read its own
+    boundary files.  The netCDF4-python reader this replaced had to stay on
+    the forecast coordinator under the free-threaded serial-I/O guard, which
+    is why the door's regional N-rank path refused at step 1 with
+    SerialExtensionIoError (rrfs-h-h3 skeptic finding, 2026-10-05).
+    """
+
+    from gpuwm.netcdf_bridge import open_dataset
+
+    return open_dataset(path)
+
+
 def _read_xtime(dataset, path: Path) -> datetime:
     if "xtime" not in dataset.variables:
         raise LbcFileError(
             f"{path} has no xtime variable; an lbc file with no valid time "
             "cannot be admitted against any model time"
         )
-    slab = np.asarray(dataset.variables["xtime"][0])
-    raw = slab.tobytes() if slab.dtype.kind in ("S", "U") else bytes(slab)
+    variable = dataset.variables["xtime"]
+    variable.set_auto_mask(False)
+    slab = np.asarray(variable[0])
+    if slab.dtype.kind == "U":
+        raw = "".join(str(item) for item in slab.reshape(-1)).encode("utf-8")
+    elif slab.dtype.kind == "S":
+        raw = slab.tobytes()
+    elif slab.dtype.kind == "O":
+        raw = "".join(
+            item.decode("utf-8", "replace") if isinstance(item, bytes) else str(item)
+            for item in slab.reshape(-1)
+        ).encode("utf-8")
+    else:
+        raw = bytes(slab)
     return _parse_xtime(raw, path)
 
 
 def read_lbc_valid_time(path: str | Path) -> datetime:
     """The file's valid time, from its own ``xtime`` — never the filename."""
 
-    from netCDF4 import Dataset
-
     p = Path(path)
-    with Dataset(p) as dataset:
-        dataset.set_auto_maskandscale(False)
-        return _read_xtime(dataset, p)
+    return _read_xtime(_open_lbc(p), p)
 
 
 @dataclass(frozen=True)
@@ -145,41 +185,55 @@ def read_lbc_file(path: str | Path) -> LbcFile:
     file was accepted.
     """
 
-    from netCDF4 import Dataset
-
     p = Path(path)
-    with Dataset(p) as dataset:
-        # Raw bytes, not the mask-and-scale view: the tendency arithmetic is
-        # pinned to the reference's float32, so the values must be the file's.
-        dataset.set_auto_maskandscale(False)
-        valid_time = _read_xtime(dataset, p)
-        fields: Dict[str, np.ndarray] = {}
-        for name, want_dims in LBC_REQUIRED_VARIABLES.items():
-            if name not in dataset.variables:
-                raise LbcFileError(
-                    f"{p} carries no {name}; the v8.4.1 lbc stream always "
-                    f"writes it, so this is not a complete lbc file and "
-                    f"admitting it would leave that field frozen at whatever "
-                    f"the previous interval held"
-                )
-            variable = dataset.variables[name]
-            got_dims = tuple(variable.dimensions)
-            if got_dims != want_dims:
-                raise LbcFileError(
-                    f"{p} carries {name} on dimensions {got_dims}, not "
-                    f"{want_dims}; reading it anyway would transpose the "
-                    f"field into plausible-looking wrong numbers"
-                )
-            if variable.dtype != np.float32:
-                raise LbcFileError(
-                    f"{p} carries {name} as {variable.dtype}, not float32; "
-                    f"the reference stream is single precision and a silent "
-                    f"widening here would make every tendency differ from "
-                    f"the reference arithmetic"
-                )
-            data = np.array(variable[0][:], dtype=np.float32)
-            data.setflags(write=False)
-            fields[name] = data
+    dataset = _open_lbc(p)
+    # Raw bytes, not the mask-and-scale view: the tendency arithmetic is
+    # pinned to the reference's float32, so the values must be the file's.
+    dataset.set_auto_maskandscale(False)
+    valid_time = _read_xtime(dataset, p)
+    fields: Dict[str, np.ndarray] = {}
+    variable_schema = dict(LBC_REQUIRED_VARIABLES)
+    variable_schema.update({
+        name: dims for name, dims in LBC_OPTIONAL_SCALAR_VARIABLES.items()
+        if name in dataset.variables
+    })
+    for name, want_dims in variable_schema.items():
+        if name not in dataset.variables:
+            raise LbcFileError(
+                f"{p} carries no {name}; the v8.4.1 lbc stream always "
+                f"writes it, so this is not a complete lbc file and "
+                f"admitting it would leave that field frozen at whatever "
+                f"the previous interval held"
+            )
+        variable = dataset.variables[name]
+        got_dims = tuple(variable.dimensions)
+        if got_dims != want_dims:
+            raise LbcFileError(
+                f"{p} carries {name} on dimensions {got_dims}, not "
+                f"{want_dims}; reading it anyway would transpose the "
+                f"field into plausible-looking wrong numbers"
+            )
+        if variable.dtype != np.float32:
+            raise LbcFileError(
+                f"{p} carries {name} as {variable.dtype}, not float32; "
+                f"the reference stream is single precision and a silent "
+                f"widening here would make every tendency differ from "
+                f"the reference arithmetic"
+            )
+        decoded = np.asarray(variable[0])
+        # The bridge may hand float32 back widened; float32 -> float64 ->
+        # float32 is exact, but anything else is not the file's bytes.
+        data = np.array(decoded, dtype=np.float32)
+        if decoded.dtype != np.float32 and not np.array_equal(
+            data.astype(decoded.dtype), decoded, equal_nan=True
+        ):
+            raise LbcFileError(
+                f"{p}: {name} came back from the Rust reader as "
+                f"{decoded.dtype} values that are not float32; the file's own "
+                f"bytes are what the tendency arithmetic is pinned to"
+            )
+        data.setflags(write=False)
+        fields[name] = data
     return LbcFile(path=p, valid_time=valid_time, fields=fields)
 
 
@@ -192,6 +246,11 @@ class LbcInventory:
     """
 
     def __init__(self, paths: Sequence[str | Path]):
+        from .lbc_stream import series_document, initial_paths
+        self._series_dir = Path(paths[0]).parent if paths else None
+        self._series = series_document(self._series_dir) if self._series_dir is not None else None
+        if self._series is not None:
+            paths = initial_paths(self._series_dir)
         if not paths:
             raise LbcAdmissionError(
                 "the lbc inventory is empty; a regional run with no boundary "
@@ -218,10 +277,22 @@ class LbcInventory:
         return tuple(t for t, _ in self._entries)
 
     def _timeline(self) -> str:
+        if self._series is not None:
+            return ", ".join(self._series["valid_times"])
         return ", ".join(t.strftime(_XTIME_FORMAT) for t, _ in self._entries)
 
     def latest_before(self, when: datetime) -> Path:
         """``MPAS_STREAM_LATEST_BEFORE``: the latest file at-or-before ``when``."""
+
+        if self._series is not None:
+            from .lbc_stream import wait_file, FORMAT
+            scheduled = [item for item in self._series["valid_times"]
+                         if datetime.strptime(item, FORMAT) <= when]
+            if scheduled:
+                path = wait_file(self._series_dir, scheduled[-1], stage="prep.lbc.wait")
+                if read_lbc_valid_time(path) != datetime.strptime(scheduled[-1], FORMAT):
+                    raise LbcAdmissionError(f"{path}: xtime differs from its hash-checked marker; refuses wrong-time forcing")
+                return path
 
         candidates = [(t, p) for t, p in self._entries if t <= when]
         if not candidates:
@@ -238,6 +309,17 @@ class LbcInventory:
     def earliest_strictly_after(self, when: datetime) -> Path:
         """``MPAS_STREAM_EARLIEST_STRICTLY_AFTER``: the earliest file after ``when``."""
 
+        if self._series is not None:
+            from .lbc_stream import wait_file, FORMAT
+            scheduled = [item for item in self._series["valid_times"]
+                         if datetime.strptime(item, FORMAT) > when]
+            if scheduled:
+                path = wait_file(self._series_dir, scheduled[0])
+                actual = read_lbc_valid_time(path)
+                if actual != datetime.strptime(scheduled[0], FORMAT):
+                    raise LbcAdmissionError(f"{path}: xtime differs from its hash-checked marker; refuses wrong-time forcing")
+                return path
+
         candidates = [(t, p) for t, p in self._entries if t > when]
         if not candidates:
             raise LbcAdmissionError(
@@ -251,18 +333,22 @@ class LbcInventory:
         return candidates[0][1]
 
 
-def _interval_seconds_f32(start: datetime, end: datetime) -> np.float32:
-    """Interval length in seconds, formed the way the Fortran forms it.
+def rkind_interval_seconds(delta: timedelta) -> np.float32:
+    """Clock interval in RKIND, including fractional seconds.
 
-    ``mpas_atm_boundaries.F`` splits the interval into whole days and
-    seconds and combines them in REAL(RKIND) arithmetic:
-    ``86400.0 * dd + s`` in single precision.
+    mpas_atm_boundaries.F:267-269,496-497,618-619 converts days, seconds
+    and the fractional numerator/denominator separately, then adds left to
+    right. Python's datetime clock carries its fraction in microseconds.
     """
+    return np.float32(
+        (np.float32(86400.0) * np.float32(delta.days) + np.float32(delta.seconds))
+        + np.float32(delta.microseconds) / np.float32(1000000.0)
+    )
 
-    delta = end - start
-    dd = np.float32(delta.days)
-    s = np.float32(delta.seconds)
-    return np.float32(np.float32(86400.0) * dd + s)
+
+def _interval_seconds_f32(start: datetime, end: datetime) -> np.float32:
+    """MPAS clock conversion shared by raw and coupled LBC pools."""
+    return rkind_interval_seconds(end - start)
 
 
 class LbcPool:
@@ -274,7 +360,19 @@ class LbcPool:
     later call: shift, read the next file, form tendencies.
     """
 
-    def __init__(self, inventory: LbcInventory):
+    def __init__(
+        self, inventory: LbcInventory, *, scalar_names: Sequence[str] = (),
+        compute_tendencies: bool = True,
+    ):
+        # MPAS-A v8.4.2 Registry.xml:2150-2196 declares the active array.
+        # gen_inc.c:615-620 and mpas_field_routines.F:383-395 initialize it.
+        self._compute_tendencies = bool(compute_tendencies)
+        self._scalar_names = tuple(scalar_names)
+        declared = {'lbc_qv'} | set(LBC_OPTIONAL_SCALAR_VARIABLES)
+        unknown = set(self._scalar_names) - declared
+        if unknown:
+            raise LbcFileError(f"undeclared boundary scalars: {sorted(unknown)}")
+        self._recycled: Dict[str, np.ndarray] = {}
         self._inventory = inventory
         self._state: LbcFile | None = None
         self._tendencies: Dict[str, np.ndarray] | None = None
@@ -286,6 +384,17 @@ class LbcPool:
         """Admit the latest file at-or-before ``when`` into level 2."""
 
         admitted = read_lbc_file(self._inventory.latest_before(when))
+        if not self._compute_tendencies:
+            self._state = admitted
+            return admitted
+        fields = dict(admitted.fields)
+        for name in self._scalar_names:
+            if name not in fields:
+                fields[name] = np.zeros_like(fields['lbc_qv'])
+        self._recycled = {
+            name: np.zeros_like(value) for name, value in fields.items()
+        }
+        admitted = LbcFile(admitted.path, admitted.valid_time, fields)
         self._state = admitted
         self._tendencies = None
         self._interval_start = None
@@ -309,17 +418,37 @@ class LbcPool:
         old = self._state
         clock = when if when is not None else old.valid_time
         admitted = read_lbc_file(self._inventory.earliest_strictly_after(clock))
+        if not self._compute_tendencies:
+            # CUDA consumers retain numerical pool storage on the device.
+            self._interval_start = old.valid_time
+            self._state = admitted
+            return admitted
+        # MPAS-A v8.4.2 mpas_atm_boundaries.F:148-151 rotates levels;
+        # mpas_field_routines.F:3335-3347/shift_time_levs_array.inc recycles
+        # the previous tendency buffer. mpas_io.F:858-878 warns and leaves
+        # that allocated storage untouched when an input variable is absent.
+        # Never replace an absent subsequent variable with a fresh zero.
+        old_fields = dict(old.fields)
+        fields = dict(admitted.fields)
+        for name in old_fields.keys() | fields.keys() | set(self._scalar_names):
+            if name not in old_fields:
+                old_fields[name] = np.zeros_like(old_fields['lbc_qv'])
+            if name not in fields:
+                fields[name] = (self._recycled[name] if name in self._recycled
+                                else np.zeros_like(old_fields[name]))
+        admitted = LbcFile(admitted.path, admitted.valid_time, fields)
         dt = _interval_seconds_f32(old.valid_time, admitted.valid_time)
         inv_dt = np.float32(np.float32(1.0) / dt)
         tendencies: Dict[str, np.ndarray] = {}
-        for name in LBC_REQUIRED_VARIABLES:
-            tendency = (admitted.fields[name] - old.fields[name]) * inv_dt
+        for name in old_fields:
+            tendency = (admitted.fields[name] - old_fields[name]) * inv_dt
             tendency = np.asarray(tendency, dtype=np.float32)
             tendency.setflags(write=False)
             tendencies[name] = tendency
         self._interval_start = old.valid_time
         self._state = admitted
         self._tendencies = tendencies
+        self._recycled = tendencies
         return admitted
 
     # -- what the pool holds ----------------------------------------------
@@ -380,12 +509,18 @@ class LbcPool:
         )
 
     def _require_field(self, name: str) -> None:
-        if name not in LBC_REQUIRED_VARIABLES:
+        schema = {**LBC_REQUIRED_VARIABLES, **LBC_OPTIONAL_SCALAR_VARIABLES}
+        if name not in schema:
             raise LbcFileError(
                 f"{name} is not an lbc stream field; the stream carries "
-                f"exactly {sorted(LBC_REQUIRED_VARIABLES)}.  Derived coupled "
+                f"required or optional fields {sorted(schema)}.  Derived coupled "
                 f"fields (lbc_rho_zz, lbc_ru, lbc_rho_edge, lbc_rtheta_m) "
                 f"are computed by "
                 f"hexcore.regional_v841.RegionalDrivingState, which is "
                 f"the pool the regional driver consumes"
+            )
+        if self._state is not None and name not in self._state.fields:
+            raise LbcFileError(
+                f"the admitted file {self._state.path} carries no {name}; "
+                "no boundary state or tendency exists for an absent species"
             )

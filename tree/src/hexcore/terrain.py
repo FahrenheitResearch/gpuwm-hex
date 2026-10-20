@@ -110,7 +110,9 @@ def _float_array(name: str, value: object, *, ndim: int | None = None) -> FloatA
         raise TypeError(f"{name} must have dtype float32 or float64, got {array.dtype}")
     if ndim is not None and array.ndim != ndim:
         raise ValueError(f"{name} must be {ndim}-dimensional, got shape {array.shape}")
-    if not np.all(np.isfinite(array)):
+    from .host_parallel import all_finite
+
+    if not all_finite(array):
         raise ValueError(f"{name} contains non-finite values")
     return array
 
@@ -255,38 +257,13 @@ def build_terrain_coupling(
         raise ValueError("cells_on_edge contains an edge with the same cell twice")
 
     dtype = raw_zb.dtype
-    n_levels_p1 = logical_zb.shape[0]
-    signs = np.zeros((n_cells, max_edges), dtype=dtype)
-    zb_cell = np.zeros((n_levels_p1, n_cells, max_edges), dtype=dtype)
-    zb3_cell = np.zeros_like(zb_cell)
-    canonical_eoc = np.full((n_cells, max_edges), -1, dtype=np.int64)
     coefficient = dtype.type(config_coef_3rd_order)
+    from .rust_hostprep import terrain_metrics
 
-    for cell in range(n_cells):
-        used: set[int] = set()
-        for slot in range(int(counts[cell])):
-            edge = int(eoc[cell, slot])
-            if edge < 0 or edge >= n_edges:
-                raise ValueError(
-                    f"active edges_on_cell[{cell}, {slot}]={edge} is out of range"
-                )
-            if edge in used:
-                raise ValueError(f"cell {cell} lists edge {edge} more than once")
-            used.add(edge)
-            canonical_eoc[cell, slot] = edge
-            if int(coe[edge, 0]) == cell:
-                side = 0
-                signs[cell, slot] = dtype.type(1.0)
-            elif int(coe[edge, 1]) == cell:
-                side = 1
-                signs[cell, slot] = dtype.type(-1.0)
-            else:
-                raise ValueError(
-                    f"cell {cell} is not present in cells_on_edge for edge {edge}"
-                )
-            zb_cell[:, cell, slot] = logical_zb[:, side, edge]
-            # Frozen atm_couple_coef_3rd_order scales zb3_cell after copying.
-            zb3_cell[:, cell, slot] = coefficient * logical_zb3[:, side, edge]
+    canonical_eoc, signs, zb_cell, zb3_cell = terrain_metrics(
+        counts=counts, edges=eoc, cells_on_edge=coe, zb=logical_zb,
+        zb3=logical_zb3, coefficient=coefficient,
+    )
 
     return TerrainCoupling(
         n_edges_on_cell=counts,

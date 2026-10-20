@@ -1,0 +1,86 @@
+{
+  "dimensions": {
+    "ids": 1,
+    "ide": 1,
+    "jds": 1,
+    "jde": 1,
+    "kds": 1,
+    "kde": 56,
+    "ims": 1,
+    "ime": 1,
+    "jms": 1,
+    "jme": 1,
+    "kms": 1,
+    "kme": 56,
+    "its": 1,
+    "ite": 1,
+    "jts": 1,
+    "jte": 1,
+    "kts": 1,
+    "kte": 55,
+    "nchem": 1,
+    "ndvel": 1
+  },
+  "values": {
+    "dt": "10.0_real32",
+    "itimestep": "1",
+    "th": "258.0_real32",
+    "qv": "0.002_real32",
+    "qc": "0.0001_real32",
+    "qr": "0.0_real32",
+    "qi": "0.00005_real32",
+    "qs": "0.0001_real32",
+    "qg": "0.0001_real32",
+    "ni": "1.e4_real32",
+    "nr": "1.e4_real32",
+    "ng": "1.e4_real32",
+    "qb": "0.0_real32",
+    "w": "0.0_real32",
+    "nc": "1.e8_real32",
+    "nwfa": "1.e8_real32",
+    "nifa": "1.e6_real32",
+    "pii": "1.0_real32",
+    "p": "100000.0_real32",
+    "dz": "200.0_real32",
+    "qc_bl": "0.0_real32",
+    "qcfrac_bl": "0.0_real32",
+    "ids": "1",
+    "ide": "1",
+    "jds": "1",
+    "jde": "1",
+    "kds": "1",
+    "kde": "56",
+    "ims": "1",
+    "ime": "1",
+    "jms": "1",
+    "jme": "1",
+    "kms": "1",
+    "kme": "56",
+    "its": "1",
+    "ite": "1",
+    "jts": "1",
+    "jte": "1",
+    "kts": "1",
+    "kte": "55"
+  },
+  "imports": [
+    "  use module_mp_tempo_driver,only:tempo_init"
+  ],
+  "initialize": [
+    "  call tempo_init(aerosolaware_flag=.true.,hailaware_flag=.true.,ml_for_bl_nc_flag=.true.,tempo_cfgs=tempo_cfgs)"
+  ],
+  "declarations": [
+    "  integer :: k"
+  ],
+  "character_lengths": {
+    "errmsg": 256
+  },
+  "derived_initialize": {
+    "tempo_cfgs": [
+      "  tempo_cfgs=ty_tempo_cfgs()"
+    ],
+    "tempo_diags": [
+      "  tempo_diags=ty_tempo_driver_diags()"
+    ]
+  }
+}

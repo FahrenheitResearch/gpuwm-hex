@@ -1,0 +1,14 @@
+rw-sfc-series
+Copyright 2026 ArWen contributors
+
+Surface interpolation and intermediate projection code derives from the Rust
+case-8 port of MPAS-A v8.4.2. The original MPAS BSD-3-Clause terms are in
+LICENSE-MPAS-BSD-3-Clause.txt. This modified version adds parallel acquisition,
+concurrent intermediate decoding, rayon cell loops, snow depth output, and
+native time-series NetCDF output with provenance. It is a modified version of
+the original software and is not an official MPAS release.
+
+The generic intermediate decoder is seeded from the engine tools/grib1_bridge
+src/bin/met_intermediate.rs at revision 63d4aae472f6f138b0c8b5ca1467e58648f4c78b.
+It retains its Vtable-driven field maps and repairs, with parallel field decode
+and deterministic ordered merging. It is part of the source-owned producer.

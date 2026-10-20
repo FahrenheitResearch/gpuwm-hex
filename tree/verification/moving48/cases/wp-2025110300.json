@@ -1,0 +1,69 @@
+{
+  "case": "wp-2025110300",
+  "description": "Western North Pacific tropical cyclone (IBTrACS 2025305N08140), 48 h from the GFS 0.25 deg analysis",
+  "start_time": "2025-11-03_00:00:00",
+  "gfs_cycle": "2025110300",
+  "hours": 48,
+  "dt_seconds": 18.75,
+  "n_levels": 55,
+  "vertical_spec": "verification/vertical-specs/tc55-v1.json",
+  "physics_args": [
+    "--convection",
+    "ntiedtke"
+  ],
+  "storm": {
+    "ibtracs_sid": "2025305N08140",
+    "initial_center_deg": [
+      10.5,
+      128.8
+    ],
+    "initial_center_source": "IBTrACS 2025-11-03 00Z (best track at the analysis time; known at run time)"
+  },
+  "mesh": {
+    "background_km": 48.0,
+    "fine_km": 3.0,
+    "fine_radius_km": 450.0,
+    "fine_transition_km": 54.0,
+    "rings": [
+      {
+        "spacing_km": 6.0,
+        "extra_radius_km": 162.0,
+        "transition_km": 108.0
+      },
+      {
+        "spacing_km": 12.0,
+        "extra_radius_km": 486.0,
+        "transition_km": 216.0
+      },
+      {
+        "spacing_km": 24.0,
+        "extra_radius_km": 1134.0,
+        "transition_km": 432.0
+      }
+    ]
+  },
+  "proof": {
+    "hours": 1,
+    "remesh_minutes": 30,
+    "move_member": "move1",
+    "move_center_deg": [
+      10.5,
+      128.5
+    ],
+    "note": "engineering proof only: one scripted 33 km westward move at minute 30; not a track"
+  },
+  "tracker": {
+    "mode": "tc",
+    "placement": {
+      "core_margin_km": 150.0,
+      "check_minutes": 60.0,
+      "max_dwell_minutes": 360.0,
+      "max_lead_minutes": 900.0,
+      "snap_deg": 0.25,
+      "fix_error_km": 25.0,
+      "motion_error_kmh": 6.0,
+      "min_move_km": 20.0,
+      "max_misses": 3
+    }
+  }
+}

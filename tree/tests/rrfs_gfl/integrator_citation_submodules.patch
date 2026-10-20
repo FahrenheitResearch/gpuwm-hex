@@ -1,0 +1,30 @@
+--- a/tree/tools/check_mpas_citations.py
++++ b/tree/tools/check_mpas_citations.py
+@@ -982,8 +982,25 @@
+     # Main-tree driver references are compared to immutable objects. A changed
+     # checkout, dirty source or mutable table cannot authenticate itself.
+     pin='1d6e370e7b43a332074809f170532a216c2212fb'
+-    authority=subprocess.run(['git','-C',str(root),'show',pin+':'+canonical],
+-                              capture_output=True,check=True).stdout
++    source=(root/resolved).resolve()
++    repository=Path(subprocess.check_output(
++        ['git','-C',str(source.parent),'rev-parse','--show-toplevel'],text=True).strip()).resolve()
++    if repository!=root.resolve():
++        # The parent model's immutable gitlink pins the scheme repository.
++        submodule=repository.relative_to(root.resolve()).as_posix()
++        link=subprocess.check_output(['git','-C',str(root),'ls-tree',pin,submodule],text=True).strip()
++        metadata,_,name=link.partition('\t')
++        mode,kind,child_pin=metadata.split()
++        if mode!='160000' or kind!='commit' or name!=submodule:
++            raise ValueError('fork citation repository is not a pinned submodule: '+submodule)
++        head=subprocess.check_output(['git','-C',str(repository),'rev-parse','HEAD'],text=True).strip()
++        if head!=child_pin:
++            raise ValueError('fork citation submodule differs from parent gitlink: '+submodule)
++        authority=subprocess.run(['git','-C',str(repository),'show',
++            child_pin+':'+source.relative_to(repository).as_posix()],capture_output=True,check=True).stdout
++    else:
++        authority=subprocess.run(['git','-C',str(root),'show',pin+':'+canonical],
++                                  capture_output=True,check=True).stdout
+     if (root/resolved).read_bytes()!=authority:
+         raise ValueError('fork citation source differs from the pinned Git object: '+resolved)
+     source_window(resolved,first,last,root)

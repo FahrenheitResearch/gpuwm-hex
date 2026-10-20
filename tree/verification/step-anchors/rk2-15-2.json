@@ -1,0 +1,48 @@
+{
+  "dt_seconds": 15.0,
+  "order": 2,
+  "acoustic_substeps": 2,
+  "dynamics_splits": 3,
+  "vertical_coefficient_calls": 3,
+  "cpu": {
+    "rho": "815f88af11a9164be2697085cf0647ede3bd0f739dfa832db753ee51470342e9",
+    "rho_theta": "cf958827336367b628004916cb0ac80cf70b179c177415cfa0379eb535e20abe",
+    "rho_u": "b222dde0b375c0cc1504e78fc510c1dfa26fdde5e8a3d6fa816c93e25199ca74",
+    "rho_w": "d032b4d78af203e885b9eb36cf648c1fc3bd882f4d5dc66c8221f896b385bb0e",
+    "scalars": "c4cfb89e6aa04ea719217ecd3999f4dfa625f44874236f910b9a23172071f579"
+  },
+  "cuda_repeat_a": {
+    "rho": "0ed063bc6ea6ae8a6e99cd59f521857079baa1ee91bda8ff80cec1849ecf0dc2",
+    "rho_theta": "d7c047d9380ee33325b024e17bee62763752e8f6c15ee6fe5d18f77e6731b001",
+    "rho_u": "4c680a35c8b0d9d17d804a3a5e827ec3834977bee9c988b3db0fa1a6df1d3f8d",
+    "rho_w": "7b1880425cbd01c26e83a0fd500d491233314e1d0b2b4a2d8a3b18f941a1e85a",
+    "scalars": "d0fdf288d8ac5143e0427d00d8e193db88ad87b65d25e88b7d27a316f8815464"
+  },
+  "cuda_repeat_b": {
+    "rho": "0ed063bc6ea6ae8a6e99cd59f521857079baa1ee91bda8ff80cec1849ecf0dc2",
+    "rho_theta": "d7c047d9380ee33325b024e17bee62763752e8f6c15ee6fe5d18f77e6731b001",
+    "rho_u": "4c680a35c8b0d9d17d804a3a5e827ec3834977bee9c988b3db0fa1a6df1d3f8d",
+    "rho_w": "7b1880425cbd01c26e83a0fd500d491233314e1d0b2b4a2d8a3b18f941a1e85a",
+    "scalars": "d0fdf288d8ac5143e0427d00d8e193db88ad87b65d25e88b7d27a316f8815464"
+  },
+  "cpu_cuda_max_absolute_difference": {
+    "rho": 5.960464477539063e-08,
+    "rho_theta": 3.0517578125e-05,
+    "rho_u": 8.726119995117188e-05,
+    "rho_w": 4.708766937255859e-06,
+    "scalars": 2.3283064365386963e-10
+  },
+  "whole_step_comparison": "differences measured; no native endpoint qualification",
+  "first_scalar_density_bitwise_cpu_authority": true,
+  "native_schedule_bits_passed": true,
+  "fixture": {
+    "grid_sha256": "35e5df1efa0c97f36f55ad0fbf2e2f83300003e0dcee137c7ab436adffea8cea",
+    "static_sha256": "a082aad1795c9e6f7a5dfd3a6a017eba9f6dae6831f7457fb9d5e1ffa3247357",
+    "cells": 2562,
+    "levels": 3,
+    "producer": "rw_mpas_mesh and rw_mpas_static",
+    "state": "existing nonvacuous numeric ruler synthetic state"
+  },
+  "card": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "scope": "native schedule bits, coefficient reuse, scalar density bits and repeatable real-device dry steps; no native endpoint or physics qualification"
+}

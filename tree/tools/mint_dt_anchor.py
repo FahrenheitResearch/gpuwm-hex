@@ -247,7 +247,15 @@ def verify_anchor(anchor: DtAnchor, *, root: Path = ROOT) -> dict[str, Any]:
             )
         else:
             for section in ("cadences", "rk_schedule", "wsm6", "clock_closure"):
-                if stored.get(section) != rederived[section]:
+                recorded = stored.get(section)
+                expected = rederived[section]
+                # Legacy receipts omit this derived descriptive count.
+                # When present it must match, like every other field.
+                if (section == "cadences" and isinstance(recorded, dict)
+                        and "surface_pbl_steps_held_between_calls" not in recorded):
+                    expected = {key: value for key, value in expected.items()
+                                if key != "surface_pbl_steps_held_between_calls"}
+                if recorded != expected:
                     findings.append(
                         f"dt={anchor.dt_seconds:g} s: the stored {section!r} "
                         f"block does not reproduce -- the receipt on disk is "
@@ -580,7 +588,7 @@ def integration_plan(dt_seconds: float, mesh: str, hours: float = 6.0) -> dict[s
             "an agent's decision",
         ],
         "what_this_does_not_prove": [
-            "byte-identity against native MPAS-A: the only native v8.4.1 "
+            "native MPAS-A dry-step tolerance agreement: the historical native v8.4.1 "
             "reference this program holds was integrated at "
             f"{dt_admission.PROVEN_DT_SECONDS:g} s, so no other timestep can "
             "have that half without a fresh native run",
@@ -605,13 +613,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cumulus-seconds", type=float, default=None)
     parser.add_argument(
         "--cumulus-scheme",
-        choices=("gf", "off"),
+        choices=("gf", "ntiedtke", "off"),
         default="gf",
         help=(
             "the cumulus selection this receipt is minted for.  'off' is "
             "the 2026-08-26 ruling below 3 km, and it is a DIFFERENT "
             "configuration: it holds its own anchor row and reports no "
-            "cumulus cadence at all"
+            "cumulus cadence at all.  'ntiedtke' is the 2026-10-05 default "
+            "at 20 km and coarser, called every step like 'gf'"
         ),
     )
     parser.add_argument("--run-steps", type=int, default=720)
@@ -694,7 +703,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.dt, arguments.mesh, arguments.hours
             )
         try:
-            scheme = None if arguments.cumulus_scheme == "off" else "gf"
+            scheme = None if arguments.cumulus_scheme == "off" else arguments.cumulus_scheme
             receipt = mint_schedule_receipt(
                 arguments.dt,
                 radiation_seconds=arguments.radiation_seconds,
@@ -726,8 +735,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             payload["anchored_today"] = anchored
             if not anchored:
-                payload["registration_note"] = dt_admission.unanchored_refusal(
-                    arguments.dt, scheme, minted_bldt
+                payload["registration_note"] = (
+                    f"dt={arguments.dt:g} s holds no registered anchor for "
+                    f"this configuration.  Since 2026-10-10 that refuses no "
+                    f"run; registering a row records evidence in "
+                    f"hexcore.dt_admission.ADMITTED_TIMESTEPS"
                 )
             if arguments.out is not None:
                 arguments.out.parent.mkdir(parents=True, exist_ok=True)

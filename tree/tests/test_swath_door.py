@@ -23,8 +23,17 @@ for candidate in (str(ROOT / "src"), str(ROOT / "tools")):
         sys.path.insert(0, candidate)
 
 import build_swath_fixture_history as fixture  # noqa: E402
+import site_support  # noqa: E402
 from hexcore.cli import build_parser, main  # noqa: E402
 from hexcore.swath import registry, sizing  # noqa: E402
+
+
+def _write_history(*args, **kwargs):
+    """fixture.build, after checking the engine carries the stream bridge the writer needs."""
+    from hexcore.restart_v842 import _STREAM_ENGINE
+
+    site_support.engine_bridge_or_skip(_STREAM_ENGINE, "writing the swath test history")
+    return fixture.build(*args, **kwargs)
 
 CELLS = 40962
 HOURS = [0.0, 3.0, 6.0, 9.0, 12.0]
@@ -39,7 +48,7 @@ SCENARIO = [
 @pytest.fixture(scope="module")
 def history(tmp_path_factory: pytest.TempPathFactory) -> Path:
     target = tmp_path_factory.mktemp("swath-door") / "coarse.nc"
-    return fixture.build(target, cells=CELLS, hours=HOURS, scenario=SCENARIO)
+    return _write_history(target, cells=CELLS, hours=HOURS, scenario=SCENARIO)
 
 
 def _engine_or_skip() -> Path:

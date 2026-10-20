@@ -1,0 +1,76 @@
+{
+  "case": "tc-al-2025081600",
+  "description": "North Atlantic tropical cyclone (IBTrACS 2025223N17337), 48 h from the GFS 0.25 deg analysis; corridor mesh, moving 3 km region",
+  "start_time": "2025-08-16_00:00:00",
+  "gfs_cycle": "2025081600",
+  "hours": 48,
+  "dt_seconds": 18.75,
+  "n_levels": 55,
+  "vertical_spec": "verification/vertical-specs/tc55-v1.json",
+  "physics_args": [
+    "--convection",
+    "ntiedtke"
+  ],
+  "storm": {
+    "ibtracs_sid": "2025223N17337",
+    "initial_center_deg": [
+      19.4,
+      -58.5
+    ],
+    "initial_center_source": "IBTrACS at the analysis time (known at run time)",
+    "initial_motion": {
+      "heading_deg": 293.5,
+      "speed_kmh": 32.5,
+      "source": "IBTrACS positions at the analysis time and 6 h before (known at run time)"
+    }
+  },
+  "mesh": {
+    "background_km": 48.0,
+    "fine_km": 3.0,
+    "fine_radius_km": 450.0,
+    "fine_transition_km": 54.0,
+    "rings": [
+      {
+        "spacing_km": 6.0,
+        "extra_radius_km": 162.0,
+        "transition_km": 108.0
+      },
+      {
+        "spacing_km": 12.0,
+        "extra_radius_km": 486.0,
+        "transition_km": 216.0,
+        "fixed": true
+      },
+      {
+        "spacing_km": 24.0,
+        "extra_radius_km": 1134.0,
+        "transition_km": 432.0,
+        "fixed": true
+      }
+    ],
+    "corridor": {
+      "cross_track_km": 350.0,
+      "spread_km_per_km": 0.5,
+      "step_km": 300.0,
+      "length_factor": 1.0,
+      "seam_rows": 6,
+      "note": "rings marked fixed are caps about points along the storm motion at the analysis time; their radius grows along the path by spread_km_per_km; only the fine cap and the unmarked rings move"
+    }
+  },
+  "tracker": {
+    "mode": "tc",
+    "placement": {
+      "core_margin_km": 150.0,
+      "check_minutes": 60.0,
+      "max_dwell_minutes": 360.0,
+      "max_lead_minutes": 900.0,
+      "snap_deg": 0.25,
+      "fix_error_km": 25.0,
+      "motion_error_kmh": 6.0,
+      "min_move_km": 180.0,
+      "max_misses": 3,
+      "follow": "continuous",
+      "max_move_km": 360.0
+    }
+  }
+}

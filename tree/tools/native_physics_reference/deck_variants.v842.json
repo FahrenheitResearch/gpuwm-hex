@@ -1,0 +1,425 @@
+{
+  "schema": "mpas.native-deck-variants/v1",
+  "variants": [
+    {
+      "name": "oml-driver-gate-closed",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_oml1d": true
+      },
+      "companions": {},
+      "native_authority": "mpas_atmphys_control.F:310-318; mpas_atmphys_driver.F:175-181",
+      "purpose": "Preserve the pristine inactive OML-only driver gate"
+    },
+    {
+      "name": "oml-hml30-gamma0.07-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 30.0,
+        "config_oml_gamma": 0.07,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml30-gamma0.07-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 30.0,
+        "config_oml_gamma": 0.07,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml30-gamma0.14-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 30.0,
+        "config_oml_gamma": 0.14,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml30-gamma0.14-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 30.0,
+        "config_oml_gamma": 0.14,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml30-gamma0.28-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 30.0,
+        "config_oml_gamma": 0.28,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml30-gamma0.28-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 30.0,
+        "config_oml_gamma": 0.28,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml0-gamma0.07-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 0.0,
+        "config_oml_gamma": 0.07,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml0-gamma0.07-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 0.0,
+        "config_oml_gamma": 0.07,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml0-gamma0.14-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 0.0,
+        "config_oml_gamma": 0.14,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml0-gamma0.14-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 0.0,
+        "config_oml_gamma": 0.14,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml0-gamma0.28-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 0.0,
+        "config_oml_gamma": 0.28,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml0-gamma0.28-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": 0.0,
+        "config_oml_gamma": 0.28,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml-1-gamma0.07-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": -1.0,
+        "config_oml_gamma": 0.07,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml-1-gamma0.07-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": -1.0,
+        "config_oml_gamma": 0.07,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml-1-gamma0.14-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": -1.0,
+        "config_oml_gamma": 0.14,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml-1-gamma0.14-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": -1.0,
+        "config_oml_gamma": 0.14,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml-1-gamma0.28-relax0",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": -1.0,
+        "config_oml_gamma": 0.28,
+        "config_oml_relaxation_time": 0.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "oml-hml-1-gamma0.28-relax864000",
+      "suites": [
+        "none",
+        "mesoscale_reference",
+        "convection_permitting"
+      ],
+      "override": {
+        "config_oml1d": true,
+        "config_oml_hml0": -1.0,
+        "config_oml_gamma": 0.28,
+        "config_oml_relaxation_time": 864000.0
+      },
+      "companions": {
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "Registry.xml:2533-2551; mpas_atmphys_init.F:347-381; module_sf_oml.F:68-144; mpas_atmphys_driver.F:175-181",
+      "input_requirement": "h_oml_initial required for hml0<=0; t_oml_200m_initial/hu_oml/hv_oml retained when hml0<0"
+    },
+    {
+      "name": "gwdo-active-bl_ugwp_gwdo",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_gwdo_scheme": "bl_ugwp_gwdo"
+      },
+      "companions": {
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_driver.F:175-181; mpas_atmphys_control.F:285-296",
+      "purpose": "Driver activation companion; original GWDO-only zero-call decks retained"
+    },
+    {
+      "name": "gwdo-active-bl_ysu_gwdo",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_gwdo_scheme": "bl_ysu_gwdo"
+      },
+      "companions": {
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev"
+      },
+      "native_authority": "mpas_atmphys_driver.F:175-181; mpas_atmphys_control.F:285-296",
+      "purpose": "Driver activation companion; original GWDO-only zero-call decks retained"
+    },
+    {
+      "name": "ngw-driver-gate-closed",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_ngw_scheme": true
+      },
+      "companions": {},
+      "native_authority": "mpas_atmphys_control.F:310-318; mpas_atmphys_driver.F:175-181",
+      "purpose": "Preserve pristine inactive nonorographic-only driver gate"
+    },
+    {
+      "name": "gwdo-driver-gate-closed-bl_ysu_gwdo",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_gwdo_scheme": "bl_ysu_gwdo"
+      },
+      "companions": {},
+      "native_authority": "mpas_atmphys_control.F:310-318; mpas_atmphys_driver.F:175-181",
+      "purpose": "Preserve pristine inactive orographic-only driver gate"
+    },
+    {
+      "name": "gwdo-driver-gate-closed-bl_ugwp_gwdo",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_gwdo_scheme": "bl_ugwp_gwdo"
+      },
+      "companions": {},
+      "native_authority": "mpas_atmphys_control.F:310-318; mpas_atmphys_driver.F:175-181",
+      "purpose": "Preserve pristine inactive orographic-only driver gate"
+    }
+  ]
+}

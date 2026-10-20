@@ -49,6 +49,7 @@ extern "C" __global__ void vector_momentum_v841_f32(
     const int *cells_on_edge, const int *edges_on_edge,
     const int *n_edges_on_edge, const float *weights_on_edge,
     const float *inv_dc_edge, const float *reference_u, const float *f_edge,
+    const float *initial_tendency, const int has_initial,
     float *result)
 {
     DYNAMICS_ELEMENT_LOOP(nlev * nedges) {
@@ -76,8 +77,106 @@ extern "C" __global__ void vector_momentum_v841_f32(
         const float gradient = mpas_mul(mpas_sub(
             kinetic[C2(k, c1, ncells)], kinetic[C2(k, c0, ncells)]),
             inv_dc_edge[edge]);
-        result[index] = mpas_sub(mpas_mul(rho_edge[index],
-            mpas_sub(q, gradient)), mpas_mul(mpas_mul(u[index], 0.5f),
+        const float horizontal = mpas_mul(rho_edge[index], mpas_sub(q, gradient));
+        result[index] = mpas_sub(has_initial ? mpas_add(initial_tendency[index], horizontal) : horizontal,
+            mpas_mul(mpas_mul(u[index], 0.5f),
+                mpas_add(mass_divergence[C2(k, c0, ncells)],
+                    mass_divergence[C2(k, c1, ncells)])));
+    }
+}
+
+#ifndef HEX_HOIST_EOE
+#define HEX_HOIST_EOE 10
+#endif
+extern "C" __global__ void vector_momentum_hoist_v841_f32(
+    const int nlev, const int ncells, const int nedges, const int max_edges2,
+    const float *u, const float *rho_edge, const float *pv_edge,
+    const float *kinetic, const float *mass_divergence,
+    const int *cells_on_edge, const int *edges_on_edge,
+    const int *n_edges_on_edge, const float *weights_on_edge,
+    const float *inv_dc_edge, const float *reference_u, const float *f_edge,
+    const float *initial_tendency, const int has_initial,
+    float *result, const int lpt)
+{
+    /* One thread per edge walks every level.  The edge's stencil -- its
+       neighbour edges, TRiSK weights, f, 1/dc and two cells -- is read once
+       instead of once per level; every level runs the
+       vector_momentum_v841_f32 element body unchanged (same operands, slot
+       order and helper calls), so each output carries the same bits. */
+    const int hex_rows = nlev;
+    const int hex_chunks = (hex_rows + lpt - 1) / lpt;
+    const int hex_element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (hex_element >= nedges * hex_chunks) return;
+    const int edge = hex_element % nedges;
+    const int hex_k0 = (hex_element / nedges) * lpt;
+    const int hex_k1 = min(hex_rows, hex_k0 + lpt);
+    const int count = n_edges_on_edge[edge];
+    const int c0 = cells_on_edge[2 * edge];
+    const int c1 = cells_on_edge[2 * edge + 1];
+    if (count > HEX_HOIST_EOE) {
+        for (int k = hex_k0; k < hex_k1; ++k) {
+            const int index = E2(k, edge, nedges);
+            float q = 0.0f;
+            for (int slot = 0; slot < count; ++slot) {
+                const int offset = edge * max_edges2 + slot;
+                const int neighbor = edges_on_edge[offset];
+                const float work_pv = mpas_mul(0.5f, mpas_add(
+                    pv_edge[index], pv_edge[E2(k, neighbor, nedges)]));
+                q = mpas_add(q, mpas_mul(mpas_mul(
+                    weights_on_edge[offset], u[E2(k, neighbor, nedges)]), work_pv));
+            }
+            for (int slot = 0; slot < count; ++slot) {
+                const int offset = edge * max_edges2 + slot;
+                const int neighbor = edges_on_edge[offset];
+                q = mpas_sub(q, mpas_mul(mpas_mul(
+                    weights_on_edge[offset], reference_u[E2(k, neighbor, nedges)]),
+                    f_edge[edge]));
+            }
+            const float gradient = mpas_mul(mpas_sub(
+                kinetic[C2(k, c1, ncells)], kinetic[C2(k, c0, ncells)]),
+                inv_dc_edge[edge]);
+            const float horizontal = mpas_mul(rho_edge[index], mpas_sub(q, gradient));
+            result[index] = mpas_sub(has_initial ? mpas_add(initial_tendency[index], horizontal) : horizontal,
+                mpas_mul(mpas_mul(u[index], 0.5f),
+                    mpas_add(mass_divergence[C2(k, c0, ncells)],
+                        mass_divergence[C2(k, c1, ncells)])));
+        }
+        return;
+    }
+    int nb[HEX_HOIST_EOE];
+    float wt[HEX_HOIST_EOE];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_EOE; ++slot) {
+        nb[slot] = slot < count ? edges_on_edge[edge * max_edges2 + slot] : edge;
+        wt[slot] = slot < count ? weights_on_edge[edge * max_edges2 + slot] : 0.0f;
+    }
+    const float fe = f_edge[edge];
+    const float inv_dc = inv_dc_edge[edge];
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        const int index = E2(k, edge, nedges);
+        const float pv_self = pv_edge[index];
+        float q = 0.0f;
+#pragma unroll
+        for (int slot = 0; slot < HEX_HOIST_EOE; ++slot) {
+            if (slot < count) {
+                const float work_pv = mpas_mul(0.5f, mpas_add(
+                    pv_self, pv_edge[E2(k, nb[slot], nedges)]));
+                q = mpas_add(q, mpas_mul(mpas_mul(
+                    wt[slot], u[E2(k, nb[slot], nedges)]), work_pv));
+            }
+        }
+#pragma unroll
+        for (int slot = 0; slot < HEX_HOIST_EOE; ++slot) {
+            if (slot < count) {
+                q = mpas_sub(q, mpas_mul(mpas_mul(
+                    wt[slot], reference_u[E2(k, nb[slot], nedges)]), fe));
+            }
+        }
+        const float gradient = mpas_mul(mpas_sub(
+            kinetic[C2(k, c1, ncells)], kinetic[C2(k, c0, ncells)]), inv_dc);
+        const float horizontal = mpas_mul(rho_edge[index], mpas_sub(q, gradient));
+        result[index] = mpas_sub(has_initial ? mpas_add(initial_tendency[index], horizontal) : horizontal,
+            mpas_mul(mpas_mul(u[index], 0.5f),
                 mpas_add(mass_divergence[C2(k, c0, ncells)],
                     mass_divergence[C2(k, c1, ncells)])));
     }
@@ -104,6 +203,123 @@ extern "C" __global__ void theta_finish_v841_f32(
         value = mpas_sub(value, mpas_mul(rdzw[k], mpas_sub(
             vertical_flux[C2(k + 1, cell, ncells)], vertical_flux[index])));
         result[index] = value;
+    }
+}
+
+// Native F:6814-6874 accumulates all advective fluxes, then all corrections.
+// Combining the two per edge changes cancellation before the cell sum.
+extern "C" __global__ void theta_finish_corrected_v841_f32(
+    const int nlev, const int ncells, const int nedges, const int max_edges,
+    const int *n_edges_on_cell, const int *edges_on_cell,
+    const float *acoustic_sign, const float *inv_area_cell, const float *rdzw,
+    const float *edge_flux, const float *vertical_flux,
+    const float *ru, const float *ru_saved, const float *theta_saved,
+    const float *dv_edge, const int *cells_on_edge, float *result)
+{
+    DYNAMICS_ELEMENT_LOOP(nlev * ncells) {
+        const int cell = element % ncells;
+        const int k = element / ncells;
+        const int index = C2(k, cell, ncells);
+        float value = 0.0f;
+        for (int slot = 0; slot < n_edges_on_cell[cell]; ++slot) {
+            const int edge = edges_on_cell[CES(cell, slot, max_edges)];
+            value = mpas_sub(value, mpas_mul(
+                acoustic_sign[CES(cell, slot, max_edges)],
+                edge_flux[E2(k, edge, nedges)]));
+        }
+        for (int slot = 0; slot < n_edges_on_cell[cell]; ++slot) {
+            const int edge = edges_on_cell[CES(cell, slot, max_edges)];
+            const int c0 = cells_on_edge[2 * edge];
+            const int c1 = cells_on_edge[2 * edge + 1];
+            const int eindex = E2(k, edge, nedges);
+            const float flux = mpas_mul(mpas_mul(mpas_mul(mpas_mul(
+                acoustic_sign[CES(cell, slot, max_edges)], dv_edge[edge]),
+                mpas_sub(ru_saved[eindex], ru[eindex])), 0.5f),
+                mpas_add(theta_saved[C2(k, c1, ncells)],
+                    theta_saved[C2(k, c0, ncells)]));
+            value = mpas_sub(value, flux);
+        }
+        value = mpas_mul(value, inv_area_cell[cell]);
+        result[index] = mpas_sub(value, mpas_mul(rdzw[k], mpas_sub(
+            vertical_flux[C2(k + 1, cell, ncells)], vertical_flux[index])));
+    }
+}
+
+// Reuse topology for four levels without changing the per-output operation order.
+extern "C" __global__ void theta_finish_corrected_chunk_v841_f32(
+    const int nlev, const int ncells, const int nedges, const int max_edges,
+    const int *n_edges_on_cell, const int *edges_on_cell,
+    const float *acoustic_sign, const float *inv_area_cell, const float *rdzw,
+    const float *edge_flux, const float *vertical_flux,
+    const float *ru, const float *ru_saved, const float *theta_saved,
+    const float *dv_edge, const int *cells_on_edge, float *result, const int lpt)
+{
+    const int chunks = (nlev + lpt - 1) / lpt;
+    const int element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (element >= ncells * chunks) return;
+    const int cell = element % ncells;
+    const int k0 = (element / ncells) * lpt;
+    const int k1 = min(nlev, k0 + lpt);
+    const int count = n_edges_on_cell[cell];
+    const bool hoisted = count <= 10;
+    int ed[10], ca[10], cb[10];
+    float sg[10], sd[10];
+#pragma unroll
+    for (int slot = 0; slot < 10; ++slot) {
+        const bool live = hoisted && slot < count;
+        const int edge = live ? edges_on_cell[CES(cell, slot, max_edges)] : 0;
+        ed[slot] = edge;
+        ca[slot] = live ? cells_on_edge[2 * edge] : 0;
+        cb[slot] = live ? cells_on_edge[2 * edge + 1] : 0;
+        sg[slot] = live ? acoustic_sign[CES(cell, slot, max_edges)] : 0.0f;
+        sd[slot] = live ? mpas_mul(sg[slot], dv_edge[edge]) : 0.0f;
+    }
+    for (int k = k0; k < k1; ++k) {
+        const int index = C2(k, cell, ncells);
+        float value = 0.0f;
+        if (hoisted) {
+#pragma unroll
+            for (int slot = 0; slot < 10; ++slot) {
+                if (slot < count) {
+                    value = mpas_sub(value, mpas_mul(sg[slot],
+                        edge_flux[E2(k, ed[slot], nedges)]));
+                }
+            }
+            // Preserve the two separate sums and every FP32 helper operation.
+#pragma unroll
+            for (int slot = 0; slot < 10; ++slot) {
+                if (slot < count) {
+                    const int eindex = E2(k, ed[slot], nedges);
+                    const float flux = mpas_mul(mpas_mul(mpas_mul(sd[slot],
+                        mpas_sub(ru_saved[eindex], ru[eindex])), 0.5f),
+                        mpas_add(theta_saved[C2(k, cb[slot], ncells)],
+                            theta_saved[C2(k, ca[slot], ncells)]));
+                    value = mpas_sub(value, flux);
+                }
+            }
+        } else {
+            for (int slot = 0; slot < n_edges_on_cell[cell]; ++slot) {
+                const int edge = edges_on_cell[CES(cell, slot, max_edges)];
+                value = mpas_sub(value, mpas_mul(
+                    acoustic_sign[CES(cell, slot, max_edges)],
+                    edge_flux[E2(k, edge, nedges)]));
+            }
+            for (int slot = 0; slot < n_edges_on_cell[cell]; ++slot) {
+                const int edge = edges_on_cell[CES(cell, slot, max_edges)];
+                const int c0 = cells_on_edge[2 * edge];
+                const int c1 = cells_on_edge[2 * edge + 1];
+                const int eindex = E2(k, edge, nedges);
+                const float flux = mpas_mul(mpas_mul(mpas_mul(mpas_mul(
+                    acoustic_sign[CES(cell, slot, max_edges)], dv_edge[edge]),
+                    mpas_sub(ru_saved[eindex], ru[eindex])), 0.5f),
+                    mpas_add(theta_saved[C2(k, c1, ncells)],
+                        theta_saved[C2(k, c0, ncells)]));
+                value = mpas_sub(value, flux);
+            }
+        }
+        value = mpas_mul(value, inv_area_cell[cell]);
+        result[index] = mpas_sub(value, mpas_mul(rdzw[k], mpas_sub(
+            vertical_flux[C2(k + 1, cell, ncells)], vertical_flux[index])));
     }
 }
 
@@ -223,6 +439,67 @@ extern "C" __global__ void split_flux_finish_v841_f32(
         average[element] = mpas_mul(accumulator[element], reciprocal);
     }
 }
+
+#ifndef HEX_HOIST_CELL
+#define HEX_HOIST_CELL 10
+#endif
+/* Chunked, stencil-hoisted forms of theta_finish_v841_f32 and
+   w_finish_v841_f32: one thread per (level chunk, cell); rows 0 and nlev of
+   w are the element kernel's zero rows. */
+extern "C" __global__ void finish_chunk_v841_f32(
+    const int nlev, const int ncells, const int nedges, const int max_edges,
+    const int *n_edges_on_cell, const int *edges_on_cell,
+    const float *acoustic_sign, const float *inv_area_cell, const float *rdz,
+    const float *edge_flux, const float *vertical_flux, float *result,
+    const int w_rows, const int lpt)
+{
+    const int hex_rows = w_rows ? nlev + 1 : nlev;
+    const int hex_chunks = (hex_rows + lpt - 1) / lpt;
+    const int hex_element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (hex_element >= ncells * hex_chunks) return;
+    const int cell = hex_element % ncells;
+    const int hex_k0 = (hex_element / ncells) * lpt;
+    const int hex_k1 = min(hex_rows, hex_k0 + lpt);
+    const int count = n_edges_on_cell[cell];
+    const bool hoisted = count <= HEX_HOIST_CELL;
+    int ed[HEX_HOIST_CELL];
+    float sg[HEX_HOIST_CELL];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+        const bool live = hoisted && slot < count;
+        ed[slot] = live ? edges_on_cell[CES(cell, slot, max_edges)] : 0;
+        sg[slot] = live ? acoustic_sign[CES(cell, slot, max_edges)] : 0.0f;
+    }
+    const float inv_area = inv_area_cell[cell];
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        const int index = C2(k, cell, ncells);
+        if (w_rows && (k == 0 || k == nlev)) {
+            result[index] = 0.0f;
+            continue;
+        }
+        float value = 0.0f;
+        if (hoisted) {
+#pragma unroll
+            for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+                if (slot < count) {
+                    value = mpas_sub(value, mpas_mul(sg[slot],
+                        edge_flux[E2(k, ed[slot], nedges)]));
+                }
+            }
+        } else {
+            for (int slot = 0; slot < count; ++slot) {
+                const int edge = edges_on_cell[CES(cell, slot, max_edges)];
+                value = mpas_sub(value, mpas_mul(
+                    acoustic_sign[CES(cell, slot, max_edges)],
+                    edge_flux[E2(k, edge, nedges)]));
+            }
+        }
+        value = mpas_mul(value, inv_area);
+        value = mpas_sub(value, mpas_mul(rdz[k], mpas_sub(
+            vertical_flux[C2(k + 1, cell, ncells)], vertical_flux[index])));
+        result[index] = value;
+    }
+}
 """
 
 _CACHE: Any | None = None
@@ -238,7 +515,7 @@ def _cupy() -> Any:
     return cp
 
 
-def _kernel(name: str, kernel_cache: Any | None = None) -> Any:
+def _kernel(name: str, kernel_cache: Any | None = None, dimensions=()) -> Any:
     global _CACHE
     from .cuda_backend import KernelCache, require_cuda
 
@@ -247,13 +524,15 @@ def _kernel(name: str, kernel_cache: Any | None = None) -> Any:
         if _CACHE is None:
             _CACHE = KernelCache(capability=require_cuda(min_compute=(12, 0)))
         selected = _CACHE
-    key = (selected, name)
+    key = (selected, name, dimensions)
     if key not in _KERNELS:
-        _KERNELS[key] = selected.raw_kernel(
-            name,
-            _CUDA_SOURCE,
-            module_key="hexcore.cuda_dynamics_v841",
-        )
+        if dimensions:
+            from .cuda_shape import resolve
+            _KERNELS[key] = resolve(selected, name, _CUDA_SOURCE,
+                                    "hexcore.cuda_dynamics_v841", dimensions)
+        else:
+            _KERNELS[key] = selected.raw_kernel(
+                name, _CUDA_SOURCE, module_key="hexcore.cuda_dynamics_v841")
     return _KERNELS[key]
 
 
@@ -261,7 +540,8 @@ def _launch(name: str, count: int, args: tuple[Any, ...], cache: Any | None) -> 
     if count < 1:
         return
     threads = 128
-    _kernel(name, cache)(
+    dimensions = tuple(zip(("nlev", "ncells", "nedges", "max_edges2"), args[:4])) if name == "vector_momentum_hoist_v841_f32" else ()
+    _kernel(name, cache, dimensions)(
         ((int(count) + threads - 1) // threads,),
         (threads,),
         args,
@@ -284,6 +564,7 @@ def vector_momentum_tendency_cuda_v841(
     pv_edge: Any,
     kinetic_energy: Any,
     horizontal_divergence: Any,
+    initial_tendency: Any | None = None,
     kernel_cache: Any | None = None,
 ) -> Any:
     cp = _cupy()
@@ -306,21 +587,34 @@ def vector_momentum_tendency_cuda_v841(
     ):
         require_resident_array(name, value, dtype=np.float32, shape=shape)
     out = cp.empty_like(normal_velocity)
+    if initial_tendency is not None:
+        require_resident_array("initial_tendency", initial_tendency, dtype=np.float32, shape=(nlev, nedges))
     reference_u = reference_wind_edge_cuda_v841(
         mesh, context, n_vert_levels=nlev, kernel_cache=kernel_cache
     )
-    _launch(
-        "vector_momentum_v841_f32",
-        nlev * nedges,
-        (
-            np.int32(nlev), np.int32(ncells), np.int32(nedges),
-            np.int32(mesh.max_edges2), normal_velocity, rho_edge, pv_edge,
-            kinetic_energy, horizontal_divergence, mesh.cells_on_edge,
-            mesh.edges_on_edge, mesh.n_edges_on_edge, mesh.weights_on_edge,
-            context.inv_dc_edge, reference_u, mesh.f_edge, out,
-        ),
-        kernel_cache,
+    arguments = (
+        np.int32(nlev), np.int32(ncells), np.int32(nedges),
+        np.int32(mesh.max_edges2), normal_velocity, rho_edge, pv_edge,
+        kinetic_energy, horizontal_divergence, mesh.cells_on_edge,
+        mesh.edges_on_edge, mesh.n_edges_on_edge, mesh.weights_on_edge,
+        context.inv_dc_edge, reference_u, mesh.f_edge,
+        normal_velocity if initial_tendency is None else initial_tendency,
+        np.int32(initial_tendency is not None),
     )
+    from . import cuda_edge_hoist
+    if not cuda_edge_hoist.enabled(nedges):
+        _launch("vector_momentum_v841_f32", nlev * nedges, (*arguments, out), kernel_cache)
+        return out
+    lpt = cuda_edge_hoist.levels_per_thread(
+        "vector_momentum_hoist_v841_f32", nedges, nlev, lambda value: _launch(
+            "vector_momentum_hoist_v841_f32", nedges * cuda_edge_hoist.chunks(nlev, value),
+            (*arguments, out, np.int32(value)), kernel_cache), _cupy())
+    _launch("vector_momentum_hoist_v841_f32", nedges * cuda_edge_hoist.chunks(nlev, lpt),
+            (*arguments, out, np.int32(lpt)), kernel_cache)
+    if cuda_edge_hoist.check_wanted("vector_momentum_hoist_v841_f32", cp):
+        element = cp.empty_like(out)
+        _launch("vector_momentum_v841_f32", nlev * nedges, (*arguments, element), kernel_cache)
+        cuda_edge_hoist.compare("vector_momentum_hoist_v841_f32", out, element, cp)
     return out
 
 
@@ -388,6 +682,7 @@ def theta_finish_cuda_v841(
     vertical_flux: Any,
     rdzw: Any,
     n_vert_levels: int,
+    correction: tuple[Any, Any, Any] | None = None,
     kernel_cache: Any | None = None,
 ) -> Any:
     cp = _cupy()
@@ -410,17 +705,54 @@ def theta_finish_cuda_v841(
     )
     require_resident_array("rdzw", rdzw, dtype=np.float32, shape=(nlev,))
     out = cp.empty((nlev, ncells), dtype=cp.float32)
-    _launch(
-        "theta_finish_v841_f32",
-        nlev * ncells,
-        (
-            np.int32(nlev), np.int32(ncells),
-            np.int32(nedges), np.int32(mesh.max_edges),
-            mesh.n_edges_on_cell, mesh.edges_on_cell, mesh.edge_sign_on_cell,
-            context.inv_area_cell, rdzw, edge_flux, vertical_flux, out,
-        ),
-        kernel_cache,
+    inputs = (
+        np.int32(nlev), np.int32(ncells),
+        np.int32(nedges), np.int32(mesh.max_edges),
+        mesh.n_edges_on_cell, mesh.edges_on_cell, mesh.edge_sign_on_cell,
+        context.inv_area_cell, rdzw, edge_flux, vertical_flux,
     )
+    if correction is not None:
+        ru, ru_saved, theta_saved = correction
+        for name, value, shape in (
+            ("ru", ru, (nlev, nedges)),
+            ("ru_saved", ru_saved, (nlev, nedges)),
+            ("theta_saved", theta_saved, (nlev, ncells)),
+        ):
+            require_resident_array(name, value, dtype=np.float32, shape=shape)
+        from . import cuda_edge_hoist
+        corrected_inputs = (*inputs, ru, ru_saved, theta_saved, mesh.dv_edge,
+                            mesh.cells_on_edge)
+        if cuda_edge_hoist.enabled(nedges):
+            # Fixed geometry: no first-call tuning or synchronization here.
+            lpt = 4
+            _launch("theta_finish_corrected_chunk_v841_f32",
+                    ncells * cuda_edge_hoist.chunks(nlev, lpt),
+                    (*corrected_inputs, out, np.int32(lpt)), kernel_cache)
+            if cuda_edge_hoist.check_wanted("theta_finish_corrected_chunk_v841_f32", cp):
+                element = cp.empty_like(out)
+                _launch("theta_finish_corrected_v841_f32", nlev * ncells,
+                        (*corrected_inputs, element), kernel_cache)
+                cuda_edge_hoist.compare("theta_finish_corrected_chunk_v841_f32",
+                                        out, element, cp)
+        else:
+            _launch("theta_finish_corrected_v841_f32", nlev * ncells,
+                    (*corrected_inputs, out), kernel_cache)
+        return out
+    from . import cuda_edge_hoist
+    if not cuda_edge_hoist.enabled(nedges):
+        _launch("theta_finish_v841_f32", nlev * ncells, (*inputs, out), kernel_cache)
+        return out
+    rows = nlev + 0
+    lpt = cuda_edge_hoist.levels_per_thread(
+        "theta_finish_chunk_v841_f32", ncells, rows, lambda value: _launch(
+            "finish_chunk_v841_f32", ncells * cuda_edge_hoist.chunks(rows, value),
+            (*inputs, out, np.int32(0), np.int32(value)), kernel_cache), cp)
+    _launch("finish_chunk_v841_f32", ncells * cuda_edge_hoist.chunks(rows, lpt),
+            (*inputs, out, np.int32(0), np.int32(lpt)), kernel_cache)
+    if cuda_edge_hoist.check_wanted("theta_finish_chunk_v841_f32", cp):
+        element = cp.empty_like(out)
+        _launch("theta_finish_v841_f32", nlev * ncells, (*inputs, element), kernel_cache)
+        cuda_edge_hoist.compare("theta_finish_chunk_v841_f32", out, element, cp)
     return out
 
 
@@ -454,17 +786,27 @@ def w_finish_cuda_v841(
     )
     require_resident_array("rdzu", rdzu, dtype=np.float32, shape=(nlev,))
     out = cp.empty((nlev + 1, ncells), dtype=cp.float32)
-    _launch(
-        "w_finish_v841_f32",
-        (nlev + 1) * ncells,
-        (
-            np.int32(nlev), np.int32(ncells),
-            np.int32(nedges), np.int32(mesh.max_edges),
-            mesh.n_edges_on_cell, mesh.edges_on_cell, mesh.edge_sign_on_cell,
-            context.inv_area_cell, rdzu, edge_flux, vertical_flux, out,
-        ),
-        kernel_cache,
+    inputs = (
+        np.int32(nlev), np.int32(ncells),
+        np.int32(nedges), np.int32(mesh.max_edges),
+        mesh.n_edges_on_cell, mesh.edges_on_cell, mesh.edge_sign_on_cell,
+        context.inv_area_cell, rdzu, edge_flux, vertical_flux,
     )
+    from . import cuda_edge_hoist
+    if not cuda_edge_hoist.enabled(nedges):
+        _launch("w_finish_v841_f32", (nlev + 1) * ncells, (*inputs, out), kernel_cache)
+        return out
+    rows = nlev + 1
+    lpt = cuda_edge_hoist.levels_per_thread(
+        "w_finish_chunk_v841_f32", ncells, rows, lambda value: _launch(
+            "finish_chunk_v841_f32", ncells * cuda_edge_hoist.chunks(rows, value),
+            (*inputs, out, np.int32(1), np.int32(value)), kernel_cache), cp)
+    _launch("finish_chunk_v841_f32", ncells * cuda_edge_hoist.chunks(rows, lpt),
+            (*inputs, out, np.int32(1), np.int32(lpt)), kernel_cache)
+    if cuda_edge_hoist.check_wanted("w_finish_chunk_v841_f32", cp):
+        element = cp.empty_like(out)
+        _launch("w_finish_v841_f32", (nlev + 1) * ncells, (*inputs, element), kernel_cache)
+        cuda_edge_hoist.compare("w_finish_chunk_v841_f32", out, element, cp)
     return out
 
 

@@ -11,8 +11,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from _vertical_rust_fixture import delivered_vertical_engine, vertical_rust_engine
+from _vertical_rust_fixture import requires_hex_vertical
+
 from hexcore.init_door import InitDoorRefusal, select_vertical_mode
 from hexcore.timestep_admission import (
+    SplitExplicitSchedule,
     CourantPolicy,
     TimestepAdmissionError,
     admit_timestep,
@@ -61,6 +65,7 @@ def mesh() -> ClosedFourCellMesh:
     return ClosedFourCellMesh()
 
 
+@requires_hex_vertical
 def test_terrain_zero_guard_matches_native_branch(mesh: ClosedFourCellMesh) -> None:
     smoothed = smooth_terrain(mesh, mesh.ter, passes=2)
     assert smoothed[0] == 0.0
@@ -68,6 +73,7 @@ def test_terrain_zero_guard_matches_native_branch(mesh: ClosedFourCellMesh) -> N
     assert not np.array_equal(smoothed[1:], mesh.ter[1:])
 
 
+@requires_hex_vertical
 @pytest.mark.parametrize("scheme", ["tc", "legacy"])
 def test_vertical_grid_invariants_two_native_branches(
     mesh: ClosedFourCellMesh, scheme: str
@@ -89,6 +95,7 @@ def test_vertical_grid_invariants_two_native_branches(
     assert vertical.hx[0, 0] == 0.0
 
 
+@requires_hex_vertical
 def test_nonhybrid_and_specified_interfaces(mesh: ClosedFourCellMesh) -> None:
     interfaces = np.asarray([0.0, 200.0, 700.0, 1800.0, 4200.0, 10_000.0])
     vertical = build_vertical_grid(
@@ -106,6 +113,7 @@ def test_nonhybrid_and_specified_interfaces(mesh: ClosedFourCellMesh) -> None:
     assert vertical.first_height_level == 6
 
 
+@requires_hex_vertical
 def test_edge_metrics_have_native_orientation_and_zero_top(mesh: ClosedFourCellMesh) -> None:
     vertical = build_vertical_grid(
         mesh,
@@ -122,6 +130,7 @@ def test_edge_metrics_have_native_orientation_and_zero_top(mesh: ClosedFourCellM
     assert np.any(metrics.zb[:-1] != 0.0)
 
 
+@requires_hex_vertical
 def test_runtime_vectors_materialize_only_unused_lower_slots(mesh: ClosedFourCellMesh) -> None:
     vertical = build_vertical_grid(mesh, mesh.ter, n_vert_levels=5, ztop=10_000.0)
     runtime = runtime_vertical_vectors(vertical)
@@ -166,15 +175,35 @@ def test_edge_length_authority_uses_real_minimum_not_nominal() -> None:
 
 
 def test_safe_timestep_is_unchanged_and_recorded() -> None:
+    """A stable step is admitted unchanged, with both Courant numbers recorded.
+
+    The 2026-10-10 check is physical: advective U_max*dt/min(dcEdge) against
+    (3/4) of the von Neumann limit of the RK stages with flux3, and acoustic
+    c_max*dtau/min(dcEdge) against 2/sqrt(6).  MPAS-A's own 15 km step (90 s,
+    order 2, three splits, four sub-steps from v8.4.2 and two before it) on a
+    10 km minimum edge passes at either count.
+    """
+
     authority = edge_length_authority(np.asarray([10_000.0, 11_000.0]))
     result = admit_timestep(
-        60.0,
+        90.0,
         authority,
-        policy=CourantPolicy(max_characteristic_speed_m_s=125.0, safety_factor=0.9),
+        policy=CourantPolicy(max_characteristic_speed_m_s=125.0),
     )
-    assert result.resolved_dt_seconds == 60.0
+    assert result.resolved_dt_seconds == 90.0
     assert result.auto_shrunk is False
-    assert result.maximum_admitted_dt_seconds == pytest.approx(72.0)
+    assert result.estimated_outer_courant == pytest.approx(1.125)
+    assert result.admitted_courant == pytest.approx(0.75 * 1.5466, abs=1e-3)
+    assert result.acoustic_courant == pytest.approx(
+        CourantPolicy().max_sound_speed_m_s * 7.5 / 10_000.0)
+    two = admit_timestep(
+        90.0, authority, policy=CourantPolicy(max_characteristic_speed_m_s=125.0),
+        schedule=SplitExplicitSchedule(2, 2))
+    assert two.acoustic_courant == pytest.approx(
+        CourantPolicy().max_sound_speed_m_s * 15.0 / 10_000.0)
+    assert result.acoustic_courant_limit == pytest.approx(2.0 / np.sqrt(6.0))
+    assert result.maximum_admitted_dt_seconds == pytest.approx(
+        0.75 * 1.5466 * 10_000.0 / 125.0, rel=1e-3)
 
 
 def test_unsafe_timestep_refuses_with_numbers_and_no_auto_shrink() -> None:
@@ -183,12 +212,17 @@ def test_unsafe_timestep_refuses_with_numbers_and_no_auto_shrink() -> None:
         admit_timestep(
             120.0,
             authority,
-            policy=CourantPolicy(max_characteristic_speed_m_s=125.0, safety_factor=0.9),
+            policy=CourantPolicy(max_characteristic_speed_m_s=125.0),
+            # two sub-steps, the count at which this step also breaks the
+            # acoustic bound; at the default four only the advective one fails
+            schedule=SplitExplicitSchedule(2, 2),
         )
     message = str(caught.value)
     assert "min(dcEdge)=8000" in message
     assert "requested dt=120" in message
-    assert "maximum dt=57.6" in message
+    assert "advective Courant estimate U_max*dt/min(dcEdge)" in message
+    assert "acoustic Courant c_max*dtau/min(dcEdge)" in message
+    assert "2/sqrt(6)" in message
     assert "will not auto-shrink" in message
 
 
@@ -285,6 +319,9 @@ def native_mesh_pair(tmp_path_factory, binding_mod) -> SimpleNamespace:
         dataset.setncattr("sphere_radius", 1.0)
         dataset.createDimension("nCells", binding.n_cells)
         dataset.createDimension("nEdges", binding.n_edges)
+        # The bind reads maxEdges for the wind-reconstruction topology
+        # (e6feb2f); an icosahedral quasi-uniform mesh carries six.
+        dataset.createDimension("maxEdges", 6)
         dataset.createDimension("TWO", 2)
         nominal = dataset.createVariable("nominalMinDc", "f8", ())
         nominal[...] = binding.nominal_dx_m / radius
@@ -297,8 +334,9 @@ def native_mesh_pair(tmp_path_factory, binding_mod) -> SimpleNamespace:
         pairs[:, 1] = (edges + 1) % binding.n_cells + 1
         dataset.createVariable("cellsOnEdge", "i4", ("nEdges", "TWO"))[:] = pairs
 
-    # min(dcEdge)=20 km admits the registry's 120 s at 125 m/s and 0.90 safety
-    # (bound 144 s), so admission passes on geometry rather than on a waiver.
+    # min(dcEdge)=20 km admits both the recorded 120 s and MPAS-A's 150 s for
+    # a 25 km nominal spacing under the physical stability check (advective
+    # limit 1.16 at 125 m/s: 185.6 s), so admission passes on geometry.
     dc_edge = 20_000.0 + (np.arange(binding.n_edges, dtype=np.float64) % 5_000.0)
     # dvEdge is genuine geometry too, at the published family's own ratio: the
     # bind measures dual-edge amplification from this array, and a fixture that
@@ -365,6 +403,10 @@ def _frozen_native_proof(binding_mod) -> SimpleNamespace:
         LANDMASK_CONSTRUCTOR_CAST_PIN={"role": "landmask"},
         AUTHORITY_PINS={"grid": {"role": "grid"}, "static": {"role": "static"}},
         require_frozen_execution_sources=lambda: {"files": {}, "sha256": "0" * 64},
+        measure_execution_sources=lambda: {
+            "files": {}, "sha256": "0" * 64,
+            "matches_pins": True, "moved_from_pins": [],
+        },
     )
 
 
@@ -415,3 +457,54 @@ def test_a_bare_constants_fingerprint_is_never_a_valid_baseline(
     assert bound["fields"]["EDGE_LENGTH_AUTHORITY_SHA256"] == authority.raw_sha256
     assert bound["fields"]["EDGE_LENGTH_MINIMUM_M"] == repr(float(authority.minimum_m))
     assert bound["sha256"] != binding_mod.constants_fingerprint(proof)["sha256"]
+
+
+def test_the_bind_records_the_anchor_at_the_recorded_schedule(
+    binding_mod, native_mesh_pair, monkeypatch
+) -> None:
+    """The frozen row binds as a no-op at the native reference's schedule,
+    passed explicitly, and the receipt records the anchor evidence instead
+    of refusing on it (retired 2026-10-10)."""
+
+    monkeypatch.setattr(
+        binding_mod, "_require_file", _unpinned_require_file(binding_mod)
+    )
+    proof = _frozen_native_proof(binding_mod)
+    receipt = binding_mod.bind_mesh(
+        proof, binding_mod.NATIVE_MESH_NAME,
+        grid=native_mesh_pair.grid, static=native_mesh_pair.static,
+        dt_seconds=120.0, time_integration_order=3, acoustic_substeps=6,
+        radiation_seconds=600.0, log=lambda *a, **k: None,
+    )
+    assert receipt["rebound"] is False
+    admission = receipt["observed"]["dt_admission"]
+    assert admission["refuses"] is False
+    assert admission["dt_seconds"] == 120.0
+    assert admission["dt_selection"]["registered_row_dt_seconds"] == 120.0
+    assert admission["anchor"]["matched"] is True
+    assert admission["dycore_anchor"]["matched"] is False
+
+
+def test_the_bind_refuses_an_unstable_or_unschedulable_step_by_name(
+    binding_mod, native_mesh_pair, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        binding_mod, "_require_file", _unpinned_require_file(binding_mod)
+    )
+    proof = _frozen_native_proof(binding_mod)
+    with pytest.raises(binding_mod.MeshBindingMismatch) as caught:
+        binding_mod.bind_mesh(
+            proof, binding_mod.NATIVE_MESH_NAME,
+            grid=native_mesh_pair.grid, static=native_mesh_pair.static,
+            dt_seconds=300.0, log=lambda *a, **k: None,
+        )
+    assert "advective Courant" in str(caught.value)
+    with pytest.raises(binding_mod.MeshBindingMismatch) as caught:
+        binding_mod.bind_mesh(
+            proof, binding_mod.NATIVE_MESH_NAME,
+            grid=native_mesh_pair.grid, static=native_mesh_pair.static,
+            dt_seconds=140.0, log=lambda *a, **k: None,
+        )
+    message = str(caught.value)
+    assert "radiation_seconds=1800 s is not a positive integer multiple" in message
+    assert "is 120 s" in message

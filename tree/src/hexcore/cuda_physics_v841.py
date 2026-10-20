@@ -21,6 +21,7 @@ are refused rather than copied implicitly.
 """
 
 from __future__ import annotations
+from hexcore import numerics as _hex_numerics
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -267,8 +268,16 @@ def _wsm6_sr_roundoff_limit_v841(dt: float) -> tuple[np.float32, int, int]:
     and denominator contain the same nonnegative frozen components but
     associate their binary32 additions differently, so an all-frozen column
     may finish a few ULPs above one. This is the exact integer-rational
-    construction frozen by Arwen _wsm6_sr_roundoff_limit; it admits the
+    construction of Arwen _sr_roundoff_envelope(6, dt); it admits the
     proved expression-order roundoff and does not mutate the scheme output.
+
+    WSM6 scales every accumulated surface term as WRF does,
+    fallsum*delz/denr*dtcld*1000 (Arwen kernels/wsm6.cu:501-515): four
+    roundings on each side of the quotient, so the bound carries
+    ((1+u)/(1-u))^4 on top of the sums' terms. The copy pinned until
+    2026-10-15 priced zero scalings (the pre-2.9.0 kernel's pre-scaled
+    accumulation): 3 ULPs at one minor loop instead of 7, and a default
+    forecast (dt=90 s) stopped at 4590 s on SR=1.00000048, 4 ULPs over 1.
     """
 
     if isinstance(dt, (bool, np.bool_)):
@@ -297,8 +306,14 @@ def _wsm6_sr_roundoff_limit_v841(dt: float) -> tuple[np.float32, int, int]:
             f"roundoff envelope: loops={loops}"
         )
 
-    numerator = (scale + 1) ** 3 * (scale - 3)
-    denominator = scale**2 * (scale - 6) * (scale - 2 * accumulation_adds)
+    step_scalings = 4
+    numerator = (scale + 1) ** (3 + step_scalings) * (scale - 3)
+    denominator = (
+        scale**2
+        * (scale - 6)
+        * (scale - 2 * accumulation_adds)
+        * (scale - 1) ** step_scalings
+    )
     if numerator >= 2 * denominator:
         raise ValueError(
             "WSM6 FP32 SR roundoff bound reaches 2.0, where ULP(1) "
@@ -821,6 +836,14 @@ class CudaHeldMpasPhysicsTendenciesV841:
     time_seconds: float
     validation_d2h: TransferStats
     execution_provenance: CudaPhaseOneExecutionProvenanceV841
+    #: SG2: MPAS-A's ``rt_diabatic_tend`` -- the previous step's modified-theta
+    #: change across microphysics per second (hexcore.lagged_heating_v841).
+    #: The dycore adds ``rho*diabatic_theta`` to every RK stage's theta tendency
+    #: and removes ``dt*rho*diabatic_theta`` at the final recovery
+    #: (mpas_atm_time_integration.F:6937, :4436-4437).  ``None`` is the first
+    #: step and every run whose physics produces none, as native's zeroed
+    #: tend pool.
+    diabatic_theta: Any = None
 
     @property
     def contract_sha256(self) -> str:
@@ -855,6 +878,13 @@ class CudaHeldMpasPhysicsTendenciesV841:
             require_resident_array(
                 f"held_physics.{name}", value, dtype=np.float32, shape=shape
             )
+        if self.diabatic_theta is not None:
+            require_resident_array(
+                "held_physics.diabatic_theta",
+                self.diabatic_theta,
+                dtype=np.float32,
+                shape=(n_vert_levels, n_cells),
+            )
 
     def receipt(self) -> dict[str, Any]:
         return {
@@ -862,6 +892,7 @@ class CudaHeldMpasPhysicsTendenciesV841:
             "contract_sha256": self.contract_sha256,
             "kernel_sha256": CUDA_PHYSICS_V841_KERNEL_SHA256,
             "phase": "pre_rk_held",
+            "lagged_diabatic_theta": self.diabatic_theta is not None,
             "time_seconds": float(self.time_seconds),
             "shape": {
                 "rho": list(self.rho.shape),
@@ -893,6 +924,13 @@ class CudaPostRkWsm6UpdateV841:
     #: The scheme's effective radii, in the row's order.
     radii: Mapping[str, Any]
     time_seconds: float
+    #: The species row the backend formed this update under.  ``None``
+    #: means "the row the scalar names select", which is what every caller
+    #: before 2026-10-11 meant.  Two schemes can carry the same block
+    #: (Kessler and microphysics off both transport qv, qc, qr) with
+    #: different buckets, so the names alone cannot say which buckets the
+    #: update holds; the backend that built it can.
+    row: Any = None
 
     def __getattr__(self, name: str) -> Any:
         for group in ("species", "surface", "radii"):
@@ -930,7 +968,7 @@ class CudaPostRkWsm6UpdateV841:
             "schema": CUDA_PHYSICS_V841_SCHEMA,
             "contract_sha256": self.contract_sha256,
             "phase": "post_rk_microphysics",
-            "scheme": "WSM6",
+            "scheme": "WSM6" if self.row is None else self.row.scheme_name,
             "time_seconds": float(self.time_seconds),
             "volume_shape": list(self.theta.shape),
             "surface_shape": list(self.rainnc.shape),
@@ -1109,7 +1147,8 @@ def couple_raw_column_physics_v841(
         raw.du[..., garbage_cell] = held_du
         raw.dv[..., garbage_cell] = held_dv
     started = time.perf_counter()
-    invalid_value = int(cp.asnumpy(invalid)[0])
+    from .cuda_solve_region_v841 import read_validation_word
+    invalid_value = read_validation_word(invalid, kernel_cache)
     validation_d2h = TransferStats(int(invalid.nbytes), time.perf_counter() - started)
     if invalid_value != 0:
         # A refusal has to name what it refused.  The two kernels above set a
@@ -1171,6 +1210,24 @@ def couple_raw_column_physics_v841(
     return result
 
 
+def with_lagged_diabatic_theta_v841(
+    held: CudaHeldMpasPhysicsTendenciesV841, backend: Any
+) -> CudaHeldMpasPhysicsTendenciesV841:
+    """Attach the backend's committed lagged microphysics heating (SG2).
+
+    A backend that carries none (the first step, or a backend without the
+    producer) leaves ``held`` exactly as it was, so the dycore launches no
+    carry kernel and its arithmetic is the pre-SG2 arithmetic.
+    """
+
+    carry = getattr(backend, "lagged_diabatic_theta", None)
+    if carry is None:
+        return held
+    from dataclasses import replace
+
+    return replace(held, diabatic_theta=carry)
+
+
 def nonnegative_qv_scratch_v841(
     scalars: Any,
     *,
@@ -1192,7 +1249,8 @@ def nonnegative_qv_scratch_v841(
         (np.int32(qv.size), scalars, qv, invalid),
     )
     started = time.perf_counter()
-    invalid_value = int(cp.asnumpy(invalid)[0])
+    from .cuda_solve_region_v841 import read_validation_word
+    invalid_value = read_validation_word(invalid, kernel_cache)
     transfer = TransferStats(int(invalid.nbytes), time.perf_counter() - started)
     if invalid_value != 0:
         raise FloatingPointError("non-finite qv refused before aggregate phase one")
@@ -1222,7 +1280,8 @@ def clamp_wsm6_scalars_in_place_v841(
         (np.int32(scalars.size), np.int32(0), scalars, invalid),
     )
     started = time.perf_counter()
-    invalid_value = int(cp.asnumpy(invalid)[0])
+    from .cuda_solve_region_v841 import read_validation_word
+    invalid_value = read_validation_word(invalid, kernel_cache)
     transfer = TransferStats(int(invalid.nbytes), time.perf_counter() - started)
     if invalid_value != 0:
         raise FloatingPointError("non-finite WSM6 carrier refused before phase two")
@@ -1254,7 +1313,15 @@ def recover_post_rk_wsm6_state_v841(
         raise TypeError("post-RK WSM6 recovery requires FP32 MPAS state")
     sr_upper, _, _ = _wsm6_sr_roundoff_limit_v841(phase2_dt_seconds)
     names = _scalar_names(scalar_names, int(state.scalars.shape[0]))
-    row = species_row_for_names(names)
+    # The update's own row when the backend named one: the names select
+    # Kessler's row for microphysics off too (same three species), whose
+    # RAINNC bucket the off row does not have, and the recovery then asked
+    # the update for a bucket it never carried.
+    row = species_row_for_names(names) if update.row is None else update.row
+    if tuple(names[: len(row.names())]) != tuple(row.names()):
+        raise ValueError(
+            f"post-RK update row {row.scheme_name!r} carries {list(row.names())}, "
+            f"not the scalar block {list(names)}")
     if float(update.time_seconds) != float(state.time_seconds):
         raise ValueError(
             "WSM6 update time must equal the candidate endpoint exactly: "
@@ -1272,7 +1339,8 @@ def recover_post_rk_wsm6_state_v841(
     # declared order for the radii.  Both sizes travel with the row, so a
     # scheme with two radii instead of three needs no kernel change.
     water_table = cp.asarray(np.asarray(
-        [int(update.species[name].data.ptr) for name in names],
+        [int(update.species.get(name, state.scalars[index]).data.ptr)
+         for index, name in enumerate(names)],
         dtype=np.uint64))
     radius_table = cp.asarray(np.asarray(
         [int(update.radii[name].data.ptr) for name in row.radius_names],
@@ -1313,10 +1381,21 @@ def recover_post_rk_wsm6_state_v841(
         return cp.asarray(np.asarray(
             [int(item.data.ptr) for item in arrays], dtype=np.uint64))
 
+    # SR is formed by a scheme that precipitates.  A row with no bucket
+    # (microphysics off) publishes none, and the engine's seam returns none
+    # (plan.surface_receipts is empty); every other row must carry it.
+    sr_field = update.surface.get("sr")
+    if sr_field is None and bucket_names:
+        raise ValueError(
+            f"post-RK update of {row.scheme_name!r} carries buckets "
+            f"{list(bucket_names)} and no sr")
     acc_table = _table([update.surface[name] for name in bucket_names])
     inc_table = _table(
         [update.surface[f"{name}v"] for name in bucket_names])
     old_table = _table(old_values)
+    signed_fallout = cp.asarray(np.asarray(
+        [item.signed_fallout for item in row.surface_accumulators],
+        dtype=np.int32))
     _launch(
         kernel_cache,
         "validate_wsm6_surface_v841_f32",
@@ -1324,20 +1403,23 @@ def recover_post_rk_wsm6_state_v841(
         (
             np.int32(n_cells),
             np.int32(len(bucket_names)),
+            np.int32(0 if sr_field is None else 1),
             sr_upper,
             acc_table,
             inc_table,
             old_table,
-            update.sr,
+            signed_fallout,
+            candidate_rho_theta if sr_field is None else sr_field,
             invalid,
         ),
     )
     started = time.perf_counter()
-    invalid_value = int(cp.asnumpy(invalid)[0])
+    from .cuda_solve_region_v841 import read_validation_word
+    invalid_value = read_validation_word(invalid, kernel_cache)
     transfer = TransferStats(int(invalid.nbytes), time.perf_counter() - started)
     if invalid_value != 0:
         raise FloatingPointError(
-            "post-RK WSM6 numeric validation refused the candidate state"
+            f"post-RK {row.scheme_name} numeric validation refused the candidate state"
         )
 
     _launch(
@@ -1346,6 +1428,7 @@ def recover_post_rk_wsm6_state_v841(
         count,
         (
             np.int32(count),
+            np.int32(len(names)),
             candidate_rho_theta,
             candidate_scalars,
             state.rho_theta,
@@ -1389,6 +1472,7 @@ __all__ = [
     "nonnegative_qv_scratch_v841",
     "physics_contract_evidence_v841",
     "recover_post_rk_wsm6_state_v841",
+    "with_lagged_diabatic_theta_v841",
 ]
 _CUDA_SOURCE = (
     CUDA_FTZ_HELPERS
@@ -1544,20 +1628,29 @@ extern "C" __global__ void recover_wsm6_v841_f32(
 }
 
 extern "C" __global__ void commit_wsm6_state_v841_f32(
-    const int count, const float *candidate_rho_theta,
+    const int count, const int nspecies, const float *candidate_rho_theta,
     const float *candidate_scalars, float *rho_theta, float *scalars)
 {
     const int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= count) return;
     rho_theta[i] = candidate_rho_theta[i];
-    for (int s = 0; s < 6; ++s) {
+    // nspecies is the ROW's block length, the same count the recovery
+    // kernel filled candidate_scalars with.  It was the literal 6 (the
+    // WSM6 block): a three-species block (Kessler, microphysics off) was
+    // read and written three planes past both buffers, which stopped the
+    // card with cudaErrorIllegalAddress at the first commit (60 km and
+    // 30 km global, 2026-10-11), and a longer block published only its
+    // first six.
+    for (int s = 0; s < nspecies; ++s) {
         scalars[s * count + i] = candidate_scalars[s * count + i];
     }
 }
 extern "C" __global__ void validate_wsm6_surface_v841_f32(
-    const int count, const int nbuckets, const float sr_upper,
+    const int count, const int nbuckets, const int check_sr,
+    const float sr_upper,
     const float *const *acc_p, const float *const *inc_p,
-    const float *const *old_p, const float *sr, int *invalid)
+    const float *const *old_p, const int *signed_fallout,
+    const float *sr, int *invalid)
 {
     const int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= count) return;
@@ -1570,10 +1663,19 @@ extern "C" __global__ void validate_wsm6_surface_v841_f32(
         const float inc[1] = {inc_p[j][i]};
         const float old[1] = {old_p[j][i]};
         const int k = 0;
-        if (!isfinite(acc[k]) || acc[k] < 0.0f || acc[k] < old[k]
-                || !isfinite(inc[k]) || inc[k] < 0.0f) atomicExch(invalid, 1);
+        // Morrison's native sedimentation sums signed fallout. Preserve
+        // those words, including decreases, instead of imposing WSM6's
+        // positive-sum invariant. The row declares this per bucket, so
+        // every other scheme and every undeclared extra stays strict.
+        if (!isfinite(acc[k]) || !isfinite(inc[k]) || !isfinite(old[k])
+                || (signed_fallout[j] == 0
+                    && (acc[k] < 0.0f || acc[k] < old[k] || inc[k] < 0.0f)))
+            atomicExch(invalid, 1);
     }
-    if (!isfinite(sr[i]) || sr[i] < 0.0f || sr[i] > sr_upper)
+    // check_sr is 0 only for a row with no precipitation bucket at all
+    // (microphysics off): no scheme forms SR there, and sr is never read.
+    if (check_sr != 0
+            && (!isfinite(sr[i]) || sr[i] < 0.0f || sr[i] > sr_upper))
         atomicExch(invalid, 1);
 }
 """
@@ -1602,7 +1704,7 @@ def _require_kernel_cache_contract(cache: KernelCache) -> None:
     if not isinstance(cache, KernelCache):
         raise TypeError("kernel_cache must be a KernelCache")
     options = tuple(cache.base_options)
-    if options != _REQUIRED_KERNEL_CACHE_OPTIONS:
+    if options != _hex_numerics.kernel_base():
         raise TypeError(
             "v8.4.1 physics KernelCache base_options must be exactly "
             f"{_REQUIRED_KERNEL_CACHE_OPTIONS}; got {options}"
@@ -1643,3 +1745,450 @@ def _kernel(cache: KernelCache, name: str) -> Any:
 def _launch(cache: KernelCache, name: str, count: int, args: tuple[Any, ...]) -> None:
     threads = 128
     _kernel(cache, name)(((count + threads - 1) // threads,), (threads,), args)
+
+
+# Separate module/digest: extending the native MPAS seam must not move the
+# existing ArWen v8.4.1 execution contract or its kernel source fingerprint.
+_MPAS_V842_SOURCE = CUDA_FTZ_HELPERS + r'''
+// MPAS-Model v8.4.2 mpas_atmphys_todynamics.F:304-498.
+extern "C" __global__ void mpas_rk_cells_v842_f32(
+    const int nlev, const int ncells, const int nsolve, const int nspecies,
+    const int pbl, const int cu, const int lw, const int sw,
+    const int *pbl_indices, const int *cu_indices,
+    const float rvord, const float *mass, const float *theta_m,
+    const float *qv, const float *const *rates,
+    float *out_theta, float *out_q, float *out_rho)
+{
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i >= nlev * ncells || i % ncells >= nsolve) return;
+    const int plane = nlev * ncells;
+    float th = 0.0f;
+    if (pbl) {
+        th = mpas_add(th, mpas_mul(rates[0][i], mass[i]));
+        for (int s = 0; s < 8; ++s) {
+            const int species = pbl_indices[s];
+            if (species >= 0) {
+                const int si = species * plane + i;
+                out_q[si] = mpas_add(out_q[si], mpas_mul(rates[1+s][i], mass[i]));
+            }
+        }
+    }
+    if (cu) {
+        th = mpas_add(th, mpas_mul(rates[9][i], mass[i]));
+        for (int s = 0; s < 5; ++s) {
+            const int species = cu_indices[s];
+            if (species >= 0) {
+                const int si = species * plane + i;
+                out_q[si] = mpas_add(out_q[si], mpas_mul(rates[10+s][i], mass[i]));
+            }
+        }
+    }
+    if (lw) th = mpas_add(th, mpas_mul(rates[15][i], mass[i]));
+    if (sw) th = mpas_add(th, mpas_mul(rates[16][i], mass[i]));
+    const float coeff = mpas_add(1.0f, mpas_mul(rvord, qv[i]));
+    // qv is the first index of cu/pbl maps; both maps always name qv.
+    const float vapor = out_q[pbl_indices[0] * plane + i];
+    const float coupled = mpas_add(mpas_mul(coeff, th),
+        mpas_div(mpas_mul(mpas_mul(rvord, theta_m[i]), vapor), coeff));
+    out_theta[i] = mpas_add(0.0f, coupled);
+    out_rho[i] = 0.0f;
+}
+
+// MPAS-Model v8.4.2 mpas_atmphys_todynamics.F:380-394,450-462.
+extern "C" __global__ void mpas_rk_edges_v842_f32(
+    const int nlev, const int nedges, const int nsolve,
+    const int pbl, const int cu_momentum, const int first,
+    const float *mass_edge, const float *pbl_edge, const float *cu_edge,
+    float *out_u, float *tend_u_phys)
+{
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i >= nlev * nedges) return;
+    if (first) {
+        if (pbl) tend_u_phys[i] = pbl_edge[i];
+        if (cu_momentum) tend_u_phys[i] = mpas_add(tend_u_phys[i], cu_edge[i]);
+    }
+    if (i % nedges >= nsolve) return;
+    float u = 0.0f;
+    if (pbl) u = mpas_add(u, mpas_mul(pbl_edge[i], mass_edge[i]));
+    if (cu_momentum) u = mpas_add(u, mpas_mul(cu_edge[i], mass_edge[i]));
+    out_u[i] = u;
+}
+
+// MPAS-Model v8.4.2 mpas_atmphys_update.F:72-254. One subtraction, strict >.
+extern "C" __global__ void mpas_radiation_bucket_v842_f32(
+    const int ncells, const int nsolve, const int ring,
+    const float dt, const float bucket, const float *const *fluxes,
+    float *const *acc, int *const *counts)
+{
+    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
+    if (cell >= nsolve) return;
+    for (int f = 0; f < 16; ++f) {
+        float value = mpas_add(acc[f][cell], mpas_mul(fluxes[f][cell], dt));
+        if (ring && bucket > 0.0f && value > bucket) {
+            counts[f][cell] += 1;
+            value = mpas_sub(value, bucket);
+        }
+        acc[f][cell] = value;
+    }
+}
+
+// MPAS-Model v8.4.2 mpas_atm_time_integration.F:5199-5210.
+// The monotonic/positive-definite transport updates time level ONE in place.
+// Its later vapor handoff subtracts this source-updated baseline, not the
+// beginning-of-step mixing ratios. Preserve the multiply/divide association.
+extern "C" __global__ void mpas_transport_source_baseline_v842_f32(
+    const int nlev, const int ncells, const int nsolve, const int nspecies,
+    const float dt, const float *before, const float *source,
+    const float *rho_old, float *baseline)
+{
+    const int q = blockDim.x * blockIdx.x + threadIdx.x;
+    const int plane = nlev * ncells;
+    if (q >= nspecies * plane) return;
+    baseline[q] = q % ncells < nsolve
+        ? mpas_add(before[q], mpas_div(mpas_mul(dt, source[q]), rho_old[q % plane]))
+        : before[q];
+}
+
+// MPAS-Model v8.4.2 mpas_atm_time_integration.F:2781-2802.
+extern "C" __global__ void mpas_transport_handoff_v842_f32(
+    const int nlev, const int ncells, const int nsolve, const int nspecies,
+    const int iqv, const int handoff, const int monotonic, const float dt,
+    const float rv, const float rd, const float rvord,
+    const float *before, float *after, const float *theta_m,
+    float *rqvdynten, float *rthdynten)
+{
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
+    const int plane = nlev * ncells;
+    if (i >= plane) return;
+    const int qi = iqv * plane + i;
+    // Handoff uses the transported vapor BEFORE the all-species clamp.
+    if (handoff) {
+        const float dq = monotonic ? mpas_div(mpas_sub(after[qi], before[qi]), dt) : 0.0f;
+        rqvdynten[i] = dq; // Native whole-array assignment includes halos.
+        if (i % ncells < nsolve) {
+            const float fac = mpas_div(1.0f, mpas_add(1.0f, mpas_mul(rvord, after[qi])));
+            const float theta_local = mpas_mul(theta_m[i], fac);
+            const float vapor_term = mpas_mul(mpas_div(mpas_mul(theta_local, rv), rd), dq);
+            rthdynten[i] = mpas_mul(fac, mpas_sub(rthdynten[i], vapor_term));
+        }
+    }
+    for (int s = 0; s < nspecies; ++s) {
+        const int si = s * plane + i;
+        // FTZ comparisons would treat negative subnormals as -0. Native
+        // WHERE (<0) clamps those words but preserves NaN and negative zero.
+        const unsigned int word = __float_as_uint(after[si]);
+        const unsigned int magnitude = word & 0x7fffffffu;
+        if ((word & 0x80000000u) && magnitude != 0u && magnitude <= 0x7f800000u)
+            after[si] = 0.0f;
+    }
+}
+'''
+MPAS_PHYSICS_V842_KERNEL_SHA256 = sha256(_MPAS_V842_SOURCE.encode()).hexdigest()
+_MPAS_V842_KERNELS: dict[tuple[int, str], Any] = {}
+_MPAS_V842_MODULES: dict[int, Any] = {}
+MPAS_RADIATION_FLUX_FIELDS_V842 = (
+    "swdnb", "swdnbc", "swdnt", "swdntc", "swupb", "swupbc", "swupt", "swuptc",
+    "lwdnb", "lwdnbc", "lwdnt", "lwdntc", "lwupb", "lwupbc", "lwupt", "lwuptc",
+)
+
+
+def _mpas_v842_launch(cache: KernelCache, name: str, count: int, args: tuple) -> None:
+    """Preserve strict RKIND subnormals; mpas_atmphys_todynamics.F:98-498; mpas_atmphys_update.F:72-254."""
+    _require_kernel_cache_contract(cache)
+    key = id(cache), name
+    kernel = _MPAS_V842_KERNELS.get(key)
+    if kernel is None:
+        from cupy.cuda import compiler, function
+        from .cuda_backend.compile_contract import NvrtcCompileCapture
+        module_key = "hexcore.mpasphys.coupling_v842"
+        options = _hex_numerics.options((*cache.base_options,"--fmad=false","--ftz=false",
+                   "--prec-div=true","--prec-sqrt=true"))
+        manifest = cache._compile_manifest
+        manifest.declare_module(module_key,source=_MPAS_V842_SOURCE,
+            requested_options=options,module_cache_key=cache._module_key(_MPAS_V842_SOURCE,options))
+        module = _MPAS_V842_MODULES.get(id(cache))
+        if module is None:
+            # CuPy RawModule appends -ftz=true. Direct NVRTC preserves the
+            # native subnormal words witnessed in p5's FTZ defect receipt.
+            with NvrtcCompileCapture() as capture:
+                image,_ = compiler.compile_using_nvrtc(_MPAS_V842_SOURCE,
+                    options=options,cache_in_memory=True)
+            manifest.record_effective_compile(module_key,capture.evidence(MPAS_PHYSICS_V842_KERNEL_SHA256))
+            module = function.Module()
+            module.load(image)
+            _MPAS_V842_MODULES[id(cache)] = module
+        kernel = module.get_function(name)
+        manifest.record_kernel(module_key,name)
+        kernel = cache._observe(f'{module_key}:{name}',kernel,name,module_key)
+        _MPAS_V842_KERNELS[key] = kernel
+    kernel(((count + 127) // 128,), (128,), args)
+
+
+def couple_mpas_physics_tendencies_v842(
+    *, mass: Any, mass_edge: Any, theta_m: Any, scalars: Any,
+    scalar_names: Sequence[str], tendencies: Mapping[str, Any],
+    selectors: Mapping[str, str], pbl_edge: Any, convection_edge: Any,
+    tend_u_phys: Any, n_cells_solve: int, n_edges_solve: int,
+    rk_step: int, dynamics_substep: int, kernel_cache: KernelCache,
+) -> Mapping[str, Any]:
+    """Native per-RK coupling; mpas_atmphys_todynamics.F:98-498.
+
+    mass is MPAS rho_zz at time level 2; theta_m/scalars are time level 1.
+    The adapter exchanges halos and projects the TWO momentum fields only at
+    rk_step=dynamics_substep=1. Inputs to this function are unweighted edges.
+    Buffers include the adapter's halo cells/edges; solve counts exclude them.
+    """
+    cp = _cp()
+    require_resident_array("mass", mass, dtype=np.float32, ndim=2)
+    nlev, ncells = mass.shape
+    require_resident_array("mass_edge", mass_edge, dtype=np.float32, ndim=2)
+    nedges = mass_edge.shape[1]
+    if mass_edge.shape[0] != nlev:
+        raise ValueError("mass and mass_edge vertical dimensions differ")
+    names = tuple(scalar_names)
+    if len(set(names)) != len(names) or "qv" not in names:
+        raise ValueError("MPAS scalar names must be unique and include qv")
+    if not 0 < n_cells_solve <= ncells or not 0 < n_edges_solve <= nedges:
+        raise ValueError("MPAS solve extents must fit resident buffers")
+    if rk_step not in (1, 2, 3) or dynamics_substep < 1:
+        raise ValueError("invalid MPAS RK stage/split")
+    require_resident_array("theta_m", theta_m, dtype=np.float32, shape=mass.shape)
+    require_resident_array("scalars", scalars, dtype=np.float32,
+                           shape=(len(names), nlev, ncells))
+    for name, array in (("pbl_edge", pbl_edge), ("convection_edge", convection_edge),
+                        ("tend_u_phys", tend_u_phys)):
+        require_resident_array(name, array, dtype=np.float32, shape=mass_edge.shape)
+    pbl = selectors["config_pbl_scheme"] != "off"
+    cu_scheme = selectors["config_convection_scheme"]
+    cu = cu_scheme != "off"
+    pbl_species = ["qv", "qc", "qi"] if pbl else []
+    if pbl and selectors["config_pbl_scheme"] == "bl_mynn":
+        pbl_species += ["qs", "ni"]
+        if selectors["config_microp_scheme"] == "mp_thompson_aerosols":
+            pbl_species += ["nc", "nifa", "nwfa"]
+    cu_species = ["qv", "qc", "qi"] if cu else []
+    if cu_scheme == "cu_kain_fritsch":
+        cu_species += ["qr", "qs"]
+    needed = set(pbl_species + cu_species + ["qv"])
+    if not needed.issubset(names):
+        raise ValueError(f"MPAS coupling missing species {sorted(needed - set(names))}")
+    pbl_order = ("qv", "qc", "qi", "qs", "ni", "nc", "nifa", "nwfa")
+    cu_order = ("qv", "qc", "qi", "qr", "qs")
+    def indices(order, used):
+        return cp.asarray(np.array([names.index(n) if n in used or n == "qv" else -1
+                                    for n in order], dtype=np.int32))
+    pbl_index = indices(pbl_order, pbl_species)
+    cu_index = indices(cu_order, cu_species)
+    rate_names = ("rthblten", "rqvblten", "rqcblten", "rqiblten", "rqsblten",
+                  "rniblten", "rncblten", "rnifablten", "rnwfablten",
+                  "rthcuten", "rqvcuten", "rqccuten", "rqicuten", "rqrcuten",
+                  "rqscuten", "rthratenlw", "rthratensw")
+    required = set()
+    if pbl:
+        required.add("rthblten")
+        required.update(rate_names[1 + pbl_order.index(n)] for n in pbl_species)
+    if cu:
+        required.add("rthcuten")
+        required.update(rate_names[10 + cu_order.index(n)] for n in cu_species)
+    lw = selectors["config_radt_lw_scheme"] != "off"
+    sw = selectors["config_radt_sw_scheme"] != "off"
+    if lw:
+        required.add("rthratenlw")
+    if sw:
+        required.add("rthratensw")
+    missing = required - set(tendencies)
+    if missing:
+        raise ValueError(f"MPAS coupling missing tendencies {sorted(missing)}")
+    zero = cp.zeros_like(mass)
+    rates = []
+    for name in rate_names:
+        array = tendencies[name] if name in required else zero
+        require_resident_array(name, array, dtype=np.float32, shape=mass.shape)
+        rates.append(array)
+    table = cp.asarray(np.array([a.data.ptr for a in rates], dtype=np.uint64))
+    outputs = {"tend_rtheta_physics": cp.zeros_like(mass),
+               "tend_rho_physics": cp.zeros_like(mass),
+               "tend_ru_physics": cp.zeros_like(mass_edge),
+               "scalars_tend": cp.zeros_like(scalars)}
+    _mpas_v842_launch(kernel_cache, "mpas_rk_cells_v842_f32", nlev * ncells,
+        (np.int32(nlev), np.int32(ncells), np.int32(n_cells_solve), np.int32(len(names)),
+         np.int32(pbl), np.int32(cu), np.int32(lw), np.int32(sw), pbl_index, cu_index,
+         RV_OVER_RD_F32, mass, theta_m, scalars[names.index("qv")], table,
+         outputs["tend_rtheta_physics"], outputs["scalars_tend"], outputs["tend_rho_physics"]))
+    _mpas_v842_launch(kernel_cache, "mpas_rk_edges_v842_f32", nlev * nedges,
+        (np.int32(nlev), np.int32(nedges), np.int32(n_edges_solve), np.int32(pbl),
+         np.int32(cu_scheme in ("cu_tiedtke", "cu_ntiedtke")),
+         np.int32(rk_step == 1 and dynamics_substep == 1), mass_edge,
+         pbl_edge, convection_edge, outputs["tend_ru_physics"], tend_u_phys))
+    return MappingProxyType(outputs)
+
+
+def project_mpas_momentum_v842(
+    *, geometry: CudaPhysicsGeometryV841, zonal: Any, meridional: Any,
+    invalid_flag: Any, kernel_cache: KernelCache,
+) -> Any:
+    """Unweighted native projection; mpas_atmphys_todynamics.F:501-552.
+
+    Reuses the existing native-order projection with a unit mass. The adapter
+    must exchange the named PBL or convection halo group before calling it,
+    including native's zero dummy cell. Projection covers every resident edge;
+    subsequent coupling applies the solve mask and current rho_edge.
+    """
+    cp = _cp()
+    require_resident_array("zonal", zonal, dtype=np.float32, ndim=2)
+    nlev, ncells = zonal.shape
+    if ncells != geometry.n_cells:
+        raise ValueError("MPAS momentum pool and geometry cell extents differ")
+    require_resident_array("meridional", meridional, dtype=np.float32, shape=zonal.shape)
+    require_resident_array("invalid_flag", invalid_flag, dtype=np.int32, shape=(1,))
+    out = cp.empty((nlev, geometry.n_edges), dtype=cp.float32)
+    unit_mass = cp.ones_like(out)
+    _launch(kernel_cache, "project_edges_v841_f32", geometry.n_edges,
+        (np.int32(nlev), np.int32(ncells), np.int32(geometry.n_edges),
+         geometry.cells_on_edge, geometry.east_cell, geometry.north_cell,
+         geometry.edge_normal_vectors, zonal, meridional, unit_mass, out, invalid_flag))
+    return out
+
+
+def update_mpas_radiation_diagnostics_v842(
+    *, fields: Mapping[str, Any], dt: float, bucket: float, ringing: bool,
+    n_cells_solve: int, kernel_cache: KernelCache,
+) -> None:
+    """Radiation accumulation/bucketing; mpas_atmphys_update.F:72-254.
+
+    Caller applies driver.F:252 guard (bucket update enabled and threshold >0).
+    Fields and counters are persistent restart arrays, mutated on solve cells.
+    """
+    cp = _cp()
+    fluxes = [fields[n] for n in MPAS_RADIATION_FLUX_FIELDS_V842]
+    acc = [fields["ac" + n] for n in MPAS_RADIATION_FLUX_FIELDS_V842]
+    counts = [fields["i_ac" + n] for n in MPAS_RADIATION_FLUX_FIELDS_V842]
+    ncells = int(fluxes[0].size)
+    if not 0 < n_cells_solve <= ncells:
+        raise ValueError("radiation solve extent must fit resident buffers")
+    for arrays, dtype in ((fluxes, np.float32), (acc, np.float32), (counts, np.int32)):
+        for a in arrays:
+            require_resident_array("radiation field", a, dtype=dtype, shape=(ncells,))
+    def table(arrays):
+        return cp.asarray(np.array([a.data.ptr for a in arrays], dtype=np.uint64))
+    _mpas_v842_launch(kernel_cache, "mpas_radiation_bucket_v842_f32", n_cells_solve,
+        (np.int32(ncells), np.int32(n_cells_solve), np.int32(ringing),
+         np.float32(dt), np.float32(bucket), table(fluxes), table(acc), table(counts)))
+
+
+def prepare_mpas_transport_source_baseline_v842(
+    *, before: Any, source: Any, rho_old: Any, dt: float,
+    n_cells_solve: int, kernel_cache: KernelCache,
+) -> Any:
+    """Time-level-one source update; mpas_atm_time_integration.F:5199-5210.
+
+    CUDA transport owns its limiter. This seam reproduces the baseline that
+    native leaves in scalars_1 for the post-transport vapor tendency. The held
+    sources and outer state remain intact for their other consumers.
+    """
+    require_resident_array("rho_old", rho_old, dtype=np.float32, ndim=2)
+    nlev, ncells = rho_old.shape
+    require_resident_array("before", before, dtype=np.float32, ndim=3)
+    require_resident_array("source", source, dtype=np.float32, shape=before.shape)
+    if before.shape[1:] != rho_old.shape:
+        raise ValueError("MPAS source baseline must match the old density extent")
+    if not 0 < n_cells_solve <= ncells or not math.isfinite(dt) or dt <= 0:
+        raise ValueError("MPAS source baseline requires positive dt and solve extent")
+    baseline = _cp().empty_like(before)
+    _mpas_v842_launch(kernel_cache, "mpas_transport_source_baseline_v842_f32", before.size,
+        (np.int32(nlev), np.int32(ncells), np.int32(n_cells_solve),
+         np.int32(before.shape[0]), np.float32(dt), before, source, rho_old, baseline))
+    return baseline
+
+
+def prepare_mpas_post_transport_v842(
+    *, before: Any, after: Any, theta_m: Any, scalar_names: Sequence[str],
+    rqvdynten: Any, rthdynten: Any, convection_scheme: str, monotonic: bool,
+    dt: float, n_cells_solve: int, kernel_cache: KernelCache,
+) -> None:
+    """Transport handoff and clamp; mpas_atm_time_integration.F:2770-2802.
+
+    before is scalars time level 1, after and theta_m are time level 2. Species
+    clamp includes halos. Vapor handoff includes halos, dry-theta tendency
+    recovery touches solve cells only and runs before the clamp. Native
+    pre_microphysics follows this operation (host/device synchronization in
+    OpenACC builds). The slot's microphysics_from_MPAS owns dry-state conversion.
+    """
+    names = tuple(scalar_names)
+    if len(set(names)) != len(names) or "qv" not in names:
+        raise ValueError("MPAS scalar names must be unique and include qv")
+    require_resident_array("theta_m", theta_m, dtype=np.float32, ndim=2)
+    nlev, ncells = theta_m.shape
+    shape = (len(names), nlev, ncells)
+    require_resident_array("before", before, dtype=np.float32, shape=shape)
+    require_resident_array("after", after, dtype=np.float32, shape=shape)
+    for name, array in (("rqvdynten", rqvdynten), ("rthdynten", rthdynten)):
+        require_resident_array(name, array, dtype=np.float32, shape=theta_m.shape)
+    if not 0 < n_cells_solve <= ncells or not math.isfinite(dt) or dt <= 0:
+        raise ValueError("MPAS transport requires a positive dt and valid solve extent")
+    _mpas_v842_launch(kernel_cache, "mpas_transport_handoff_v842_f32", nlev * ncells,
+        (np.int32(nlev), np.int32(ncells), np.int32(n_cells_solve), np.int32(len(names)),
+         np.int32(names.index("qv")),
+         np.int32(convection_scheme in ("cu_grell_freitas", "cu_ntiedtke")),
+         np.int32(monotonic), np.float32(dt), np.float32(461.6), np.float32(287.0),
+         RV_OVER_RD_F32, before, after, theta_m, rqvdynten, rthdynten))
+
+
+@dataclass(frozen=True)
+class CudaMpasStageSourcesV842:
+    """Dycore carrier names; mpas_atmphys_todynamics.F:98-498."""
+    rho: Any
+    rho_u: Any
+    rho_theta: Any
+    scalars: Any
+    # Carried microphysics heating is outside physics_get_tend's source sum;
+    # mpas_atm_time_integration.F:6931-6948,4436-4437.
+    diabatic_theta: Any | None = None
+
+
+class CudaMpasCouplingV842:
+    """Persistent edge caches and native halo order; mpas_atmphys_todynamics.F:98-498.
+
+    Bind outer time-level-one theta/scalars in the forecast adapter and pass
+    outer-step mass/edge mass at the first call; hold its result through RK. The caller owns the three persistent
+    edge pools and their restart words. Halo exchange must update the supplied
+    tendency arrays in place before projection, using MPAS's dummy cell.
+    """
+    # Bind the native persistent edge pools; mpas_atmphys_todynamics.F:98-249.
+    def __init__(self, *, selectors: Mapping[str, str], scalar_names: Sequence[str],
+                 geometry: CudaPhysicsGeometryV841, kernel_cache: KernelCache,
+                 exchange_halo_group: Any, pbl_edge: Any, convection_edge: Any,
+                 tend_u_phys: Any):
+        if not callable(exchange_halo_group):
+            raise TypeError('MPAS coupling requires an explicit halo exchange callback')
+        self.selectors, self.scalar_names = dict(selectors), tuple(scalar_names)
+        self.geometry, self.kernel_cache = geometry, kernel_cache
+        self.exchange_halo_group = exchange_halo_group
+        self.pbl_edge, self.convection_edge, self.tend_u_phys = pbl_edge, convection_edge, tend_u_phys
+
+    def get_tend(self, *, mass: Any, mass_edge: Any, theta_m: Any, scalars: Any,
+                 tendencies: Mapping[str, Any], n_cells_solve: int, n_edges_solve: int,
+                 rk_step: int, dynamics_substep: int, invalid_flag: Any) -> CudaMpasStageSourcesV842:
+        """Project and couple at the outer assembly point; mpas_atmphys_todynamics.F:380-498."""
+        cp = _cp()
+        if rk_step == 1 and dynamics_substep == 1:
+            for active, group, zonal, meridional, target in (
+                    (self.selectors['config_pbl_scheme'] != 'off',
+                     'physics:blten','rublten','rvblten',self.pbl_edge),
+                    (self.selectors['config_convection_scheme'] in ('cu_tiedtke','cu_ntiedtke'),
+                     'physics:cuten','rucuten','rvcuten',self.convection_edge)):
+                if active:
+                    self.exchange_halo_group(group)
+                    projected = project_mpas_momentum_v842(
+                        geometry=self.geometry,zonal=tendencies[zonal],meridional=tendencies[meridional],
+                        invalid_flag=invalid_flag,kernel_cache=self.kernel_cache)
+                    require_resident_array(group+' edge cache',target,dtype=np.float32,shape=projected.shape)
+                    cp.copyto(target,projected)
+        sources = couple_mpas_physics_tendencies_v842(
+            mass=mass,mass_edge=mass_edge,theta_m=theta_m,scalars=scalars,
+            scalar_names=self.scalar_names,tendencies=tendencies,selectors=self.selectors,
+            pbl_edge=self.pbl_edge,convection_edge=self.convection_edge,tend_u_phys=self.tend_u_phys,
+            n_cells_solve=n_cells_solve,n_edges_solve=n_edges_solve,
+            rk_step=rk_step,dynamics_substep=dynamics_substep,kernel_cache=self.kernel_cache)
+        return CudaMpasStageSourcesV842(sources['tend_rho_physics'],sources['tend_ru_physics'],
+                                      sources['tend_rtheta_physics'],sources['scalars_tend'])

@@ -1,10 +1,17 @@
 # gpuwm-hex User Manual
 
 gpuwm-hex runs a global, variable-resolution atmospheric model on one consumer
-CUDA GPU. The numerics are a port of the MPAS-Atmosphere v8.4.1 dynamical core;
-the physics is the ArWen engine's suite. This manual is for users at every
+CUDA GPU. It is a port of MPAS-Atmosphere v8.4.2: the dynamical core, the MPAS
+physics suites, initialization, IAU, limited-area runs, streams, restart and
+diagnostics, each checked against native MPAS. The default physics is the
+ArWen engine's suite. This manual is for users at every
 level of experience: it starts from "what is an atmospheric model" and ends at
 the receipts behind every measured number.
+
+[MPAS compatibility](../mpas-compatibility.md) states the dycore claim (byte
+identity with native MPAS-A v8.4.2 built strictly) and its measured scope,
+supported formats and namelist options, and the reproducible `verify-dycore`
+command for an outside modeller.
 
 gpuwm-hex is a research and educational tool. It is never a substitute for
 official forecasts and warnings from your national meteorological service. Do
@@ -21,8 +28,8 @@ independent port and is not affiliated with or endorsed by them.)*
    gap doctor names, obtaining assets, first initial conditions, first
    forecast, first rendered products.
 3. [Concepts](03-concepts.md) — mesh, static, init; the doors; why the
-   dynamical core is pinned and the physics is judged by observations; what a
-   refusal is and why every refusal names its remedy.
+   ported MPAS is matched against native MPAS while ArWen's physics is judged
+   by observations; what a refusal is and why every refusal names its remedy.
 4. [Meshes and static fields](04-meshes-and-static.md) — validate a mesh pair,
    generate a new mesh and build its static, capacity planning with the
    measured footprint model.
@@ -38,6 +45,25 @@ independent port and is not affiliated with or endorsed by them.)*
    what each means, and the remedy for each.
 9. [Reference](09-reference.md) — doors and flags, environment variables, the
    mesh registry, the test battery, and where receipts live.
+10. [What's new in 0.4](10-whats-new-0.4.md) — the full MPAS-A v8.4.2 port:
+    byte identity with native MPAS, the MPAS physics suites on the GPU,
+    correct mode, native initialization and statics, hex global, the
+    storm-following region and RRFS-MPAS; then forecast products, restart,
+    seven init sources, country rows, the observation scorecard and the hourly
+    ensemble. Each with its command, its proof, a picture and what it does not
+    do yet.
+12. [Several cards on one host](12-same-host-ranks.md) — `--samehost-devices`,
+    layouts, checkpoints, and what is still unqualified.
+
+MPAS physics: [the MPAS physics seam](mpas-physics-seam.md) (suites, slots,
+backends, correct mode) and [physics suites](../physics-suites.md).
+
+Door guides outside the chapters: [hex global](../global-door.md),
+[products](../products-door.md),
+[init sources](../init-sources.md), [country rows](../country-door.md),
+[observation scorecard](../forecast-observation-scorecard.md),
+[hourly ensemble](../hourly-ensemble.md),
+[local time stepping](../fullstep-local-timestep.md).
 
 ## Conventions
 
@@ -69,14 +95,17 @@ repository-relative files. A measured claim says what it was measured on
 and when; a claim without that is a definition or a description of
 behavior, not a measurement.
 
-**Declared divergences.** gpuwm-hex differs from native MPAS-Atmosphere in
-three measured, physics-shaped ways. They are stated in chapter 3, quantified
+**Declared divergences.** Three measured physics differences from native
+MPAS-Atmosphere are stated in chapter 3, quantified
 in [`docs/declared-divergences.md`](../declared-divergences.md), and never
-hidden behind an option. Read them before trusting a number.
+hidden behind an option. The dycore identity result and its scope are in
+[MPAS compatibility](../mpas-compatibility.md). Read both before trusting a number.
 
-**Version.** This manual describes gpuwm-hex 0.3.3 with the gpuwm 2.8.0
-engine. Where a measurement was taken on specific hardware, the card is
-named beside the number.
+**Version.** This manual describes the gpuwm-hex 0.4.1 candidate with the gpuwm 2.9.2
+engine. Chapters 1 to 9 were walked against the earlier wheels named in
+*Conventions*; chapter 10 says where each 0.4 result was measured. Where a
+measurement was taken on specific hardware, the card is named beside the
+number.
 
 **Vocabulary.** The *distribution* (what you `pip install`) and the *command*
 (what you type) are both `gpuwm-hex`. The *import namespace* is `hexcore`,
@@ -84,3 +113,5 @@ renamed from `mpas_port` at 0.2.0 and explained in the README. A *door* is a com
 user can walk through; a *lane* is a capability path such as the forecast
 or limited-area lane. The *engine* is the `gpuwm` distribution that supplies the physics
 seam and the Rust binaries.
+
+Stochastic global ensembles: [SPPT, SKEB and per-member seeds](../stochastic-physics.md).

@@ -693,7 +693,7 @@ def main(argv: list[str] | None = None) -> int:
                 control_band, arms[0]["band"]
             )
         result["what_this_does_not_prove"] = [
-            "byte-identity against native MPAS-A: the only native v8.4.1 "
+            "native MPAS-A dry-step tolerance agreement: the historical native v8.4.1 "
             f"reference this program holds ran at "
             f"{dt_admission.PROVEN_DT_SECONDS:g} s, so no other timestep can "
             "have that half without a fresh native run",

@@ -28,6 +28,18 @@ Two Rust binaries do all field-data work; this command is orchestration only.
 There is no fallback plotter. If the Rust renderer is absent the door
 refuses by name; it never draws a weather field in Python.
 
+## Remap (`--remap`, default `auto`)
+
+`auto` asks the converter for `--remap product` on a single run: linear
+barycentric interpolation on the mesh's own Delaunay triangles for state,
+first-order area-conservative remap for accumulated precipitation (each
+frame records the window integral against the mesh's own), nearest cell for
+categories and soil. A `--compose` render keeps the nearest-cell map (it
+switches source point by point, so there is no single mesh to interpolate
+across) and an explicit `--remap product` there is refused by name.
+`--remap nearest` is the frozen nearest-cell map. The methods, their
+measured accuracy and the per-variable table are in `products-door.md`.
+
 ## Executable resolution
 
 | Binary | Order |
@@ -74,6 +86,22 @@ delivered png tree is a shipped defect (readers publish half-finished
 temporaries); an explicit `--scratch` that resolves inside `--out` is
 refused by name. Scratch is deleted after a clean run and the deletion is
 reported; `--keep-scratch` retains it, and any failure retains it.
+
+## One store for a series: `--series`
+
+By default each frame is imported into its own renderer store. With
+`--series` every frame of the render goes into ONE store and one renderer
+start draws them all; each picture is then filed under the frame whose lead
+its engine name carries, and each skip or failure under the frame file the
+renderer names in it. That is the only arrangement in which the windowed
+products (`qpf_1h`, `qpf_6h`, `qpf_12h`, `qpf_24h`, `10m_wind_run_max`,
+`2m_temp_0_24h_max`, ...) can be drawn: a window is the difference or the
+extreme of several stored frames, and a store per frame holds one, so every
+windowed row listed as "windowed accumulations need more than one stored
+whole-hour frame". Frames that do not carry distinct leads (or a single
+frame) fall back to a store per frame, and the door says so. The product
+door always asks for `--series`; a bare `render` keeps per-frame stores so
+existing receipts keep their shape.
 
 ## Selection pass-through
 

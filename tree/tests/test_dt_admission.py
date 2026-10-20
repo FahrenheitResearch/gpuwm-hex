@@ -1,15 +1,14 @@
-"""Timestep admission: the opened pin stays a gate, and the clocks agree.
+"""Timestep anchors are evidence, the cadences are a rule, the clocks agree.
 
 Two things are under test here and they are different defects.
 
-**The freeze.**  ``V841MpasColumnPhysicsConfig.validate`` refused any
-``config_dt`` but 120.0 with a literal, alongside ``config_bldt_seconds``
-and ``config_cudt_seconds``.  Its premise was "unproven at other dt", not
-"wrong at other dt", so it is now the earned-anchor registry
-:mod:`hexcore.dt_admission` -- one anchored timestep today, every other
-value refused BY NAME with the evidence an anchor needs and the procedure
-that mints it.  The admitted set is unchanged; what changed is that a ruling
-now has a table to edit instead of a literal.
+**The freeze, and its retirement.**  ``V841MpasColumnPhysicsConfig.validate``
+refused any ``config_dt`` but 120.0 with a literal, then (2026-08-26) any
+timestep the earned-anchor registry did not hold.  On 2026-10-10 the owner ruled
+"we need to be able to do what we want": the registry is now evidence that
+the run RECORDS (``dt_admission.anchor_record``), and the only refusals left
+name a breakage -- a cadence the timestep cannot schedule, a clock that does
+not close in binary64 (``dt_admission.require_cadences``).
 
 **The rebinding gap, which was its own defect.**  MEASURED (2026-08-26,
 the proving RTX 5090): ``bind_mesh`` rebound ``DT_SECONDS`` in the proof and
@@ -113,17 +112,24 @@ def _unanchored_dt() -> float:
 # the refusal itself
 # ---------------------------------------------------------------------------
 def test_unanchored_refusal_names_the_timestep_the_breakage_and_the_remedy():
-    text = dt_admission.unanchored_refusal(20.0)
-    assert "config_dt=20 s" in text
-    # the concrete breakage, with the measurement that produced it
-    assert "18,820 MiB" in text and "285 s" in text
-    assert "120.0 != 100.0" in text
-    # the roster of what IS anchored
-    assert "120 s" in text
-    # the remedy, and who may apply it
-    assert "tools/mint_dt_anchor.py" in text
-    assert "ADMITTED_TIMESTEPS" in text
-    assert "a ruling" in text
+    """RETIRED 2026-10-10: there is no unanchored refusal to word any more.
+
+    The anchor gate's refusal builders are gone; what replaced them is a
+    record, and the record names the configuration and the roster so a
+    reader still sees what evidence exists.
+    """
+
+    for retired in ("unanchored_refusal", "cadence_mismatch_refusal", "require_dt_anchor"):
+        assert not hasattr(dt_admission, retired), retired
+    probe = _unanchored_dt()
+    record = dt_admission.anchor_record(
+        probe, radiation_seconds=1800.0, surface_pbl_seconds=probe,
+        cumulus_seconds=probe,
+    )
+    assert record["matched"] is False
+    assert record["configuration"]["dt_seconds"] == probe
+    assert "120 s (GF)" in record["registered"]
+    assert "not refused" in record["note"]
 
 
 def test_the_refusal_reports_the_admitted_roster(monkeypatch):
@@ -154,60 +160,59 @@ def test_the_refusal_reports_the_admitted_roster(monkeypatch):
 def test_an_unanchored_timestep_is_refused_and_an_anchored_one_is_admitted(
     monkeypatch,
 ):
+    """Both are recorded; neither is refused.  A registered row is matched."""
+
     probe = _unanchored_dt()
-    with pytest.raises(DtAdmissionError) as caught:
-        dt_admission.require_dt_anchor(
-            probe,
-            radiation_seconds=600.0,
-            surface_pbl_seconds=probe,
-            cumulus_seconds=probe,
-        )
-    assert "holds no timestep anchor" in str(caught.value)
+    unanchored = dt_admission.anchor_record(
+        probe, radiation_seconds=600.0, surface_pbl_seconds=probe,
+        cumulus_seconds=probe,
+    )
+    assert unanchored["matched"] is False
 
     monkeypatch.setattr(
         dt_admission,
         "ADMITTED_TIMESTEPS",
         {**ADMITTED_TIMESTEPS, dt_admission.dt_key(probe): _anchor(probe)},
     )
-    admitted = dt_admission.require_dt_anchor(
-        probe,
-        radiation_seconds=600.0,
-        surface_pbl_seconds=probe,
+    anchored = dt_admission.anchor_record(
+        probe, radiation_seconds=600.0, surface_pbl_seconds=probe,
         cumulus_seconds=probe,
     )
-    assert admitted.dt_seconds == probe
+    assert anchored["matched"] is True
+    assert anchored["row"]["dt_seconds"] == probe
 
 
 def test_an_anchored_timestep_at_a_radiation_cadence_it_never_measured_is_refused():
-    """How often a scheme is CALLED is part of what the anchor measured."""
+    """Recorded as a cadence mismatch against the row; not refused."""
 
-    with pytest.raises(DtAdmissionError) as caught:
-        dt_admission.require_dt_anchor(
-            120.0,
-            radiation_seconds=1200.0,  # radiation every ten steps instead of five
-            surface_pbl_seconds=120.0,
-            cumulus_seconds=120.0,
-        )
-    message = str(caught.value)
-    assert "at physics cadences this run does not use" in message
-    assert "earns its own" in message
+    record = dt_admission.anchor_record(
+        120.0,
+        radiation_seconds=1200.0,  # radiation every ten steps instead of five
+        surface_pbl_seconds=120.0,
+        cumulus_seconds=120.0,
+    )
+    assert record["matched"] is False
+    assert record["cadences_match"] is False
+    assert record["row"]["radiation_seconds"] == 600.0
+    assert record["configuration"]["radiation_seconds"] == 1200.0
 
 
 def test_a_held_surface_pbl_cadence_at_an_anchored_timestep_is_admitted_derived():
-    """The one cadence a run may SELECT is admitted on the welded row's
-    dycore evidence, with its physics band stamped NOT MEASURED rather than
-    borrowed (hexcore.dt_admission.derived_held_cadence_anchor)."""
+    """The held cadence is recorded against the row DERIVED from the welded
+    anchor, whose physics band is stamped NOT MEASURED rather than borrowed
+    (hexcore.dt_admission.derived_held_cadence_anchor)."""
 
-    anchor = dt_admission.require_dt_anchor(
+    record = dt_admission.anchor_record(
         120.0,
         radiation_seconds=600.0,
         surface_pbl_seconds=600.0,  # YSU every five steps instead of every step
         cumulus_seconds=120.0,
     )
-    assert anchor.derived is True
-    assert anchor.derived_from == dt_admission.dt_key(120.0, "gf")
-    assert anchor.surface_pbl_seconds == 600.0
-    assert anchor.physics_health.startswith("NOT MEASURED")
+    assert record["matched"] is True
+    row = record["row"]
+    assert row["derived_from"] == dt_admission.dt_key(120.0, "gf")
+    assert row["surface_pbl_seconds"] == 600.0
+    assert row["physics_health"].startswith("NOT MEASURED")
     assert dt_admission.registered_anchor(120.0, "gf", 600.0) is None
 
 
@@ -251,66 +256,63 @@ def test_the_proven_timestep_is_the_one_the_native_reference_was_run_at():
 # the frozen config admits from the registry, and the admitted set is unchanged
 # ---------------------------------------------------------------------------
 def test_the_frozen_config_admits_exactly_the_earned_set_and_nothing_else():
-    """The gate did not go away when the ruling came; it got a bigger table.
+    """RETIRED 2026-10-10 as a gate: every schedulable timestep builds.
 
-    it was ruled on 2026-08-26 that the lane stops being pinned to 120 s, and
-    four anchors were earned against that ruling.  What must NOT have happened
-    is the refusal becoming permissive: an unearned timestep is still refused
-    before anything is allocated, and it is refused BY NAME.
+    owner ruling.  The earned rows still
+    build, and so do timesteps no row holds -- 60 s and 90 s among them, the
+    MPAS-A standard steps for 10 km and 15 km.  What is still refused is a
+    cadence the timestep cannot schedule, by name.
     """
 
     from hexcore.config_v841 import V841MpasColumnPhysicsSmagorinskyGwdoConfig
 
     V841MpasColumnPhysicsSmagorinskyGwdoConfig().validate()
-
-    # Every EARNED row builds, including the convection-off rows the
-    # 2026-08-26 ruling added: the row's own cumulus selection travels with
-    # its cadences, because the two are one decision.
     for anchor in ADMITTED_TIMESTEPS.values():
         V841MpasColumnPhysicsSmagorinskyGwdoConfig(
             config_dt=anchor.dt_seconds,
             config_bldt_seconds=anchor.surface_pbl_seconds,
             config_cudt_seconds=anchor.cumulus_seconds,
             config_convection_scheme=(
-                "off" if anchor.cumulus_scheme is None else "cu_grell_freitas"
+                "off" if anchor.cumulus_scheme is None
+                else "cu_ntiedtke" if anchor.cumulus_scheme == "ntiedtke"
+                else "cu_grell_freitas"
             ),
         ).validate()
 
     probe = _unanchored_dt()
-    for dt in (probe, 60.0, 90.0):
-        if dt_admission.admitted_timestep(dt) is not None:
-            continue
-        with pytest.raises(ConfigurationRefusal) as caught:
-            V841MpasColumnPhysicsSmagorinskyGwdoConfig(
-                config_dt=dt, config_bldt_seconds=dt, config_cudt_seconds=dt
-            ).validate()
-        message = str(caught.value)
-        assert message.startswith(f"config_dt={dt!r} is refused")
+    for dt in (probe, 60.0, 90.0, 180.0):
+        V841MpasColumnPhysicsSmagorinskyGwdoConfig(
+            config_dt=dt, config_bldt_seconds=dt, config_cudt_seconds=dt
+        ).validate()
+    with pytest.raises(ConfigurationRefusal) as caught:
+        V841MpasColumnPhysicsSmagorinskyGwdoConfig(
+            config_dt=90.0, config_bldt_seconds=90.0, config_cudt_seconds=90.0,
+            config_radt_seconds=600.0,
+        ).validate()
+    message = str(caught.value)
+    assert message.startswith("config_dt=90.0 is refused")
+    assert "not a positive integer multiple" in message
 
 
 def test_an_anchored_timestep_is_still_refused_at_a_cadence_it_never_measured():
-    """Earning 20 s did not earn 20 s with radiation at 1200 s.
-
-    How often a scheme is CALLED is part of what an anchor certifies, so an
-    anchored dt run at a cadence its anchor did not measure is a different
-    configuration and is refused -- except the surface/PBL cadence, which
-    is selectable and admitted through a derived row (the test after this).
-    """
+    """A cadence an anchor did not measure is admitted; one the timestep
+    cannot divide is refused, because no step exists to run it on."""
 
     from hexcore.config_v841 import V841MpasColumnPhysicsSmagorinskyGwdoConfig
 
     anchor = min(ADMITTED_TIMESTEPS.values(), key=lambda a: a.dt_seconds)
+    V841MpasColumnPhysicsSmagorinskyGwdoConfig(
+        config_dt=anchor.dt_seconds,
+        config_radt_seconds=1200.0,
+        config_bldt_seconds=anchor.dt_seconds,
+        config_cudt_seconds=anchor.cumulus_seconds,
+        config_convection_scheme=(
+            "off" if anchor.cumulus_scheme is None else "cu_grell_freitas"
+        ),
+    ).validate()
     with pytest.raises(ConfigurationRefusal) as caught:
-        V841MpasColumnPhysicsSmagorinskyGwdoConfig(
-            config_dt=anchor.dt_seconds,
-            config_radt_seconds=1200.0,
-            config_bldt_seconds=anchor.dt_seconds,
-            config_cudt_seconds=anchor.cumulus_seconds,
-            config_convection_scheme=(
-                "off" if anchor.cumulus_scheme is None else "cu_grell_freitas"
-            ),
-        ).validate()
-    assert "is anchored, but at physics cadences this run does not use" in str(
+        V841MpasColumnPhysicsSmagorinskyGwdoConfig(config_radt_seconds=1000.0).validate()
+    assert "radiation_seconds=1000 s is not a positive integer multiple" in str(
         caught.value
     )
 
@@ -334,12 +336,7 @@ def test_the_config_admits_a_held_surface_pbl_cadence_through_the_derived_row():
 
 
 def test_the_config_and_the_mesh_registry_admit_from_the_same_surface():
-    """One registry, two callers.  Two literals could disagree; a table cannot.
-
-    Before this lane the mesh row's dt and the config's dt were separately
-    hardcoded 120.0 in two files, which is exactly the arrangement that let a
-    100 s row bind and then die inside the dycore.
-    """
+    """One cadence rule, two callers; and no anchor gate in either."""
 
     binding = _load_tool("mpas_mesh_binding.py", "_test_dt_mesh_binding")
     assert binding.dt_admission is dt_admission
@@ -347,10 +344,13 @@ def test_the_config_and_the_mesh_registry_admit_from_the_same_surface():
     from hexcore import config_v841
 
     source = Path(config_v841.__file__).read_text(encoding="utf-8")
-    assert "dt_admission.require_dt_anchor" in source
-    assert '"config_dt": 120.0' not in source, (
-        "the literal the registry replaced must not come back beside it"
-    )
+    assert "dt_admission.require_cadences" in source
+    assert "require_dt_anchor" not in source
+    assert "require_step_anchor" not in source
+    assert '"config_dt": 120.0' not in source
+    binding_source = (DRIVERS / "mpas_mesh_binding.py").read_text(encoding="utf-8")
+    assert "dt_admission.require_cadences(" in binding_source
+    assert "unanchored_refusal" not in binding_source
 
 
 # ---------------------------------------------------------------------------
@@ -437,9 +437,15 @@ def test_the_forecast_host_builds_its_configuration_at_the_bound_timestep(
 
 
 def test_an_unanchored_timestep_is_refused_before_a_mesh_file_is_opened():
+    """An unanchored timestep builds; an unschedulable one still refuses on
+    the host, before a mesh file is opened."""
+
     forecast = _load_tool("run_cuda_v841_forecast.py", "_test_dt_forecast_refusal")
-    with pytest.raises(ConfigurationRefusal):
-        forecast.build_forecast_config(dt_seconds=_unanchored_dt()).validate()
+    forecast.build_forecast_config(dt_seconds=_unanchored_dt()).validate()
+    forecast.build_forecast_config(dt_seconds=90.0).validate()
+    with pytest.raises(ConfigurationRefusal) as caught:
+        forecast.build_forecast_config(dt_seconds=90.0, radiation_seconds=600.0).validate()
+    assert "not a positive integer multiple" in str(caught.value)
 
 
 def test_the_constructor_values_take_their_clocks_from_the_config():
@@ -541,32 +547,29 @@ def test_the_receipt_records_how_much_more_often_convection_would_be_called():
     assert fine["cadences"]["cumulus_calls_per_hour_at_proven_dt"] == 30.0
 
 
-def test_largest_admissible_dt_reproduces_the_registered_graded_rows():
-    """Validate the instrument against rows measured by a different lane."""
+def test_the_retired_courant_policy_function_is_gone():
+    """``largest_admissible_dt`` applied the 0.90 x 125 m/s outer-step policy
+    that was retired on 2026-10-10 (it refused MPAS-A's own 90 s at 15 km).
+    Nothing called it; an exported function still quoting the retired policy
+    is an orphaned guard.  The largest step a run can take is
+    ``hexcore.timestep_admission.largest_schedulable_dt`` over the measured
+    stability maximum."""
 
-    assert (
-        dt_admission.largest_admissible_dt(14_398.0)["largest_admissible_dt_seconds"]
-        == 100.0
-    )
-    assert (
-        dt_admission.largest_admissible_dt(13_311.8)["largest_admissible_dt_seconds"]
-        == 75.0
-    )
-    assert (
-        dt_admission.largest_admissible_dt(12_492.8)["largest_admissible_dt_seconds"]
-        == 75.0
-    )
-    # 600/7 = 85.714... clears Courant on the first of those and is skipped,
-    # because its multiples are not exact.
-    rejected = dt_admission.largest_admissible_dt(13_311.8)[
-        "rejected_for_clock_closure"
-    ]
-    assert rejected and abs(rejected[0] - 600.0 / 7.0) < 1e-9
+    from hexcore import timestep_admission
+
+    assert not hasattr(dt_admission, "largest_admissible_dt")
+    assert timestep_admission.largest_schedulable_dt(102.4, 1800.0) == 100.0
+    assert timestep_admission.largest_schedulable_dt(95.84, 600.0) == 75.0
+    assert timestep_admission.largest_schedulable_dt(102.44, None) == 102.4
+    assert timestep_admission.largest_schedulable_dt(0.4, 1800.0) == 0.0
 
 
 def test_the_courant_floor_for_the_proven_timestep_is_the_measured_19km_window():
+    """Stability moved to the mesh-measured check; the schedule receipt says so."""
+
     receipt = dt_admission.schedule_receipt(120.0)
-    assert abs(receipt["courant"]["minimum_dc_edge_m"] - 16_666.666666666668) < 1e-6
+    assert "timestep_admission" in receipt["courant"]["note"]
+    assert "minimum_dc_edge_m" not in receipt["courant"]
 
 
 # ---------------------------------------------------------------------------
@@ -610,15 +613,20 @@ def test_the_integration_plan_names_what_it_does_not_prove():
 # the candidate mint: the only way through the gate, and it is loud
 # ---------------------------------------------------------------------------
 def test_a_candidate_mint_needs_the_authorization_verbatim():
-    for authorization in ("", "yes", dt_admission.CANDIDATE_MINT_AUTHORIZATION.upper()):
-        with pytest.raises(DtAdmissionError) as caught:
-            dt_admission.candidate_mint(
-                20.0, authorization=authorization, card="the proving RTX 5070 Ti"
-            )
-        assert "authorization verbatim" in str(caught.value)
+    """RETIRED 2026-10-10: the sentence gates nothing, so it is not checked."""
+
+    probe = _unanchored_dt()
+    for authorization in ("", "yes"):
+        with dt_admission.candidate_mint(
+            probe, authorization=authorization, card="the proving RTX 5070 Ti"
+        ) as candidate:
+            assert candidate.admitted_on == "CANDIDATE-UNANCHORED"
 
 
 def test_a_candidate_mint_needs_a_card_and_a_timestep_worth_earning():
+    """The card is still required (the evidence records hardware); a
+    configuration that already holds a row keeps that row, unshadowed."""
+
     with pytest.raises(DtAdmissionError) as caught:
         dt_admission.candidate_mint(
             20.0,
@@ -627,13 +635,15 @@ def test_a_candidate_mint_needs_a_card_and_a_timestep_worth_earning():
         )
     assert "must name the card" in str(caught.value)
 
-    with pytest.raises(DtAdmissionError) as caught:
-        dt_admission.candidate_mint(
-            PROVEN_DT_SECONDS,
-            authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-            card="the proving RTX 5070 Ti",
-        )
-    assert "already holds an anchor" in str(caught.value)
+    before = dt_admission.ADMITTED_TIMESTEPS
+    with dt_admission.candidate_mint(
+        PROVEN_DT_SECONDS,
+        authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
+        card="the proving RTX 5070 Ti",
+    ) as row:
+        assert row.admitted_on == "2026-08-26"
+        assert dt_admission.ADMITTED_TIMESTEPS is before
+    assert dt_admission.ADMITTED_TIMESTEPS is before
 
 
 def test_a_candidate_mint_refuses_before_a_card_if_the_host_half_fails():
@@ -683,16 +693,23 @@ def test_a_candidate_row_is_never_certified_as_an_anchor():
 # the door answers the timestep question without a card and without a file
 # ---------------------------------------------------------------------------
 def test_the_door_refuses_an_unanchored_row_from_the_row_alone():
+    """The door records the anchor answer and refuses only an unschedulable
+    cadence, from the row alone."""
+
     from hexcore import forecast_door
 
     probe = _unanchored_dt()
+    record = forecast_door.admit_timestep("some-row", probe)
+    assert record["admitted"] is True
+    assert record["anchor"]["matched"] is False
+    assert record["refuses_for_missing_anchor"] is False
     with pytest.raises(forecast_door.ForecastDoorRefusal) as caught:
-        forecast_door.admit_timestep("some-row", probe)
+        forecast_door.admit_timestep("some-row", 90.0, radiation_seconds=600.0)
     message = str(caught.value)
-    assert f"--mesh some-row declares dt={probe:g} s" in message
-    assert "holds no timestep anchor" in message
-    record = forecast_door.admit_timestep("x4.163842", 120.0)
-    assert record["admitted"] and record["dt_seconds"] == 120.0
+    assert "--mesh some-row runs dt=90 s" in message
+    assert "not a positive integer multiple" in message
+    record = forecast_door.admit_timestep("x4.163842", 120.0, radiation_seconds=600.0)
+    assert record["admitted"] and record["anchor"]["matched"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -713,56 +730,45 @@ def _binding_module(alias: str):
 
 
 def test_a_candidate_row_override_needs_the_authorization_verbatim():
+    """RETIRED 2026-10-10: the override takes any authorization."""
+
     from hexcore import mesh_row_candidate
 
     probe = _unanchored_dt()
-    with dt_admission.candidate_mint(
-        probe,
-        authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-        card="the proving RTX 5070 Ti",
+    with mesh_row_candidate.candidate_mesh_dt(
+        "x1.40962", probe, authorization="because I said so"
     ):
-        with pytest.raises(DtAdmissionError) as caught:
-            mesh_row_candidate.candidate_mesh_dt(
-                "x1.40962", probe, authorization="because I said so"
-            )
-    assert "verbatim" in str(caught.value)
+        row = _binding_module("_test_binding_any_authorization").MESH_BINDINGS["x1.40962"]
+        assert row.dt_seconds == probe
 
 
 def test_a_candidate_row_override_refuses_without_a_live_timestep_admission():
-    """The tight guard: the row can never move on its own.
-
-    A row declaring an unanchored timestep is exactly the thing that cost
-    18,820 MiB and 285 s on 2026-08-26.  Opening the row without opening the
-    timestep gate would rebuild that defect with a nicer name, so the override
-    refuses unless the timestep is ALREADY admitted as a candidate.
-    """
+    """RETIRED 2026-10-10: no live candidate mint is needed, because no
+    timestep is refused for lacking an anchor."""
 
     from hexcore import mesh_row_candidate
 
     probe = _unanchored_dt()
     assert dt_admission.admitted_timestep(probe) is None
-    with pytest.raises(DtAdmissionError) as caught:
-        mesh_row_candidate.candidate_mesh_dt(
-            "x1.40962",
-            probe,
-            authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-        )
-    text = str(caught.value)
-    assert "not admitted at all" in text
-    assert "candidate_mint" in text
+    with mesh_row_candidate.candidate_mesh_dt(
+        "x1.40962", probe, authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
+    ):
+        assert dict(mesh_row_candidate.active_overrides()) == {"x1.40962": probe}
 
 
 def test_a_candidate_row_override_refuses_a_timestep_that_holds_a_real_anchor():
+    """RETIRED 2026-10-10: an anchored timestep may be overridden too."""
+
     from hexcore import mesh_row_candidate
 
-    with pytest.raises(DtAdmissionError) as caught:
-        mesh_row_candidate.candidate_mesh_dt(
-            "x1.40962",
-            PROVEN_DT_SECONDS,
-            authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-        )
-    assert "holds a real anchor" in str(caught.value)
-    assert "REGISTERED row" in str(caught.value)
+    with mesh_row_candidate.candidate_mesh_dt(
+        "x1.40962",
+        PROVEN_DT_SECONDS,
+        authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
+    ):
+        assert dict(mesh_row_candidate.active_overrides()) == {
+            "x1.40962": PROVEN_DT_SECONDS
+        }
 
 
 def test_the_override_reaches_a_registry_loaded_the_way_the_door_loads_it():
@@ -818,30 +824,26 @@ def test_no_mint_in_flight_leaves_the_registry_object_untouched():
 
 
 def test_an_overridden_row_still_faces_every_other_gate():
-    """The override moves ONE field and buys nothing else.
-
-    A candidate timestep still has to divide the radiation cadence, and the
-    row's ``__post_init__`` is what checks it -- so a candidate that cannot be
-    a registry row at all is refused where the row is built, not one card-hour
-    later.
-    """
+    """The cadence check moved from the row to the bind, where the run's own
+    radiation interval is known: the override loads, and the cadence rule the
+    bind applies still refuses 90 s against a 600 s interval."""
 
     from hexcore import mesh_row_candidate
 
-    with dt_admission.candidate_mint(
-        90.0,
-        authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-        card="the proving RTX 5070 Ti",
-        radiation_seconds=450.0,
+    with mesh_row_candidate.candidate_mesh_dt(
+        "x1.40962", 90.0, authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
     ):
-        with mesh_row_candidate.candidate_mesh_dt(
-            "x1.40962",
-            90.0,
-            authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-        ):
-            with pytest.raises(Exception) as caught:
-                _binding_module("_test_binding_indivisible")
-    assert "does not divide" in str(caught.value)
+        row = _binding_module("_test_binding_indivisible").MESH_BINDINGS["x1.40962"]
+        assert row.dt_seconds == 90.0
+    with pytest.raises(DtAdmissionError) as caught:
+        dt_admission.require_cadences(
+            90.0, radiation_seconds=600.0, surface_pbl_seconds=None,
+            cumulus_seconds=90.0,
+        )
+    assert "not a positive integer multiple" in str(caught.value)
+    dt_admission.require_cadences(
+        90.0, radiation_seconds=1800.0, surface_pbl_seconds=None, cumulus_seconds=90.0,
+    )
 
 
 def test_two_mints_cannot_share_one_row():
@@ -932,3 +934,44 @@ def test_the_verdict_travels_into_a_run_receipt():
 
     for anchor in ADMITTED_TIMESTEPS.values():
         assert anchor.as_dict()["physics_health"] == anchor.physics_health
+
+
+@pytest.mark.parametrize("defect, certified", [
+    ("legacy-description-absent", True),
+    ("description-present", True),
+    ("description-wrong", False),
+    ("cadence-missing", False),
+    ("rk-missing", False),
+    ("wsm6-missing", False),
+    ("clock-missing", False),
+])
+def test_legacy_schedule_description_keeps_all_other_fields_strict(
+    receipts, tmp_path, defect, certified
+):
+    mint = _load_tool("mint_dt_anchor.py", "_test_mint_legacy_schedule")
+    anchor = dt_admission.registered_anchor(PROVEN_DT_SECONDS)
+    assert anchor is not None
+    stored = json.loads((TREE_ROOT / anchor.schedule_receipt).read_text(encoding="utf-8"))
+    description = "surface_pbl_steps_held_between_calls"
+    stored["cadences"].pop(description, None)
+    if defect == "description-present":
+        stored["cadences"][description] = dt_admission.schedule_receipt(
+            PROVEN_DT_SECONDS
+        )["cadences"][description]
+    elif defect == "description-wrong":
+        stored["cadences"][description] = 1
+    elif defect == "cadence-missing":
+        del stored["cadences"]["stepra"]
+    elif defect == "rk-missing":
+        del stored["rk_schedule"]
+    elif defect == "wsm6-missing":
+        del stored["wsm6"]
+    elif defect == "clock-missing":
+        del stored["clock_closure"]
+    path = tmp_path / "schedule.json"
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    probe = dataclasses.replace(anchor, schedule_receipt=str(path))
+    verdict = mint.verify_anchor(probe, root=TREE_ROOT)
+    assert verdict["certified"] is certified, verdict
+    if not certified:
+        assert verdict["findings"], verdict

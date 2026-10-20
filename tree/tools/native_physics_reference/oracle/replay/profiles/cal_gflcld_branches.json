@@ -1,0 +1,38 @@
+{
+  "dimensions": {
+    "ims": 1,
+    "ime": 1,
+    "kms": 1,
+    "kme": 8,
+    "jms": 1,
+    "jme": 1
+  },
+  "values": {
+    "cldfrac": "0.5_real32",
+    "qc": "0.0_real32",
+    "qi": "0.0_real32",
+    "its": "1",
+    "ite": "1",
+    "jts": "1",
+    "jte": "1",
+    "kts": "1",
+    "kte": "8",
+    "qc_cu": "0.0002_real32",
+    "qi_cu": "0.00005_real32"
+  },
+  "imports": [
+    "  use mpas_atmphys_vars,only: native_ims=>ims,native_ime=>ime,native_kms=>kms,native_kme=>kme,native_jms=>jms,native_jme=>jme"
+  ],
+  "initialize": [
+    "  native_ims=1; native_ime=1; native_kms=1; native_kme=8; native_jms=1; native_jme=1",
+    "  cldfrac(1,:,1)=[0.0_real32,0.001_real32,0.5_real32,0.5_real32,0.5_real32,0.5_real32,0.5_real32,0.5_real32]",
+    "  qc(1,:,1)=[0.0_real32,0.0_real32,0.0_real32,1.e-6_real32,2.e-6_real32,0.0_real32,0.0_real32,0.0_real32]",
+    "  qi(1,:,1)=[0.0_real32,0.0_real32,0.0_real32,0.0_real32,0.0_real32,1.e-9_real32,2.e-9_real32,0.0_real32]"
+  ],
+  "assertions": [
+    "  if(qc(1,3,1)/=qc_cu(1,3,1)) error stop 'native liquid cloud branch not reached'",
+    "  if(qi(1,3,1)/=qi_cu(1,3,1)) error stop 'native ice cloud branch not reached'",
+    "  if(qc(1,1,1)/=0.0_real32.or.qi(1,1,1)/=0.0_real32) error stop 'native clear column changed'",
+    "  if(qc(1,4,1)/=1.e-6_real32.or.qi(1,6,1)/=1.e-9_real32) error stop 'native threshold branch changed'"
+  ]
+}

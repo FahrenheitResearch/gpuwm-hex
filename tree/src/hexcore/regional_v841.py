@@ -1,4 +1,7 @@
-"""MPAS-A v8.4.1 regional (limited-area) runtime for the CPU authority lane.
+"""MPAS-A regional (limited-area) runtime, audited against v8.4.2.
+
+The historical module name is retained for the existing driver interface.
+Direct strict-GNU replay: tests/test_regional_native_v842.py.
 
 Transcribed against the native v8.4.1 sources of the pinned reference rig
 (``src/MPAS-intel/src/core_atmosphere``, the exact tree that built the
@@ -32,7 +35,7 @@ from numpy.typing import NDArray
 
 from . import rkind_libm
 from .errors import ConfigurationRefusal, MpasPortError
-from .lbc import LbcAdmissionError, LbcFile, LbcInventory, LbcPool
+from .lbc import LbcAdmissionError, LbcFile, LbcInventory, LbcPool, rkind_interval_seconds
 
 FloatArray = NDArray[np.floating[Any]]
 IntArray = NDArray[np.integer[Any]]
@@ -46,6 +49,14 @@ N_BDY_ZONE = N_SPEC_ZONE + N_RELAX_ZONE
 #: mpas_constants.F: ``rvord = rv/rgas`` is a compile-time REAL(RKIND)
 #: parameter division of the float32 constants 461.6 and 287.0.
 RVORD_F32 = np.float32(np.float32(461.6) / np.float32(287.0))
+
+
+def scalar_index_for_field(name: str, scalar_names: Sequence[str]) -> int | None:
+    """Resolve native constituent fallback (mpas_atm_boundaries.F:398-419,535-548)."""
+    try:
+        return scalar_names.index(f"lbc_{name}")
+    except ValueError:
+        return None
 
 
 def _mesh_array(mesh: object, name: str) -> NDArray[Any]:
@@ -144,36 +155,37 @@ def derive_regional_masks(mesh: object, dtype: np.dtype[Any]) -> RegionalMasks:
     cells_on_cell = _rows(
         _mesh_array(mesh, "cellsOnCell"), n_cells, "cellsOnCell"
     ).astype(np.int64, copy=False)
-    x_cell = np.asarray(_mesh_array(mesh, "xCell"), dtype=np.float64)
-    y_cell = np.asarray(_mesh_array(mesh, "yCell"), dtype=np.float64)
-    z_cell = np.asarray(_mesh_array(mesh, "zCell"), dtype=np.float64)
+    x_cell = np.asarray(_mesh_array(mesh, "xCell"), dtype=dtype)
+    y_cell = np.asarray(_mesh_array(mesh, "yCell"), dtype=dtype)
+    z_cell = np.asarray(_mesh_array(mesh, "zCell"), dtype=dtype)
 
     # F:702: nearestRelaxationCell(:) = nCells+1, i.e. the garbage index.
     nearest = np.full(n_cells, n_cells, dtype=np.int64)
     # F:708-722: inner specified zone (nRelaxZone+1) searches cellsOnCell for
     # bdyMaskCell == nRelaxZone.  F:728-751: outer specified zone
     # (nRelaxZone+2) searches cellsOnCell of cellsOnCell.  Distances use the
-    # native REAL arithmetic on x/y/zCell; the reference culls store these in
-    # float64 so the squared distances match native doubles exactly.
+    # native REAL(RKIND) arithmetic on x/y/zCell (v8.4.2
+    # mpas_atm_boundaries.F:667-678,713,737). File storage precision does
+    # not determine pool precision. Double arithmetic changes nearest-cell
+    # selection when squared distances tie after single-precision rounding.
     for cell in range(n_cells):
         mask = bdy_mask_cell[cell]
         if mask == N_RELAX_ZONE + 1:
-            dmin = 1.0e36
+            dmin = dtype.type(1.0e36)
             for slot in range(int(counts[cell])):
                 neighbor = int(cells_on_cell[cell, slot])
                 if neighbor < 0 or neighbor >= n_cells:
                     continue  # stored-0 slot on a ring-7 row: no cell there
                 if bdy_mask_cell[neighbor] == N_RELAX_ZONE:
-                    d = (
-                        (x_cell[neighbor] - x_cell[cell]) ** 2
-                        + (y_cell[neighbor] - y_cell[cell]) ** 2
-                        + (z_cell[neighbor] - z_cell[cell]) ** 2
-                    )
+                    dx = x_cell[neighbor] - x_cell[cell]
+                    dy = y_cell[neighbor] - y_cell[cell]
+                    dz = z_cell[neighbor] - z_cell[cell]
+                    d = (dx * dx + dy * dy) + dz * dz
                     if d < dmin:
                         dmin = d
                         nearest[cell] = neighbor
         elif mask == N_RELAX_ZONE + 2:
-            dmin = 1.0e36
+            dmin = dtype.type(1.0e36)
             for slot in range(int(counts[cell])):
                 neighbor = int(cells_on_cell[cell, slot])
                 if neighbor < 0 or neighbor >= n_cells:
@@ -184,11 +196,10 @@ def derive_regional_masks(mesh: object, dtype: np.dtype[Any]) -> RegionalMasks:
                         if outer < 0 or outer >= n_cells:
                             continue
                         if bdy_mask_cell[outer] == N_RELAX_ZONE:
-                            d = (
-                                (x_cell[outer] - x_cell[cell]) ** 2
-                                + (y_cell[outer] - y_cell[cell]) ** 2
-                                + (z_cell[outer] - z_cell[cell]) ** 2
-                            )
+                            dx = x_cell[outer] - x_cell[cell]
+                            dy = y_cell[outer] - y_cell[cell]
+                            dz = z_cell[outer] - z_cell[cell]
+                            d = (dx * dx + dy * dy) + dz * dz
                             if d < dmin:
                                 dmin = d
                                 nearest[cell] = outer
@@ -311,9 +322,8 @@ class RegionalDrivingState:
     Wraps the file-level :class:`~hexcore.lbc.LbcPool` admission and
     timekeeping and adds what ``mpas_atm_update_bdy_tend`` computes after
     every read: ``lbc_rho_zz = lbc_rho / zz``, edge-averaged
-    ``lbc_rho_edge`` (only where both adjacent cells exist; one-cell ring-7
-    edges keep the pool's prior value, which is 0.0 by allocation and stays
-    0.0 by induction), ``lbc_ru = lbc_u * lbc_rho_edge``, and
+    ``lbc_rho_edge`` (including the zero-valued native garbage cell at
+    an outer edge), ``lbc_ru = lbc_u * lbc_rho_edge``, and
     ``lbc_rtheta_m = lbc_theta * lbc_rho_zz * (1 + rvord*qv)``, all in
     float32 with native operation order.
 
@@ -331,7 +341,7 @@ class RegionalDrivingState:
         *,
         scalar_names: Sequence[str] = ("lbc_qv",),
     ) -> None:
-        self._pool = LbcPool(inventory)
+        self._pool = LbcPool(inventory, scalar_names=scalar_names)
         self._scalar_names = tuple(scalar_names)
         if not self._scalar_names:
             raise ConfigurationRefusal(
@@ -347,13 +357,16 @@ class RegionalDrivingState:
             _mesh_array(mesh, "dcEdge").size,
             "cellsOnEdge",
         ).astype(np.int64, copy=False)
+        # MPAS-A v8.4.2 mpas_block_creator.F:1490-1496 remaps absent
+        # file neighbors to the allocated, zero-valued garbage cell.
+        cells_on_edge = np.where(cells_on_edge < 0, zz_array.shape[1], cells_on_edge)
         self._cells_on_edge = cells_on_edge
         self._both_present = (cells_on_edge[:, 0] >= 0) & (
             cells_on_edge[:, 1] >= 0
         )
         n_edges = cells_on_edge.shape[0]
         nlev = zz_array.shape[0]
-        # Pool allocation zero: the value one-cell-edge rho_edge slots keep.
+        # Initial pool allocation before the first boundary admission.
         self._rho_edge_slot = np.zeros((nlev, n_edges), dtype=np.float32)
         self._state: Dict[str, np.ndarray] | None = None
         self._state_scalars: np.ndarray | None = None
@@ -381,10 +394,7 @@ class RegionalDrivingState:
         # F:265-272: dt from whole days + seconds in REAL(RKIND), then the
         # single reciprocal; every tendency is (new-old)*that reciprocal.
         delta = admitted.valid_time - old_end
-        dt = np.float32(
-            np.float32(86400.0) * np.float32(delta.days)
-            + np.float32(delta.seconds)
-        )
+        dt = rkind_interval_seconds(delta)
         inv_dt = np.float32(np.float32(1.0) / dt)
         self._tend = {
             name: np.asarray(
@@ -421,14 +431,14 @@ class RegionalDrivingState:
         # division; this port's arrays carry no garbage column, so the real
         # columns divide by the file zz directly (identical bytes).
         rho_zz = np.asarray(rho / self._zz, dtype=np.float32)
-        # F:234-247: rho_edge only where both adjacent cells exist; the
-        # one-cell (ring-7) edge slots keep the prior pool value, which is
-        # 0.0 from allocation and provably stays 0.0 at every admission.
+        # MPAS-A v8.4.2 mpas_atm_boundaries.F:234-247 averages both
+        # reindexed neighbors, including the zero-valued garbage cell.
+        padded_rho = np.pad(rho_zz, ((0, 0), (0, 1)))
         rho_edge = self._rho_edge_slot.copy()
         both = self._both_present
         c0 = self._cells_on_edge[both, 0]
         c1 = self._cells_on_edge[both, 1]
-        rho_edge[:, both] = np.float32(0.5) * (rho_zz[:, c0] + rho_zz[:, c1])
+        rho_edge[:, both] = np.float32(0.5) * (padded_rho[:, c0] + padded_rho[:, c1])
         ru = np.asarray(u * rho_edge, dtype=np.float32)
         # F:257-263: rtheta_m = theta * rho_zz * (1 + rvord*qv), left to
         # right in float32.
@@ -470,6 +480,10 @@ class RegionalDrivingState:
         if name == "scalars":
             assert self._tend_scalars is not None
             return self._tend_scalars
+        scalar_index = scalar_index_for_field(name, self._scalar_names)
+        if name not in _DRIVING_FIELDS and scalar_index is not None:
+            assert self._tend_scalars is not None
+            return self._tend_scalars[scalar_index]
         if name not in _DRIVING_FIELDS:
             raise ConfigurationRefusal(
                 "field",
@@ -495,14 +509,17 @@ class RegionalDrivingState:
         assert self._tend_scalars is not None
         end = self._pool.interval_end
         delta = end - step_start
-        remaining = np.float32(
-            np.float32(86400.0) * np.float32(delta.days)
-            + np.float32(delta.seconds)
-        )
+        remaining = rkind_interval_seconds(delta)
         dt = np.float32(remaining - np.float32(delta_t))
         if name == "scalars":
             return np.asarray(
                 self._state_scalars - dt * self._tend_scalars,
+                dtype=np.float32,
+            )
+        scalar_index = scalar_index_for_field(name, self._scalar_names)
+        if name not in _DRIVING_FIELDS and scalar_index is not None:
+            return np.asarray(
+                self._state_scalars[scalar_index] - dt * self._tend_scalars[scalar_index],
                 dtype=np.float32,
             )
         if name not in _DRIVING_FIELDS:
@@ -542,9 +559,15 @@ def dynamics_time_offset(
     )
 
 
-def rk_timestep_f32(*, outer_dt: float, dynamics_split: int, rk_step: int) -> np.float32:
+def rk_timestep_f32(*, outer_dt: float, dynamics_split: int, rk_step: int, order: int = 3) -> np.float32:
     """The float32 ``rk_timestep(rk_step)`` of atm_srk3:2066-2070."""
 
+    if order not in (2, 3):
+        raise ValueError("order must be 2 or 3")
+    # Order 2 selects the existing half-step branch at both first stages
+    # (native v8.4.1 atm_srk3:2080-2092).
+    if order == 2 and rk_step == 1:
+        rk_step = 2
     dt_dynamics = np.float32(np.float32(outer_dt) / np.float32(dynamics_split))
     if rk_step == 1:
         return np.float32(dt_dynamics / np.float32(3.0))
@@ -555,9 +578,13 @@ def rk_timestep_f32(*, outer_dt: float, dynamics_split: int, rk_step: int) -> np
     raise ValueError("rk_step must be 1, 2, or 3")
 
 
-def transport_rk_timestep_f32(*, outer_dt: float, rk_step: int) -> np.float32:
+def transport_rk_timestep_f32(*, outer_dt: float, rk_step: int, order: int = 3) -> np.float32:
     """The float32 split-transport ``rk_timestep`` of atm_srk3:2676-2678."""
 
+    if order not in (2, 3):
+        raise ValueError("order must be 2 or 3")
+    if order == 2 and rk_step == 1:
+        rk_step = 2
     dt = np.float32(outer_dt)
     if rk_step == 1:
         return np.float32(dt / np.float32(3.0))
@@ -583,15 +610,16 @@ def adjust_dynamics_speczone_tend(
     ru_driving_tend: FloatArray,
     rt_driving_tend: FloatArray,
     rho_driving_tend: FloatArray,
+    rt_diabatic_tend: FloatArray | None = None,
 ) -> None:
     """``atm_bdy_adjust_dynamics_speczone_tend`` (F:7906-7967), in place.
 
     Cells with ``bdyMaskCell > nRelaxZone``: ``tend_rho``/``tend_rt`` take
     the driving tendencies, ``tend_rw`` (the omega tendency, rows
     1..nVertLevels) and ``rt_diabatic_tend`` are zeroed.  The dry authority
-    carries no diabatic tendency array (identically zero with
-    config_physics_suite='none'), so only its zeroing site is documented
-    here.  Edges with ``bdyMaskEdge > nRelaxZone``: ``tend_ru`` takes the
+    may omit the diabatic tendency pool (identically zero with
+    config_physics_suite='none'); physics callers supply it to reproduce
+    mpas_atm_time_integration.F:7949.  Edges with ``bdyMaskEdge > nRelaxZone``: ``tend_ru`` takes the
     driving tendency.
     """
 
@@ -603,6 +631,8 @@ def adjust_dynamics_speczone_tend(
     # Native zeroes k=1..nVertLevels of tend_rw; the top interface row of
     # the omega tendency is untouched at F:7948.
     tend_rw[:nlev, cells] = tend_rw.dtype.type(0.0)
+    if rt_diabatic_tend is not None:
+        rt_diabatic_tend[:nlev, cells] = rt_diabatic_tend.dtype.type(0.0)
     tend_ru[:, edges] = ru_driving_tend[:, edges]
 
 
@@ -982,7 +1012,9 @@ def clamp_negative_scalars(scalars: FloatArray) -> None:
     reintroduce small negatives from the driving data.
     """
 
-    np.maximum(scalars, scalars.dtype.type(0.0), out=scalars)
+    # mpas_atm_time_integration.F:2799-2800 is a conditional write, not
+    # MAX: negative zero and NaN payloads must remain untouched.
+    scalars[scalars < scalars.dtype.type(0.0)] = scalars.dtype.type(0.0)
 
 
 __all__ = [

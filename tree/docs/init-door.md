@@ -13,6 +13,17 @@ native MPAS file at all: the vertical contract is constructed from
 `native-free-init-admission.md`), written to a durable artifact, and handed to
 the engine through its existing capsule ABI.
 
+Derived mesh geometry runs in `rw_mpas_geometry`, including the per-cell RBF
+solve. Its float32 and float64 arithmetic keeps the scalar reference order;
+independent cells run in parallel. No released gpuwm carries a version that
+speaks `hex-vertical-v1`, so the prebuilt wheel carries one in `hexcore/libexec`,
+pinned by SHA-256 ([engine bridges](engine-bridges.md)). The binary follows the
+same discovery ladder as the init engine, and `GPUWM_HEX_RW_MPAS_GEOMETRY` or
+`RW_MPAS_GEOMETRY` still wins over the bundled copy. An install built from the
+sdist without the bundled bridges can build one from a gpuwm source at the pinned
+commit or newer with `cargo build --release --locked --offline -p rw-mpas --bin
+rw_mpas_geometry`. A missing or stale binary refuses before geometry is computed.
+
 ```sh
 export RW_MPAS_INIT=/path/to/rw_mpas_init        # or pass --engine
 
@@ -52,7 +63,7 @@ python -m hexcore.cli init \
   --static assets/MESH.static.nc \
   --grid   assets/MESH.grid.nc \                 # optional here; cross-checked against --static
   --capsule   NATIVE_INIT.nc \                   # vertical metrics + smoothed terrain source
-  --reference NATIVE_INIT.nc \                   # zgrid asserted bit-identical against this
+  --reference NATIVE_INIT.nc \                   # zgrid checked for exact array equality against this
   --out    init.nc \
   --start-time 2025-03-14_12:00:00 \
   --nfglevels 38 --nfgsoillevels 4 \
@@ -80,11 +91,56 @@ either way.  The native namelist key is printed in each refusal so a captured
 reproduce-ifx-ftz` reproduces an `-O3` ifx reference exactly where the two
 modes diverge.
 
-## What the capsule is
+## ECMWF IFS open data
+
+IFS already has the engine registry row `ecmwf-open-data` (aliases `ecmwf`
+and `ifs`). It enters this door through exactly the same WPS intermediate
+reader as GFS. No source name selects initialization code.
+
+The intermediate writer takes `--map-source ecmwf` and the packaged table
+`hexcore/data/vtables/Vtable.ECMWF-OD.rw`. For the measured 2026-10-03 12Z publication,
+declare `--nfglevels 15 --nfgsoillevels 4 --use-spechumd no`: fourteen
+pressure levels plus the surface, and four soil layers. Earlier publications
+can have a different ladder; use the inventory of the actual input.
+
+The table now selects ECMWF snow water equivalent (`sd`, centre 98, local
+table 1, GRIB2 0-1-254). The writer's existing `SNOW_EC` rule converts metres
+of water to kg m-2. A sea-ice area-fraction row selects 10-2-0 when present;
+it does not select sea-ice thickness 10-2-1. This cycle's public index carries
+thickness but no area fraction. Without a fraction input the existing init
+leaves ice at zero. That is not a qualified polar initialization.
+
+`SOILGEO` is a scratch input and `SOILHGT` is a declared derived output.
+The existing writer computes `SOILHGT = SOILGEO / 9.81`; the output row is
+required to deliver it. Omitting that row silently leaves the init's source
+terrain at zero and changes its terrain correction of skin and soil temperature.
+
+An additional same-time, fraction-only donor is possible through the same
+writer only if its coordinate layout matches the primary land mask exactly.
+The init engine shares that mask by array index for soil and ice, so a donor
+with a different longitude origin is unsafe even when it has the same grid
+size. This campaign does not silently substitute a donor.
+
+`verification/ifs-open-data/source-contract.json` records the level, soil and
+gap contract. Hydrometeors start at zero on this cold-start path for both
+sources. Soil uses the MPAS engine's existing depth interpolation onto Noah
+midpoints. The WRF mapped composition's conservative layer remap is a
+different path and is not claimed for hex.
+
+The measured +3-hour IFS publication omits surface geopotential. Its source
+contract supplies one terrain-only record from the same cycle's step-zero file
+as a cycle-invariant supplement. Pass the forecast GRIB and that single-record
+donor to the existing multi-file intermediate writer, with the forecast's valid
+time in `--date`. The donor must share the primary land mask's coordinate layout.
+Do not supply a full step-zero file: later files overwrite matching fields, so
+that would replace the forecast atmosphere too. The writer uses the caller's
+date for its intermediate headers; the caller owns this invariant-field contract.
+
+## Capsule contract
 
 `rw_mpas_init` does not build the vertical grid.  It reads `zgrid, zz, fzm,
 fzp, dzu, rdzw, zb, zb3` and the smoothed terrain from an init-class capsule
-and asserts the capsule's `zgrid` bit-identical against `--reference` before
+and checks the capsule's `zgrid` for exact array equality against `--reference` before
 trusting a single level.  In native-free mode the constructed artifact IS the
 capsule and is passed as both inputs, which keeps that identity check; in
 compatibility mode the capsule is a **native-minted init-class file**.  The
@@ -102,6 +158,7 @@ provenance mismatch, not corruption).
 - met source missing; directory with zero or several WPS intermediates
 - file not readable as a WPS intermediate (truncated / non-ungrib bytes)
 - `LANDSEA` absent from the intermediate file
+- `SOILHGT` absent: source terrain would be assumed zero and skin/soil terrain corrections would be wrong
 - no level tagged `200100.0` (the surface tag)
 - more distinct first-guess levels than `--nfglevels` declares
 - no soil layers (`ST*/SM*/SOILT*/SOILM*`) in the intermediate file
@@ -116,7 +173,7 @@ naming that the engine refused and that nothing was written.
 
 ## Proof of record
 
-Golden parity and the acid test are recorded in the provenance receipts of the
+The recorded initial-array comparison and the acid test are in the provenance receipts of the
 first door run: the door-built init for the ERA5 2025-03-14 12Z factory case
 was compared field-by-field against the surviving native golden under
 `init-tolerances-r3.json`, and the same file started the CUDA v8.4.1 port for a

@@ -1,0 +1,167 @@
+{
+  "schema": "gpuwm-hex.engine-bridges/v1",
+  "breakage": "the init door needs rw_mpas_geometry speaking hex-vertical-v1 and the stream I/O needs rw_mpas_stream; no released gpuwm carries either (the frozen 2.9.0 bridge lacks hex-vertical-v1), so a clean install refused both doors (release readiness B5). The point door needs an rw_mpas_static whose generated-grid statics hold the binary64 coordinates they declare; gpuwm 2.9.0's reads every grid through binary32, so no 3 km regional mesh could be built (ARWEN-VS-HEX-TIMING-2026-10-15). The RRFS fork dycore calls rw_mpas_rrfs_connectivity, rw_mpas_rrfs_damping and rw_mpas_rrfs_deformation, which no released gpuwm carries, so a clean install refused every RRFS forecast (\"Rust bridge is not installed\"; RRFS-MPAS from a pip install, 2026-10-15). The global door's native static voted the staged 21-category lakes archive, and every MPAS suite on a global row stopped at Noah's first call (\"too many input landuse types\"). Native-identical lateral boundaries need the case-9 port of rw_mpas_lbc (gpuwm i7, e72f3809); no released gpuwm carries it, and gpuwm 2.9.0's rw_mpas_lbc refuses a regional grid with no model_name attribute and was never proven against native case 9, so a plain install could not build native-identical boundary files (hex 0.4.0 install audit, 2026-10-15). gpuwm-hex score reads the radiosondes of a case NOMADS no longer serves (older than about two days) through rw_igra2, and the published gpuwm 2.9.0 wheel does not install it, so on a plain install every past case scored no sondes (\"rw_igra2 is missing from the engine's Rust bridge installation\", daily hex rehearsal HX7, 2026-10-15). The mesh generator rebuilt its whole spherical Delaunay on one CPU thread about 1,000 times per graded mesh (123 s on the 1 km-core spec while the card idled), and the serial rw_mpas_geometry held the init door on one thread for minutes (2026-10-16: no single-threaded stages); both now come from gpuwm 3313936ffb2. The point door's halo route cut its native static against the cut grid slot for slot, padding included, and refused every generated point mesh (\"provenance grid cellsOnCell differs from the regional cut\", unified-image check 2026-10-16); rw_mpas_mesh comes from gpuwm 993858e1744.",
+  "gpuwm_source_rev": "0aa356bf64e0c437f17042e34bcd47ca7f8fb664",
+  "gpuwm_source": "gpuwm rel/hex040-fix-lbc-case9 0aa356bf: rel/hex040-fix-global-1 96792ab8 (the native-init static votes lakes as water; on integrate/hex-mpas e36d22c0, which carries a2b708c6, the static builder's binary64 grid read, e7ee8c99 and the three RRFS programs) merged with the i7 lane's case-9 LBC port hex/mpas-i7-init-lbc e72f3809: tools/rustwx (crate rw-mpas), with tools/grib1_bridge/vendor and tools/region_global_dealias",
+  "recipe": "tools/build_engine_bridges.sh",
+  "image": "quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "netcdf_c": "4.9.3 static with netCDF-4: HDF5 1.14.6 and zlib 1.3.1 (tools/build_netcdf4_static.sh)",
+  "reproducible": "built at 0aa356bf by the recipe in the pinned image; two builds in separate containers gave identical bytes for the earlier bridges at e7ee8c99, and the three RRFS programs (which embed no commit) came out with their e7ee8c99 bytes unchanged; rw_mpas_geometry, rw_mpas_stream and rw_mpas_static embed their source commit, so they re-pin with it; rw_igra2 joined at 0aa356bf in a cargo call of its own (-p rw-obs), and the same container build gave the seven rw-mpas programs their pinned bytes unchanged",
+  "platform": "manylinux_2_28_x86_64",
+  "release_assets": {
+    "repository": "FahrenheitResearch/gpuwm-hex",
+    "tag": "engine-bridges-3313936f"
+  },
+  "bridges": {
+    "rw_mpas_geometry": {
+      "sha256": "d08b98af791d6c1ff2c498dbc20c98b9b0b56a88c90efae519986f5ba240d455",
+      "bytes": 4278048,
+      "source": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_geometry.rs",
+      "source_sha256": "e3594df36d57e517da679996a04dfe1cad6c22bb241ded3e90697798a0e37b5a",
+      "protocols": [
+        "hex-geometry-v1",
+        "hex-vertical-v1",
+        "hex-cold-artifact-v1",
+        "hex-init-artifact-v1",
+        "hex-advection-v1",
+        "hex-advection-compression-v1"
+      ],
+      "gpuwm_source_rev": "3313936ffb248ec8b035ff5782ce11fb5c5ac098",
+      "parallel": "hex-vertical-v1 runs on every core (gpuwm 08be92aabdd, 30de7226b5b); output bytes equal the serial 0aa356bf binary's on x1.2562, x1.40962, x1.163842, x1.655362 and core1km-halo"
+    },
+    "rw_mpas_stream": {
+      "sha256": "859076bb295914247a4a556e9c875870769e5c8fe969bcffc42eb81b79dea2c2",
+      "bytes": 5933760,
+      "source": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_stream.rs",
+      "source_sha256": "a04af96acd6e80153f05fa2a5cb6f3128cbe82b2d62f735a26be88f2aad49342",
+      "formats": [
+        "netcdf",
+        "pnetcdf",
+        "pnetcdf,cdf5",
+        "netcdf4"
+      ],
+      "gpuwm_source_rev": "aaec6b4be30ddc8f416f44cbc0fecf9244459f5e",
+      "required_markers": [
+        "ordered_metadata"
+      ],
+      "cargo_lock_sha256": "124aeed826f08c404df231e049442d5a15656dde6451ea98c63ea9852f9f2c78",
+      "build_command": "GPUWM_BRIDGE_SOURCE_REV=aaec6b4be30ddc8f416f44cbc0fecf9244459f5e LIBRARY_PATH=<static-netcdf4>/lib cargo build --release --locked --offline -j8 -p rw-mpas --features system-netcdf --bin rw_mpas_stream",
+      "holds": "The ordered metadata response required by restart_v842.py preserves native dimension and attribute ordering. Rebuilt in the pinned manylinux image with the recorded Rust toolchain and static NetCDF dependencies; strict whole-run qualification is required before release."
+    },
+    "rw_mpas_static": {
+      "sha256": "b2691a67dae0b20fd0b38d8c9b7dab0c0e0b04d3a1f92f4463baecf6b84d5511",
+      "bytes": 4438528,
+      "source": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_static.rs",
+      "source_sha256": "c86d0f7a1005b76bf0f018ea5b3832a7735f46c1ece2c0cf7f621fbc3e16c929",
+      "builder_source": "tools/rustwx/crates/rw-mpas/src/static_builder.rs",
+      "builder_source_sha256": "3ba8793d2d2172e1daf169dda6b89fbd107b6d1dc6aa604976a5597f61a83c91",
+      "holds": "a generated grid's static stores the binary64 coordinates it declares (Mesh::read_as); a native-init static counts the staged lakes archive's lake pixels (islake) as water before the category vote, as native's 20-category archive holds them, so MPAS Noah's 20-row table accepts it (x1.40962: all 69 variables equal to a static built from modis_landuse_20class_30s)",
+      "native_static_replays": "i2 (12 cases, 20,556,696 words, 0 different outside the 1,662 approved residue words) and i3 (4 cases) rerun at this commit"
+    },
+    "rw_mpas_rrfs_connectivity": {
+      "sha256": "023c49d557889d9df0c88d5bec6d9be5d7d5e12273ef85e0088f70dfce8eb13b",
+      "bytes": 329824,
+      "source": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_rrfs_connectivity.rs",
+      "source_sha256": "15d3ff80b370b54d6b384f4b756c809b88895ae3eec10665b1bfa95bf9073654",
+      "used_by": "the RRFS fork dycore's second-ring cell traversal (hexcore.core_rrfs)",
+      "links": "the C library only (standard-library Rust)"
+    },
+    "rw_mpas_rrfs_damping": {
+      "sha256": "920efdbd82881d78cce1a8c26d62bf2cfd79dbd41e0a8a3b53f6397e27b329c2",
+      "bytes": 327208,
+      "source": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_rrfs_damping.rs",
+      "source_sha256": "747a6d7c3ea4a60b0b185725938e01be9ad9208eca607ee275639eee995ada8c",
+      "used_by": "the RRFS fork dycore's vertical-velocity damping coefficients (hexcore.damping_rrfs)",
+      "links": "the C library only (standard-library Rust)"
+    },
+    "rw_mpas_rrfs_deformation": {
+      "sha256": "082c3a5e50149d384539939fe401936127a9fab32ac2bb1074bc3eca9b827939",
+      "bytes": 339888,
+      "source": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_rrfs_deformation.rs",
+      "source_sha256": "1433756ed9bf828248a8a00f20dc2d14c559fce8bb3381ae542613d5deaa9550",
+      "used_by": "the RRFS fork dycore's deformation weights and edge trigonometry (hexcore.deformation_rrfs)",
+      "links": "the C library only (standard-library Rust)"
+    },
+    "rw_mpas_lbc": {
+      "sha256": "97288a92a6aa44a2855ee2d5e69b54fe0623d883e04812bdcece507fea728098",
+      "bytes": 3661080,
+      "source": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_lbc.rs",
+      "source_sha256": "a9fec4856fcda1be4763a32886111a202a3f43e6807c724b0eb51f0198f866fc",
+      "port_sources": {
+        "tools/rustwx/crates/rw-mpas/src/init/metfile.rs": "90cbd90cc98fdcb0e1097b21e41e6487975e47fc0629eb7f51f614bf56c83b26",
+        "tools/rustwx/crates/rw-mpas/src/lbc/emit.rs": "4dc9a05417c5a28718aa05b790f2ca59802f48fdbf2d846d0d5c3ae899eedb41",
+        "tools/rustwx/crates/rw-mpas/src/lbc/mod.rs": "d70fe4a0e6cbf8aaa062d5f06abddc4ed6e24c70a58f5167329189b0f3f32337",
+        "tools/rustwx/crates/rw-mpas/src/lbc/projection.rs": "c1dfba8f68d676472d4f4a766582f1b8c40e2718f10759212bcd16a8acd1c8a3"
+      },
+      "used_by": "gpuwm-hex lbc and every limited-area boundary series (hexcore.engines LBC)",
+      "holds": "native init_atmosphere v8.4.2 case 9 boundary files, byte for byte: the i7 lane replay (3 meshes x 2 dates x 2 valid times, 12 files, 12,303,036 values, 0 different) and this build through the hex door (x1.2562, GFS 2023-03-31 12Z and 15Z, 650,092 values, 0 different)"
+    },
+    "rw_igra2": {
+      "sha256": "b10d0c7fa8637f27940f73c7210ed140f639716e31ff0896765b4f459ed0d672",
+      "bytes": 2918384,
+      "source": "tools/rustwx/crates/rw-obs/src/bin/igra2.rs",
+      "source_sha256": "a3c8d53560da578ceb176b1622b7b59f6dc64fe003610c5b97b5fe785b0e597d",
+      "used_by": "gpuwm-hex score: radiosondes from IGRA2 for a case NOMADS no longer serves (hexcore.observation_scorecard)",
+      "links": "crate rw-obs (pure-Rust HTTPS through rustls; licenses/THIRD-PARTY-LICENSES-helper-binaries.txt, program O)",
+      "public_source": "byte-equal to tools/rustwx/crates/rw-obs/src/bin/igra2.rs at gpuwm's public tag v2.9.0 (0db04746)"
+    },
+    "rw_mpas_mesh": {
+      "sha256": "0c715626d4506df6d96f4fb44375ee893d194fe5a3a083676d8615555c021aa2",
+      "bytes": 4306408,
+      "source": "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_mesh.rs",
+      "source_sha256": "a4d947962c4f5de3c23d238c3c6b7eaa5ddabdc01c5b971d42468e459bde5337",
+      "gpuwm_source_rev": "993858e17443d3614c4de8d8c7760a8682bb8b12",
+      "parallel_sources": {
+        "mesh/hull.rs": "2722ed196349b77f60eda00bda44b65b1467a032213e85582381461009e4bcfc",
+        "mesh/surgery.rs": "93e2fb1f99aa07dac75691273dd5d5de80699adbdf12b5043a52671d779fe0ef",
+        "mesh/lloyd.rs": "580dc5dbf0625a47d71225021631c96166ebd27d5972c46ba7181afa9cc43142",
+        "mesh/hierarchy.rs": "baf75b6c641ca578d41ec11b3d389c0bd98f8428eb4b2505f147a8009e961166",
+        "mesh/derive.rs": "8048936db6d26f7b4b4cc17daaee297e42e52f6c0baae3cce2740b0fa27a8500",
+        "mesh/validate.rs": "3f1a8699e91fcb31e7a2a882a44288904dc454c98d6778ce5e647d50d05fc91c",
+        "mesh/mod.rs": "2f4512bcc442180c9f5d3ec37ba9177e5d3618971738266c07cbe1bf663f0717",
+        "mesh/cull.rs": "0f4981484c5daab3f33583530760b3bccff9a2d17631cd4bb4b96560c6fa0ec6"
+      },
+      "holds": "triangulation kept by Lawson repair and surgery edits, parallel region hull builds, parallel derive; rings start at their smallest neighbour, so --triangulation incremental (default) and rebuild write the same bytes on any thread count; --cull-provenance-grid compares each ring's active slots, not its padding (gpuwm 993858e1744 on lane/292-mesh-parallel 3313936ffb2): a native static zeroes the slots past nEdgesOnCell and a grid repeats the last neighbour, so mesh-plan --point --generate refused the cut of its own halo static (unified-image check 2026-10-16)"
+    }
+  },
+  "cargo_lock_sha256": "65cb80ace48beef36853104c73338086c8ee240f24b0e2b87cda2e97401d58f5",
+  "retire_when": "a released gpuwm bundles rw_mpas_geometry with hex-vertical-v1, a self-contained rw_mpas_stream and an rw_mpas_static built from 46c8a71513e or newer; then this file, setup.py engine_bridges() and the hexcore.engines libexec rung (bundled_candidate) go; the three RRFS programs go when a released gpuwm bundles them; rw_mpas_lbc goes when a released gpuwm bundles the case-9 port; rw_igra2 goes when a released gpuwm wheel installs it; rw_mpas_mesh and the parallel rw_mpas_geometry go when a released gpuwm bundles gpuwm 3313936ffb2 or newer",
+  "source_prebuilts": {
+    "breakage": "publish.yml checks out the public engine tag the floor names (v2.9.2), and that tree has no S2S renderer source (no s2s-window ABI in tools/rustwx), so tools/build_s2s_renderer.sh cannot build rw_wrfbatch there and setup.py stopped the public build with \"rw_wrfbatch prebuilt lacks the current S2S fixes\" after the tag and the release existed (hex 0.4.1 fix workflow, 2026-10-20). The renderer and the surface-series producer are built once by the release recipe in the pinned image from the gpuwm source below, published beside the bridges, and downloaded by SHA-256 with the provenance setup.py checks.",
+    "gpuwm_source_rev": "aaec6b4be30ddc8f416f44cbc0fecf9244459f5e",
+    "recipe": "tools/build_s2s_renderer.sh and tools/build_sfc_series.sh against that gpuwm source, LIBRARY_PATH=/opt/netcdf4-static/lib",
+    "retire_when": "the public engine tag the floor names carries the S2S renderer source (s2s-window); then publish.yml builds both from it",
+    "files": {
+      "rw_wrfbatch": {
+        "bytes": 22548272,
+        "sha256": "ac95170dcfad79abbefb611d783b1b6032c00423d8d29c15731c676f753d011b",
+        "provenance": {
+          "sha256": "ac95170dcfad79abbefb611d783b1b6032c00423d8d29c15731c676f753d011b",
+          "patches": {
+            "0001-rw-wrfbatch-s2s-window-scales.patch": "6c5ecb84642ca887a0e0b8addad6ade5f84d3a83caed7e0bcc25e3e0d2450316",
+            "0002-rw-wrfbatch-global-ensemble-projection.patch": "2d5831d1e64d155f31fa9744e30e5198626592f173335523cabe97197de54d1a"
+          },
+          "recipe_sha256": "86d606b158a8658312d768e41e5e23e2fa0df2092ef56ebee158117030883641"
+        }
+      },
+      "rw_sfc_series": {
+        "bytes": 12839424,
+        "sha256": "54337d39a6742b4ae1bbf925e547f2a8fb08b14b63b575a465a8e4a757da3a0f",
+        "provenance": {
+          "sha256": "54337d39a6742b4ae1bbf925e547f2a8fb08b14b63b575a465a8e4a757da3a0f",
+          "sources": {
+            "Cargo.lock": "7f15076f2f7c5eaa56b029b0b864f0ec11d675f557808fbe52e4f021949e7d1c",
+            "Cargo.toml": "71a92000d6f960622375ac512ed7b3e446d4e0bd8e10f1bb909db237ac2c531e",
+            "LICENSE-MPAS-BSD-3-Clause.txt": "de7271e2e28110a83553f5dc36e53d93c8db422085f26bf98d0910ff5b21d20d",
+            "NOTICE": "16e906e8822e5b6da9dcabd9640749127c104347e494fc3860245bd24bff6ba8",
+            "src/intermediate.rs": "b9e7f145dce69593f2e90211ea2dcd54522ae82b1c0a122e32a169208e4d3fff",
+            "src/main.rs": "79f8bf46795a090f04e0cd6bdb127479596a82a1fe7838635786cbb1787e9011",
+            "src/remap.rs": "49ef7bc545533ab130e525b6127ddfcbe15a4a8fef36b623ce2621033c215eef",
+            "src/surface_met.rs": "47c8b08a740285c3f2fad226d31e502961806f92a80bcc81693f94bff81d66fc"
+          }
+        }
+      }
+    }
+  }
+}

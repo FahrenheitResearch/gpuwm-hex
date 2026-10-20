@@ -1,0 +1,97 @@
+{
+  "schema": "gpuwm-hex.hourly-ensemble/v1",
+  "resolution_km": 3,
+  "start_time": "2022-06-13_18:00:00",
+  "mesh": "wofs-patch",
+  "grid": "hex-wofs-ensemble/prepared/mesh.grid.nc",
+  "static": "hex-wofs-ensemble/prepared/mesh.static.nc",
+  "mesh_rows": "hex-wofs-ensemble/prepared/mesh-rows.json",
+  "native_template": "hex-wofs-ensemble/prepared/gec00/init.nc",
+  "reference_init": "hex-wofs-ensemble/prepared/gec00/init.nc",
+  "patch": {
+    "center_deg": [
+      42.5,
+      -87.0
+    ],
+    "square_side_km": 900,
+    "shape": "cap",
+    "core_radius_km": 650,
+    "fine_spacing_km": 3,
+    "background_spacing_km": 48,
+    "transition_factor": 18,
+    "ring_factor": 3
+  },
+  "forecast_flags": [
+    "--dt",
+    "18.75",
+    "--fullstep-local-timestep",
+    "--fullstep-lts-mode",
+    "active",
+    "--fullstep-lts-max-rate",
+    "8",
+    "--convection",
+    "ntiedtke"
+  ],
+  "members": [
+    {
+      "id": "gec00",
+      "init": "hex-wofs-ensemble/prepared/gec00/init.nc",
+      "source": "GEFS 20220613 18Z gec00 f000; gefs-sources.json",
+      "forecast_flags": []
+    },
+    {
+      "id": "gep01",
+      "init": "hex-wofs-ensemble/prepared/gep01/init.nc",
+      "source": "GEFS 20220613 18Z gep01 f000; gefs-sources.json",
+      "forecast_flags": []
+    },
+    {
+      "id": "gep02",
+      "init": "hex-wofs-ensemble/prepared/gep02/init.nc",
+      "source": "GEFS 20220613 18Z gep02 f000; gefs-sources.json",
+      "forecast_flags": []
+    },
+    {
+      "id": "gep03",
+      "init": "hex-wofs-ensemble/prepared/gep03/init.nc",
+      "source": "GEFS 20220613 18Z gep03 f000; gefs-sources.json",
+      "forecast_flags": []
+    },
+    {
+      "id": "gep04",
+      "init": "hex-wofs-ensemble/prepared/gep04/init.nc",
+      "source": "GEFS 20220613 18Z gep04 f000; gefs-sources.json",
+      "forecast_flags": [
+        "--physics",
+        "config_microp_scheme=mp_thompson"
+      ]
+    },
+    {
+      "id": "gep05",
+      "init": "hex-wofs-ensemble/prepared/gep05/init.nc",
+      "source": "GEFS 20220613 18Z gep05 f000; gefs-sources.json",
+      "forecast_flags": [
+        "--physics",
+        "config_microp_scheme=mp_thompson"
+      ]
+    },
+    {
+      "id": "gep06",
+      "init": "hex-wofs-ensemble/prepared/gep06/init.nc",
+      "source": "GEFS 20220613 18Z gep06 f000; gefs-sources.json",
+      "forecast_flags": [
+        "--physics",
+        "config_microp_scheme=mp_thompson"
+      ]
+    },
+    {
+      "id": "gep07",
+      "init": "hex-wofs-ensemble/prepared/gep07/init.nc",
+      "source": "GEFS 20220613 18Z gep07 f000; gefs-sources.json",
+      "forecast_flags": [
+        "--physics",
+        "config_microp_scheme=mp_thompson"
+      ]
+    }
+  ]
+}

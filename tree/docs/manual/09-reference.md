@@ -58,12 +58,19 @@ fall-through.
 | `rw_mpas_convert` | `--convert-exe`, `$GPUWM_HEX_RW_MPAS_CONVERT`, `$MPAS_PORT_RW_MPAS_CONVERT`, `$GPUWM_RW_MPAS_CONVERT`, gpuwm bridge directories, `PATH` |
 | `rw_mpas_mesh` | `--mesh-exe` (`--engine` on `cull`), `$GPUWM_HEX_RW_MPAS_MESH`, `$RW_MPAS_MESH`, `$GPUWM_RW_MPAS_MESH`, gpuwm bridge directories, `PATH` |
 | `rw_wrfbatch` | `--renderer-exe`, `$GPUWM_HEX_RW_WRFBATCH`, `$MPAS_PORT_RW_WRFBATCH`, `$GPUWM_RW_WRFBATCH`, gpuwm bridge directories, `PATH` |
+| `rw_mpas_geometry` | `$GPUWM_HEX_RW_MPAS_GEOMETRY`, `$RW_MPAS_GEOMETRY`, `$GPUWM_RW_MPAS_GEOMETRY`, this wheel's `hexcore/libexec`, gpuwm bridge directories, `PATH` |
+| `rw_mpas_stream` | `$GPUWM_HEX_RW_MPAS_STREAM`, `$GPUWM_RW_MPAS_STREAM`, this wheel's `hexcore/libexec`, gpuwm bridge directories, `PATH` |
+| `rw_mpas_static` | `--static-exe`, `$GPUWM_HEX_RW_MPAS_STATIC`, `$RW_MPAS_STATIC`, `$GPUWM_RW_MPAS_STATIC`, this wheel's `hexcore/libexec`, gpuwm bridge directories, `PATH` |
 
 The `GPUWM_HEX_*` spellings are preferred; the older spellings still work
 and always will — a rename never invalidates an install line that already
 works. "gpuwm bridge directories" means a gpuwm checkout's
 `tools/rustwx/target/release`, `libexec/bridges` beside the installed
 package, and `~/.gpuwm/bridges` (where `gpuwm fetch-bridges` stages).
+Every engine is looked for in this wheel's own `hexcore/libexec` just before
+the gpuwm bridge directories; the prebuilt wheel carries three there,
+`rw_mpas_geometry`, `rw_mpas_stream` and `rw_mpas_static`, because no released
+gpuwm carries the versions this release needs ([engine bridges](../engine-bridges.md)).
 
 Other variables: `GPUWM_HEX_NO_LOCAL_GPU=1` / `GPUWM_NO_LOCAL_GPU=1` ban
 device contact; `GPUWM_WPS_GEOG` names the geog root for `gpuwm mesh`.
@@ -139,33 +146,48 @@ by omission.
 - Distribution and command: `gpuwm-hex`. Import namespace: `hexcore`,
   renamed from `mpas_port` at 0.2.0 and settled there (README, *The import
   namespace*). There is no alias shim.
-- Engine range: `gpuwm>=2.8.0,<2.8.1` is what pip enforces, a bounded
-  range, derived from a measured table in `hexcore.engine_pin` rather than
-  typed. The floor is where it is for one reason and it is the strictest
-  one: 2.8.0 is the only published engine whose bytes match the
-  sixteen-file Arwen seam manifest, re-measured 2026-09-29 against every
-  published 2.5.x, 2.6.x, 2.7.x and 2.8.x release
-  (`verification/engine-verdicts/repin-280-20260929.json`, written by
-  `tools/measure_engine_verdicts.py`). It clears, incidentally, the bundle rows that put the MPAS bridge
+- Engine range: `gpuwm>=2.9.0,<2.10` is what pip enforces, the whole 2.9
+  minor, derived from a measured table in `hexcore.engine_pin` rather than
+  typed. The floor is the engine whose bytes this release measured against
+  the sixteen-file seam manifest; an engine inside the minor whose radiation
+  helper set no row admits is refused at the forecast door by name, and the
+  whole-minor range means installing gpuwm-hex never downgrades an engine you
+  already have. The floor clears, incidentally, the bundle rows that put the MPAS bridge
   binaries (`rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`,
   `rw_mpas_static`, `rw_mpas_lbc`) within reach of `gpuwm fetch-bridges`;
   published 2.5.2 carries none of them and would strand every door that
   drives one. The CEILING is exclusive and sits at the first engine not
   measured usable, so an engine that has not been compared against the
   manifest is never resolved onto — including ones not published yet. An
-  engine that is NOT on PyPI (a local version such as `2.8.0+x.1`, which
+  engine that is NOT on PyPI (a local version such as `2.9.0+x.1`, which
   the range already resolves) is admitted only by a measured row of its
   own in `hexcore.engine_pin.ADMITTED_ENGINES`, written by the same
   instrument's `--admit` from the engine's wheels and source tree and
   keyed by its exact version string and its sixteen digests together; the
-  seam check, the door, `doctor` and the adapter accept that row's bytes
-  under that version and refuse everything else by name. The
-  forecast lane's real wall is stricter still: the sixteen-file seam
-  manifest, checked against the installed engine (or a clone passed as
-  `--gpuwm-checkout`) at launch (chapter 6.1). `gpuwm-hex doctor` compares
-  the installed engine's bytes against the manifest and names the version
-  it found; since 2.5.8 all sixteen pinned paths resolve from the install,
-  and since 0.3.2 the forecast runs on it with no clone.
-- Licence: Apache-2.0, with the MPAS-Atmosphere BSD-3-Clause notice
-  travelling in `NOTICE`. This is not the version available from LANS and
-  UCAR, and neither they nor their contributors endorse it.
+  seam check, the door, `doctor` and the adapter name that row's bytes
+  under that version as that engine. Since 2026-10-10 the sixteen-file seam
+  manifest is evidence, not a wall: a forecast runs on an engine whose seam
+  bytes match no measured row, and its receipt records the comparison
+  (`arwen_engine_pin`: declared version, measured version, the moved and
+  absent files). The pip range above is what an install resolves; a tree
+  passed as `--gpuwm-checkout` may be any gpuwm that carries
+  `gpuwm/core/mpas_column_batch.py`. `gpuwm-hex doctor` compares the
+  installed engine's bytes against the manifest and names the version it
+  found; since 2.5.8 all sixteen pinned paths resolve from the install,
+  and since 0.3.2 the forecast runs on it with no clone. The x4
+  full-physics proof keeps the exact-bytes requirement.
+- Licence: Apache-2.0, with only permissive upstream terms for the ported
+  portions: MPAS-Atmosphere and NCAR MMM-physics (BSD-3-Clause), WRF physics
+  (public-domain notice), RRTMG (AER BSD-3-Clause), MT19937 (BSD-3-Clause)
+  and the Arm and CORE-MATH maths (MIT). `NOTICE`, `THIRD-PARTY-NOTICES.txt`
+  and `licenses/` state them. UGWP's CUDA ports ship and the RRFS stage runs
+  the fork's NOAA GSL physics with no opt-in: the project treats them as US
+  Government code (owner ruling 2026-10-14; `NOTICE` sections 8 and 9).
+  Withheld from the public distribution: the Noah-MP v5.0 CUDA port (UCAR
+  terms forbid sale). No default runs code that cannot be sold: a selection
+  of `config_lsm_scheme='sf_noahmp'` is refused unless the run names the
+  terms with `--licence-opt-in ucar-noahmp` (`GPUWM_HEX_LICENCE_OPT_IN`), and
+  such a run says so on its console and in `physics.licence_opt_in`. The Noah-MP that runs by default is the ArWen
+  suite's WRF-lineage v4.x (WRF public-domain notice), not MPAS-bitwise. This
+  is not the version available from LANS and UCAR, and neither they nor their
+  contributors endorse it.

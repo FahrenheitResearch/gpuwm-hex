@@ -686,6 +686,7 @@ class LocalTimestepAttachment:
         stage: int,
         acoustic_steps: int,
         scalars: Any,
+        **lagged_heating: Any,
     ) -> tuple[Any, Any, Any, Any]:
         driver = self.driver
         nlev, ncells, nedges = driver.nlev, driver.ncells, driver.nedges
@@ -710,7 +711,8 @@ class LocalTimestepAttachment:
             )
             self.launch_counts["reflux_settles"] += 1
         state, diagnostics, flux_u, flux_w = self._stock_recover(
-            saved_state, saved_diag, acoustic, stage, acoustic_steps, scalars
+            saved_state, saved_diag, acoustic, stage, acoustic_steps, scalars,
+            **lagged_heating,  # SG2 carry, removed by the stock final recovery
         )
         if not self.device.single_class:
             cell_steps, edge_steps = self._counts_for(int(acoustic_steps))
@@ -878,17 +880,18 @@ def attach_local_timestep(
             "a partitioned run exchanges halo rings on a schedule built for one "
             "global sub-step rate, so a coarse rank would damp and exchange "
             "stale ring-1 state",
-            "a single-device run, or the multi-GPU lane once it is proved",
+            "a single-device run",
         )
     # The flux-corrected transport branch clips a scalar's flux against the
     # bounds of its neighbours within one step.  Across a rate boundary the two
     # sides reach that step at different times, so the limiter would compare a
     # cell against neighbours it has not caught up with and clip a flux the
     # reflux is relying on -- which breaks the scalar budget the interface was
-    # built to keep.  The v8.4.1 CUDA lane refuses both knobs today
-    # (cuda_driver.py:2569-2582, no native nonzero-tracer ruler), so this never
-    # fires; it is here so that admitting the FCT branch later cannot let local
-    # time stepping ride along on an interface that was never proved for it.
+    # built to keep.  This refusal FIRES: since 2026-10-10 the limiter is the
+    # default (MPAS-A Registry.xml:239) and config_positive_definite runs it
+    # too, so --local-timestep with either switch on lands here.  The door
+    # turns the limiter off for a local-timestep run unless --monotonic is
+    # given, and names this when it is.
     for knob in ("config_monotonic", "config_positive_definite"):
         if getattr(config, knob, False):
             _refuse(
@@ -897,7 +900,8 @@ def attach_local_timestep(
                 "a flux-corrected transport limiter clips against neighbours "
                 "that a rate boundary has not advanced to the same time, so it "
                 "would clip the very flux the reflux balances the interface "
-                "with; that combination has not been proved",
+                "with and the scalar budget across the boundary would not "
+                "close",
                 f"{knob}=False with config_local_timestep=True",
             )
     order = int(getattr(config, "config_time_integration_order", 3))
@@ -907,11 +911,14 @@ def attach_local_timestep(
         _refuse(
             "config_number_of_sub_steps",
             substeps,
-            "the rate ladder and the per-stage effective rates were derived "
-            f"for the released {SUPPORTED_STAGE_ACOUSTIC_STEPS} acoustic "
-            "schedule; another schedule admits a different ladder and has not "
-            "been proved",
-            "config_time_integration_order=3 with config_number_of_sub_steps=6",
+            "the local-timestep kernels skip whole acoustic sub-steps, so a "
+            "rate must divide every stage's sub-step count; they are built "
+            f"for the stage counts {SUPPORTED_STAGE_ACOUSTIC_STEPS} (RK3, six "
+            f"sub-steps), and order {order} with {substeps} sub-steps gives "
+            f"{stages if order == 3 else (max(1, substeps // 2),) * 2 + (substeps,)}, "
+            "on which the derived per-stage rates do not exist",
+            "--time-integration-order 3 --acoustic-substeps 6 with "
+            "--local-timestep (the door takes them when neither is given)",
         )
     rates = tuple(int(value) for value in config.config_local_timestep_rates)
     ltsk.refuse_unsupported_ladder(rates, SUPPORTED_STAGE_ACOUSTIC_STEPS)

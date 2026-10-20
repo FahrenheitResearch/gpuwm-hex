@@ -1,0 +1,367 @@
+{
+  "sources_sha256": {
+    "ccpp_kind_types.F": "d4a02744daaaf042a26d8225dc6c40e6d06dcdf35fe1e64f3fc057fcfc241efa",
+    "module_libmassv.F90": "262630e14a9c70ba5074dac04c6f53ebe59c6f1cf27989d1b6c7c1850d7860f3",
+    "mp_radar.F90": "f349afc8f5068173320856f11e9b4b1f769761803ce282f2832340b96e6f90b3",
+    "mp_wsm6.F90": "67756cd9b659bd544f1e0715d159f451fe814ee59d1752e991133c770703c156",
+    "mp_wsm6_effectRad.F90": "abaf69c2abbe8974d790ea1b650dbf14daf990617856c1ee49c255d534706842"
+  },
+  "pinned_mp_wsm6_sha256": "83012eedbe67a94e6cc0883b29c5658432d97fc99cad9eb326a1a5fd0f8146de",
+  "mp_wsm6_diff": [
+    "--- pinned/mp_wsm6.F90",
+    "+++ referee/mp_wsm6.F90",
+    "@@ -63,0 +64,6 @@",
+    "+",
+    "+!correct mode, finding WB5 (the host sets this once at initialization; MPAS from config_physics_mode):",
+    "+!.false. books the below-ground part of the straddling sedimentation cell at the flat cell mean, as",
+    "+!released; .true. books it with the same piecewise-linear profile (qmi/qpi) the remap integrates for",
+    "+!the part that stays aloft, so column water plus surface precipitation is conserved.",
+    "+ logical,public,save:: wsm6_plm_surface = .false.",
+    "@@ -1984 +1990,6 @@",
+    "-          precip(i) = precip(i) + qa(k)*(0.0-za(k))",
+    "+          if(wsm6_plm_surface) then",
+    "+             th = (0.0-za(k))/dza(k)",
+    "+             precip(i) = precip(i) + dza(k)*(qmi(k)*th + 0.5*(qpi(k)-qmi(k))*th*th)",
+    "+          else",
+    "+             precip(i) = precip(i) + qa(k)*(0.0-za(k))",
+    "+          endif",
+    "@@ -2254 +2265,6 @@",
+    "-             precip(i) = precip(i) + qa(k)*(0.0-za(k))",
+    "+             if(wsm6_plm_surface) then",
+    "+                th = (0.0-za(k))/dza(k)",
+    "+                precip(i) = precip(i) + dza(k)*(qmi(k)*th + 0.5*(qpi(k)-qmi(k))*th*th)",
+    "+             else",
+    "+                precip(i) = precip(i) + qa(k)*(0.0-za(k))",
+    "+             endif"
+  ],
+  "schema": "hex.correct-mode-referee-words/v1",
+  "finding": "WB5",
+  "cluster": "mpas-water-budget",
+  "referee_root": "v8.4.2-gnu-strict-atmosphere-correct-mode-v3",
+  "flags": [
+    "-std=f2008",
+    "-fimplicit-none",
+    "-O3",
+    "-ffree-line-length-none",
+    "-fconvert=big-endian",
+    "-ffree-form",
+    "-ffp-contract=off",
+    "-fno-tree-vectorize",
+    "-fno-unsafe-math-optimizations",
+    "-fPIC"
+  ],
+  "compiler": "GNU Fortran (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+  "constants": [
+    9.806159973144531,
+    1004.5,
+    1846.4000244140625,
+    287.0,
+    461.6000061035156,
+    273.1499938964844,
+    0.6083624362945557,
+    0.6217504143714905,
+    0.0,
+    0.0,
+    0.0,
+    1.0000000036274937e-15,
+    2850000.0,
+    2500000.0,
+    350000.0,
+    1.2799999713897705,
+    1000.0,
+    4190.0,
+    2106.0,
+    610.780029296875,
+    2.4900000425986946e-06,
+    4.9899999794433825e-06,
+    9.989999853132758e-06,
+    4.999999873689376e-05,
+    0.0001250000059371814,
+    0.000999000039882958
+  ],
+  "cases": [
+    {
+      "nz": 8,
+      "dt": 120.0,
+      "hail": 0
+    },
+    {
+      "nz": 24,
+      "dt": 120.0,
+      "hail": 1
+    },
+    {
+      "nz": 55,
+      "dt": 120.0,
+      "hail": 0
+    },
+    {
+      "nz": 8,
+      "dt": 300.0,
+      "hail": 1
+    },
+    {
+      "nz": 24,
+      "dt": 300.0,
+      "hail": 0
+    },
+    {
+      "nz": 55,
+      "dt": 300.0,
+      "hail": 1
+    },
+    {
+      "nz": 8,
+      "dt": 600.0,
+      "hail": 0
+    },
+    {
+      "nz": 24,
+      "dt": 600.0,
+      "hail": 1
+    },
+    {
+      "nz": 55,
+      "dt": 600.0,
+      "hail": 0
+    },
+    {
+      "nz": 8,
+      "dt": 60.0,
+      "hail": 1
+    },
+    {
+      "nz": 24,
+      "dt": 60.0,
+      "hail": 0
+    },
+    {
+      "nz": 55,
+      "dt": 60.0,
+      "hail": 1
+    },
+    {
+      "nz": 8,
+      "dt": 120.0,
+      "hail": 0
+    },
+    {
+      "nz": 24,
+      "dt": 120.0,
+      "hail": 1
+    },
+    {
+      "nz": 55,
+      "dt": 120.0,
+      "hail": 0
+    },
+    {
+      "nz": 8,
+      "dt": 300.0,
+      "hail": 1
+    },
+    {
+      "nz": 24,
+      "dt": 300.0,
+      "hail": 0
+    },
+    {
+      "nz": 55,
+      "dt": 300.0,
+      "hail": 1
+    },
+    {
+      "nz": 8,
+      "dt": 600.0,
+      "hail": 0
+    },
+    {
+      "nz": 24,
+      "dt": 600.0,
+      "hail": 1
+    },
+    {
+      "nz": 55,
+      "dt": 600.0,
+      "hail": 0
+    },
+    {
+      "nz": 8,
+      "dt": 60.0,
+      "hail": 1
+    },
+    {
+      "nz": 24,
+      "dt": 60.0,
+      "hail": 0
+    },
+    {
+      "nz": 55,
+      "dt": 60.0,
+      "hail": 1
+    },
+    {
+      "nz": 8,
+      "dt": 120.0,
+      "hail": 0
+    },
+    {
+      "nz": 24,
+      "dt": 120.0,
+      "hail": 1
+    },
+    {
+      "nz": 55,
+      "dt": 120.0,
+      "hail": 0
+    },
+    {
+      "nz": 8,
+      "dt": 300.0,
+      "hail": 1
+    },
+    {
+      "nz": 24,
+      "dt": 300.0,
+      "hail": 0
+    },
+    {
+      "nz": 55,
+      "dt": 300.0,
+      "hail": 1
+    },
+    {
+      "nz": 8,
+      "dt": 600.0,
+      "hail": 0
+    },
+    {
+      "nz": 24,
+      "dt": 600.0,
+      "hail": 1
+    },
+    {
+      "nz": 55,
+      "dt": 600.0,
+      "hail": 0
+    },
+    {
+      "nz": 8,
+      "dt": 60.0,
+      "hail": 1
+    },
+    {
+      "nz": 24,
+      "dt": 60.0,
+      "hail": 0
+    },
+    {
+      "nz": 55,
+      "dt": 60.0,
+      "hail": 1
+    },
+    {
+      "nz": 8,
+      "dt": 120.0,
+      "hail": 0
+    },
+    {
+      "nz": 24,
+      "dt": 120.0,
+      "hail": 1
+    },
+    {
+      "nz": 55,
+      "dt": 120.0,
+      "hail": 0
+    },
+    {
+      "nz": 8,
+      "dt": 300.0,
+      "hail": 1
+    },
+    {
+      "nz": 24,
+      "dt": 300.0,
+      "hail": 0
+    },
+    {
+      "nz": 55,
+      "dt": 300.0,
+      "hail": 1
+    },
+    {
+      "nz": 8,
+      "dt": 600.0,
+      "hail": 0
+    },
+    {
+      "nz": 24,
+      "dt": 600.0,
+      "hail": 1
+    },
+    {
+      "nz": 55,
+      "dt": 600.0,
+      "hail": 0
+    },
+    {
+      "nz": 8,
+      "dt": 60.0,
+      "hail": 1
+    },
+    {
+      "nz": 24,
+      "dt": 60.0,
+      "hail": 0
+    },
+    {
+      "nz": 55,
+      "dt": 60.0,
+      "hail": 1
+    }
+  ],
+  "surface_changed_cases": [
+    0,
+    1,
+    2,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    11,
+    12,
+    13,
+    14,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    36,
+    37,
+    38,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46
+  ],
+  "non_surface_changed_cases": [],
+  "words_sha256": "1eff4b6d8b0a1d7443b664a1aabf0d0b617364c188bcb1e7dd36b3d9c68b3097"
+}

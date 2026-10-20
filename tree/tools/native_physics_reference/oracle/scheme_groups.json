@@ -1,0 +1,11 @@
+{
+  "sfclay_mm5": [
+    "sfclay",
+    "sfclayrev"
+  ],
+  "radshared": [
+    "calc_cldincidence",
+    "calc_cldfraction",
+    "cal_cldfra3"
+  ]
+}

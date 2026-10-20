@@ -1,0 +1,98 @@
+{
+  "allowed_backend_artifact_paths": [
+    "seam/arrays/driver/cumulus_tendencies/ru",
+    "seam/arrays/driver/pbl_tendencies/ru",
+    "seam/arrays/driver/radiation_tendencies/ru"
+  ],
+  "allowed_metadata_divergence_substrings": [
+    "identity/constructor_identity_sha256",
+    "identity/n_columns"
+  ],
+  "arms": {
+    "candidate": {
+      "boundary_receipt_sha256": "388cdf14842d9eab92352c1fbf068fa32d91673d52be68cba3a641978c5f0cd5",
+      "coordinator_io_qualified_and_restored": true,
+      "driver_receipt_sha256": "d4602d3e5661706fd58af0c9183d31c96fea2e7c88fccae6a1f1f9dcd1500af1",
+      "final_gf_tendency_hashes": {
+        "rqvdynten": {
+          "dtype": "<f4",
+          "sha256": "eefb64d5ec2daf3a3bf42e9ac206c34f9a9ccc0227c3b35c662a4ff9a9aa075a",
+          "shape": [
+            55,
+            64002
+          ]
+        },
+        "rthdynten": {
+          "dtype": "<f4",
+          "sha256": "4fd900059cff3ca94828f25b6f693f4042db24af39080392934caf2958febb5d",
+          "shape": [
+            55,
+            64002
+          ]
+        }
+      },
+      "history_files": {
+        "cuda-history.2026-10-03_12.00.00.nc": "f656a31010263660a1ae819fcb043dedc3b44d237a268d887621e6fd5400b766",
+        "cuda-history.2026-10-03_13.00.00.nc": "8a9066d245c04adac293b16e3aa65de9c990b674e820f49a6a50d5c1ace0ec8b"
+      },
+      "measurement_receipt_sha256": "91e4d14609ab444703f4a57020e1a9a29e0f75fff6fe4f0446bc2bb3bcb670ca",
+      "runtime_identity_eligible": true
+    },
+    "reference": {
+      "boundary_receipt_sha256": "92548f3de3be8b0cc802c941b4d071a804531cbe4e7fa6116af5934b104fb811",
+      "coordinator_io_qualified_and_restored": true,
+      "driver_receipt_sha256": "50d53d5f873c17ef0c724c3a7f0a053f8c259d314a067c6896e044b6581471a4",
+      "final_gf_tendency_hashes": {
+        "rqvdynten": {
+          "dtype": "<f4",
+          "sha256": "eefb64d5ec2daf3a3bf42e9ac206c34f9a9ccc0227c3b35c662a4ff9a9aa075a",
+          "shape": [
+            55,
+            64002
+          ]
+        },
+        "rthdynten": {
+          "dtype": "<f4",
+          "sha256": "4fd900059cff3ca94828f25b6f693f4042db24af39080392934caf2958febb5d",
+          "shape": [
+            55,
+            64002
+          ]
+        }
+      },
+      "history_files": {
+        "cuda-history.2026-10-03_12.00.00.nc": "f656a31010263660a1ae819fcb043dedc3b44d237a268d887621e6fd5400b766",
+        "cuda-history.2026-10-03_13.00.00.nc": "8a9066d245c04adac293b16e3aa65de9c990b674e820f49a6a50d5c1ace0ec8b"
+      },
+      "measurement_receipt_sha256": "ddb958c3b9435cbd07e849e030f7f82393f328094789d975401831eeeff88c56",
+      "runtime_identity_eligible": true
+    }
+  },
+  "candidate_ranks": 2,
+  "compared_boundaries": 31,
+  "comparison_receipt_sha256": "fb3b5673366583de6f31c7837c40ff091999ee7a38c63e6d41e4fdd1bfcff641",
+  "completed_steps": 30,
+  "control_commit": "e6feb2f6c6b8273f2211fb15b65154a4f8dfb5b0",
+  "distinct_physical_cards": 1,
+  "executed_candidate_checkpoint": "91f29712853755a90bbfc5e952e733afa52c37dc",
+  "forecast_seconds": 3600,
+  "history_frames": 2,
+  "identity_scope": "all 12 atmosphere state/diagnostic arrays, persisted backend arrays except named artifacts, shared clocks, published history file bytes and final next-step GF forcing",
+  "mesh": {
+    "cells": 64002,
+    "edges": 192000,
+    "levels": 55
+  },
+  "nonclaims": [
+    "byte identity of the three named unconsumed staggered-u batch carriers",
+    "complete backend restart identity including the excluded artifacts",
+    "native MPAS whole-model identity or forecast skill",
+    "distinct-card scaling or identity",
+    "regional forecast qualification",
+    "new native dycore contract-deck results"
+  ],
+  "runtime_identical_files": 158,
+  "schema": "samehost-global-forecast-qualification/v1",
+  "status": "PASS",
+  "timestep_seconds": 120
+}

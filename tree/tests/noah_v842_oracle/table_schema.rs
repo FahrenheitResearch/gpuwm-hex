@@ -1,0 +1,111 @@
+// NoahTables ABI metadata; matches noah_v842.table_dtype().
+const TABLE_BYTES: usize = 5696;
+fn field(name: &str) -> (usize, usize, char) {
+    match name {
+        "RD" => (0, 1, 'f'),
+        "SIGMA" => (4, 1, 'f'),
+        "CPH2O" => (8, 1, 'f'),
+        "CPICE" => (12, 1, 'f'),
+        "LSUBF" => (16, 1, 'f'),
+        "EMISSI_S" => (20, 1, 'f'),
+        "LUCATS" => (24, 1, 'i'),
+        "BARE" => (28, 1, 'i'),
+        "NATURAL" => (32, 1, 'i'),
+        "LCZ_1" => (36, 1, 'i'),
+        "LCZ_2" => (40, 1, 'i'),
+        "LCZ_3" => (44, 1, 'i'),
+        "LCZ_4" => (48, 1, 'i'),
+        "LCZ_5" => (52, 1, 'i'),
+        "LCZ_6" => (56, 1, 'i'),
+        "LCZ_7" => (60, 1, 'i'),
+        "LCZ_8" => (64, 1, 'i'),
+        "LCZ_9" => (68, 1, 'i'),
+        "LCZ_10" => (72, 1, 'i'),
+        "LCZ_11" => (76, 1, 'i'),
+        "NLUS" => (80, 1, 'i'),
+        "LUTYPE" => (84, 256, 'c'),
+        "NROTBL" => (340, 50, 'i'),
+        "SNUPTBL" => (540, 50, 'f'),
+        "RSTBL" => (740, 50, 'f'),
+        "RGLTBL" => (940, 50, 'f'),
+        "HSTBL" => (1140, 50, 'f'),
+        "SHDTBL" => (1340, 50, 'f'),
+        "MAXALB" => (1540, 50, 'f'),
+        "EMISSMINTBL" => (1740, 50, 'f'),
+        "EMISSMAXTBL" => (1940, 50, 'f'),
+        "LAIMINTBL" => (2140, 50, 'f'),
+        "LAIMAXTBL" => (2340, 50, 'f'),
+        "Z0MINTBL" => (2540, 50, 'f'),
+        "Z0MAXTBL" => (2740, 50, 'f'),
+        "ALBEDOMINTBL" => (2940, 50, 'f'),
+        "ALBEDOMAXTBL" => (3140, 50, 'f'),
+        "ZTOPVTBL" => (3340, 50, 'f'),
+        "ZBOTVTBL" => (3540, 50, 'f'),
+        "TOPT_DATA" => (3740, 1, 'f'),
+        "CMCMAX_DATA" => (3744, 1, 'f'),
+        "CFACTR_DATA" => (3748, 1, 'f'),
+        "RSMAX_DATA" => (3752, 1, 'f'),
+        "SLCATS" => (3756, 1, 'i'),
+        "NSLTYPE" => (3760, 1, 'i'),
+        "SLTYPE" => (3764, 256, 'c'),
+        "BB" => (4020, 30, 'f'),
+        "DRYSMC" => (4140, 30, 'f'),
+        "F11" => (4260, 30, 'f'),
+        "MAXSMC" => (4380, 30, 'f'),
+        "REFSMC" => (4500, 30, 'f'),
+        "SATPSI" => (4620, 30, 'f'),
+        "SATDK" => (4740, 30, 'f'),
+        "SATDW" => (4860, 30, 'f'),
+        "WLTSMC" => (4980, 30, 'f'),
+        "QTZ" => (5100, 30, 'f'),
+        "SLPCATS" => (5220, 1, 'i'),
+        "NSLOPE" => (5224, 1, 'i'),
+        "SLOPE_DATA" => (5228, 30, 'f'),
+        "SBETA_DATA" => (5348, 1, 'f'),
+        "FXEXP_DATA" => (5352, 1, 'f'),
+        "CSOIL_DATA" => (5356, 1, 'f'),
+        "SALP_DATA" => (5360, 1, 'f'),
+        "REFDK_DATA" => (5364, 1, 'f'),
+        "REFKDT_DATA" => (5368, 1, 'f'),
+        "FRZK_DATA" => (5372, 1, 'f'),
+        "ZBOT_DATA" => (5376, 1, 'f'),
+        "SMLOW_DATA" => (5380, 1, 'f'),
+        "SMHIGH_DATA" => (5384, 1, 'f'),
+        "CZIL_DATA" => (5388, 1, 'f'),
+        "LVCOEF_DATA" => (5392, 1, 'f'),
+        "ERR_MESSAGE" => (5396, 256, 'c'),
+        "ILOC" => (5652, 1, 'i'),
+        "JLOC" => (5656, 1, 'i'),
+        "CP" => (5660, 1, 'f'),
+        "R_D" => (5664, 1, 'f'),
+        "XLF" => (5668, 1, 'f'),
+        "XLV" => (5672, 1, 'f'),
+        "RHOWATER" => (5676, 1, 'f'),
+        "STBOLT" => (5680, 1, 'f'),
+        "KARMAN" => (5684, 1, 'f'),
+        "GRAVITY" => (5688, 1, 'f'),
+        "error" => (5692, 1, 'i'),
+        _ => panic!("unknown Noah table field {name}"),
+    }
+}
+fn defaults() -> Vec<u8> {
+    let mut data = vec![0; TABLE_BYTES];
+    store(&mut data, "RD", 0, "287.04");
+    store(&mut data, "SIGMA", 0, "5.67E-8");
+    store(&mut data, "CPH2O", 0, "4.218E+3");
+    store(&mut data, "CPICE", 0, "2.106E+3");
+    store(&mut data, "LSUBF", 0, "3.335E+5");
+    store(&mut data, "EMISSI_S", 0, "0.95");
+    store(&mut data, "NLUS", 0, "50");
+    store(&mut data, "NSLTYPE", 0, "30");
+    store(&mut data, "NSLOPE", 0, "30");
+    store(&mut data, "CP", 0, "1004.5");
+    store(&mut data, "R_D", 0, "287.0");
+    store(&mut data, "XLF", 0, "3.50E5");
+    store(&mut data, "XLV", 0, "2.50E6");
+    store(&mut data, "RHOWATER", 0, "1000.0");
+    store(&mut data, "STBOLT", 0, "5.67051E-8");
+    store(&mut data, "KARMAN", 0, "0.4");
+    store(&mut data, "GRAVITY", 0, "9.80616");
+    data
+}

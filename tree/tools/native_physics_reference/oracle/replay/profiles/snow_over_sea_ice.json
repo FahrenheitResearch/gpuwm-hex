@@ -1,0 +1,21 @@
+{
+  "precision": "real32",
+  "assignments": {
+    "xice": "1.0_real32",
+    "snow": "100.0_real32",
+    "snowh2d": "0.3_real32",
+    "snowc": "1.0_real32",
+    "snowsi": "0.3_real32",
+    "icedepth": "2.0_real32",
+    "tsk": "260.0_real32",
+    "tslb": "260.0_real32",
+    "albsi": "0.75_real32"
+  },
+  "pre_assertions": [
+    "all(xice>=xice_threshold)",
+    "all(snowh2d>0.0_real32)"
+  ],
+  "post_assertions": [
+    "all(snowh2d>0.0_real32)"
+  ]
+}

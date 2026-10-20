@@ -1,0 +1,20 @@
+{
+  "precision": "real32",
+  "assignments": {
+    "t3d": "max(t3d,310.0_real32*(pcps/100000.0_real32)**0.286_real32)",
+    "qv3d": "max(qv3d,0.020_real32*(pcps/100000.0_real32)**2)",
+    "w": "max(w,2.0_real32)",
+    "hfx": "max(hfx,200.0_real32)",
+    "qfx": "max(qfx,0.0003_real32)",
+    "raincv": "0.0_real32",
+    "pratec": "0.0_real32"
+  },
+  "pre_assertions": [
+    "all(qv3d(its:ite,kts:kte,jts:jte)>0.0_real32)",
+    "all(w(its:ite,kts:kte,jts:jte)>=2.0_real32)"
+  ],
+  "post_assertions": [
+    "any(raincv>0.0_real32)",
+    "any(cu_act_flag)"
+  ]
+}

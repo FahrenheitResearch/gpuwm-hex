@@ -561,17 +561,18 @@ def advance_acoustic_step_v841(
         for level in range(1, nlev):
             delta_saved = forcing.rw_save[level, cell] - forcing.rw[level, cell]
             damping = forcing.dss[level, cell]
-            density_at_interface = (
+            zz_at_interface = (
                 fzm_a[level] * forcing.zz[level, cell]
                 + fzp_a[level] * forcing.zz[level - 1, cell]
-            ) * (
+            )
+            rho_at_interface = (
                 fzm_a[level] * forcing.rho_zz[level, cell]
                 + fzp_a[level] * forcing.rho_zz[level - 1, cell]
             )
             out.rw_p[level, cell] = (
                 out.rw_p[level, cell]
                 + delta_saved
-                - dts_r * damping * density_at_interface * forcing.w[level, cell]
+                - dts_r * damping * zz_at_interface * rho_at_interface * forcing.w[level, cell]
             ) / (one + dts_r * damping) - delta_saved
         out.ww_avg[1:nlev, cell] = out.ww_avg[1:nlev, cell] + (
             ewp[1:nlev] * out.rw_p[1:nlev, cell]

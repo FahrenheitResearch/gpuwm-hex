@@ -1,0 +1,33 @@
+{
+  "schema": "hex.correct-mode-referee-words/v1",
+  "finding": "WB3",
+  "cluster": "mpas-water-budget",
+  "referee_source": "v8.4.2-gnu-strict-atmosphere-correct-mode-v3/src/core_atmosphere/physics/mpas_atmphys_driver_microphysics.F",
+  "referee_source_sha256": "7b008c5559b4a9c2e0bf052b27fb771cc2815fdcf34e3373c67d8eb7cf304728",
+  "loop_first_line": 649,
+  "loop": [
+    "do k = kts,kte",
+    "if(dry_density) then",
+    "rho_a = rho_p(i,k,j)",
+    "else",
+    "rho_a = rho_p(i,k,j) / (1._RKIND + qv_p(i,k,j))",
+    "endif",
+    "precipw(i) = precipw(i) + qv_p(i,k,j) * rho_a * dz_p(i,k,j)",
+    "enddo"
+  ],
+  "flags": [
+    "-O3",
+    "-ffp-contract=off",
+    "-fno-tree-vectorize",
+    "-fno-unsafe-math-optimizations",
+    "-ffree-line-length-none",
+    "-fconvert=big-endian",
+    "-ffree-form"
+  ],
+  "compiler": "GNU Fortran (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+  "nz": 24,
+  "nc": 64,
+  "inputs_sha256": "6983fff50d1d5ea964641f49dfb5986585a0da1f333ecad863f129a55eb1b4b0",
+  "words_sha256": "d4520b69f2035e5b5d029d64eec14fe7c0624f377be048b2d7252d82cf2d53e6",
+  "layout": "big-endian binary32; inputs qv,rho,dz each [level][cell]; words precipw[cell] exact then correct"
+}

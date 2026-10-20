@@ -1,0 +1,56 @@
+{
+  "schema": "mpas-native-radiation-stress-profiles-v1",
+  "scope": "Synthetic radiation argument inputs; expected outputs come from complete native modules. These profiles do not prove a forecast or branch completeness.",
+  "profiles": [
+    {
+      "name": "supersaturated",
+      "schemes": ["rrtmg_lwrad", "rrtmg_swrad"],
+      "profile": {
+        "precision": "real32",
+        "required_present": ["qv3d"],
+        "assignments": {
+          "qv3d": "max(qv3d,0.025_real32)",
+          "t3d": "270.0_real32",
+          "t8w": "270.0_real32"
+        },
+        "pre_assertions": ["all(qv3d>=0.025_real32)", "all(t3d==270.0_real32)"]
+      }
+    },
+    {
+      "name": "deep_cloud",
+      "schemes": ["rrtmg_lwrad", "rrtmg_swrad"],
+      "profile": {
+        "precision": "real32",
+        "required_present": ["qv3d", "qc3d", "qi3d", "qs3d", "cldfra3d"],
+        "assignments": {
+          "qv3d": "max(qv3d,0.020_real32)",
+          "qc3d": "0.001_real32",
+          "qi3d": "0.0005_real32",
+          "qs3d": "0.0003_real32",
+          "cldfra3d": "1.0_real32",
+          "icloud": "1_int32",
+          "cldovrlp": "2_int32"
+        },
+        "pre_assertions": ["all(cldfra3d==1.0_real32)", "all(qc3d>0.0_real32)", "all(qi3d>0.0_real32)", "all(qs3d>0.0_real32)"]
+      }
+    },
+    {
+      "name": "snow_over_sea_ice_lw",
+      "schemes": ["rrtmg_lwrad"],
+      "profile": {
+        "precision": "real32",
+        "assignments": {"xice": "1.0_real32", "snow": "100.0_real32", "tsk": "260.0_real32", "xland": "2.0_real32", "emiss": "0.98_real32"},
+        "pre_assertions": ["all(xice==1.0_real32)", "all(snow>0.0_real32)"]
+      }
+    },
+    {
+      "name": "snow_over_sea_ice_sw",
+      "schemes": ["rrtmg_swrad"],
+      "profile": {
+        "precision": "real32",
+        "assignments": {"xice": "1.0_real32", "snow": "100.0_real32", "tsk": "260.0_real32", "xland": "2.0_real32", "albedo": "0.75_real32"},
+        "pre_assertions": ["all(xice==1.0_real32)", "all(snow>0.0_real32)"]
+      }
+    }
+  ]
+}

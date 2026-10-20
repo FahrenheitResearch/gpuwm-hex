@@ -1,17 +1,18 @@
-"""Verify every frozen MPAS ``file:line`` citation against v8.2.3.
+"""Verify MPAS source citations and per-routine coverage against pinned v8.4.2.
 
-Line numbers rot while continuing to look plausible.  This checker scans the
-Python port's published source citations, resolves each one only inside the
-vendored MPAS-Model v8.2.3 tree, and requires an exhaustive static pin.  A pin
-contains the exact source path, range, occurrence count, and SHA-256 of the
-complete cited line window.  The digest is a stricter form of gpuwm's citation
-anchor: it fails if any cited line changes, while an edited citation also
-creates an unpinned row and leaves its former pin stale.
+Line numbers rot while continuing to look plausible. The campaign audit
+resolves new MPAS citations inside the supplied pristine v8.4.2 source tree,
+checks its immutable SHA manifest. --routine-coverage additionally requires
+a citation on each routine; the default G0 mode is whole-file authentication.
+Existing v8.2.3 citations retain their committed source-window pins. Unknown
+release tags, missing files and invalid ranges refuse G0.
 
 Comma continuations (``file.F:10-20,30-40``) and inherited ranges
-(``file.F:10-20`` followed by ``:30-40``) are separate pins.  No missing file
-is treated as external: the v8.2.3 source is committed under ``vendor/`` and
-the checker fails closed if it cannot resolve a path.
+(``file.F:10-20`` followed by ``:30-40``) are separate windows.
+
+The historical v8.2.3 frozen-window audit is retained under --legacy-freeze.
+The campaign audit validates the immutable v8.4.2 source manifest and checks
+each cited file's bytes against it; it does not silently regenerate source pins.
 
 Usage::
 
@@ -22,11 +23,14 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import ast
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
 from typing import Mapping, Sequence
 
 
@@ -62,6 +66,7 @@ class CitationOccurrence:
 # Bare aliases actually published by the port.  They are declarations, not
 # guesses: any new ambiguous spelling is rejected until it receives a row.
 ALIASES: Mapping[str, str] = {
+    "Registry.xml": "src/core_atmosphere/Registry.xml",
     "core.F": "src/core_atmosphere/mpas_atm_core.F",
     "helpers.F": "src/operators/mpas_tracer_advection_helpers.F",
     "mono.F": "src/operators/mpas_tracer_advection_mono.F",
@@ -858,11 +863,63 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="print the resolved candidate inventory as JSON",
     )
+    parser.add_argument("--routine-coverage", action="store_true",
+                        help="also require a direct MPAS citation on every physics/dynamics/diagnostics routine")
+    parser.add_argument("--mpas-source", type=Path,
+                        default=Path(os.environ.get("MPAS_REF", str(ROOT / "vendor" / "MPAS-Model-v8.4.2"))))
+    parser.add_argument("--legacy-freeze", action="store_true",
+                        help="run the archived v8.2.3 frozen-window audit")
     arguments = parser.parse_args(argv)
     if arguments.inventory:
-        print(json.dumps(candidate_inventory(), indent=2, sort_keys=True))
+        if arguments.legacy_freeze:
+            rows = candidate_inventory()
+        else:
+            rows = []
+            for citation, occurrences in citations().items():
+                cited, first, last = _split_citation(citation)
+                if not is_mpas_citation(cited):
+                    continue
+                row = {"citation": citation, "occurrences": len(occurrences)}
+                rrfs_errors = check_rrfs_window(citation, occurrences)
+                if rrfs_errors is not None:
+                    row.update(release="RRFS " + RRFS_COMMIT, source_path=RRFS_SOURCE_FILE,
+                               source_sha256=RRFS_SOURCE_SHA256,
+                               authority="committed historical RRFS whole-file pin")
+                    if rrfs_errors:
+                        row["error"] = "; ".join(rrfs_errors)
+                    rows.append(row)
+                    continue
+                if citation in PINS:
+                    pin = PINS[citation]
+                    row.update(release="v8.2.3", source_path=pin.source_path,
+                               window_sha256=pin.window_sha256,
+                               authority="committed historical source-window pin")
+                    errors = check_legacy_window(citation)
+                    if errors:
+                        row["error"] = "; ".join(errors)
+                    rows.append(row)
+                    continue
+                try:
+                    if fork_citation_window(cited,first,last):
+                        root=Path(os.environ["RRFS_REF"]) if os.environ.get("RRFS_REF") else RRFS_SOURCE_ROOT
+                        resolved=resolve_cited_path(cited.removeprefix("MPAS-Model-rrfs/"),root)
+                        row.update(release="rrfs-1d6e370e",source_path=resolved,
+                            window_sha256=window_sha256(source_window(resolved,first,last,root)))
+                        rows.append(row)
+                        continue
+                    if cited.startswith("MPAS-Model-") and not cited.startswith("MPAS-Model-v8.4.2/"):
+                        raise ValueError("citation names an older MPAS release")
+                    resolved = resolve_cited_path(cited.removeprefix("MPAS-Model-v8.4.2/"), arguments.mpas_source)
+                    row.update(release="v8.4.2", source_path=resolved, window_sha256=window_sha256(
+                        source_window(resolved, first, last, arguments.mpas_source)))
+                except (OSError, ValueError, IndexError, subprocess.CalledProcessError) as error:
+                    row["error"] = str(error)
+                rows.append(row)
+        print(json.dumps(rows, indent=2, sort_keys=True))
         return 0
-    failures = check()
+    failures = check() if arguments.legacy_freeze else check_campaign_citations(SOURCE_ROOT, arguments.mpas_source)
+    if arguments.routine_coverage:
+        failures.extend(check_routine_coverage(SOURCE_ROOT, arguments.mpas_source))
     for failure in failures:
         print(f"FAIL: {failure}")
     found = citations()
@@ -871,6 +928,223 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{len(found)} unique ranges, {len(failures)} failures"
     )
     return 1 if failures else 0
+
+
+SOURCE_MANIFEST_SHA256 = "5ec8c4c614f29a230fb1a38ced564a0cccb0d8029e8e6c056c170175b3251c8e"
+
+# This existing adapter explicitly cites the workflow's RRFS commit, rather
+# than MPAS v8.4.2. Authenticate that historical source; never reinterpret its
+# out-of-range v8.4.2 line numbers as a v8.4.2 citation.
+# MPAS_RRFS_REF names the pinned RRFS checkout; a pool host that exports MPAS_LANES keeps its
+# references under ref/rrfs there; a public checkout looks in vendor/ like the v8.4.2 source.
+RRFS_SOURCE_ROOT = Path(os.environ.get("MPAS_RRFS_REF") or (
+    str(Path(os.environ["MPAS_LANES"]) / "ref/rrfs/MPAS-Model-rrfs") if os.environ.get("MPAS_LANES")
+    else str(ROOT / "vendor" / "MPAS-Model-rrfs")))
+RRFS_COMMIT = "1d6e370e7b43a332074809f170532a216c2212fb"
+RRFS_CITATION = "mpas_atmphys_driver_convection.F:1152-1154"
+RRFS_SOURCE_FILE = "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F"
+RRFS_SOURCE_SHA256 = "46b356413aa850ed8b906962d81f0d68ce1050528fc24265097cfe401c002cd5"
+
+
+def check_rrfs_window(citation: str, occurrences: Sequence[CitationOccurrence]) -> list[str] | None:
+    if citation != RRFS_CITATION or not all(
+            Path(item.python_path).name == "cuda_ntiedtke_column_v841.py" for item in occurrences):
+        return None
+    try:
+        path = RRFS_SOURCE_ROOT / RRFS_SOURCE_FILE
+        if _sha256_file(path) != RRFS_SOURCE_SHA256:
+            return [f"historical RRFS {RRFS_COMMIT} source SHA-256 mismatch"]
+        source_window(RRFS_SOURCE_FILE, 1152, 1154, RRFS_SOURCE_ROOT)
+    except (OSError, ValueError, IndexError, subprocess.CalledProcessError) as error:
+        return [f"historical RRFS {RRFS_COMMIT} source unavailable: {error}"]
+    return []
+
+
+def is_mpas_citation(cited: str) -> bool:
+    basename = Path(cited).name
+    # WRF's driver is cited by the retained ArWen seam. MPAS has its own
+    # mpas_atmphys_driver_microphysics.F and does not contain this WRF file.
+    # WRF's Noah-MP land surface (module_sf_noahmplsm.F) is cited by the ArWen
+    # Noah-MP shdmax binding (cuda_arwen_physics_v841, hex 0.4.0); MPAS v8.4.2
+    # carries the refactored physics_noahmp/ and does not contain this WRF file.
+    # An explicitly MPAS-qualified spelling still fails source resolution.
+    if cited in ("module_microphysics_driver.F", "module_sf_noahmplsm.F"):
+        return False
+    return (basename.startswith(("mpas_", "module_")) or basename == "Registry.xml" or
+            cited in ALIASES or "MPAS-Model" in cited)
+
+
+
+def fork_citation_window(cited: str, first: int, last: int) -> bool:
+    """Authenticate explicit fork authority; shared citations retain v8.4.2."""
+    prefix='MPAS-Model-rrfs/'
+    if not cited.startswith(prefix):
+        return False
+    import subprocess
+    root=Path(os.environ["RRFS_REF"]) if os.environ.get("RRFS_REF") else RRFS_SOURCE_ROOT
+    relative=cited.removeprefix(prefix)
+    resolved=resolve_cited_path(relative,root)
+    canonical=(root/resolved).resolve().relative_to(root.resolve()).as_posix()
+    # Main-tree driver references are compared to immutable objects. A changed
+    # checkout, dirty source or mutable table cannot authenticate itself.
+    pin='1d6e370e7b43a332074809f170532a216c2212fb'
+    source=(root/resolved).resolve()
+    repository=Path(subprocess.check_output(
+        ['git','-C',str(source.parent),'rev-parse','--show-toplevel'],text=True).strip()).resolve()
+    if repository!=root.resolve():
+        # The parent model's immutable gitlink pins the scheme repository.
+        submodule=repository.relative_to(root.resolve()).as_posix()
+        link=subprocess.check_output(['git','-C',str(root),'ls-tree',pin,submodule],text=True).strip()
+        metadata,_,name=link.partition('\t')
+        mode,kind,child_pin=metadata.split()
+        if mode!='160000' or kind!='commit' or name!=submodule:
+            raise ValueError('fork citation repository is not a pinned submodule: '+submodule)
+        head=subprocess.check_output(['git','-C',str(repository),'rev-parse','HEAD'],text=True).strip()
+        if head!=child_pin:
+            raise ValueError('fork citation submodule differs from parent gitlink: '+submodule)
+        authority=subprocess.run(['git','-C',str(repository),'show',
+            child_pin+':'+source.relative_to(repository).as_posix()],capture_output=True,check=True).stdout
+    else:
+        authority=subprocess.run(['git','-C',str(root),'show',pin+':'+canonical],
+                                  capture_output=True,check=True).stdout
+    if (root/resolved).read_bytes()!=authority:
+        raise ValueError('fork citation source differs from the pinned Git object: '+resolved)
+    source_window(resolved,first,last,root)
+    return True
+
+
+def check_campaign_citations(source_root: Path, mpas_source: Path) -> list[str]:
+    manifest = mpas_source.parent / "MPAS-Model-v8.4.2.sha256"
+    if not manifest.is_file() or _sha256_file(manifest) != SOURCE_MANIFEST_SHA256:
+        return ["pinned v8.4.2 source manifest unavailable or changed; cannot authenticate cited MPAS bytes"]
+    expected = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        sha, name = line.split(maxsplit=1)
+        expected[name.removeprefix("./")] = sha
+    failures = []
+    verified = set()
+    for citation, occurrences in citations(source_root).items():
+        cited, first, last = _split_citation(citation)
+        if not is_mpas_citation(cited):
+            continue  # glibc and other non-MPAS source references
+        label = f"{citation} ({occurrences[0].python_path}:{occurrences[0].python_line})"
+        rrfs_errors = check_rrfs_window(citation, occurrences)
+        if rrfs_errors is not None:
+            failures.extend(f"{label}: {error}" for error in rrfs_errors)
+            continue
+        if citation in PINS:
+            failures.extend(f"{label}: {error}" for error in check_legacy_window(citation))
+            continue
+        if cited.startswith("MPAS-Model-rrfs/"):
+            try:
+                fork_citation_window(cited,first,last)
+            except (OSError,ValueError,IndexError,subprocess.CalledProcessError) as error:
+                failures.append(f"{label}: {error}")
+            continue
+        if cited.startswith("MPAS-Model-") and not cited.startswith("MPAS-Model-v8.4.2/"):
+            failures.append(f"{label}: citation names an older MPAS release")
+            continue
+        cited = cited.removeprefix("MPAS-Model-v8.4.2/")
+        try:
+            resolved = resolve_cited_path(cited, mpas_source)
+            source_window(resolved, first, last, mpas_source)
+            if resolved not in verified:
+                # MPAS intentionally shares framework files through symlinks;
+                # its source manifest pins their canonical file only.
+                canonical = (mpas_source / resolved).resolve().relative_to(mpas_source.resolve()).as_posix()
+                if expected.get(canonical) != _sha256_file(mpas_source / resolved):
+                    raise ValueError(f"source SHA-256 differs from pinned manifest: {resolved}")
+                verified.add(resolved)
+        except (OSError, ValueError, IndexError, subprocess.CalledProcessError) as error:
+            failures.append(f"{label}: {error}")
+    return failures
+
+
+def check_legacy_window(citation: str) -> list[str]:
+    """Retain previously audited windows without relabelling them as v8.4.2.
+
+    PINS is the committed historical authority, not a generated inventory.
+    When the archived source is installed, additionally authenticate its
+    window. New historical references require an explicit reviewed pin.
+    """
+    pin = PINS[citation]
+    if not VENDOR_ROOT.is_dir():
+        return []
+    try:
+        window = source_window(pin.source_path, pin.first_line, pin.last_line, VENDOR_ROOT)
+        if window_sha256(window) != pin.window_sha256:
+            return ["v8.2.3 source-window pin mismatch"]
+    except (OSError, ValueError, IndexError, subprocess.CalledProcessError) as error:
+        return [f"v8.2.3 pinned window unavailable: {error}"]
+    return []
+
+
+def check_routine_coverage(source_root: Path, mpas_source: Path) -> list[str]:
+    """A module-level citation cannot silently cover newly added routines.
+
+    Physics includes helpers and launchers, as requested by the campaign.
+    Dynamics/diagnostics includes Python functions and CUDA device/global
+    routines embedded in source strings. Legacy citations remain frozen by
+    check(); new MPAS citations resolve inside the supplied read-only tree.
+    """
+    failures = []
+    modules = []
+    for path in sorted(source_root.rglob("*.py")):
+        if "mpasphys" in path.parts or any(word in path.stem for word in ("dynamics", "diagnostics")):
+            modules.append(path)
+    for path in modules:
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        parsed = ast.parse(text, filename=str(path))
+        scopes = []
+        for node in ast.walk(parsed):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Citation belongs to this routine's docstring or its adjacent
+                # comment, never to a nested routine or another function body.
+                leading = node.lineno - 2
+                comments = []
+                while leading >= 0 and lines[leading].lstrip().startswith("#"):
+                    comments.insert(0, lines[leading]); leading -= 1
+                scopes.append((node.name, node.lineno, "\n".join(comments) + "\n" + (ast.get_docstring(node) or "")))
+        cuda = re.compile(r"(?:__global__|__device__)\s+(?:__forceinline__\s+)?(?:[\w*]+\s+)+(?P<name>\w+)\s*\(")
+        for match in cuda.finditer(text):
+            lineno = _line_number(text, match.start())
+            leading = lineno - 2
+            comments = []
+            while leading >= 0 and (lines[leading].lstrip().startswith(("//", "/*", "*"))):
+                comments.insert(0, lines[leading]); leading -= 1
+            scopes.append((match.group("name"), lineno, "\n".join(comments)))
+        for name, line, citation_text in scopes:
+            citations_here = list(_FULL.finditer(citation_text))
+            label = f"{path.relative_to(source_root)}:{line} {name}"
+            if not citations_here:
+                failures.append(f"{label}: MPAS file:line citation missing on routine")
+                continue
+            for match in citations_here:
+                cited = match.group("file")
+                first, last = _parse_range(match.group("range"))
+                # Existing immutable pins are still checked against their
+                # original release. New citations bind v8.4.2 directly.
+                old_key = f"{cited}:{first}-{last}" if first != last else f"{cited}:{first}"
+                rrfs_errors = check_rrfs_window(old_key, [CitationOccurrence(
+                    old_key, str(path), line)])
+                if rrfs_errors is not None:
+                    failures.extend(f"{label}: {error}" for error in rrfs_errors)
+                    continue
+                if old_key in PINS:
+                    failures.extend(f"{label}: {error}" for error in check_legacy_window(old_key))
+                    continue
+                if not mpas_source.is_dir():
+                    failures.append(f"{label}: pinned MPAS source unavailable: {mpas_source}")
+                    continue
+                cited = cited.removeprefix("MPAS-Model-v8.4.2/")
+                try:
+                    if not fork_citation_window(cited,first,last):
+                        resolved = resolve_cited_path(cited, mpas_source)
+                        source_window(resolved, first, last, mpas_source)
+                except (OSError, ValueError, IndexError, subprocess.CalledProcessError) as error:
+                    failures.append(f"{label}: invalid MPAS citation: {error}")
+    return failures
 
 
 if __name__ == "__main__":

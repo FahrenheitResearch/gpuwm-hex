@@ -1,0 +1,73 @@
+# The moving-region jolt: cause and fix
+
+**16.174 → 1.007** is the worst post-move jolt ratio in the reduced moving-refinement GPU test with LTS, across three moves. All three baseline moves exceed 1.5; all three corrected moves pass. Without LTS the worst ratio changes **21.094 → 1.038**. The reproduced cause is a discrete pressure/buoyancy imbalance introduced by conservative remapping onto changed vertical geometry. Conservation alone does not preserve force balance.
+
+This is a controlled numerical result, not a rerun of Fung-wong 20 h or Erin 39 h. Their reported 1.5004 and 1.81 scores remain unverified after this fix. The retained bundle contains source, CPU tests, small GPU experiments, meshes, and numerical records. No full cyclone inputs or New Tiedtke integration were reconstructed here.
+
+**Measured moving-refinement results.** The table reports maxima during the full ten minutes after each move, divided by the same-time maxima in the matching fixed run. Jolt is the larger of the two ratios. Each arm starts from the same state and retains its own evolving history across all three moves; the baseline is not reset to the fixed state at each move.
+
+| Executor | Move, minutes | Before: abs(w) ratio | After: abs(w) ratio | Before: pressure-tendency ratio | After: pressure-tendency ratio |
+|---|---:|---:|---:|---:|---:|
+| Uniform step | 10 | 1.624 | 1.017 | 3.535 | 1.000 |
+| Uniform step | 20 | 4.034 | 0.993 | 11.871 | 0.952 |
+| Uniform step | 30 | 7.592 | 0.979 | 21.094 | 1.038 |
+| LTS + changing classes | 10 | 1.261 | 0.986 | 2.883 | 1.000 |
+| LTS + changing classes | 20 | 3.476 | 0.988 | 9.385 | 1.000 |
+| LTS + changing classes | 30 | 6.281 | 1.007 | 16.174 | 0.986 |
+
+Pressure tendency is in Pa/s before normalization; vertical velocity is in m/s. At the third LTS move, the fixed, baseline, and corrected pressure tendencies are respectively 0.017969, 0.290625, and 0.017708 Pa/s. Their peak vertical velocities are 0.002893, 0.018170, and 0.002913 m/s. These small absolute values belong to a weakly perturbed resting atmosphere, not a cyclone.
+
+The fixture has 522 spherical Voronoi cells, eight layers to 30 km, an isothermal 288 K reference, a 10^-5 relative theta-mass perturbation, and one passive tracer. A smooth contraction of centres creates approximately a 1.4:1 requested spacing contrast. The cap centre moves from (15°, 0°) to longitudes 10°, 20°, and 30°. Every member is rebuilt using `rw_mpas_mesh --from-centres`. Terrain is the same analytic 0–100 m function evaluated on each mesh. The nominal vertical layers stay fixed; their physical heights change. This tests a moving refinement region, but is much milder in resolution contrast than 48/3 km.
+
+The ordinary integrator uses 30 s steps, three dynamics splits, and six acoustic substeps. LTS uses the production `FullStepLtsActive` executor, RK2, 15/30 s class steps, scalar reflux, and a class boundary shifted by 0.25 radians at each move. Every gathered boundary has synchronized clocks and empty transfer registers. Samples are 30 s apart; moves are at 600, 1200, and 1800 s; integration ends at 2400 s. No divergence damping, terrain smoothing, or added time filter is enabled in the fixtures. The reported device is an RTX 5090. The small class-driver allocation pools are tens of MB, not the 54 GB production case. That pool measurement is not a claim about peak CUDA context memory.
+
+**Why it happens.** The conserved quantities are computational dry density rho, theta mass H, and individual tracer masses rho*q. Their integrals use nominal layer thickness and cell area. The physical equation of state depends on the new Jacobian: p = p0 (R*zz*H/p0)^1.4. The native vertical force additionally uses the new reference state and discrete interface weights. Independently remapping rho and H, then deriving pressure, does not commute with this operator. A small remap error in pressure can be a large force relative to the quiet fixed control. Comparing with a moving run's own calm hours can conceal this persistent source of adjustment.
+
+For an interior interface the pressure/buoyancy residual used by the correction is
+
+```
+R_k = rdzu_k * (p'_k - p'_(k-1))
+      + g * [fzm_k * (rho + Q - rho_base)_k
+             + fzp_k * (rho + Q - rho_base)_(k-1)]
+```
+
+Q is the sum of water-species masses, not a passive tracer. Dividing by the native interface density, interface metric, and moisture loading gives the pressure contribution to physical w acceleration, with a consistent opposite-sign convention. Terrain/u contributions and horizontal pressure force are separate. The code transfers the source acceleration at physical interface heights and constrains the new operator to reproduce it. It does not assume that a nonhydrostatic storm should have zero vertical acceleration.
+
+**CPU experiments separating the causes.** A resting atmosphere has zero initial native pressure force. With six changed terrain columns among 132, the full atmosphere remap gives:
+
+| Reconciliation / initialization | Peak vertical residual, Pa/m | Peak horizontal force, Pa/m | Unchanged-terrain columns whose density changes |
+|---|---:|---:|---:|
+| Global / previous | 0.117164 | 7.668e-5 | 126 |
+| Global / corrected | 6.755e-6 | 1.867e-5 | 126 |
+| Local / previous | 2.462613 | 2.998e-3 | 0 |
+| Local / corrected | 7.480e-6 | 8.837e-4 | 0 |
+
+This reproduces the nonlocal correction diagnosis, but also shows why simply switching to the existing local policy is insufficient. It forces each changed column to retain its original complete mass after its ground rises, concentrating displaced air near the terrain. Its pressure anomaly is 11023 Pa before balance and still 3204 Pa afterward. Global reconciliation distributes that domain discrepancy; corresponding anomalies are 232 and 61 Pa. Vertical balance cannot eliminate a horizontal pressure anomaly required by the chosen column budgets. Thus this branch retains global reconciliation as the default. It does not claim distant-state identity, local horizontal balance, or removal of the generator's geometry changes.
+
+In the full 522-cell regenerated-mesh resting test, the native vertical residual changes from zero to 1.349e-3 Pa/m with the old remap, versus 1.314e-5 Pa/m with the correction. Horizontal force changes from 1.741e-6 to 4.654e-7 Pa/m. The remaining vertical residual is of the size produced by FP32 evaluation of the pressure split; the FP64 constrained solve closes much more tightly.
+
+A separate 132-cell integration holds horizontal geometry and rates fixed and changes only vertical geometry at three moves. CPU baseline worst jolt is 86.424; corrected worst is 1.060. GPU baseline worst is 86.288; corrected worst is 1.039. Therefore neither LTS rate changes nor physics caches are necessary to produce this transient. A three-move local-centre-displacement family also passes after correction on both CPU and GPU. These full records are retained, including individual diagnostic ratios rather than just their maximum.
+
+Changing only LTS rate classes on the unchanged 132-cell mesh changes 6, 14, and 12 cell rates. Its three pressure-tendency ratios are all 1.000; velocity ratios are 1.000, 1.000, and 0.986. This excludes that mechanism in this fixture, not in every cyclone. The source code exports only complete synchronized boundaries with empty LTS registers. `driver.py` builds the saved Euler forces and stage-1 tendencies at the start of each complete dynamics subcycle. No partially advanced ru/rw acoustic tendency is supposed to cross this boundary. The new pressure perturbation is rebuilt from the corrected mass products and new reference; a stale perturbation array is never substituted for the equation of state.
+
+The physics cache defect is independent and real: the old path horizontally averages atmospheric fields at equal computational indices. A CPU linear-height example that should become [1, 2, 4.5] instead stays [1, 3, 5]. The fix uses physical mass-layer centres for atmospheric rates, heating, moisture feedback, ozone, cloud fields, and other declared atmospheric SAVE fields, and physical interfaces for interface fields. Vector tendencies are interpolated as Cartesian components and projected into target east/north directions. Surface and soil coordinates retain their separate semantics, even when a reduced test happens to have the same number of soil and atmospheric levels. Tests cover pseudo-staggered vectors and feedback clocks. There is no measured New Tiedtke cache contribution to the historical cyclone scores here.
+
+An unchanged-centres geometry rebuild also fails bit identity: 117/132 cell areas and 298/390 dual-edge lengths change in FP64. The maximum changes are 3.47e-16 steradians and 1.36e-15 unit-sphere lengths. Those particular discrepancies are tiny and do not establish a significant force error by themselves. They do establish that `--from-centres` cannot be treated as an exact geometry-copy operation. The generator and vertical smoothing policy were not modified.
+
+**What changed in code.** `moving_balance.py` performs weighted Newton corrections to rho and H, enforcing the carried pressure acceleration plus both original remapped column integrals. Its Schur solve is tridiagonal with two budget constraints, linear in layers times cells; columns are processed in batches of 4096. Water mass is retained during the solve and individual mixing ratios are reconstructed against the corrected density. A nonzero moist/nonhydrostatic unit case preserves its source acceleration to 1e-10 while preserving both column integrals to 1e-13. Failure to converge, invalid thermodynamics, a broken FP64 integral, or an unrepresentable FP32 conservation target raises an error rather than silently relaxing the checks.
+
+Casting uses adjacent FP32 values to close the global budgets to a 5e-10 target. It changes each rounded value by at most one ULP and leaves exactly representable values alone. Unchanged columns are copied only after checking geometry, mass products, water mass, and the native reference pressure split. Each passive tracer has its own copy mask: dry-state identity must not erase an independent tracer-domain correction. No artificial diffusion, velocity smoothing, acoustic damping, or relaxation interval was added. The existing momentum reconstruction and its divergence diagnostic remain in place; a divergence-preserving horizontal velocity remap is not supplied by this fix.
+
+`moving_state.py` enables this initialization whenever a physical-height mapper is used. `GPUWM_HEX_MOVING_BALANCE=0` retains the former thermodynamic path for comparison; `gpuwm-hex moving run` passes this switch through to every segment. `moving_vertical.py` supplies atmospheric intensive interpolation. `moving_physics.py` applies it according to the sealed field meanings. Fixed-region execution does not enter these moving modules. The separate experimental `moving_zone_state.py` balance route is not replaced or validated by this branch.
+
+**Conservation and fixed-run identity.** Worst relative remap errors over the retained CPU/GPU integration comparisons are dry mass **3.101e-10**, theta mass **4.043e-10**, and passive tracer mass **4.817e-10**. All are below 1e-9. The resting local/global tests also meet 5e-10 after the correction. These are before/after remap budgets; they do not relabel native FP32 time-integration drift as remap error.
+
+Fixed GPU runs on the 132-cell terrain mesh were compared against both c3ee8ab and f54e247, in both ordinary and two-rate LTS execution. All five prognostic-array hashes and all 80 diagnostic samples match exactly. All seven saved-diagnostic hashes also match where recorded (both accepted-revision controls and the f54e247 LTS control). The f54e247 ordinary control predates recording those seven additional hashes; its prognostic hashes and time series match. This is measured dry fixed-run identity plus the structural fact that no fixed dycore/physics routine changed; it is not a newly executed full-physics fixed-cyclone identity gate. The targeted CPU suite finishes with **116 passed, zero skipped**.
+
+**Pressure jumps and metric scope.** The ten-minute tendency metric starts from the state immediately after remapping, as the production segment instrument starts a new pressure series. It does not difference pressures at different mesh locations and ground heights across the instant of remapping. All instantaneous changes are retained separately. In the refined LTS case the raw pressure changes are approximately 33/96/147 Pa before and 35/102/156 Pa after correction. Subtracting the reference atmosphere's terrain-induced change leaves perturbation-pressure changes of 3.21/6.13/9.45 Pa before and 0.66/0.96/1.15 Pa afterward. The raw discontinuity is not eliminated, and a criterion that includes it must be assessed separately. Sampling here is 30 s rather than the historical macro cadence; these scores are not interchangeable with the 15 cyclone scores.
+
+**Cost and remaining acceptance work.** Median host atmosphere-remap time in the 522-cell LTS fixture is 9.86 ms before and 13.76 ms after correction, excluding mesh preparation and class construction. That is a small-case measurement, not a speed claim for the 48/3 km mesh. The projection adds work; the historical 22–41% move overhead has not been remeasured or removed.
+
+The numerical diagnosis and correction are demonstrated on CPU and the small GPU cases above. Remaining production acceptance is a replay of the original fifteen New Tiedtke/LTS moves against their matching fixed controls, particularly the two reported failures, with the same diagnostic cadence. Strongly moist convection, 55-layer steep terrain, the 16:1 spacing contrast, horizontal geostrophic/divergence balance, and large-mesh cost remain outside the measured claim. Global terrain reconciliation still changes distant columns. These limitations are explicit reasons not to declare the original cyclone acceptance problem closed.
+
+**Where it lives.** The correction is `hexcore/moving_balance.py`, called from `hexcore/moving_state.remap_atmosphere` whenever a height remap carries the saved native pressure split (`moving_balance.balance_scope`; an analysis transfer, which carries none, keeps its previous path and its receipt says so). `GPUWM_HEX_MOVING_BALANCE=0` selects the previous thermodynamic path as a comparison knob; the default is on. The reduced refined-family test above (ordinary or LTS) is reproduced from an install by `gpuwm-hex moving check` (see `docs/moving-nest.md`); the separating CPU experiments are in `tools/moving_jolt/`.

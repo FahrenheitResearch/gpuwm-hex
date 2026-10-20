@@ -41,6 +41,8 @@ argument refusal work on a box with no CUDA lane at all.
 
 from __future__ import annotations
 
+from .stochastic import resolve_options as resolve_stochastic_options
+
 import argparse
 from dataclasses import dataclass
 import datetime as _dt
@@ -56,6 +58,7 @@ from .device_admission import (
     DEFAULT_HEADROOM_BYTES,
     FOOTPRINT_MODEL,
     REFERENCE_CARD,
+    ROLLBACK_ARMED_BYTES_PER_CELL,
     CardProfile,
     FootprintModel,
     ShapedFootprintModel,
@@ -70,8 +73,10 @@ from .physics_backend_admission import (
 )
 from . import engine_pin
 from . import forecast_preset
+from . import mpas_defaults
 from .host_identity import host_record
 from .errors import ConfigurationRefusal, MpasPortError
+from . import time_ledger
 
 __all__ = [
     "AdmissionVerdict",
@@ -106,6 +111,7 @@ __all__ = [
     "resolve_request",
     "run_forecast",
     "seam_pin_problem",
+    "seam_pin_record",
 ]
 
 MIB = 1024**2
@@ -231,6 +237,16 @@ class MeshRow:
     #: offers no spacing is recorded as ``source: "unknown-spacing"`` rather
     #: than having one guessed for it.
     nominal_dx_m: float | None = None
+    #: The native invariant stream's file name the row declares
+    #: (``MeshBinding.invariant_file``), ``None`` for a row whose workflow
+    #: configures none.  :func:`resolve_invariant` looks for it beside the
+    #: grid and static.
+    invariant_file: str | None = None
+    #: A generated variable-resolution row's background (coarsest) spacing,
+    #: in metres, ``None`` on a uniform row.  Preflight hands it to the
+    #: convection decision so a variable mesh is decided per cell from the
+    #: row alone, as the bind decides it from the grid.
+    coarsest_dx_m: float | None = None
 
 
 def load_registry(drivers: Path | None = None) -> dict[str, MeshRow]:
@@ -251,6 +267,8 @@ def load_registry(drivers: Path | None = None) -> dict[str, MeshRow]:
             cells=int(row.n_cells),
             dt_seconds=float(row.dt_seconds),
             nominal_dx_m=float(row.nominal_dx_m),
+            invariant_file=getattr(row, "invariant_file", None),
+            coarsest_dx_m=getattr(row, "coarsest_dx_m", None),
         )
         for name, row in module.MESH_BINDINGS.items()
     }
@@ -282,6 +300,9 @@ class AdmissionVerdict:
     alternatives: tuple[str, ...]
     model_provenance: str
     model: ShapedFootprintModel | None = None
+    stochastic_basis_bytes: int = 0
+    stochastic_array_bytes: int = 0
+    stochastic_arrays: dict[str, int] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         record: dict[str, Any] = {
@@ -304,6 +325,10 @@ class AdmissionVerdict:
             "fitted_registered_meshes": list(self.alternatives),
             "model_provenance": self.model_provenance,
             "measured_at_decision_time": True,
+            "stochastic_basis_bytes": self.stochastic_basis_bytes,
+            "stochastic_array_bytes": self.stochastic_array_bytes,
+            "stochastic_arrays": dict(self.stochastic_arrays or {}),
+            "stochastic_allocation_note": "logical array floor; not a measured peak; construction scratch, intermediate expressions, allocator placement and opaque library workspaces excluded",
         }
         if self.model is not None:
             record["footprint_model"] = self.model.as_dict()
@@ -324,17 +349,32 @@ def admission_verdict(
     headroom_bytes: int | None,
     registry: Mapping[str, MeshRow],
     model: ShapedFootprintModel | None = None,
+    stochastic: str | None = None,
 ) -> AdmissionVerdict:
     """Decide whether this card, as it is right now, holds this mesh."""
 
     model = model or FOOTPRINT_MODEL
     margin = model.margin_bytes() if headroom_bytes is None else int(headroom_bytes)
-    predicted = int(round(model.predict_bytes(cells)))
+    arrays = stochastic_array_ledger(cells, stochastic)
+    basis_bytes = arrays.get("harmonic_basis", 0)
+    array_bytes = sum(arrays.values())
+    predicted = int(round(model.predict_bytes(cells))) + array_bytes
     # THE one admission sum, shared with the driver's floor: a byte of
     # divergence here is a card that passes one gate and dies on the other.
-    required = required_free_bytes(cells, model, margin)
+    required = required_free_bytes(cells, model, margin) + array_bytes
     admitted = int(free_bytes) >= required
     fitted_cells = model.max_cells(int(free_bytes), margin)
+    if array_bytes:
+        # The additional allocation grows with the candidate mesh too.
+        low, high = 0, fitted_cells
+        while low < high:
+            middle = (low + high + 1) // 2
+            arrays_at_middle = stochastic_array_bytes(max(4, middle), stochastic)
+            if required_free_bytes(middle, model, margin) + arrays_at_middle <= int(free_bytes):
+                low = middle
+            else:
+                high = middle - 1
+        fitted_cells = low
     headroom_bytes = margin
     alternatives = tuple(
         sorted(
@@ -357,6 +397,9 @@ def admission_verdict(
         alternatives=alternatives,
         model_provenance=model.provenance,
         model=model,
+        stochastic_basis_bytes=basis_bytes,
+        stochastic_array_bytes=array_bytes,
+        stochastic_arrays=arrays,
     )
 
 
@@ -365,6 +408,13 @@ def require_admitted(verdict: AdmissionVerdict) -> None:
 
     if verdict.admitted:
         return
+    model = verdict.model or FOOTPRINT_MODEL
+    if verdict.headroom_bytes == model.margin_bytes():
+        margin_detail = "; ".join(
+            f"{name}: {_mib(term['bytes'])} for {term['absorbs']}"
+            for name, term in model.margin_terms().items())
+    else:
+        margin_detail = f"explicit headroom {_mib(verdict.headroom_bytes)}"
     if verdict.alternatives:
         remedy = (
             "This card fits the registered mesh(es) "
@@ -395,13 +445,8 @@ def require_admitted(verdict: AdmissionVerdict) -> None:
         f"short by {_mib(verdict.shortfall_bytes)}.  Running anyway does not "
         "fail a check -- it loads the mesh, compiles the kernels, and then "
         "dies inside a CuPy allocation part-way through the integration, "
-        f"which is what this gate exists to prevent.  {remedy}  The margin "
-        "held back is this card's own, and it is not padding: "
-        f"{_mib(verdict.headroom_bytes)} = the RRTMG shortwave workspace "
-        "(the largest block in the footprint that does not scale with the "
-        "mesh, measured to move the pool high-water by 1,707.2 MiB when it "
-        "stops being servable from the free list) plus 11.2 MiB of "
-        f"instrument convention.  The row is {verdict.model_provenance}.  If "
+        f"which is what this gate exists to prevent.  {remedy}  Margin: "
+        f"{margin_detail}.  The row is {verdict.model_provenance}.  If "
         "this card's own ledger has been run, supply its row with "
         f"--device-fixed-mib and --device-bytes-per-cell.  {LEDGER_PROBE} is "
         "the instrument that measures it."
@@ -429,12 +474,11 @@ def measure_device_memory() -> tuple[int, int]:
         raise _refuse(
             f"the CUDA lane is not importable ({error}), so free device memory "
             "cannot be measured and a forecast cannot be admitted.  Install "
-            'the CUDA-13 CuPy: pip install "gpuwm-hex[gpu]".  Every GPU door '
-            "here refuses a CUDA runtime below 13000, so the cu12 wheel is "
-            "not an alternative -- it imports, probes clean, and is then "
-            "refused by name at launch.  `gpuwm-hex doctor` reads your "
-            "driver's CUDA major and says whether this box can run the forecast "
-            "at all."
+            'the CUDA lane: pip install "gpuwm-hex[gpu]", whose CUDA 12 '
+            "wheel runs on a CUDA 12 or CUDA 13 driver ("
+            '"gpuwm-hex[gpu-cu13]" on a CUDA 13 driver also works).  '
+            "`gpuwm-hex doctor` reads your driver's CUDA major and names the "
+            "extra for it."
         ) from None
     try:
         if cupy.cuda.runtime.getDeviceCount() < 1:
@@ -447,6 +491,15 @@ def measure_device_memory() -> tuple[int, int]:
     except ForecastDoorRefusal:
         raise
     except Exception as error:  # pragma: no cover - driver present but unusable
+        if "InsufficientDriver" in str(error):
+            raise _refuse(
+                f"the CUDA driver refused a memory query ({error}): the "
+                "installed CuPy is built for a newer CUDA major than this "
+                "driver serves (cupy-cuda13x on a CUDA 12 driver).  Remove it "
+                "and install the CUDA 12 wheel: pip uninstall -y cupy-cuda13x "
+                '&& pip install "gpuwm-hex[gpu-cu12]".  `gpuwm-hex doctor` '
+                "reads the driver's CUDA major and names the extra for it."
+            ) from None
         raise _refuse(
             f"the CUDA driver refused a memory query ({error}); the device is "
             "present but unusable, so no admission decision can be made.  "
@@ -587,31 +640,24 @@ def admit_timestep(
     nominal_dx_m: float | None = None,
     convection: str = "auto",
     pbl_cadence: str = "auto",
+    radiation_seconds: float = 1800.0,
+    coarsest_dx_m: float | None = None,
 ) -> dict[str, Any]:
     """Answer the timestep half of "will this run?" from the row alone.
 
-    The run's own gate is ``V841MpasColumnPhysicsConfig.validate``, which
-    admits ``config_dt`` from the earned-anchor registry
-    (:mod:`hexcore.dt_admission`) -- but that lives past the driver's CUDA
-    import and past the mesh bind, so a row with an unanchored timestep used
-    to reach a card before anything said so.  MEASURED (2026-08-26, the proving RTX 5090
-    RTX 5090): 18,820 MiB reserved and 285 s spent before the refusal.
-
-    This needs no card and no file: a registered row carries its declared
-    timestep, and whether that timestep is anchored is a table lookup.  It
-    is the same shape as :func:`admit_architecture`, and for the same
-    reason -- preflight's answer and the run's answer must not disagree.
+    RETIRED 2026-10-10 as an anchor gate (owner ruling).  This used to refuse every timestep the earned-anchor
+    registry did not hold.  It now refuses only what the run cannot
+    schedule -- a surface/PBL, radiation or cumulus cadence that is not a
+    whole number of steps, or a timestep whose multiples are not exact in
+    binary64 -- and RECORDS whether the configuration matches a registered
+    anchor.  Stability is measured at bind from the mesh's own dcEdge
+    (hexcore.timestep_admission).  Card-free and file-free, so preflight's
+    answer and the run's answer agree.
     """
 
     from . import convection_admission, dt_admission
     from . import pbl_cadence as pbl_cadence_module
 
-    # An anchor certifies a CONFIGURATION at a timestep, and the project's
-    # 3 km convection default made the cumulus selection part of that
-    # configuration.  Answered from the row alone: the row carries its
-    # declared nominal spacing, and the default is a comparison against one
-    # threshold.  A row with no spacing to offer keeps the historical
-    # Grell-Freitas answer rather than guessing at one.
     if nominal_dx_m is None:
         decision = {
             "scheme": convection_admission.SCHEME_GRELL_FREITAS,
@@ -620,56 +666,48 @@ def admit_timestep(
         }
     else:
         decision = convection_admission.convection_decision(
-            nominal_dx_m=nominal_dx_m, requested=convection
+            nominal_dx_m=nominal_dx_m, requested=convection,
+            coarsest_dx_m=coarsest_dx_m,
         )
     cumulus_scheme = decision["constructor_scheme"]
-
-    # The surface/PBL cadence is part of the same configuration, answerable
-    # from the row alone for the same reason: the row declares the timestep
-    # and the cadence is either welded to it or held at a stated number.
-    # A cadence that is not a whole number of the row's steps, or is not a
-    # number at all, is the door's refusal: it names both numbers, the
-    # multiples of dt on either side and the way out, and it is raised HERE
-    # so preflight collects it beside the other blockers instead of the
-    # driver tracing back after the mesh is bound.
     try:
         pbl_decision = pbl_cadence_module.pbl_cadence_decision(
-            dt_seconds=dt_seconds, requested=pbl_cadence
+            dt_seconds=dt_seconds, requested=pbl_cadence,
+            radiation_seconds=radiation_seconds,
         )
     except pbl_cadence_module.PblCadenceError as error:
         raise _refuse(
-            f"--mesh {mesh} declares dt={float(dt_seconds):g} s and "
-            f"{error}"
+            f"--mesh {mesh} runs dt={float(dt_seconds):g} s and {error}"
         ) from error
     surface_pbl_seconds = float(pbl_decision["surface_pbl_seconds"])
-
-    anchor = dt_admission.admitted_timestep(
-        dt_seconds, cumulus_scheme, surface_pbl_seconds
-    )
-    if anchor is None:
-        raise _refuse(
-            f"--mesh {mesh} declares dt={float(dt_seconds):g} s and selects "
-            f"{convection_admission.label(decision['scheme'])} "
-            f"({decision['source']}) with {pbl_decision['label']} "
-            f"({pbl_decision['source']}).  "
-            + dt_admission.unanchored_refusal(
-                dt_seconds, cumulus_scheme, surface_pbl_seconds
-            )
+    cumulus_seconds = None if cumulus_scheme is None else float(dt_seconds)
+    try:
+        steps = dt_admission.require_cadences(
+            dt_seconds,
+            radiation_seconds=radiation_seconds,
+            surface_pbl_seconds=surface_pbl_seconds,
+            cumulus_seconds=cumulus_seconds,
+            cumulus_scheme=cumulus_scheme,
         )
+    except dt_admission.DtAdmissionError as error:
+        raise _refuse(
+            f"--mesh {mesh} runs dt={float(dt_seconds):g} s with radiation "
+            f"every {float(radiation_seconds):g} s: {error}.  Give --dt a "
+            f"value that divides the radiation interval, or --radiation-seconds "
+            f"a multiple of the timestep"
+        ) from error
     return {
         "dt_seconds": float(dt_seconds),
         "admitted": True,
-        "basis": f"timestep anchor of {anchor.admitted_on}",
-        "schedule_receipt": anchor.schedule_receipt,
-        "integration_anchor": anchor.integration_anchor,
-        "cumulus_scheme": anchor.cumulus_scheme,
-        "surface_pbl_seconds": anchor.surface_pbl_seconds,
-        "physics_health": anchor.physics_health,
-        # ``None`` for a registered row; the welded row's key when the held
-        # cadence is admitted on that row's dycore evidence (hexcore.
-        # dt_admission.derived_held_cadence_anchor), so a receipt never
-        # reads a derived row as a registered one.
-        "surface_pbl_anchor_derived_from": anchor.derived_from,
+        "refuses_for_missing_anchor": False,
+        "cadence_steps": steps,
+        "anchor": dt_admission.anchor_record(
+            dt_seconds,
+            radiation_seconds=radiation_seconds,
+            surface_pbl_seconds=surface_pbl_seconds,
+            cumulus_seconds=cumulus_seconds,
+            cumulus_scheme=cumulus_scheme,
+        ),
         "convection": decision,
         "pbl_cadence": pbl_decision,
     }
@@ -682,6 +720,7 @@ def admit_device(
     headroom_bytes: int | None,
     registry: Mapping[str, MeshRow],
     model: ShapedFootprintModel | None = None,
+    stochastic: str | None = None,
 ) -> AdmissionVerdict:
     """Measure the card NOW, then decide.  Module-level lookup of
     :func:`measure_device_memory` is deliberate: it is the seam a test
@@ -697,6 +736,7 @@ def admit_device(
         headroom_bytes=headroom_bytes,
         registry=registry,
         model=model,
+        stochastic=stochastic,
     )
 
 
@@ -717,7 +757,7 @@ class ForecastRequest:
     init_source: str
     start_time: str | None
     hours: float
-    history_every_minutes: int
+    history_every_minutes: float
     steps: int
     capture_count: int
     out: Path
@@ -747,6 +787,8 @@ class ForecastRequest:
     #: The lateral-boundary series a limited-area grid is driven by.  ``None``
     #: on a global grid; the driver refuses either mismatch by name.
     lbc_dir: Path | None = None
+    history_from_minutes: float = 0.0
+    fingerprint_every: int = 0
     #: The column-physics backend ROW this run selects
     #: (``hexcore.physics_backend_admission``).  The default is the frozen
     #: lane; a provider's row runs its own pinned column batch and may
@@ -763,6 +805,70 @@ class ForecastRequest:
     #: ``"preset"`` when the row decided the surface/PBL cadence,
     #: ``"explicit"`` when --pbl-cadence was given.
     pbl_cadence_source: str = "preset"
+    #: The checkpoint/restart/DA-cycling selections, forwarded verbatim to the
+    #: driver, which resolves and refuses them (one decision, one source).
+    cycling_argv: tuple[str, ...] = ()
+    boundary_fingerprint_every: int = 0
+    # MPAS-A v8.4.2 Registry defaults (hexcore.mpas_defaults).
+    time_integration_order: int = 2
+    acoustic_substeps: int = 4
+    radiation_seconds: float = 1800.0
+    monotonic: bool = True
+    #: How the run's timestep was chosen (mpas_defaults.resolve_dt): the
+    #: mesh rule, the row's registered value, or an explicit --dt.
+    dt_selection: Mapping[str, Any] | None = None
+    #: Where the schedule knobs came from: "mpas-defaults", "explicit",
+    #: "namelist" or "local-timestep" (per knob).
+    schedule_sources: Mapping[str, str] | None = None
+    cam_coefficient: float = 0.0
+    cam_damping_levels: int = 4
+    rayleigh_u: bool = False
+    damping_start_m: float = 22000.0
+    #: Dynamics options with no flag of their own, as (attribute, value),
+    #: from ``--dynamics KEY=VALUE`` and from a ``--physics-namelist``'s
+    #: dynamics groups (:func:`resolve_dynamics_overrides`).
+    dynamics_overrides: tuple[tuple[str, Any], ...] = ()
+    dynamics_override_sources: Mapping[str, str] | None = None
+    #: ``--max-wind``: the largest horizontal wind the bind's advective
+    #: stability estimate assumes; ``None`` takes the mesh row's (125 m/s).
+    max_wind_m_s: float | None = None
+    #: The native invariant stream the driver reads the vertical grid from,
+    #: ``None`` for the init file.  :func:`resolve_invariant` decides it.
+    invariant: Path | None = None
+    #: How it was decided, in a sentence, for the receipt and the console.
+    invariant_selection: str = "the mesh row declares no invariant stream"
+    #: The named physics suite (``hexcore.physics_suites``) and the overrides
+    #: this run was resolved from; ``None`` when no suite flag was given,
+    #: which is the run a bare door made before named suites.
+    physics_suite: str | None = None
+    physics_overrides: tuple[tuple[str, Any], ...] = ()
+    stochastic: str | None = None
+    #: The drag statistics a column-suite selection reads, ``None`` otherwise.
+    orographic_statistics: Path | None = None
+    #: The resolution's receipt, for the door's own receipt.
+    physics_resolution: Mapping[str, Any] | None = None
+    fullstep_local_timestep: bool = False
+    fullstep_lts_mode: str = "shadow"
+    # 8, not the ladder top: see the guard in drivers/fullstep_lts_forecast_v841.py
+    fullstep_lts_max_rate: int = 8
+    fullstep_lts_buffer_rings: int = 2
+    #: Incremental analysis update (hexcore.iau_forcing): the analysis init whose difference
+    #: from ``init`` (the background) is forced in over ``iau_window_seconds``.
+    iau_analysis: Path | None = None
+    iau_window_seconds: float | None = None
+    #: MPAS IAU increments (hexcore.analysis_bundle, the native route's input) and the route
+    #: the increment enters by (hexcore.iau_native: "native" or "hex").
+    iau_increment: Path | None = None
+    iau_route: str | None = None
+    #: ``--analysis``: the bundle's receipt block (hexcore.analysis_door), None without one.
+    analysis_bundle: Mapping[str, Any] | None = None
+    #: Surface-pressure tendency statistics at every macro boundary.
+    balance_series: bool = False
+    #: ``physics.mode`` (hexcore.correct_mode): "exact" (the matched
+    #: arithmetic, the default) or "correct", and the corrections a
+    #: correct-mode arm drops.  Exact hands the driver no flag at all.
+    physics_mode: str = "exact"
+    physics_correct_skip: tuple[str, ...] = ()
 
     @property
     def inputs_present(self) -> bool:
@@ -816,6 +922,123 @@ def _require_file(
         raise _refuse(problem)
     collected.append(problem)
     return resolved
+
+
+def _vertical_interfaces(path: Path) -> int | None:
+    """``nVertLevelsP1`` of an MPAS file, ``None`` when it declares no levels."""
+
+    from netCDF4 import Dataset
+
+    with Dataset(path, mode="r") as dataset:
+        dimensions = dataset.dimensions
+        if "nVertLevelsP1" in dimensions:
+            return len(dimensions["nVertLevelsP1"])
+        if "nVertLevels" in dimensions:
+            return len(dimensions["nVertLevels"]) + 1
+    return None
+
+
+def resolve_invariant(
+    arguments: argparse.Namespace,
+    row: MeshRow,
+    grid: Path,
+    static: Path,
+    init: Path,
+    collected: list[str] | None = None,
+) -> tuple[Path | None, str]:
+    """Which file the run's vertical grid comes from, and why, in a sentence.
+
+    MPAS-A reads zgrid, zz, zb, zb3 and the rest of the metric set from the
+    ``invariant`` stream when a run configures one, and from the init file
+    otherwise.  A mesh row whose workflow configures the stream names its file
+    (``MeshBinding.invariant_file``); this finds it beside ``--grid`` or
+    ``--static`` and selects it BY DEFAULT, because fixed means default-on: a
+    user who never heard of the stream gets the vertical grid the native model
+    uses.  ``--invariant FILE`` names another file; ``--no-invariant`` runs on
+    the init file's grid (the pre-fix behaviour, for reproducing old receipts).
+
+    THE BREAKAGE THE DEFAULT CLOSES (measured
+    2026-10-05 on RRFS v2's conus12km, physics off): the init file's grid is
+    2.7 mm off in zgrid and 8e-5 relative in zz, and running on it moved hex
+    from 3.6e-5 to 2.0e-4 K RMS theta against NOAA's MPAS at hour 1.
+    """
+
+    explicit = getattr(arguments, "invariant", None)
+    declined = bool(getattr(arguments, "no_invariant", False))
+    if explicit is not None and declined:
+        raise _refuse(
+            "--invariant and --no-invariant were both given.  One names the "
+            "file the vertical grid comes from and the other says it comes "
+            "from the init file; the door will not pick one of them for you."
+        )
+    if declined:
+        return None, (
+            "declined by --no-invariant: the vertical grid comes from the "
+            "init file"
+            + (f", although the {row.name} row declares {row.invariant_file}"
+               if row.invariant_file else "")
+        )
+    if explicit is not None:
+        path = _require_file(
+            Path(explicit), "--invariant",
+            "Name the native invariant stream file, or omit the flag.",
+            collected)
+        selection = "named by --invariant"
+    elif row.invariant_file:
+        searched: list[Path] = []
+        found: Path | None = None
+        for anchor in (grid, static):
+            folder = Path(anchor).parent
+            if folder in searched:
+                continue
+            searched.append(folder)
+            candidate = folder / row.invariant_file
+            if candidate.is_file() or candidate.is_symlink():
+                found = candidate
+                break
+        if found is None:
+            return None, (
+                f"the {row.name} row declares the invariant stream "
+                f"{row.invariant_file}, and no such file sits beside the grid "
+                f"or static ({', '.join(str(folder) for folder in searched)}); "
+                "the vertical grid comes from the init file.  On conus12km "
+                "that grid moved hex by 2.0e-4 K RMS theta at hour 1 against "
+                "the native model, which reads the invariant file.  Put the "
+                "file beside the grid, or name it with --invariant"
+            )
+        path = _require_file(
+            found, "--invariant",
+            "The mesh row's invariant stream file must be a regular file.",
+            collected)
+        selection = (
+            f"the {row.name} row's invariant stream, found beside the "
+            f"{'grid' if found.parent == Path(grid).parent else 'static'}"
+        )
+    else:
+        return None, (
+            "the mesh row declares no invariant stream; the vertical grid "
+            "comes from the init file"
+        )
+    # The level count is the one property the init and the invariant must
+    # share.  THE BREAKAGE THIS PREVENTS: an L65 invariant against an L60
+    # init loads its 66-interface zgrid beside the init's 59-layer state and
+    # dies in host preparation, after the card was reserved and the mesh
+    # read, with a shape error that names neither file.
+    if path.is_file() and Path(init).is_file():
+        ours, theirs = _vertical_interfaces(path), _vertical_interfaces(init)
+        if ours is None or ours != theirs:
+            problem = (
+                f"--invariant {path} carries {ours} vertical interfaces and "
+                f"the init {init} carries {theirs}.  The invariant stream "
+                "replaces the init file's vertical grid, so the two must "
+                "share one level set; pick the invariant of the init's level "
+                "file (RRFS names it <mesh>.invariant.nc_L<levels>_<model>), "
+                "or pass --no-invariant"
+            )
+            if collected is None:
+                raise _refuse(problem)
+            collected.append(problem)
+    return path, selection
 
 
 def _parse_rates(raw: Any, flag: str) -> tuple[int, ...]:
@@ -879,10 +1102,16 @@ class _SuppliedRow:
     core_bytes: float
     bytes_per_cell: float
 
-    def with_card(self, card: CardProfile, configuration: str) -> ShapedFootprintModel:
+    def with_card(self, card: CardProfile, configuration: str, *,
+                  rollback_armed: bool = False) -> ShapedFootprintModel:
         return ShapedFootprintModel(
             core_bytes=self.core_bytes,
             bytes_per_cell=self.bytes_per_cell,
+            # A supplied row prices a bare run; arming the rollback adds its
+            # measured copies on top, whoever measured the row.
+            rollback_bytes_per_cell=(
+                ROLLBACK_ARMED_BYTES_PER_CELL if rollback_armed else 0.0
+            ),
             card=card,
             configuration=configuration,
             measured=True,
@@ -917,6 +1146,8 @@ def read_card_profile() -> CardProfile:
         import cupy
 
         properties = cupy.cuda.runtime.getDeviceProperties(0)
+        threads_per_sm = cupy.cuda.runtime.deviceGetAttribute(
+            cupy.cuda.runtime.cudaDevAttrMaxThreadsPerMultiProcessor, 0)
     except Exception as error:  # pragma: no cover - depends on the box
         raise _refuse(
             f"the CUDA driver refused a device-properties query ({error}), so "
@@ -938,9 +1169,7 @@ def read_card_profile() -> CardProfile:
         str(raw_name or "").strip() or "this device",
         {
             "MultiProcessorCount": properties["multiProcessorCount"],
-            "MaxThreadsPerMultiProcessor": properties.get(
-                "maxThreadsPerMultiProcessor", 1536
-            ),
+            "MaxThreadsPerMultiProcessor": threads_per_sm,
         },
     )
 
@@ -972,6 +1201,25 @@ def _with_resolved_model(request: "ForecastRequest") -> "ForecastRequest":
     return replace(request, model=resolve_admission_model(request))
 
 
+def _pinned_for_driver(request: "ForecastRequest") -> "ForecastRequest":
+    """The same-host request with a supplied row pinned to the card, once the ranks are admitted.
+
+    Same-host admission prices every card's ranks from the supplied row itself
+    (``samehost_forecast_v841.admit_request`` pins it per card), so the row
+    stays unresolved until that decision is taken; the driver argv
+    (``--required-free-bytes``) and the receipt are then built from the pinned
+    row. Breakage it prevents: every same-host run given
+    ``--device-fixed-mib``/``--device-bytes-per-cell`` was admitted and then
+    stopped in build_driver_argv with "AttributeError: '_SuppliedRow' object
+    has no attribute 'required_bytes'" (x1.40962, --samehost-devices 0,0,
+    io-halo lane 2026-10-15). A request without a supplied row is unchanged.
+    """
+
+    if isinstance(request.model, _SuppliedRow):
+        return _with_resolved_model(request)
+    return request
+
+
 def resolve_admission_model(request: "ForecastRequest") -> ShapedFootprintModel:
     """The footprint row this request is decided on.
 
@@ -983,16 +1231,20 @@ def resolve_admission_model(request: "ForecastRequest") -> ShapedFootprintModel:
 
     configuration = request_configuration(request)
     card = read_card_profile()
+    # --stop-on-refusal arms the forecast rollback: two committed boundaries
+    # for the late health gate and a per-step physics boundary export, which
+    # a bare run does not hold (device_admission.ROLLBACK_ARMED_BYTES_PER_CELL).
+    armed = bool(getattr(request, "stop_on_refusal", False))
     supplied = request.model
     if isinstance(supplied, _SuppliedRow):
-        return supplied.with_card(card, configuration)
+        return supplied.with_card(card, configuration, rollback_armed=armed)
     if isinstance(supplied, ShapedFootprintModel):
         return supplied
-    return model_for_card(card, configuration)
+    return model_for_card(card, configuration, rollback_armed=armed)
 
 
-def _schedule(hours: float, history_every_minutes: int, dt_seconds: float,
-              mesh: str) -> tuple[int, int]:
+def _schedule(hours: float, history_every_minutes: float, dt_seconds: float,
+              mesh: str, history_from_minutes: float = 0.0) -> tuple[int, int]:
     """``(steps, capture_count)``, or a refusal naming the mesh's timestep.
 
     The timestep is the REGISTERED row's, not a module constant: the
@@ -1008,21 +1260,29 @@ def _schedule(hours: float, history_every_minutes: int, dt_seconds: float,
     if abs(raw_steps - round(raw_steps)) > 1e-9:
         raise _refuse(
             f"--hours {hours} is not a whole number of steps on mesh {mesh}, "
-            f"whose registered timestep is {dt_seconds:.0f} s: it is "
+            f"whose timestep for this run is {dt_seconds:.0f} s: it is "
             f"{raw_steps:.4f} steps.  A partial step cannot be integrated, so "
             f"choose a length that divides by {dt_seconds:.0f} s (for example "
             f"{max(1, int(raw_steps)) * dt_seconds / 3600.0:g} hours)."
         )
     steps = int(round(raw_steps))
-    history_seconds = int(history_every_minutes) * 60
-    if history_seconds <= 0 or history_seconds % int(dt_seconds) != 0:
+    history_seconds = float(history_every_minutes) * 60
+    # The stride is counted against the step itself, not its integer part: a
+    # step on the eighth-second grid (18.75 s) was truncated to 18 s here, so
+    # an hourly frame of a 192-step hour was given stride 200 and refused as
+    # "does not divide the run" (measured 2026-10-11, 48-3 km patch mesh).
+    raw_stride = history_seconds / float(dt_seconds)
+    if history_seconds <= 0 or abs(raw_stride - round(raw_stride)) > 1e-9:
         raise _refuse(
             f"--history-every-minutes {history_every_minutes} is not a whole "
-            f"number of {dt_seconds:.0f} s steps on mesh {mesh}; a history "
+            f"number of {dt_seconds:g} s steps on mesh {mesh}; a history "
             "frame can only be written at a step boundary."
         )
-    stride = history_seconds // int(dt_seconds)
-    if steps % stride != 0:
+    stride = int(round(raw_stride))
+    first = float(history_from_minutes) * 60 / dt_seconds
+    if first < 0 or first > steps or abs(first - round(first)) > 1e-9:
+        raise _refuse('--history-from-minutes must select a whole step within the forecast')
+    if (steps - int(round(first))) % stride != 0:
         raise _refuse(
             f"--history-every-minutes {history_every_minutes} does not divide "
             f"the {hours} h run on mesh {mesh} ({steps} steps, stride "
@@ -1030,7 +1290,7 @@ def _schedule(hours: float, history_every_minutes: int, dt_seconds: float,
             "at its end, so the output would silently not cover the length "
             "asked for."
         )
-    return steps, len(range(0, steps + 1, stride))
+    return steps, len(range(int(round(first)), steps + 1, stride))
 
 
 def resolve_physics_backend(arguments: argparse.Namespace):
@@ -1066,86 +1326,314 @@ def backend_pin_problem(row, checkout: Path) -> str | None:
     if probe is None:
         return (
             f"--physics-backend {row.name} names adapter module "
-            f"{row.adapter_module}, which publishes no pin_problem(checkout); "
-            "the door cannot say which bytes this row would run and refuses "
-            "to run unpinned physics"
+            f"{row.adapter_module}, which publishes no pin_problem(checkout).  "
+            "That function is how a provider row says whether the named "
+            "engine carries the files it executes; without it a missing file "
+            "is found only after the mesh is bound, as an ImportError"
         )
     return probe(checkout)
 
 
 def seam_pin_problem(checkout: Path) -> str | None:
-    """The seam pin, checked at the door, as a refusal that NAMES A VERSION.
+    """What stops the frozen row's seam from running on ``checkout``, or None.
 
-    THE BREAKAGE THIS PREVENTS, measured on a real install on 2026-08-27
-    (``evidence/userwalk-20260827/``): a user whose pip resolved gpuwm 2.5.7
-    met this::
+    RETIRED 2026-10-10 as a certificate gate (owner ruling; Gate law, Refusals law).  This used to refuse any engine
+    whose sixteen seam files were not, byte for byte, the pinned version's:
+    "the seam is the whole physics of this model ... so running against
+    moved bytes would be running physics nobody proved".  That sentence
+    names missing evidence, not a breakage.  MEASURED on the 8-card RTX PRO 6000 host the same day: a
+    bare 15 km door preflight against gpuwm 2.8.9 answered "pinned to gpuwm
+    2.8.7, 7 of 16 pinned files have moved" and no forecast could start.
+    Physics parity was retired on 2026-08-20; a byte match with a measured
+    engine is evidence the receipt records
+    (:func:`hexcore.engine_pin.measured_row_record`, ``arwen_engine_pin`` in
+    the run receipt and ``engine_pin`` in the door's preflight report), never
+    a permission to run.
 
-        gpuwm/core/microphysics.py does not match the proven manifest
-        (expected a127585c..., found 4df5b7a3...) - the seam's executed
-        source moved; re-prove before running.  That is not one of this
-        program's named refusals ...
-
-    Two digests, no version, an instruction addressed to a developer of this
-    port rather than a user of it, and the door's own wrapper telling the
-    reader its message should not be trusted.  Under the refusal law a
-    refusal must name the breakage AND its remedy; a manifest holds digests
-    and the user has no way to invert one into a version.  So the door
-    inverts it here: which engine is on disk, which engine this port pins,
-    and the two commands that close the gap.
-
-    The driver's own sixteen-file check is NOT retired by this and must not
-    be -- it is the wall, it runs against the checkout's git state as well as
-    its bytes, and it is inside the frozen proof harness.  This is the sign
-    on the wall, placed where the user meets it first.
+    WHAT IS STILL REFUSED, because it cannot run: a tree that does not carry
+    ``gpuwm/core/mpas_column_batch.py``.  The seam constructs that module's
+    column batch; without it Python either fails on import after the mesh is
+    bound or silently imports another gpuwm from elsewhere on the path.
     """
 
     from . import engine_pin
 
     inspection = engine_pin.inspect_seam(checkout)
-    if inspection.accepted:
+    seam_module = "gpuwm/core/mpas_column_batch.py"
+    if seam_module not in inspection.absent:
         return None
-    if inspection.misdeclared:
-        # The bytes are an admitted engine's, the version string is not.
-        # Named as its own refusal because the remedy is different: nothing
-        # needs installing, the tree needs to be the build it was measured
-        # as, under the version that build declares.
-        declared = (
-            f"declares itself gpuwm {inspection.declared}"
-            if inspection.declared is not None
-            else "declares no version this door could read"
-        )
-        return (
-            f"the gpuwm at {checkout} carries the measured seam bytes of "
-            f"the admitted engine gpuwm {inspection.engine} and {declared}.  "
-            "An admitted engine is keyed by its version string and its bytes "
-            "together -- a re-versioned copy of a measured build is neither "
-            "that build nor the pin, and its receipts would name a version "
-            "the bytes never had.  Point --gpuwm-checkout at the build as it "
-            f"was measured, declaring gpuwm {inspection.engine}, or at a "
-            f"checkout of v{engine_pin.wanted_version()}."
-        )
-
-    found = engine_pin.checkout_version(checkout)
-    if found is None:
-        found = engine_pin.version_from_moved(inspection.moved)
-    wanted = engine_pin.wanted_version()
-    names = ", ".join(inspection.moved or inspection.absent)
-    what = "have moved" if inspection.moved else "are missing"
-    identity = (
-        f"is gpuwm {found}" if found is not None
-        else "declares no version this door could read"
-    )
     return (
-        f"the gpuwm at {checkout} {identity}, and this port's physics "
-        f"seam is pinned to gpuwm {wanted}.  "
-        f"{len(inspection.moved or inspection.absent)} of "
-        f"{len(engine_pin.seam_manifest())} pinned files {what}: {names}.  "
-        "The seam is the whole physics of this model -- the port owns no "
-        "parameterization arithmetic -- so running against moved bytes would "
-        "be running physics nobody proved.  Install the pinned engine, or "
-        f"point --gpuwm-checkout at a clone of v{wanted}:\n"
-        f"{engine_pin.remedy(found)}"
+        f"the gpuwm at {checkout} carries no {seam_module}.  The physics "
+        "seam constructs that module's column batch, so this tree has no "
+        "physics for the run to call.  Install an engine, or point "
+        f"--gpuwm-checkout at a gpuwm source tree:\n{engine_pin.remedy()}"
     )
+
+
+def seam_pin_record(checkout: Path) -> dict[str, Any]:
+    """Whether ``checkout`` is a measured engine row, for the door's report.
+
+    Evidence only; see :func:`seam_pin_problem` for why nothing refuses on it.
+    """
+
+    from . import engine_pin
+
+    return engine_pin.measured_row_record(engine_pin.inspect_seam(checkout))
+
+
+#: --convection's vocabulary -> the MPAS spelling an override records.
+_CONVECTION_SPELLING = {
+    "off": "off", "gf": "cu_grell_freitas", "ntiedtke": "cu_ntiedtke",
+}
+
+
+def _command_line_overrides(arguments: argparse.Namespace) -> dict[str, Any]:
+    """``--physics KEY=VALUE`` in order, with --convection spelled as MPAS
+    spells it.  Refuses two different cumulus selections."""
+
+    from .physics_suites import parse_override
+
+    merged: dict[str, Any] = {}
+    for text in getattr(arguments, "physics", None) or ():
+        try:
+            key, value = parse_override(text)
+        except ConfigurationRefusal as error:
+            raise _refuse(f"--physics {text}: {error}") from error
+        merged[key] = value
+    explicit = getattr(arguments, "convection", "auto")
+    if explicit not in (None, "auto"):
+        # Beyond the three hex names, --convection takes what the resolver
+        # takes: an MPAS spelling, a registry option id or a cu_physics
+        # number.  WOOF's registry says whether it exists.
+        spelled = _CONVECTION_SPELLING.get(explicit, explicit)
+        given = merged.get("config_convection_scheme", merged.get("cu_physics"))
+        if given is not None and given != spelled:
+            raise _refuse(
+                f"--convection {explicit} and --physics "
+                f"config_convection_scheme={given} name two cumulus selections "
+                "for one run; give one")
+        merged["config_convection_scheme"] = spelled
+    return merged
+
+
+def resolve_door_physics(
+    arguments: argparse.Namespace, mesh: str, nominal_dx_m: float | None = None,
+):
+    """The named physics this request selects: ``(physics, namelist import,
+    resolver overrides)``, or ``(None, None, {})`` for the legacy road.
+
+    The legacy road is taken exactly when no physics-suite flag was given:
+    then nothing about the run changes (the backend row and --convection
+    decide, as before).  Otherwise the suite, the namelist and the overrides
+    resolve through :func:`hexcore.physics_suites.resolve_physics`;
+    --convection, when given explicitly, is an override; --physics on top of
+    a namelist is read as if the namelist had said it; and --physics-backend,
+    when given, must name the row the suite resolves to: one decision, one
+    source.
+    """
+
+    from .physics_namelist import read_physics_namelist
+    from .physics_suites import PhysicsSelectionRefusal, generation_keys, resolve_physics
+
+    from . import engine_registry
+
+    suite = getattr(arguments, "physics_suite", None)
+    raw = list(getattr(arguments, "physics", None) or ())
+    namelist = getattr(arguments, "physics_namelist", None)
+    explicit_convection = getattr(arguments, "convection", "auto")
+    if (suite is None and not raw and namelist is None
+            and explicit_convection in (None, "auto", *_CONVECTION_SPELLING)):
+        return None, None, {}
+    # The engine tree whose registry says which options exist: the one the
+    # run names when it carries a registry (a tree that is no engine at all
+    # is refused by name further down, at the pin check), else the
+    # importable gpuwm.
+    engine_checkout = engine_registry.checkout_with_registry(
+        getattr(arguments, "gpuwm_checkout", None))
+    command_line = _command_line_overrides(arguments)
+    imported = None
+    if namelist is not None:
+        if suite is not None:
+            raise _refuse(
+                f"--physics-suite {suite} and --physics-namelist {namelist} both "
+                "name the run's suite; the namelist's config_physics_suite would "
+                "be one of two sources for one decision.  Give one, and use "
+                "--physics KEY=VALUE for overrides on top of the namelist")
+        generation = {k: v for k, v in command_line.items() if k in generation_keys()}
+        into_namelist = {k: v for k, v in command_line.items() if k not in generation}
+        try:
+            imported = read_physics_namelist(namelist, mesh=mesh, overrides=into_namelist)
+        except (OSError, ConfigurationRefusal) as error:
+            raise _refuse(f"--physics-namelist {namelist}: {error}") from error
+        if imported.refusals:
+            raise _refuse(
+                f"--physics-namelist {namelist}: "
+                + str(PhysicsSelectionRefusal(imported.refusals, context=str(namelist))))
+        suite = imported.suite
+        overrides = {**imported.overrides, **generation}
+    else:
+        overrides = command_line
+    try:
+        physics = resolve_physics(
+            suite, overrides, mesh=mesh, nominal_dx_m=nominal_dx_m,
+            engine_checkout=engine_checkout)
+    except PhysicsSelectionRefusal as error:
+        raise _refuse(f"physics suite: {error}") from error
+    explicit_backend = getattr(arguments, "physics_backend", None)
+    if explicit_backend not in (None, DEFAULT_BACKEND) and explicit_backend != physics.backend_row:
+        raise _refuse(
+            f"--physics-backend {explicit_backend} and the physics suite "
+            f"({physics.suite}) resolving to row {physics.backend_row} name two "
+            "backends for one run; drop --physics-backend, the suite decides it")
+    return physics, imported, overrides
+
+
+def resolve_schedule(arguments: argparse.Namespace, imported_namelist: Any) -> dict[str, Any]:
+    """The dycore schedule: an explicit flag, else the namelist, else MPAS-A.
+
+    MPAS-A v8.4.2's Registry defaults (hexcore.mpas_defaults): RK order 2
+    (Registry.xml:69), four acoustic sub-steps (:104), the monotonic limiter
+    on (:239).  A ``--physics-namelist`` that sets ``config_dt``,
+    ``config_time_integration_order``, ``config_number_of_sub_steps`` or
+    ``config_monotonic`` supplies that knob when its flag is absent, so a
+    namelist's dynamics run instead of being refused for disagreeing with a
+    default.  ``sources`` records which of the three decided each knob.
+    """
+
+    namelist: dict[str, Any] = {}
+    config = None if imported_namelist is None else imported_namelist.dycore_config
+    if config is not None and imported_namelist.dycore_options:
+        present = {str(option).casefold() for _g, option, _v in imported_namelist.dycore_options}
+        for option, key in (
+            ("config_dt", "dt"),
+            ("config_time_integration_order", "order"),
+            ("config_number_of_sub_steps", "substeps"),
+            ("config_monotonic", "monotonic"),
+        ):
+            if option in present and hasattr(config, option):
+                namelist[key] = getattr(config, option)
+    resolved: dict[str, Any] = {"sources": {}}
+    for key, flag, default in (
+        ("order", "time_integration_order", mpas_defaults.DEFAULT_TIME_INTEGRATION_ORDER),
+        ("substeps", "acoustic_substeps", mpas_defaults.DEFAULT_ACOUSTIC_SUBSTEPS),
+        ("monotonic", "monotonic", mpas_defaults.DEFAULT_MONOTONIC),
+    ):
+        given = getattr(arguments, flag, None)
+        if given is not None:
+            resolved[key], source = given, "explicit"
+        elif key in namelist:
+            resolved[key], source = namelist[key], "namelist"
+        else:
+            resolved[key], source = default, "mpas-defaults"
+        resolved["sources"][key] = source
+    if getattr(arguments, "dt", None) is None and "dt" in namelist:
+        resolved["dt"] = float(namelist["dt"])
+        resolved["sources"]["dt"] = "namelist"
+    else:
+        resolved["dt"] = None
+        resolved["sources"]["dt"] = (
+            "mpas-defaults" if getattr(arguments, "dt", None) in (None, "auto")
+            else "explicit")
+    resolved["order"] = int(resolved["order"])
+    resolved["substeps"] = int(resolved["substeps"])
+    resolved["monotonic"] = bool(resolved["monotonic"])
+    return resolved
+
+
+def resolve_dynamics_overrides(
+    arguments: argparse.Namespace, imported_namelist: Any,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Dynamics options with no flag of their own: ``--dynamics``, else the
+    namelist.
+
+    THE BREAKAGE THIS CLOSES (2026-10-10 audit, measured): a
+    ``--physics-namelist`` with ``config_apvm_upwinding = 0.25``,
+    ``config_smdiv = 0.2`` and ``config_coef_3rd_order = 1.0`` was refused
+    three times with "the run has no flag for it", after the certificate
+    gates that pinned those options had been retired -- the options were
+    free in the configuration type and unreachable from any front door.
+    Every dynamics option the namelist sets that no other flag decides now
+    travels to the driver as ``--dynamics KEY=VALUE``.  An explicit
+    ``--dynamics`` for an option the namelist also sets must agree with it:
+    like ``--dt`` against a namelist's ``config_dt``, two different values
+    for one option are refused by :func:`namelist_dycore_problems`, which
+    also names an option the run's configuration does not carry.
+    """
+
+    import importlib
+
+    driver = importlib.import_module("hexcore.drivers.run_cuda_v841_forecast")
+    try:
+        explicit = driver.parse_dynamics_overrides(getattr(arguments, "dynamics", None))
+    except ValueError as error:
+        raise _refuse(str(error)) from error
+    overrides: dict[str, Any] = {}
+    sources: dict[str, str] = {}
+    config = None if imported_namelist is None else imported_namelist.dycore_config
+    if config is not None and imported_namelist.dycore_options:
+        from .config import _V841_DYCORE_BINDINGS
+
+        for _group, option, _value in imported_namelist.dycore_options:
+            binding = _V841_DYCORE_BINDINGS.get(str(option).casefold())
+            if binding is None or binding.attribute in driver._FLAG_CARRIED_DYNAMICS:
+                continue
+            if not hasattr(config, binding.attribute):
+                continue
+            overrides[binding.attribute] = getattr(config, binding.attribute)
+            sources[binding.attribute] = "namelist"
+    for key, value in explicit.items():
+        overrides[key] = value
+        sources[key] = "explicit"
+    return overrides, sources
+
+
+def _physics_mode_fields(arguments: argparse.Namespace,
+                         preset: "forecast_preset.ForecastPreset | None" = None) -> dict[str, Any]:
+    """``--physics-mode`` / ``--physics-correct-skip`` validated at the door,
+    before any input is read (hexcore.correct_mode refuses a misspelling).
+
+    A run that names no mode takes its preset row's (every shipped row says
+    ``correct``, owner ruling 2026-10-13); ``--physics-mode exact`` is
+    the matched arithmetic, byte for byte."""
+
+    from . import correct_mode
+
+    default = correct_mode.DEFAULT_PHYSICS_MODE if preset is None else preset.physics_mode
+    try:
+        skip_names = tuple(s.strip() for value in getattr(arguments, "physics_correct_skip", None) or ()
+                           for s in str(value).split(",") if s.strip())
+        mode, skip = correct_mode.validate(
+            getattr(arguments, "physics_mode", None) or default, skip_names)
+        # THE BREAKAGE THIS PREVENTS: a skip of a finding this route never applies (an MPAS-suite RP id,
+        # an IAU or boundary-door id) would make an observation A/B arm identical to its control while
+        # its receipt names an arm.
+        foreign = [f for f in skip if f not in correct_mode.route_findings("arwen-column")]
+        if foreign:
+            raise correct_mode.CorrectModeRefusal(
+                f"--physics-correct-skip {foreign} names findings the ArWen route never applies; it "
+                f"applies {sorted(correct_mode.route_findings('arwen-column'))}")
+    except correct_mode.CorrectModeRefusal as error:
+        raise _refuse(str(error)) from error
+    return {"physics_mode": mode, "physics_correct_skip": skip}
+
+
+def default_step_selectors(physics: Any, arguments: argparse.Namespace) -> dict[str, str]:
+    """The boundary-layer and cumulus selection a run's default-step cap reads.
+
+    THE BREAKAGE THIS PREVENTS (hex 0.4.0 recut, 2026-10-16): a bare forecast names no suite, so
+    ``physics`` is None and the first version of the cap read nothing and never bound -- the smoke
+    forecast on x1.40962 still took the mesh's own 600 s with YSU.  With no suite named the frozen
+    engine seam runs its own column suite (``forecast_preset.ENGINE_COLUMN_SUITE``, YSU), and the
+    cumulus is the door's ``--convection``."""
+
+    if physics is not None:
+        return dict(physics.selectors)
+    from .forecast_preset import ENGINE_COLUMN_SUITE
+
+    convection = str(getattr(arguments, "convection", "auto") or "auto")
+    return {"config_pbl_scheme": "bl_" + ENGINE_COLUMN_SUITE["boundary_layer"],
+            "config_convection_scheme": "cu_grell_freitas" if convection in ("gf", "cu_grell_freitas")
+            else convection}
 
 
 def resolve_request(
@@ -1163,23 +1651,28 @@ def resolve_request(
     mesh = _require(
         getattr(arguments, "mesh", None),
         "--mesh",
-        "the mesh registry pins each row's grid and static bytes, its "
-        "dimensions and its Courant-admitted timestep, and the door will not "
-        "guess which row the supplied files are. Registered meshes: "
+        "the mesh registry pins each row's grid and static bytes and its "
+        "dimensions, and the door will not guess which row the supplied "
+        "files are. Registered meshes: "
         + ", ".join(sorted(registry)),
     )
     if mesh not in registry:
         raise _refuse(
             f"--mesh {mesh!r} is not a registered mesh.  Registered meshes are "
             f"{', '.join(sorted(registry))}.  A row pins its grid and static "
-            "by byte count and SHA-256 and declares the timestep its real "
-            "dcEdge admits; running an unregistered mesh would run an "
-            "unproved shape at an unadmitted timestep.  Register the row in "
-            "src/hexcore/drivers/mpas_mesh_binding.py before running it."
+            "by byte count and SHA-256 and declares the level and soil "
+            "counts the driver sizes its arrays by; without one the door "
+            "cannot size the run.  Register the row in "
+            "src/hexcore/drivers/mpas_mesh_binding.py, or describe the mesh "
+            "in a mesh-rows.json named by $GPUWM_HEX_MESH_ROWS."
         )
     row = registry[mesh]
     preflight = bool(getattr(arguments, "preflight", False))
     collected: list[str] | None = [] if preflight else None
+    physics, imported_namelist, physics_overrides = resolve_door_physics(
+        arguments, mesh, getattr(row, "nominal_dx_m", None))
+    if physics is not None:
+        backend_row = resolve_backend(physics.backend_row)
 
     # ORDER.  Everything a user can fix from the command line alone is
     # checked before anything that depends on the filesystem, because those
@@ -1197,11 +1690,15 @@ def resolve_request(
         "00Z\"",
     )
 
+    fingerprint_every = int(getattr(arguments, "fingerprint_every", 0))
+    if fingerprint_every < 0:
+        raise ForecastDoorRefusal("--fingerprint-every must be nonnegative; a negative interval cannot schedule boundary identity receipts")
+
     hours = float(_require(
         getattr(arguments, "hours", None), "--hours",
         "the forecast length has no default; the door will not choose how "
         "much compute a run spends"))
-    history_every_minutes = int(_require(
+    history_every_minutes = float(_require(
         getattr(arguments, "history_every_minutes", None),
         "--history-every-minutes",
         "the history cadence has no default; it decides how much of the run "
@@ -1217,7 +1714,68 @@ def resolve_request(
     # run?" was half an answer, which is the one thing preflight promises not
     # to be.  The two blockers are independent and a user fixing one wants to
     # know about the other in the same pass.
-    convection = getattr(arguments, "convection", "auto")
+    convection = (
+        getattr(arguments, "convection", "auto") if physics is None
+        else physics.convection
+    )
+    radiation_seconds = getattr(arguments, "radiation_seconds", None)
+    if (
+        imported_namelist is not None
+        and imported_namelist.radiation_seconds is not None
+    ):
+        namelist_seconds = imported_namelist.radiation_seconds
+        if radiation_seconds is not None and float(radiation_seconds) != namelist_seconds:
+            raise _refuse(
+                f"--radiation-seconds {radiation_seconds:g} and the namelist's "
+                f"radiation interval ({namelist_seconds:g} s) name two cadences "
+                "for one run; give one")
+        radiation_seconds = namelist_seconds
+    if radiation_seconds is None:
+        # MPAS-A config_radtlw_interval = config_radtsw_interval = 00:30:00
+        # (Registry.xml:2316, 2321).
+        radiation_seconds = mpas_defaults.DEFAULT_RADIATION_SECONDS
+    schedule = resolve_schedule(arguments, imported_namelist)
+    dynamics_overrides, dynamics_override_sources = resolve_dynamics_overrides(
+        arguments, imported_namelist)
+    max_wind_m_s = getattr(arguments, "max_wind", None)
+    if max_wind_m_s is not None:
+        max_wind_m_s = float(max_wind_m_s)
+        if not (max_wind_m_s > 0.0) or max_wind_m_s != max_wind_m_s or max_wind_m_s == float("inf"):
+            raise _refuse(
+                f"--max-wind {max_wind_m_s!r} is not a positive finite speed "
+                "in m/s, so the stability estimate has no wind to bound the "
+                "step with")
+    try:
+        dt_selection = mpas_defaults.resolve_dt(
+            getattr(arguments, "dt", None) if schedule["dt"] is None else schedule["dt"],
+            nominal_dx_m=(
+                None if getattr(row, "nominal_dx_m", None) is None
+                else float(row.nominal_dx_m)),
+            row_dt_seconds=float(row.dt_seconds),
+            radiation_seconds=float(radiation_seconds),
+        )
+    except ValueError as error:
+        raise _refuse(str(error)) from None
+    if schedule["dt"] is not None:
+        dt_selection["source"] = "namelist"
+    if dt_selection.get("source") == "mesh":
+        # YSU (and New Tiedtke) at a long step leave single hot layers at the boundary-layer top on an
+        # engine without their donor bounds (gpuwm 2.9.0 has neither); the default step takes the cap
+        # gpuwm-hex global applies, and runs the mesh's own step on an engine that carries both
+        # (hexcore.global_door.default_step_cap says why and when it retires).
+        from .global_door import default_step_cap
+        dt_selection = default_step_cap(dt_selection, default_step_selectors(physics, arguments),
+                                        radiation_seconds=float(radiation_seconds))
+        if dt_selection.get("source") == "physics cap":
+            print(f"gpuwm-hex: timestep {dt_selection['dt_seconds']:g} s, under the "
+                  f"{dt_selection['arm']} physics arm's {dt_selection['cap_seconds']:g} s cap (the mesh's own "
+                  f"step is {dt_selection['mesh_dt_seconds']:g} s): YSU at a longer step leaves single hot layers "
+                  "at the boundary-layer top on an engine without its donor bounds"
+                  + (f" (this engine lacks {', '.join(dt_selection['engine_lacks'])})"
+                     if dt_selection.get("engine_lacks") else "")
+                  + "; --dt SECONDS runs a step of your choosing", file=sys.stderr, flush=True)
+    dt_selection["registered_row_dt_seconds"] = float(row.dt_seconds)
+    dt_seconds = float(dt_selection["dt_seconds"])
     # The preset is a ROW (hexcore.forecast_preset) and resolves into the
     # knob this door already has: the surface/PBL cadence at this row's
     # timestep.  An explicit --pbl-cadence is the user's own selection and
@@ -1227,28 +1785,54 @@ def resolve_request(
     except ConfigurationRefusal as error:
         raise _refuse(str(error)) from None
     explicit_pbl_cadence = getattr(arguments, "pbl_cadence", None)
+    if (
+        physics is not None
+        and physics.seam != "frozen"
+        and preset.surface_pbl_hold_seconds is not None
+        and explicit_pbl_cadence is None
+    ):
+        # THE BREAKAGE THIS PREVENTS: a preset row declares the frozen
+        # seam's schemes (forecast_preset.ENGINE_COLUMN_SUITE) and was
+        # measured and graded holding THEM; applied to a column-suite
+        # selection it would hold MYNN, RUC and the GSL drag at a cadence
+        # nobody measured, and the receipt would name YSU and Noah-MP.
+        problem = (
+            f"--preset {preset.name} holds the surface layer, land surface and "
+            f"PBL up to {preset.surface_pbl_hold_seconds:g} s, measured and "
+            f"graded on the frozen suite {dict(preset.suite)}; this run's "
+            f"physics ({physics.suite}, row {physics.backend_row}) runs "
+            f"{physics.selectors['config_pbl_scheme']} over "
+            f"{physics.selectors['config_lsm_scheme']} on the {physics.seam} "
+            "seam, where no hold was measured.  Use --preset "
+            f"{forecast_preset.DEFAULT_PRESET}, or name the cadence with "
+            "--pbl-cadence as an explicit arm")
+        if collected is None:
+            raise _refuse(problem)
+        collected.append(problem)
     if explicit_pbl_cadence is None:
-        pbl_cadence = forecast_preset.pbl_cadence_request(preset, row.dt_seconds)
+        pbl_cadence = forecast_preset.pbl_cadence_request(preset, dt_seconds)
         pbl_cadence_source = "preset"
     else:
         pbl_cadence = str(explicit_pbl_cadence)
         pbl_cadence_source = "explicit"
     if collected is None:
         admit_timestep(
-            mesh, row.dt_seconds,
+            mesh, dt_seconds,
             nominal_dx_m=row.nominal_dx_m, convection=convection,
-            pbl_cadence=pbl_cadence,
+            pbl_cadence=pbl_cadence, radiation_seconds=float(radiation_seconds),
+            coarsest_dx_m=getattr(row, "coarsest_dx_m", None),
         )
     else:
         try:
             admit_timestep(
-                mesh, row.dt_seconds,
+                mesh, dt_seconds,
                 nominal_dx_m=row.nominal_dx_m, convection=convection,
-                pbl_cadence=pbl_cadence,
+                pbl_cadence=pbl_cadence, radiation_seconds=float(radiation_seconds),
             )
         except ForecastDoorRefusal as error:
             collected.append(str(error))
-    steps, captures = _schedule(hours, history_every_minutes, row.dt_seconds, mesh)
+    history_from_minutes = float(getattr(arguments, 'history_from_minutes', 0.0))
+    steps, captures = _schedule(hours, history_every_minutes, dt_seconds, mesh, history_from_minutes)
 
     out = Path(_require(
         getattr(arguments, "out", None), "--out",
@@ -1292,6 +1876,23 @@ def resolve_request(
 
     horiz_mixing = getattr(arguments, "horiz_mixing", "2d_smagorinsky")
     local_timestep = bool(getattr(arguments, "local_timestep", False))
+    time_integration_order, acoustic_substeps, monotonic, schedule_sources = (
+        schedule["order"], schedule["substeps"], schedule["monotonic"],
+        dict(schedule["sources"]))
+    if local_timestep:
+        # The local-timestep rate ladder is built on the RK3 six-sub-step
+        # stage counts (1, 3, 6) and refuses the FCT limiter (hexcore.
+        # cuda_driver_lts); with --local-timestep and no explicit choice the
+        # door takes that schedule rather than refusing the flag.
+        for knob, value in (("order", 3), ("substeps", 6), ("monotonic", False)):
+            if schedule_sources[knob] == "mpas-defaults":
+                schedule_sources[knob] = "local-timestep"
+                if knob == "order":
+                    time_integration_order = value
+                elif knob == "substeps":
+                    acoustic_substeps = value
+                else:
+                    monotonic = value
     rates = _parse_rates(
         getattr(arguments, "local_timestep_rates", "1,3"), "--local-timestep-rates"
     )
@@ -1354,6 +1955,14 @@ def resolve_request(
                  "from and there is no synthetic default"),
         "--init",
         "Build one with `gpuwm-hex init` (chapter 5 of the manual).", collected)
+    invariant, invariant_selection = resolve_invariant(
+        arguments, row, grid, static, init, collected)
+    orographic_statistics = resolve_orographic_statistics(
+        arguments, physics, mesh, grid, collected)
+    for problem in microphysics_problems(backend_row, init):
+        if collected is None:
+            raise _refuse(problem)
+        collected.append(problem)
 
     checkout_argument = getattr(arguments, "gpuwm_checkout", None)
     have_tree = True
@@ -1454,6 +2063,63 @@ def resolve_request(
                 raise _refuse(problem)
             collected.append(problem)
 
+    if dynamics_overrides:
+        # Keep what this run's configuration type carries.  A NAMELIST
+        # option it does not carry is dropped here and named by the
+        # comparison below when the namelist asks for something other than
+        # the value the run holds; an EXPLICIT --dynamics for one is refused
+        # now, because the user asked for it by name and it would not run.
+        import importlib as _importlib
+
+        _driver = _importlib.import_module("hexcore.drivers.run_cuda_v841_forecast")
+        try:
+            carried = _carried_overrides(
+                _driver, dynamics_overrides, horiz_mixing=horiz_mixing,
+                arguments=arguments, local_timestep=local_timestep) or {}
+            flagged = sorted(set(carried) & _driver._FLAG_CARRIED_DYNAMICS)
+            problem = None
+            if flagged:
+                problem = (
+                    f"--dynamics sets {flagged}, and each has a flag of its "
+                    f"own ({[_driver._FLAG_CARRIED_DYNAMICS_FLAGS[name] for name in flagged]}); "
+                    "set it there, so one option cannot be given two values")
+        except ValueError as error:
+            carried, problem = {}, f"--dynamics: {error}"
+        uncarried = sorted(
+            key for key in dynamics_overrides
+            if key not in carried and dynamics_override_sources.get(key) == "explicit")
+        if problem is None and uncarried:
+            problem = (
+                f"--dynamics sets {uncarried}, and this run's configuration "
+                "carries no such option, so the value would be recorded and "
+                "not run.  The options a run carries are the fields of its "
+                "configuration type (hexcore.config_v841).")
+        if problem is not None:
+            if collected is None:
+                raise _refuse(problem)
+            collected.append(problem)
+        dynamics_overrides = dict(carried)
+        dynamics_override_sources = {
+            key: dynamics_override_sources[key] for key in dynamics_overrides}
+
+    if imported_namelist is not None and imported_namelist.dycore_options:
+        dynamics_problems = namelist_dycore_problems(
+            imported_namelist, arguments,
+            dt_seconds=dt_seconds, horiz_mixing=horiz_mixing,
+            time_integration_order=time_integration_order,
+            acoustic_substeps=acoustic_substeps, monotonic=monotonic,
+            local_timestep=local_timestep, rates=rates, rings=rings,
+            apply_lbcs=lbc_dir is not None,
+            radiation_seconds=float(radiation_seconds),
+            dynamics_overrides=dynamics_overrides,
+        )
+        if dynamics_problems and collected is None:
+            # Every disagreement in one refusal: a user fixing the first
+            # flag should not learn about the second on the next attempt.
+            raise _refuse("\n".join(dynamics_problems))
+        if collected is not None:
+            collected.extend(dynamics_problems)
+
     receipt = getattr(arguments, "receipt", None)
     receipt_path = (
         Path(receipt).expanduser().absolute() if receipt is not None
@@ -1465,11 +2131,68 @@ def resolve_request(
             "it before the run rather than losing the receipt at the end of one."
         )
 
+    boundary_fingerprint_every = int(getattr(arguments, "boundary_fingerprint_every", 0))
+    if boundary_fingerprint_every < 0:
+        raise _refuse("--boundary-fingerprint-every must be nonnegative; a negative cadence would omit the committed state evidence")
+    if fingerprint_every and boundary_fingerprint_every and fingerprint_every != boundary_fingerprint_every:
+        raise _refuse("the two boundary fingerprint intervals disagree; the run cannot promise two different identity schedules")
+    fingerprint_every = fingerprint_every or boundary_fingerprint_every
+    fullstep_enabled = bool(getattr(arguments, "fullstep_local_timestep", False))
+    iau_analysis = getattr(arguments, "iau_analysis", None)
+    iau_increment = getattr(arguments, "iau_increment", None)
+    iau_window_seconds = getattr(arguments, "iau_window_seconds", None)
+    has_increment = iau_analysis is not None or iau_increment is not None
+    if has_increment != (iau_window_seconds is not None):
+        raise _refuse("--iau-analysis (or --iau-increment) and --iau-window-seconds go together: an "
+                      "increment without a window (or a window without an increment) has no defined forcing")
+    if getattr(arguments, "iau_route", None) is not None and not has_increment:
+        raise _refuse("--iau-route selects how an increment enters; this run has none (--analysis with "
+                      "--iau on, --iau-analysis or --iau-increment), so it would be accepted and never used")
+    mode_fields = _physics_mode_fields(arguments, preset)
+    iau_route = None
+    if has_increment:
+        from .analysis_door import resolve_iau_route
+
+        for flag, value in (("--iau-analysis", iau_analysis), ("--iau-increment", iau_increment)):
+            if value is not None and not Path(value).expanduser().is_file():
+                raise _refuse(f"{flag} {value} does not exist; the run would start from the background "
+                              "with nothing to add")
+        iau_analysis = None if iau_analysis is None else Path(iau_analysis).expanduser().resolve()
+        iau_increment = None if iau_increment is None else Path(iau_increment).expanduser().resolve()
+        if not float(iau_window_seconds) > 0:
+            raise _refuse("--iau-window-seconds must be positive; a zero window is direct insertion")
+        iau_route = resolve_iau_route(arguments, mode_fields["physics_mode"])
+        if iau_route == "hex" and iau_analysis is None:
+            raise _refuse("--iau-route hex forms its increment from two recoupled initial-conditions files "
+                          "and needs --iau-analysis; an MPAS increment file alone runs --iau-route native")
+    # Retired 2026-10-14 (lane W1): IAU and the balance series needed the active full-step
+    # class executor, the only one with a held-tendency hook.  The fixed-step executor has the
+    # same hook now (hexcore.iau_native), and so do the same-host ranks (one class per rank);
+    # only the balance series stays on one card (drivers/samehost_forecast_v841.execute_samehost).
+    fullstep_knobs = {name: getattr(arguments, name, None) for name in
+                     ("fullstep_lts_mode", "fullstep_lts_max_rate", "fullstep_lts_buffer_rings")}
+    if not fullstep_enabled and any(value is not None for value in fullstep_knobs.values()):
+        raise _refuse("the requested LTS policy would be ignored; LTS-only knobs need --fullstep-local-timestep")
+    fullstep_values = {name: value for name, value in fullstep_knobs.items() if value is not None}
+    if fullstep_enabled:
+        from .config_fullstep_lts import validate_fullstep_lts_request
+        from types import SimpleNamespace
+        validate_fullstep_lts_request(SimpleNamespace(fullstep_local_timestep=True,
+            **fullstep_values, local_timestep=local_timestep, lbc_dir=lbc_dir,
+            time_integration_order=int(time_integration_order), acoustic_substeps=int(acoustic_substeps),
+            monotonic=bool(monotonic)))
+        # Retired 2026-10-11 for the active mode: rate classes are cut into
+        # blocks across the cards (hexcore.fullstep_lts_blocks), with the
+        # same-class peer exchange, mailbox and register copies between cards
+        # (hexcore.cuda_fullstep_lts_multi).  The shadow keeps its refusal.
+        if (getattr(arguments, "samehost_devices", None) is not None
+                and fullstep_values.get("fullstep_lts_mode", "shadow") != "active"):
+            raise _refuse("the full-step shadow runs on one device: the partitioned shadow has no owner-only donor reduction (halo duplicates would corrupt the rate census)")
     return ForecastRequest(
         repo=repo,
         mesh=mesh,
         cells=row.cells,
-        dt_seconds=row.dt_seconds,
+        dt_seconds=dt_seconds,
         grid=grid,
         static=static,
         init=init,
@@ -1477,6 +2200,7 @@ def resolve_request(
         start_time=getattr(arguments, "start_time", None),
         hours=hours,
         history_every_minutes=history_every_minutes,
+        history_from_minutes=history_from_minutes,
         steps=steps,
         capture_count=captures,
         out=out,
@@ -1485,6 +2209,21 @@ def resolve_request(
         gpuwm_checkout=checkout,
         case_label=getattr(arguments, "case_label", None),
         horiz_mixing=horiz_mixing,
+        time_integration_order=int(time_integration_order),
+        acoustic_substeps=int(acoustic_substeps),
+        radiation_seconds=float(radiation_seconds),
+        monotonic=bool(monotonic),
+        dt_selection=dt_selection,
+        schedule_sources=schedule_sources,
+        cam_coefficient=getattr(arguments,"cam_coefficient",0.0),
+        cam_damping_levels=getattr(arguments,"cam_damping_levels",4),
+        rayleigh_u=getattr(arguments,"rayleigh_u",False),
+        damping_start_m=getattr(arguments,"damping_start_m",22000.0),
+        dynamics_overrides=tuple(sorted(dynamics_overrides.items())),
+        dynamics_override_sources=dict(dynamics_override_sources),
+        max_wind_m_s=max_wind_m_s,
+        invariant=invariant,
+        invariant_selection=invariant_selection,
         convection=convection,
         pbl_cadence=pbl_cadence,
         local_timestep=local_timestep,
@@ -1494,6 +2233,7 @@ def resolve_request(
         headroom_bytes=headroom_bytes,
         model=model,
         stop_on_refusal=bool(getattr(arguments, "stop_on_refusal", False)),
+        fingerprint_every=fingerprint_every,
         preflight=preflight,
         lbc_dir=lbc_dir,
         physics_backend=backend_row.name,
@@ -1501,12 +2241,358 @@ def resolve_request(
         input_problems=tuple(collected or ()),
         preset=preset.name,
         pbl_cadence_source=pbl_cadence_source,
+        boundary_fingerprint_every=fingerprint_every,
+        physics_suite=None if physics is None else physics.suite,
+        physics_overrides=tuple(sorted(physics_overrides.items())),
+        stochastic=resolve_stochastic_options(
+            {**({} if imported_namelist is None else imported_namelist.stochastic),
+             **({} if getattr(arguments, "stochastic", None) is None else
+                (json.loads(arguments.stochastic) if isinstance(arguments.stochastic, str)
+                 else arguments.stochastic))}).json(),
+        orographic_statistics=orographic_statistics,
+        physics_resolution=None if physics is None else physics.receipt(),
+        iau_analysis=iau_analysis,
+        iau_window_seconds=iau_window_seconds,
+        iau_increment=iau_increment,
+        iau_route=iau_route,
+        analysis_bundle=getattr(arguments, "analysis_receipt", None),
+        balance_series=bool(getattr(arguments, "balance_series", False)),
+        **mode_fields,
+        fullstep_local_timestep=fullstep_enabled,
+        **fullstep_values,
+        cycling_argv=_cycling_argv(arguments),
     )
+
+
+def _preset_receipt(request: "ForecastRequest") -> dict[str, Any]:
+    """The preset row as this run used it.
+
+    A preset row declares the frozen seam's schemes.  A run whose named
+    physics left that seam executed others, so its receipt does not repeat
+    the row's suite as though it ran: ``suite`` is withheld and the note
+    points at ``physics.resolution``, which names what did.
+    """
+
+    receipt = forecast_preset.resolve_preset(request.preset).receipt()
+    resolution = request.physics_resolution
+    if resolution is not None and resolution.get("seam") != "frozen":
+        receipt["declared_suite"] = receipt.pop("suite")
+        receipt["suite"] = None
+        receipt["suite_note"] = (
+            "the preset row declares the frozen seam's schemes; this run's "
+            "physics left that seam, and physics.resolution names what ran")
+    return receipt
+
+
+def _carried_overrides(driver, overrides, *, horiz_mixing, arguments, local_timestep):
+    """The NAMELIST's overrides the run's configuration type carries.
+
+    Used only to build the comparison configuration: an option the type
+    does not carry is left out here so the comparison can name it as its
+    own line ("the run's configuration holds ..."), rather than failing the
+    whole build on the first one.
+    """
+
+    if not overrides:
+        return None
+    from dataclasses import fields
+
+    probe = driver.build_forecast_config(
+        dt_seconds=60.0, horiz_mixing=horiz_mixing,
+        local_timestep=bool(local_timestep),
+        cam_coefficient=getattr(arguments, "cam_coefficient", 0.0),
+        cam_damping_levels=getattr(arguments, "cam_damping_levels", 4),
+        rayleigh_u=getattr(arguments, "rayleigh_u", False),
+        damping_start_m=getattr(arguments, "damping_start_m", 22000.0),
+    )
+    carried = {item.name for item in fields(probe)}
+    return {key: value for key, value in dict(overrides).items() if key in carried}
+
+
+def namelist_dycore_problems(
+    imported, arguments, *, dt_seconds, horiz_mixing, local_timestep, rates,
+    rings, apply_lbcs, radiation_seconds, time_integration_order=None,
+    acoustic_substeps=None, monotonic=None, dynamics_overrides=None,
+) -> list[str]:
+    """The namelist's dynamics options this run would not execute, as door
+    problems (all of them, one pass).
+
+    The run's configuration is the one the driver builds for this request
+    (``build_forecast_config``, host only), so the comparison is against
+    what executes, not against a restatement of it.  See
+    :func:`hexcore.physics_namelist.dycore_disagreements` for the measured
+    breakage.
+    """
+
+    import importlib
+
+    from .physics_namelist import dycore_disagreements
+
+    driver = importlib.import_module("hexcore.drivers.run_cuda_v841_forecast")
+    try:
+        run_config = driver.build_forecast_config(
+            dt_seconds=float(dt_seconds),
+            horiz_mixing=horiz_mixing,
+            local_timestep=local_timestep,
+            local_timestep_rates=rates,
+            local_timestep_buffer_rings=rings,
+            apply_lbcs=bool(apply_lbcs),
+            time_integration_order=int(
+                mpas_defaults.DEFAULT_TIME_INTEGRATION_ORDER
+                if time_integration_order is None else time_integration_order),
+            acoustic_substeps=int(
+                mpas_defaults.DEFAULT_ACOUSTIC_SUBSTEPS
+                if acoustic_substeps is None else acoustic_substeps),
+            radiation_seconds=float(radiation_seconds),
+            monotonic=bool(
+                mpas_defaults.DEFAULT_MONOTONIC if monotonic is None else monotonic),
+            cam_coefficient=getattr(arguments, "cam_coefficient", 0.0),
+            cam_damping_levels=getattr(arguments, "cam_damping_levels", 4),
+            rayleigh_u=getattr(arguments, "rayleigh_u", False),
+            damping_start_m=getattr(arguments, "damping_start_m", 22000.0),
+            dynamics_overrides=_carried_overrides(
+                driver, dynamics_overrides, horiz_mixing=horiz_mixing,
+                arguments=arguments, local_timestep=local_timestep),
+        )
+    except ValueError as error:
+        # The driver refuses this combination by itself; the namelist
+        # comparison has no configuration to hold, and says so.
+        return [f"--physics-namelist: the run's dynamics configuration "
+                f"cannot be built ({error}), so the namelist's dynamics "
+                "options cannot be checked against it"]
+    namelist = getattr(arguments, "physics_namelist", None)
+    return [f"--physics-namelist {namelist}: {line}"
+            for line in dycore_disagreements(imported, run_config)]
+
+
+def microphysics_problems(backend_row, init) -> list[str]:
+    """What stops the selected microphysics before the card, init first.
+
+    The init check is a few reads; the table check may acquire TEMPO's pinned
+    set, a download of about 930 MB into a fresh home.  THE BREAKAGE THIS
+    PREVENTS (verify-hex-r2 M3, measured in a fresh HOME): the door downloaded
+    the TEMPO tables and only then refused an init without aerosol fields.
+    A run its init cannot start acquires nothing.
+    """
+
+    aerosol_problem = microphysics_init_problem(backend_row, init)
+    if aerosol_problem is not None:
+        return [aerosol_problem]
+    table_problem = microphysics_table_problem(backend_row)
+    return [] if table_problem is None else [table_problem]
+
+
+def microphysics_init_problem(backend_row, init) -> str | None:
+    """Why the init cannot start the selected microphysics, or None.
+
+    THE BREAKAGE THIS PREVENTS: TEMPO's column seam refuses at the first
+    step when the init carries no water-friendly and ice-friendly aerosol
+    numbers (nwfa, nifa), after the whole construction (60 s on x1.40962,
+    golden 0.4.0 R2 gate, GFS init).  A plain GFS init carries none
+    (no aerosol climatology); only an init built for a TEMPO suite
+    (`gpuwm-hex init --physics-suite ...`, or `gpuwm preset prepare`, with
+    gpuwm 2.9.0's suite-aware rw_mpas_init) writes them from the WIF
+    climatology.  The refusal is at the door, before the card, with the same
+    reason.
+    """
+
+    if init is None:
+        return None
+    from .species_row import species_row_for_names
+    names = (*backend_row.driven_scalar_names, *backend_row.appended_scalar_names)
+    if species_row_for_names(names).engine_scheme != "tempo":
+        return None
+    from netCDF4 import Dataset
+    import numpy as np
+
+    try:
+        dataset = Dataset(str(init))
+    except OSError:
+        return None  # not readable here; the init reader refuses it by name later
+    with dataset:
+        missing = [name for name in ("nwfa", "nifa")
+                   if name not in dataset.variables
+                   or not np.any(np.asarray(dataset.variables[name][:]))]
+    if not missing:
+        return None
+    return (f"--physics-backend {backend_row.name} runs TEMPO, which needs water-friendly and "
+            f"ice-friendly aerosol initial fields; {init} carries no {' or '.join(missing)} "
+            "(a plain GFS-built init has no aerosol climatology). Build the init for the TEMPO "
+            "suite (gpuwm-hex init --physics-suite <suite>, which writes them from the WIF "
+            "climatology) or supply an init that carries nwfa and nifa")
+
+
+def microphysics_table_problem(backend_row) -> str | None:
+    """The Thompson coefficient tables a Thompson row reads, or a problem.
+
+    THE BREAKAGE THIS PREVENTS, MEASURED (2026-10-07, conus12km): aerosol-aware Thompson reads freezeH2O.dat
+    (243 MiB) and qr_acr_qg_V4.dat (71 MiB), which no gpuwm-data wheel
+    carries (PyPI's per-file cap; ``gpuwm fetch-tables`` stages them).  On a
+    wheel install the run bound the mesh, prepared the host, reserved the
+    card and then stopped at the first microphysics call with
+    ``FileNotFoundError: missing Thompson table asset``.  The engine's own
+    preflight (``gpuwm.table_assets.require_thompson_tables``) answers the
+    same question in one sentence; the door asks it before the card.
+    """
+
+    from .species_row import species_row_for_names
+    names = (*backend_row.driven_scalar_names, *backend_row.appended_scalar_names)
+    scheme = species_row_for_names(names).engine_scheme
+    if scheme == "tempo":
+        # An engine without the TEMPO port (gpuwm before 2.8.8) has neither
+        # module; refuse here, before the card, instead of an ImportError.
+        try:
+            from gpuwm.tempo_assets import ensure_tempo_tables
+        except ImportError as error:
+            return (f"--physics-backend {backend_row.name} needs a gpuwm engine that "
+                    f"carries the TEMPO port (gpuwm 2.8.8 or later): {error}")
+        # Verify, or acquire and verify, the pinned set before the card: the
+        # engine's own TEMPO entry acquires the same way.  THE BREAKAGE: this
+        # check only validated, and no `gpuwm fetch-tables` option stages the
+        # TEMPO set, so a pip install was refused with a missing-file message
+        # and no command that closes it (golden 0.4.0 R2, install gate).
+        try:
+            ensure_tempo_tables()
+        except Exception as error:  # noqa: BLE001 - every acquisition failure refuses by name
+            return (f"--physics-backend {backend_row.name} requires the pinned TEMPO tables and "
+                    f"they could not be verified or acquired: {error}. Stage them offline with "
+                    "python -c \"from gpuwm.tempo_assets import ensure_tempo_tables; "
+                    "ensure_tempo_tables(source_dir='DIR')\"")
+        return None
+    if scheme != "thompson_aero":
+        return None
+    try:
+        from gpuwm.table_assets import MissingTableAssets, require_thompson_tables
+    except ImportError:
+        return None  # the engine pin check names an absent or older engine
+    try:
+        require_thompson_tables()
+    except MissingTableAssets as error:
+        return f"--physics-backend {backend_row.name} runs aerosol-aware Thompson: {error}"
+    return None
+
+
+def resolve_orographic_statistics(arguments, physics, mesh, grid, collected):
+    """The drag statistics file a column-suite selection reads.
+
+    THE BREAKAGE THIS PREVENTS: the GSL drag reads twenty statistics per
+    cell; without them it would run on zeros, which turns the drag off
+    without saying so (the engine refuses that at construction, after the
+    card is reserved -- the wrong place to learn it).  The default is the
+    mesh's own ``<mesh>.ugwp_oro_data.nc`` beside --grid, as the native
+    workflow lays it out; a file given for a run whose drag reads none is
+    refused, because it would be accepted and never read.
+    """
+
+    given = getattr(arguments, "orographic_statistics", None)
+    reads = False
+    spec = None
+    if physics is not None and physics.column_profile is not None:
+        spec = physics.column_profile.get("orographic_statistics")
+        reads = spec is not None
+    if not reads:
+        if given is not None:
+            problem = (
+                f"--orographic-statistics {given} was given, but this run's "
+                "physics runs no drag that reads orographic statistics; the "
+                "file would be accepted and never read")
+            if collected is None:
+                raise _refuse(problem)
+            collected.append(problem)
+        return None
+    if spec.get("file") == "static":
+        # The statistics every MPAS static file carries (the YSU drag's
+        # ten): the run's own --static is the default source.
+        if given is None:
+            given = getattr(arguments, "static", None)
+        return _require_file(
+            Path(_require(
+                given, "--orographic-statistics",
+                "this run's drag reads the mesh static file's var2d/con/oa/ol "
+                "statistics and no --static names one")).expanduser().absolute(),
+            "--orographic-statistics",
+            "The engine's YSU orographic drag (WOOF gwd_opt=1) reads the ten "
+            "statistics the mesh's static file carries.", collected)
+    if given is None:
+        given = Path(grid).parent / f"{mesh}.ugwp_oro_data.nc"
+    return _require_file(
+        Path(given).expanduser().absolute(), "--orographic-statistics",
+        "The GSL drag (config_gwdo_scheme='bl_ugwp_gwdo') reads the mesh's "
+        "ugwp_oro_data.nc; RRFS v2 publishes one per mesh beside the grid "
+        "(fix_rrfs2/.../meshes/<mesh>.<date>/<mesh>.ugwp_oro_data.nc).",
+        collected)
 
 
 # ---------------------------------------------------------------------------
 # the driver invocation and the hand-off
 # ---------------------------------------------------------------------------
+def _override_text(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _cycling_argv(arguments: Any) -> tuple[str, ...]:
+    """The door's checkpoint/restart/DA selections as the driver's own flags.
+
+    The door forwarded none of them, so a checkpoint or a DA-cycling restart
+    was reachable only by calling the engineering driver past the door's mesh
+    bind (which sets the run's timestep and mesh constants).
+    """
+
+    argv: list[str] = []
+    hours = getattr(arguments, "checkpoint_hours", None)
+    if hours:
+        argv += ["--checkpoint-hours", str(hours)]
+    for flag, name in (("--restart-from", "restart_from"), ("--da-analysis", "da_analysis")):
+        value = getattr(arguments, name, None)
+        if value is not None:
+            argv += [flag, str(Path(value).expanduser().absolute())]
+    if getattr(arguments, "jedi_background", False):
+        argv.append("--jedi-background")
+    return tuple(argv)
+
+
+def _driver_floor_model(request: ForecastRequest) -> Any:
+    """The row the driver's ``--required-free-bytes`` floor is priced from.
+
+    A same-host run (``--samehost-devices``, which ``gpuwm-hex global`` always
+    passes) is admitted per card by the same-host driver and never goes
+    through :func:`_with_resolved_model`, so a user-supplied
+    ``--device-fixed-mib``/``--device-bytes-per-cell`` row reached this argv
+    unresolved and the door died with ``AttributeError: '_SuppliedRow' object
+    has no attribute 'required_bytes'`` (``gpuwm-hex global --row global-30km
+    --devices 0`` with both flags, 2026-10-16).  Resolve it against the card
+    here, as the one-card path does before its admission decision.
+    """
+
+    if isinstance(request.model, _SuppliedRow):
+        return resolve_admission_model(request)
+    return request.model
+
+
+def stochastic_basis_bytes(cells: int, options: str | None) -> int:
+    from .stochastic import StochasticConfig
+    from .device_admission import harmonic_basis_bytes
+    config = StochasticConfig.parse(options)
+    return harmonic_basis_bytes(cells, config.degree) if config.enabled else 0
+
+
+def stochastic_array_ledger(cells: int, options: str | None, *, levels: int = 55) -> dict[str, int]:
+    from .stochastic import StochasticConfig
+    from .device_admission import stochastic_array_ledger as ledger
+    config = StochasticConfig.parse(options)
+    if not config.enabled:
+        return {}
+    return ledger(cells, levels, config.degree,
+                  extra_scales=len(config.sppt_scales) if config.sppt else 0,
+                  skeb=config.skeb)
+
+
+def stochastic_array_bytes(cells: int, options: str | None, *, levels: int = 55) -> int:
+    return sum(stochastic_array_ledger(cells, options, levels=levels).values())
+
+
 def build_driver_argv(request: ForecastRequest) -> list[str]:
     """The argument vector handed to the engineering forecast driver.
 
@@ -1525,18 +2611,41 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
         "--init-source", request.init_source,
         "--hours", repr(request.hours),
         "--history-every-minutes", str(request.history_every_minutes),
+        "--history-from-minutes", str(request.history_from_minutes),
         "--arwen-checkout", str(request.gpuwm_checkout),
         "--horiz-mixing", request.horiz_mixing,
         "--convection", request.convection,
         "--pbl-cadence", request.pbl_cadence,
         "--required-free-bytes",
-        str(required_free_bytes(request.cells, request.model,
-                                request.headroom_bytes)),
+        str(required_free_bytes(request.cells, _driver_floor_model(request),
+                                request.headroom_bytes) +
+            stochastic_array_bytes(request.cells, request.stochastic)),
     ]
+    if request.stochastic is not None:
+        argv += ["--stochastic", request.stochastic]
     if request.lbc_dir is not None:
         argv += ["--lbc-dir", str(request.lbc_dir)]
+    if request.invariant is not None:
+        argv += ["--invariant", str(request.invariant)]
+    argv += ["--time-integration-order", str(request.time_integration_order),
+             "--acoustic-substeps", str(request.acoustic_substeps),
+             "--radiation-seconds", repr(float(request.radiation_seconds)),
+             "--monotonic" if request.monotonic else "--no-monotonic"]
+    for key, value in request.dynamics_overrides:
+        argv += ["--dynamics", f"{key}={json.dumps(value)}"]
+    if (request.cam_coefficient,request.cam_damping_levels,request.damping_start_m)!=(0.0,4,22000.0):
+        argv += ["--cam-coefficient",str(request.cam_coefficient),"--cam-damping-levels",str(request.cam_damping_levels),
+                 "--damping-start-m",str(request.damping_start_m)]
+    if request.rayleigh_u:argv.append("--rayleigh-u")
     if request.physics_backend != DEFAULT_BACKEND:
         argv += ["--physics-backend", request.physics_backend]
+    if request.physics_suite is not None:
+        argv += ["--physics-suite", request.physics_suite,
+                 "--physics-mesh", request.mesh]
+        for key, value in request.physics_overrides:
+            argv += ["--physics", f"{key}={_override_text(value)}"]
+    if request.orographic_statistics is not None:
+        argv += ["--orographic-statistics", str(request.orographic_statistics)]
     if request.source_table is not None:
         argv += ["--source-table", str(request.source_table)]
     if request.start_time:
@@ -1553,6 +2662,26 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
         ]
         if request.local_timestep_classing is not None:
             argv += ["--local-timestep-classing", str(request.local_timestep_classing)]
+    if request.fingerprint_every:
+        argv += ["--fingerprint-every", str(request.fingerprint_every)]
+    if request.fullstep_local_timestep:
+        argv += ["--fullstep-local-timestep", "--fullstep-lts-mode", request.fullstep_lts_mode,
+                 "--fullstep-lts-max-rate", str(request.fullstep_lts_max_rate),
+                 "--fullstep-lts-buffer-rings", str(request.fullstep_lts_buffer_rings)]
+    if request.iau_window_seconds is not None:
+        if request.iau_analysis is not None:
+            argv += ["--iau-analysis", str(request.iau_analysis)]
+        if request.iau_increment is not None:
+            argv += ["--iau-increment", str(request.iau_increment)]
+        argv += ["--iau-window-seconds", repr(float(request.iau_window_seconds)),
+                 "--iau-route", str(request.iau_route)]
+    if request.balance_series:
+        argv.append("--balance-series")
+    from . import correct_mode
+
+    # Exact adds nothing: the driver sees the argument vector it always did.
+    argv += correct_mode.door_argv(request.physics_mode, request.physics_correct_skip)
+    argv += list(getattr(request, "cycling_argv", ()))
     if request.stop_on_refusal:
         argv.append("--stop-on-refusal")
     if request.preflight:
@@ -1587,10 +2716,184 @@ def render_command(request: ForecastRequest, history: Sequence[Path]) -> list[st
     return command
 
 
+def products_command(request: ForecastRequest, history: Sequence[Path]) -> list[str]:
+    """The ``gpuwm-hex products`` command for this run's output."""
+
+    command = ["gpuwm-hex", "products", "--forecast", str(request.out),
+               "--mesh", str(request.grid), "--init", str(request.init),
+               "--out", str(request.out / "products")]
+    if request.start_time:
+        command += ["--simulation-start", request.start_time]
+    return command
+
+
+def release_device_memory() -> dict[str, Any] | None:
+    """Hand the forecast's device memory back before the product stage.
+
+    THE BREAKAGE THIS PREVENTS, MEASURED (2026-10-12): the product stage is
+    CPU work in Rust binaries, and it ran inside the forecast process while
+    that process still held every byte the integration had allocated -- on
+    a 30 km global run about 84 GB of one card for the 26 minutes the maps
+    took, memory no other job on the box could use.  The pools are emptied
+    here; what the driver still references stays, and the record says how
+    much, so "released" is a number and not a hope.  Returns ``None`` when
+    there is no CUDA runtime to ask (a CPU proof run)."""
+
+    try:
+        import gc
+
+        import cupy
+    except Exception:  # noqa: BLE001 - no device stack, nothing held
+        return None
+    try:
+        free_before, total = cupy.cuda.runtime.memGetInfo()
+        gc.collect()
+        cupy.get_default_memory_pool().free_all_blocks()
+        cupy.get_default_pinned_memory_pool().free_all_blocks()
+        free_after, _ = cupy.cuda.runtime.memGetInfo()
+    except Exception as error:  # noqa: BLE001 - never fail a finished forecast
+        return {"error": f"{type(error).__name__}: {error}"}
+    return {
+        "device_total_bytes": int(total),
+        "device_free_before_bytes": int(free_before),
+        "device_free_after_bytes": int(free_after),
+        "released_bytes": int(free_after - free_before),
+        "still_in_use_bytes": int(total - free_after),
+    }
+
+
+def products_command_for_this_install(request: ForecastRequest,
+                                      history: Sequence[Path]) -> list[str]:
+    """The default product stage's command, without point pictures when this
+    install has no ``rw_hex_points``.
+
+    THE BREAKAGE THIS PREVENTS: gpuwm 2.9.0 builds ``rw_hex_points`` as a
+    standalone program, not a wheel tool, and the products door refuses
+    before any view when it is absent (so a missing point tool is not found
+    after every map).  As the forecast's automatic last stage that refusal
+    left a pip install with no maps at all, though maps never need the point
+    tool.  Here the automatic stage draws the maps and names what it skipped
+    and how to get it; ``gpuwm-hex products`` run by hand keeps its refusal.
+    A missing converter or renderer is left to the door's own refusal."""
+
+    from .products_door import ProductDoorError, resolve_points_exe
+    from . import render_door
+
+    command = products_command(request, history)
+    try:
+        convert_exe = render_door.resolve_convert_exe(None)
+    except MpasPortError:
+        return command
+    try:
+        resolve_points_exe(None, convert_exe)
+    except ProductDoorError as error:
+        reason = str(error).splitlines()[0]
+        print(f"PRODUCTS soundings and meteograms skipped: {reason}; the maps "
+              "are drawn. Install rw_hex_points and rerun: "
+              + " ".join(command), flush=True)
+        return [*command, "--no-points"]
+    return command
+
+
+def start_detached_products(request: ForecastRequest,
+                            history: Sequence[Path],
+                            command: list[str] | None = None) -> int:
+    """Start the product door as its own process and return at once.
+
+    The forecast process then exits and its cards are free while the maps
+    draw on CPU: what a shared box wants, where a card held through the
+    product stage is a card another job is waiting for.  The child is given
+    no CUDA device, leads its own session (so the forecast's exit, or the
+    queue wrapper's, does not take it down) and writes ``products.log``
+    beside the frames."""
+
+    import subprocess
+
+    command = command or products_command(request, history)
+    log_path = request.out / "products.log"
+    environment = dict(os.environ, CUDA_VISIBLE_DEVICES="", GPUWM_NO_LOCAL_GPU="1")
+    with log_path.open("ab") as log:
+        child = subprocess.Popen(
+            [sys.executable, "-m", "hexcore.cli", *command[1:]],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+            env=environment, start_new_session=True)
+    print(f"PRODUCTS detached pid={child.pid} log={log_path} "
+          f"out={request.out / 'products'}", flush=True)
+    print("PRODUCTS $ " + " ".join(command), flush=True)
+    return 0
+
+
+def run_default_products(request: ForecastRequest, history: Sequence[Path],
+                         arguments: argparse.Namespace) -> int:
+    """Draw the standard product set into ``<out>/products``; returns the
+    product door's exit code (2 for a named refusal)."""
+
+    from .products_door import add_products_arguments, run_products
+
+    command = products_command_for_this_install(request, history)
+    # Detached is the default.  THE BREAKAGE IT PREVENTS (hex, a rented box,
+    # 2026-10-13): the 20 -> 2.5 km global forecast finished at 02:13Z on
+    # four same-host cards and its in-command product stage (CPU-only Rust)
+    # then held ~66 GB on each of the four cards for 30 minutes, with the
+    # next two queued 4-card legs blocked behind it.  Emptying the pools
+    # (release_device_memory) cannot help there: it frees only this thread's
+    # pool on one device, while the other ranks' pools and every card's CUDA
+    # context live until the process exits.  So the process exits.
+    if getattr(arguments, "products_detached", True):
+        return start_detached_products(request, history, command)
+    released = release_device_memory()
+    if released is not None:
+        if "error" in released:
+            print(f"DEVICE memory not released before products: {released['error']}",
+                  flush=True)
+        else:
+            print(
+                f"DEVICE released {released['released_bytes'] / 2**20:.0f} MiB before "
+                f"products; {released['still_in_use_bytes'] / 2**20:.0f} MiB of "
+                f"{released['device_total_bytes'] / 2**20:.0f} MiB still in use on the "
+                f"card (all tenants)", flush=True)
+    print("PRODUCTS $ " + " ".join(command), flush=True)
+    parser = argparse.ArgumentParser(prog="gpuwm-hex products")
+    add_products_arguments(parser)
+    product_arguments = parser.parse_args(command[2:])
+    try:
+        code = int(run_products(product_arguments))
+    except (MpasPortError, OSError, ValueError) as error:
+        print(f"PRODUCTS refused: {error}", flush=True)
+        print("NEXT " + " ".join(command), flush=True)
+        return 2
+    if code != 0:
+        print("PRODUCTS incomplete; rerun: " + " ".join(command), flush=True)
+    return code
+
+
 def history_files(out: Path) -> list[Path]:
     """The history frames the driver wrote, in valid-time order."""
 
     return sorted(Path(out).glob("cuda-history.*.nc"))
+
+
+def native_default_products(arguments: argparse.Namespace) -> None:
+    """Finish the MPAS suite door with the same default products stage."""
+    if getattr(arguments, "preflight", False) or getattr(arguments, "no_products", False):
+        return
+    from types import SimpleNamespace
+    out = Path(arguments.out).resolve()
+    from .products_door import native_output_frames
+    history = (sorted(out.glob("history.*.nc")) or sorted(out.glob("output.*.nc"))
+               or native_output_frames(out))
+    if not history:
+        return
+    plan = json.loads((out / "native-physics-request.json").read_text())
+    request = SimpleNamespace(out=out, grid=Path(plan["grid"] or plan["init"]),
+                              init=Path(plan["init"]), start_time=plan["start"])
+    run_default_products(request, history, arguments)
+
+
+def _correct_mode_record(request: "ForecastRequest") -> dict[str, Any]:
+    from . import correct_mode
+
+    return correct_mode.run_record(request.physics_mode, request.physics_correct_skip)
 
 
 def build_receipt(
@@ -1628,12 +2931,28 @@ def build_receipt(
             "name": request.mesh,
             "cells": request.cells,
             "dt_seconds": request.dt_seconds,
+            "dt_selection": (
+                None if request.dt_selection is None else dict(request.dt_selection)
+            ),
             "grid": str(request.grid),
             "static": str(request.static),
         },
         "init": {"path": str(request.init), "source": request.init_source},
+        "vertical_grid": {
+            "invariant": None if request.invariant is None else str(request.invariant),
+            "selection": request.invariant_selection,
+        },
         "physics": {
             "backend": request.physics_backend,
+            "suite": request.physics_suite,
+            "resolution": (
+                None if request.physics_resolution is None
+                else dict(request.physics_resolution)
+            ),
+            "orographic_statistics": (
+                None if request.orographic_statistics is None
+                else str(request.orographic_statistics)
+            ),
             "source_table": (
                 None if request.source_table is None
                 else str(request.source_table)
@@ -1655,13 +2974,34 @@ def build_receipt(
             "hours": request.hours,
             "steps": request.steps,
             "history_every_minutes": request.history_every_minutes,
+            "history_from_minutes": request.history_from_minutes,
             "expected_frames": request.capture_count,
             "start_time": request.start_time,
         },
         "configuration": {
             "horiz_mixing": request.horiz_mixing,
+            "time_integration_order": request.time_integration_order,
+            "acoustic_substeps": request.acoustic_substeps,
+            "dynamics_split_steps": mpas_defaults.DEFAULT_DYNAMICS_SPLITS,
+            "radiation_seconds": request.radiation_seconds,
+            "monotonic": request.monotonic,
+            "schedule_sources": (
+                None if request.schedule_sources is None
+                else dict(request.schedule_sources)
+            ),
+            "mpas_registry_defaults": {
+                knob: dict(row) for knob, row in mpas_defaults.REGISTRY_DEFAULTS.items()
+            },
+            "cam_coefficient":request.cam_coefficient,"cam_damping_levels":request.cam_damping_levels,
+            "rayleigh_u":request.rayleigh_u,"damping_start_m":request.damping_start_m,
+            "max_wind_m_s": request.max_wind_m_s,
+            "dynamics_overrides": dict(request.dynamics_overrides),
+            "dynamics_override_sources": (
+                None if request.dynamics_override_sources is None
+                else dict(request.dynamics_override_sources)
+            ),
             "convection": request.convection,
-            "preset": forecast_preset.resolve_preset(request.preset).receipt(),
+            "preset": _preset_receipt(request),
             "pbl_cadence": request.pbl_cadence,
             "pbl_cadence_source": request.pbl_cadence_source,
             "local_timestep": request.local_timestep,
@@ -1673,8 +3013,29 @@ def build_receipt(
                 else str(request.local_timestep_classing)
             ),
             "stop_on_refusal": request.stop_on_refusal,
+            "fingerprint_every": request.fingerprint_every,
+            "iau": (None if request.iau_window_seconds is None else
+                    {"analysis": None if request.iau_analysis is None else str(request.iau_analysis),
+                     "increment": None if request.iau_increment is None else str(request.iau_increment),
+                     "route": request.iau_route,
+                     "window_seconds": request.iau_window_seconds}),
+            "balance_series": request.balance_series,
+            # physics.mode, recorded only when a run asked for correct mode,
+            # so an exact receipt is the one written before the key existed.
+            **(
+                {"physics_mode": {"physics.mode": request.physics_mode,
+                                  "physics.correct_skip": list(request.physics_correct_skip),
+                                  # what the run's engine resolutions applied and every named
+                                  # gap (hexcore.correct_mode): never a refusal, always here
+                                  "correct_mode": _correct_mode_record(request)}}
+                if request.physics_mode != "exact" else {}
+            ),
         },
+        **({"analysis_bundle": dict(request.analysis_bundle)}
+           if request.analysis_bundle is not None else {}),
         "admission": admission.as_dict() if admission is not None else None,
+        # kernel numerics this run compiled with: fast (the default) or strict (bitwise to native MPAS)
+        "numerics": _hex_numerics_receipt(),
         "architecture": None if architecture is None else dict(architecture),
         # ``None`` when the card could not be read at all, which is the one
         # case where the door has no row to report rather than the wrong one.
@@ -1693,6 +3054,11 @@ def build_receipt(
         "history": [str(path) for path in history],
         "render_command": render_command(request, history),
         "door_seconds": round(float(seconds), 3),
+        **({"fullstep_lts": {"mode": request.fullstep_lts_mode,
+                            "max_rate": request.fullstep_lts_max_rate,
+                            "buffer_rings": request.fullstep_lts_buffer_rings,
+                            "admission_complete": False}}
+           if request.fullstep_local_timestep else {}),
     }
 
 
@@ -1734,6 +3100,16 @@ _BIND_REMEDY = (
 
 
 def _bind(binding, driver, request: ForecastRequest) -> dict[str, Any]:
+    # The whole schedule and the run's timestep, always: the bind measures
+    # stability and cadence integrality against what the run executes.
+    options = dict(
+        time_integration_order=request.time_integration_order,
+        acoustic_substeps=request.acoustic_substeps,
+        radiation_seconds=request.radiation_seconds,
+        dt_seconds=request.dt_seconds,
+        max_wind_m_s=request.max_wind_m_s,
+        apvm_upwinding=float(dict(request.dynamics_overrides).get("config_apvm_upwinding", 0.5)),
+    )
     try:
         return binding.bind_mesh(
             driver.proof,
@@ -1743,9 +3119,18 @@ def _bind(binding, driver, request: ForecastRequest) -> dict[str, Any]:
             forecast=driver,
             convection=request.convection,
             pbl_cadence=request.pbl_cadence,
+            **options,
         )
     except binding.MeshBindingError as error:
-        raise _refuse(f"the mesh bind refused: {error}{_BIND_REMEDY}") from None
+        # The file-identity remedy belongs to a file-identity refusal only; a
+        # stability or cadence refusal names its own remedy (a smaller --dt,
+        # more sub-steps, a cadence the step divides).
+        text = str(error)
+        physical = ("unstable mesh/timestep" in text
+                    or "not a positive integer multiple" in text
+                    or "clock closure" in text)
+        raise _refuse(f"the mesh bind refused: {text}"
+                      f"{'' if physical else _BIND_REMEDY}") from None
 
 
 def _print_admission(request: ForecastRequest, admission: AdmissionVerdict) -> None:
@@ -1777,6 +3162,9 @@ def _print_admission(request: ForecastRequest, admission: AdmissionVerdict) -> N
         ),
         flush=True,
     )
+    print(f"VERTICAL GRID {request.invariant_selection}"
+          + ("" if request.invariant is None else f": {request.invariant}"),
+          flush=True)
 
 
 def _run_preflight(request: ForecastRequest, registry: Mapping[str, MeshRow],
@@ -1822,6 +3210,7 @@ def _run_preflight(request: ForecastRequest, registry: Mapping[str, MeshRow],
             mesh=request.mesh, cells=request.cells,
             headroom_bytes=request.headroom_bytes, registry=registry,
             model=request.model,
+            stochastic=request.stochastic,
         )
         _print_admission(request, admission)
         if not admission.admitted:
@@ -1901,28 +3290,389 @@ def _run_preflight(request: ForecastRequest, registry: Mapping[str, MeshRow],
     return 1 if problems else 0
 
 
+#: The mode an MPAS suite route takes at this door when the run names none (``--physics-mode`` or the
+#: namelist's config_physics_mode).  The library default in ``mpasphys.driver_v842.resolve_namelist`` stays
+#: exact, so replay and reproduction callers are unchanged.
+PHYSICS_MODE_DEFAULT = "correct"
+
+
+def announce_physics_mode(config: Any, arguments: argparse.Namespace) -> None:
+    """In correct mode, print the mode and a loud multi-line warning naming every gap at startup
+    (it begins ``CORRECT MODE: named gaps``).
+
+    Exact mode prints nothing, so an exact run's console is the one written before the switch existed."""
+    if config.mode == "exact":
+        return
+    source = ("--physics-mode" if getattr(arguments, "physics_mode", None) is not None
+              else "namelist config_physics_mode or the door default for an MPAS suite route")
+    print(f"PHYSICS MODE {config.mode} ({source}); corrections applied: "
+          f"{', '.join(sorted(config.corrections)) or 'none'}; --physics-mode exact runs native "
+          "MPAS v8.4.2 bit for bit", file=sys.stderr, flush=True)
+    warning = config.gap_warning()
+    if warning:
+        print(warning, file=sys.stderr, flush=True)
+
+
+def _hex_numerics_receipt() -> dict[str, Any]:
+    from . import numerics
+    return numerics.receipt_block()
+
+
+def announce_cpu_slots(config: Any) -> None:
+    """Print, at start-up, every active MPAS-suite slot that runs on the CPU in this run (lines beginning
+    ``PHYSICS ON CPU:``; hexcore.mpasphys.driver_v842.CpuSlot).  A run with every active slot on the GPU
+    prints nothing."""
+    warning = getattr(config, "cpu_warning", lambda: None)()
+    if warning:
+        print(warning, file=sys.stderr, flush=True)
+
+
+def mpas_suite_lts_refusal(arguments: argparse.Namespace, environ=None) -> str | None:
+    """The refusal for a local-time-stepping switch on the MPAS suite route, or None.
+
+    THE BREAKAGE THIS PREVENTS: the MPAS suite route returns to its own driver before any LTS flag is
+    read, so ``--physics-suite X --fullstep-local-timestep`` (or ``--local-timestep``) ran the fixed step
+    and accepted the flag silently.  A moving segment is exempt: the moving controller passes its own fixed
+    LTS flags to every segment, and the moving-route admission judges a moving region instead.
+    """
+
+    from .fullstep_lts_admission import moving_launch_switches
+
+    if moving_launch_switches(environ):
+        return None
+    named = [flag for flag, attribute in (("--fullstep-local-timestep", "fullstep_local_timestep"),
+                                          ("--local-timestep", "local_timestep"))
+             if getattr(arguments, attribute, False)]
+    if not named:
+        return None
+    return (f"{' and '.join(named)} cannot run on the MPAS suite route: that route is the matched MPAS-A "
+            "v8.4.2 configuration and runs the fixed step only, and local time stepping is a different "
+            "time scheme, never identical to native MPAS.  Drop the flag to run the suite, or drop the "
+            "MPAS suite (--physics-suite or its namelist) to run LTS on the ArWen route")
+
+
 def run_forecast(arguments: argparse.Namespace) -> int:
+    if getattr(arguments, "members", None) is not None:
+        from .multi_member import run_members
+        return run_members(arguments, sys.modules[__name__])
+    time_ledger.configure(getattr(arguments, "out", None))
+    time_ledger.emit("prep.door", "begin")
+    time_ledger.emit("forecast.construct", "begin")
+    rc = None
+    try:
+        rc = _run_forecast(arguments)
+        return rc
+    finally:
+        if getattr(arguments, "_native_timeline", False):
+            for name in ("forecast.first_step", "forecast.integrate", "forecast.construct", "prep.door"):
+                time_ledger.end_if_open(name)
+        time_ledger.end_if_open("post.forecast")
+        time_ledger.emit("finish", attrs={"scope": "forecast_door", "returncode": rc})
+
+
+def _mesh_file_spacing_m(arguments: argparse.Namespace) -> float | None:
+    """The mesh spacing an MPAS grid or init file records: nominalMinDc, else min(dcEdge); None when neither."""
+    import numpy as np
+    from gpuwm.netcdf_bridge import open_dataset
+
+    for option in ("init", "grid", "static"):
+        value = getattr(arguments, option, None)
+        if value is None or not Path(value).is_file():
+            continue
+        dataset = open_dataset(Path(value))
+        for name in ("nominalMinDc", "dcEdge"):
+            if name in dataset.variables:
+                spacing = float(np.min(np.asarray(dataset.variables[name][:], dtype=np.float64)))
+                if spacing > 0.0:
+                    return spacing
+    return None
+
+
+def driver_floor_refusal(error: BaseException, admission: Any, driver_argv: Sequence[str]) -> str:
+    """The sentence for a run the door admitted and the driver's device-memory floor then refused.
+
+    The door's admission and the driver's floor are ONE number: both are
+    :func:`device_admission.required_free_bytes` over the same cells, model and margin (the door passes it
+    to the driver as ``--required-free-bytes``).  THE BREAKAGE THIS PREVENTS: this refusal used to say the
+    two "disagree" whenever the floor refused, so a card whose free memory fell between the two checks
+    (another process allocating) read as a model defect.  Seen 2026-10-16 on a shared 6000 card: the door
+    admitted a 44,143-cell cull needing 12,109.1 + 1,756.8 = 13,865.9 MiB with 15,452.4 MiB free; the
+    driver then saw 12,048.4 MiB free and refused on 14,539,480,038 B, which is 13,865.9 MiB, the same sum
+    printed in bytes.  The sentence now prints both in MiB, says whether they are equal, and names the
+    real cause when they are.
+    """
+    floor = None
+    if "--required-free-bytes" in driver_argv:
+        try:
+            floor = int(driver_argv[list(driver_argv).index("--required-free-bytes") + 1])
+        except (IndexError, ValueError):
+            floor = None
+    required = getattr(admission, "required_bytes", None)
+    seen_free = getattr(admission, "free_bytes", None)
+    if floor is not None and required is not None and int(floor) == int(required):
+        return (f"the card's free device memory fell between the door's admission and the driver's floor: "
+                f"both require the same {_mib(floor)} ({floor:,} B, one sum, "
+                f"device_admission.required_free_bytes); the door saw {_mib(seen_free or 0)} free and admitted, "
+                f"then the driver saw less: {error}  Another process took device memory in between.  Free the "
+                f"card (or wait for it) until {_mib(floor)} is free, and re-run.")
+    return (f"the driver's own device-memory floor refused this run: {error}  The door admitted on "
+            f"{_mib(required or 0)} and the driver's floor asked {_mib(floor or 0)}: the two gates disagree, "
+            "which is a defect (they must be one sum, device_admission.required_free_bytes); report both "
+            "numbers.")
+
+
+def prewarm_native_kernels() -> None:
+    """The MPAS suite route's kernel set compiles on every core before step 1 (hexcore.kernel_plan).
+
+    THE BREAKAGE THIS PREVENTS: the suite route never joined the door's kernel plan, so on a cold kernel
+    cache its first physics step compiled every slot's NVRTC image one after another on one core while the
+    card waited (x1.2562 convection_permitting, 5090, 2026-10-17: step 1 65 s at ~1 core, steady steps
+    under 1 s).  The same recorder and replay the ArWen route uses (kernel_prewarm.install_recorder /
+    start_replay) now run here, before the pools are decoded, so the previous run's plan compiles on a pool
+    as wide as the usable cores while the host prepares; a run with no plan yet records one.
+    """
+    from . import kernel_prewarm
+
+    try:
+        kernel_prewarm.install_recorder()
+        kernel_prewarm.start_replay_async()
+    except Exception as error:  # the run compiles as it always did
+        print(f"gpuwm-hex: kernel plan not started ({error}); kernels compile as first reached",
+              file=sys.stderr, flush=True)
+
+
+def write_kernel_plan_receipt(out: Any) -> None:
+    """``kernel-plan-receipt.json`` beside the suite route's receipt: what the plan compiled and what was inline."""
+    if out is None:
+        return
+    try:
+        from . import kernel_prewarm
+
+        target = Path(out).expanduser().resolve() / "kernel-plan-receipt.json"
+        if target.parent.is_dir():
+            target.write_text(json.dumps(kernel_prewarm.receipt(), indent=2, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def bind_native_step(arguments: argparse.Namespace, native_text: str) -> str:
+    """The MPAS suite route's ``config_dt``: the namelist's, else the door's own step for the mesh.
+
+    THE BREAKAGE THIS PREVENTS: the suite route took its step only from the namelist, so a run naming a
+    suite without a namelist ``config_dt`` (``gpuwm-hex forecast --physics-suite convection_permitting``,
+    ``gpuwm-hex global`` with an MPAS suite) ran at MPAS's Registry default, 720 s, on every mesh: on the
+    30 km globe (x1.655362, mesh step 180 s) that is four times the stable step (seen 2026-10-16, 6000
+    box: DT_CU = DT_PBL = 720, n_microp = 8).  The step now comes from the rule the ArWen route uses
+    (:func:`mpas_defaults.resolve_dt`: ``--dt`` SECONDS, ``row``, or the mesh's own default for its
+    spacing, dividing the radiation interval).  A namelist ``config_dt`` still decides, and an explicit
+    ``--dt`` naming a different step is refused as two steps for one run.
+    """
+    from .mpasphys.forecast_v842 import namelist_option, set_namelist_options
+    from .mpasphys.driver_v842 import interval_seconds
+
+    requested = getattr(arguments, "dt", None)
+    named = namelist_option(native_text, "nhyd_model", "config_dt")
+    if named is not None:
+        text = None if requested is None else str(requested).strip().lower()
+        if text not in (None, "", "auto", "row") and float(text) != float(named):
+            raise ValueError(f"--dt {requested} and the namelist config_dt {named} name two steps for one run")
+        return native_text
+    registry = load_registry(resolve_repo(getattr(arguments, "repo", None)))
+    row = registry.get(getattr(arguments, "mesh", None))
+    nominal_dx_m = None if getattr(row, "nominal_dx_m", None) is None else float(row.nominal_dx_m)
+    row_dt_seconds = None if getattr(row, "dt_seconds", None) is None else float(row.dt_seconds)
+    if row is None:
+        # An unregistered mesh (a plain MPAS grid named by --mesh) takes the spacing its own files record:
+        # MPAS's nominalMinDc, else the smallest dcEdge.  THE BREAKAGE THIS PREVENTS: a bare suite run on
+        # x1.2562 refused "not a registered mesh" although its init names its spacing (2026-10-17).
+        nominal_dx_m = _mesh_file_spacing_m(arguments)
+        if nominal_dx_m is None:
+            raise ValueError(f"--mesh {getattr(arguments, 'mesh', None)!r} is not a registered mesh and its files "
+                             "carry no nominalMinDc or dcEdge, so the MPAS suite route has no step for it; name "
+                             "--dt SECONDS or a namelist config_dt")
+    radiation = namelist_option(native_text, "physics", "config_radtlw_interval")
+    radiation_seconds = (float(interval_seconds(radiation)) if radiation not in (None, "", "none")
+                         else float(mpas_defaults.DEFAULT_RADIATION_SECONDS))
+    selection = mpas_defaults.resolve_dt(
+        requested, nominal_dx_m=nominal_dx_m, row_dt_seconds=row_dt_seconds,
+        radiation_seconds=radiation_seconds)
+    dt = float(selection["dt_seconds"])
+    print(f"gpuwm-hex: MPAS suite timestep {dt:g} s ({selection.get('source')}: {selection.get('rule', '')})",
+          file=sys.stderr, flush=True)
+    return set_namelist_options(native_text, {"nhyd_model": {"config_dt": dt}})
+
+
+def _run_forecast(arguments: argparse.Namespace) -> int:
     """The ``gpuwm-hex forecast`` handler.  Returns the process exit code."""
 
+    from .mpasphys.forecast_v842 import native_route, run_forecast as run_native_physics
+    # --analysis (lane W1): check the bundle against the run and rewrite it into the door's own
+    # inputs (--init, or the background with an IAU window, or a DA-cycling restart), so the
+    # forecast below is the code a plain --init run executes.
+    from .analysis_door import AnalysisDoorRefusal, resolve_analysis
+
+    try:
+        # The registry is read after the door binds a bundle's carried mesh, whose row it adds.
+        arguments.analysis_receipt = resolve_analysis(
+            arguments, registry_loader=lambda: load_registry(resolve_repo(getattr(arguments, "repo", None))))
+    except AnalysisDoorRefusal as error:
+        raise _refuse(str(error)) from None
+    try:
+        # An MPAS suite route that names no mode runs correct (owner ruling 2026-10-13: correct mode is the
+        # standard; coordinator 2026-10-14: default correct, gaps listed loudly, never refused).
+        # --physics-mode exact runs native MPAS v8.4.2 bit for bit; every proof names it.
+        native_config, native_text = native_route(arguments, default_mode=PHYSICS_MODE_DEFAULT)
+        if native_config is not None:
+            if getattr(native_config, 'pin_set', None) == 'rrfs':
+                from .mpasphys.forecast_v842 import require_rrfs_library
+                require_rrfs_library(arguments)
+            from .mpasphys.resident_v842 import ported_route_refusal
+            suite_refusal = ported_route_refusal(native_config)
+            if suite_refusal is not None:
+                raise ValueError(suite_refusal)
+            # A moving region on this route runs through its own move hooks (hexcore.mpasphys.moving_v842).
+            lts_refusal = mpas_suite_lts_refusal(arguments)
+            if lts_refusal is not None:
+                raise ValueError(lts_refusal)
+            if getattr(arguments, "balance_series", False):
+                # THE BREAKAGE THIS PREVENTS: the balance series is sampled by the ArWen route's executors; the
+                # MPAS suite route has no sampler, so the flag would be accepted and nothing written.
+                raise ValueError("--balance-series is sampled by the ArWen route's executors; the explicit MPAS "
+                                 "suite route has no balance-series sampler")
+            # Retired (named gap W1-G2): the suite route applies IAU now (mpasphys.runtime_v842.SuiteIau, MPAS's
+            # atm_add_tend_anal_incr once per step).  The door's IAU flags become MPAS's own &iau group and iau
+            # stream input, so a flag run and a namelist run execute the same code.
+            if getattr(arguments, "iau_window_seconds", None) is not None:
+                from .mpasphys.forecast_v842 import bind_door_iau
+                native_text = bind_door_iau(arguments, native_text)
+            # Upstream code under restricted terms (Noah-MP v5.0: UCAR forbids sale) runs only by an opt-in that names
+            # its terms (hexcore.licence_gate). UGWP is separately held from public exports;
+            # the other RRFS NOAA GSL components retain their permissive table rows.
+            from . import licence_gate
+            native_config = licence_gate.admit(native_config, arguments)
+            announce_physics_mode(native_config, arguments)
+            announce_cpu_slots(native_config)
+            native_text = bind_native_step(arguments, native_text)
+            arguments._native_timeline = True
+            prewarm_native_kernels()
+            time_ledger.emit("prep.door", "end")
+            try:
+                rc = run_native_physics(arguments, native_config, native_text)
+                if rc == 0:
+                    native_default_products(arguments)
+                return rc
+            finally:
+                write_kernel_plan_receipt(getattr(arguments, "out", None))
+    except (ValueError, OSError, RuntimeError) as error:
+        raise _refuse(str(error)) from error
     started = time.monotonic()
     request = resolve_request(arguments)
+    from .fullstep_lts_admission import forecast_moving_route, moving_route_refusal
+
+    moving_route = forecast_moving_route(
+        fullstep_local_timestep=bool(request.fullstep_local_timestep), fullstep_lts_mode=request.fullstep_lts_mode,
+        fullstep_lts_max_rate=request.fullstep_lts_max_rate,
+        multi_card=getattr(arguments, "samehost_devices", None) is not None)
+    moving_refusal = None if moving_route is None else moving_route_refusal(moving_route)
+    if moving_refusal is not None:
+        raise _refuse(moving_refusal)
+    from .speculative_contract import validate_output
+    validate_output(request.out)
     registry = load_registry(request.repo)
+    samehost_options = None
+    samehost = None
+    if getattr(arguments, "samehost_devices", None) is not None:
+        samehost = importlib.import_module("hexcore.drivers.samehost_forecast_v841")
+        try:
+            samehost_options = samehost.request_options(arguments, request)
+        except (ValueError, OSError, RuntimeError) as error:
+            raise _refuse(str(error)) from error
+    else:
+        samehost = importlib.import_module("hexcore.drivers.samehost_forecast_v841")
+        try:
+            samehost_options = samehost.automatic_options(arguments, request)
+        except (ValueError, OSError, RuntimeError) as error:
+            raise _refuse(str(error)) from error
+    if samehost_options is not None and len(set(samehost_options["devices"])) > 1:
+        # Ranks on distinct cards share this process: the engine's land kernels are held per card before
+        # any is compiled (hexcore.engine_per_card names the breakage).
+        from .engine_per_card import bind_engine_modules_per_card
+        try:
+            bind_engine_modules_per_card(importlib.import_module("cupy"))
+        except RuntimeError as error:
+            raise _refuse(str(error)) from error
+    if (request.fullstep_local_timestep and samehost_options is not None and request.fullstep_lts_max_rate != 1
+            and request.fullstep_lts_mode != "active"):
+        raise _refuse("the full-step shadow runs on one device: the partitioned shadow has no owner-only donor reduction (halo duplicates would corrupt the rate census)")
     if request.preflight:
+        if samehost_options is not None:
+            admission = samehost.admit_request(request, registry, samehost_options, sys.modules[__name__])
+            require_admitted(admission)
+            binding, driver = _load_drivers(request.repo)
+            _bind(binding, driver, request)
+            rc = int(driver.main(build_driver_argv(request)))
+            print(json.dumps({"status": "samehost_preflight_passed" if rc == 0 else "samehost_preflight_failed",
+                              "admission": samehost_options["admission_records"],
+                              "layouts_verified": True, "device_stacks_constructed": False,
+                              "identity_checked": False}, default=str), flush=True)
+            return rc
         return _run_preflight(request, registry, started)
+
+    # The point chain selects its suite after the legacy init step. Resolve
+    # soil from the recorded MET and complete aerosols on the ordinary road.
+    from .init_physics import prepare_forecast_init
+    from dataclasses import replace
+    import subprocess
+    try:
+        prepared, init_receipt = prepare_forecast_init(
+            request.init, request.out.with_name(request.out.name + ".physics-init.nc"),
+            request.physics_resolution, request.start_time)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        raise _refuse(str(error)) from error
+    if init_receipt is not None:
+        request = replace(request, init=prepared)
+        print(json.dumps({"physics_initialization": init_receipt}), flush=True)
 
     # Admission first on a real run: it is the cheapest of the remaining
     # checks and the most consequential, and refusing here spends neither
     # the mesh hashing nor a CUDA context on a run that cannot start.
-    request = _with_resolved_model(request)
-    admission = admit_device(
-        mesh=request.mesh,
-        cells=request.cells,
-        headroom_bytes=request.headroom_bytes,
-        registry=registry,
-        model=request.model,
-    )
+    if samehost_options is None:
+        request = _with_resolved_model(request)
+        admission = admit_device(
+            mesh=request.mesh, cells=request.cells, headroom_bytes=request.headroom_bytes,
+            registry=registry, model=request.model,
+            stochastic=request.stochastic,
+        )
+    else:
+        admission = samehost.admit_request(request, registry, samehost_options, sys.modules[__name__])
+        request = _pinned_for_driver(request)
     _print_admission(request, admission)
-    if not admission.admitted:
+    if (not admission.admitted and samehost_options is None
+            and os.environ.get("GPUWM_HEX_MOVING_CHECKPOINT_WAIT")):
+        # A pre-launched move segment starts while the member it replaces still
+        # holds the card, so the free memory measured now undercounts what this
+        # run will have.  The decision is deferred, not dropped: it is taken
+        # again, against the card as it then is, once the carrier is sealed and
+        # before any device state is built (hexcore.moving_control.wait_for_carrier),
+        # and it refuses by the same sentence if the card does not free in time.
+        from . import moving_control
+
+        def _readmit(request=request):
+            verdict = admit_device(
+                mesh=request.mesh, cells=request.cells, headroom_bytes=request.headroom_bytes,
+                registry=registry, model=request.model,
+                stochastic=request.stochastic,
+            )
+            return verdict
+
+        def _require(verdict, request=request):
+            _print_admission(request, verdict)
+            require_admitted(verdict)
+
+        moving_control.defer_admission(_readmit, _require)
+        print("ADMISSION DEFERRED pre-launched move segment: decided again once the "
+              "carrier is sealed and the previous member has released the card", flush=True)
+    elif not admission.admitted:
         receipt = build_receipt(
             request=request, admission=admission, bind_receipt=None,
             driver_receipt=None, history=[], driver_argv=[],
@@ -1935,16 +3685,48 @@ def run_forecast(arguments: argparse.Namespace) -> int:
 
     # The architecture half of admission, answered before a CUDA context or
     # a kernel compile is spent on a card the run would refuse by name.
-    architecture = admit_architecture()
-    print(
-        f"ARCHITECTURE sm={architecture['sm']} -> admitted, "
-        f"{architecture['basis']}",
-        flush=True,
-    )
+    # Same-host admission records the architecture of each assigned card
+    # in the driver receipt rather than one process-wide device record.
+    architecture: dict[str, Any] | None = None
+    if samehost_options is None:
+        architecture = admit_architecture()
+        print(
+            f"ARCHITECTURE sm={architecture['sm']} -> admitted "
+            f"({architecture['basis']})", flush=True,
+        )
+        # Compile the previous run's CUDA modules on a thread pool while the
+        # driver reads and prepares host state (hexcore.kernel_prewarm); the
+        # forecast then finds them in CuPy's own disk cache.
+        from . import kernel_prewarm
+
+        kernel_prewarm.install_recorder()
+        kernel_prewarm.start_replay_async()
+    else:
+        # Same-host ranks find their images in the same CuPy disk cache the
+        # replay pool writes (CuPy 14 binds its cache directory once, when it
+        # is imported, so every rank and the pool share it), so the one-card
+        # replay serves them too: open the first card as admit_architecture
+        # does for one card, then compile the previous run's modules on the
+        # pool while the host prepares.  Breakage it prevents: a multi-card
+        # run never recorded or replayed, so on a box with an empty kernel
+        # cache every compile ran on the rank threads inside step 1 (361.5 s
+        # on the first 20 km run on a rented box, 2026-10-13).
+        from . import kernel_prewarm
+        from .cuda_backend.runtime import require_cuda
+
+        try:
+            first = int(samehost_options["devices"][0])
+            require_cuda(device_id=first, min_compute=(12, 0))
+        except Exception:
+            pass  # no replay; each rank refuses by name, or compiles, as before
+        else:
+            kernel_prewarm.install_recorder()
+            kernel_prewarm.start_replay_async(device_id=first)
 
     binding, driver = _load_drivers(request.repo)
     bind_receipt = _bind(binding, driver, request)
     driver_argv = build_driver_argv(request)
+    time_ledger.emit("prep.door", "end")
     # The driver's validate_destination requires BOTH roots absent and creates
     # them itself; a door that pre-creates them kills every admitted run with
     # FileExistsError immediately after admission (measured on the RTX 3080,
@@ -1952,15 +3734,13 @@ def run_forecast(arguments: argparse.Namespace) -> int:
     # door's own earlier refusals still catch a pre-existing --out/--scratch
     # by name; creation belongs to the driver alone.
     try:
-        rc = int(driver.main(driver_argv))
+        if samehost_options is None:
+            rc = int(driver.main(driver_argv))
+        else:
+            with samehost.installed(driver, **samehost_options):
+                rc = int(driver.main(driver_argv))
     except MemoryError as error:
-        raise _refuse(
-            f"the driver's own device-memory floor refused this run: {error}  "
-            "The door's admission passed and the driver's floor did not, "
-            "which means the two disagree: report the pair of numbers, "
-            "because the floor is a proof constant and the fitted model is a "
-            "measurement, and only one of them can be wrong."
-        ) from None
+        raise _refuse(driver_floor_refusal(error, admission, driver_argv)) from None
     except ForecastDoorRefusal:
         raise
     except Exception as error:
@@ -2013,6 +3793,14 @@ def run_forecast(arguments: argparse.Namespace) -> int:
         status=status,
         architecture=architecture,
     )
+    observation_path = request.out / "observation-scorecard" / "scorecard.json"
+    if observation_path.is_file():
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+        receipt["observation_scorecard"] = {
+            "status": observation["status"],
+            "path": str(observation_path),
+            "measured_metrics": observation.get("measured_metrics", 0),
+        }
     written = _write_receipt(request, receipt)
     if written is not None:
         print(f"RECEIPT {written}", flush=True)
@@ -2025,7 +3813,14 @@ def run_forecast(arguments: argparse.Namespace) -> int:
         flush=True,
     )
     command = render_command(request, history)
-    if command is not None:
+    if command is not None and rc == 0 and not getattr(arguments, "no_products", False):
+        # The standard product set is the forecast's last stage by default
+        # (fixed means default; ship only what users can reach): a bare run
+        # ends with maps, soundings and meteograms on disk, not a command to
+        # copy.  A product failure is reported by name and leaves the
+        # forecast's own exit code alone -- the frames are good either way.
+        run_default_products(request, history, arguments)
+    elif command is not None:
         print("NEXT " + " ".join(command), flush=True)
     elif rc == 0:
         print(
@@ -2041,6 +3836,16 @@ def run_forecast(arguments: argparse.Namespace) -> int:
 # the argument surface
 # ---------------------------------------------------------------------------
 def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--fullstep-local-timestep", action=argparse.BooleanOptionalAction, default=False,
+                        help="Full-step local time stepping. Mode shadow (the default mode) only measures: "
+                             "fixed numerics remain in use. Mode active steps every rate class of a "
+                             "variable mesh at its own whole step, physics included. Uses one card "
+                             "unless --samehost-devices explicitly requests multi-card active LTS")
+    parser.add_argument("--fullstep-lts-mode", choices=("shadow", "active"), default=None)
+    parser.add_argument("--fullstep-lts-max-rate", type=int, choices=(1,2,4,8,16,32), default=None)
+    parser.add_argument("--fullstep-lts-buffer-rings", type=int, default=None)
+    parser.add_argument("--boundary-fingerprint-every", type=int, default=0, metavar="STEPS",
+                        help="record the existing committed-state fingerprints every N steps (0 disables)")
     """Wire the ``forecast`` subcommand's arguments onto ``parser``.
 
     Nothing is ``required=True``.  argparse's own missing-argument error is a
@@ -2049,6 +3854,21 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
     one of them can be exercised without a card.
     """
 
+    parser.add_argument("--samehost-devices", default=None, metavar="D0,D1,...",
+                        help="explicitly select resident cards, including opt-in multi-card active LTS; "
+                             "repeated ordinals check same-card rank identity")
+    parser.add_argument("--samehost-layouts", type=Path, default=None,
+                        help="N-rank K=3 partition layouts with native regional padding")
+    parser.add_argument("--samehost-part", type=Path, default=None,
+                        help="partition file whose hash the layouts carry")
+    parser.add_argument("--samehost-transport", choices=("auto", "peer", "staged"), default="auto",
+                        help="same-host halo copy route")
+    parser.add_argument("--samehost-reference", type=Path, default=None,
+                        help="single-card boundary fingerprints for the identity gate")
+    parser.add_argument("--samehost-fingerprint-every", type=int, default=None,
+                        help="identity boundary interval in steps; zero records only initial and final boundaries. "
+                             "Default: every step with --samehost-reference (the identity gate needs every "
+                             "boundary), otherwise zero")
     parser.add_argument(
         "--mesh", default=None, metavar="NAME",
         help="registered mesh row (src/hexcore/drivers/mpas_mesh_binding.py)")
@@ -2066,6 +3886,17 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
         help="provenance sentence for the init, recorded in the receipt "
              '(e.g. "GFS 2026-08-24 00Z")')
     parser.add_argument(
+        "--invariant", type=Path, default=None, metavar="FILE",
+        help="the native invariant stream the vertical grid is read from, as "
+             "MPAS-A does when a run configures one (default: the file the "
+             "mesh row declares, when it sits beside --grid or --static; "
+             "RRFS v2's conus12km and conus3km declare one)")
+    parser.add_argument(
+        "--no-invariant", action="store_true",
+        help="read the vertical grid from the init file even when the mesh "
+             "row's invariant stream is present (reproduces runs made before "
+             "the invariant default)")
+    parser.add_argument(
         "--lbc-dir", type=Path, default=None, metavar="DIR",
         help="lateral-boundary files (lbc.*.nc from `rw_mpas_lbc`) for a "
              "LIMITED-AREA grid. THE BREAKAGE IT PREVENTS: a grid cut with "
@@ -2076,12 +3907,96 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "triple, refused when it does not")
     parser.add_argument(
         "--physics-backend", default=DEFAULT_BACKEND, metavar="ROW",
-        help="the column-physics backend row this run selects "
+        help="mpasphys selects the MPAS suite route (its Registry default is "
+             "mesoscale_reference; --physics-suite or a namelist may select another). "
+             "Otherwise, the column-physics backend row this run selects "
              "(hexcore.physics_backend_admission). The default is the "
              "frozen lane. A provider's row runs its own pinned column "
              "batch and may declare extra prognostic scalars and a point "
              "source; an unregistered name is refused naming the rows "
              "this installation carries")
+    parser.add_argument(
+        "--physics-suite", default=None, metavar="NAME",
+        help="named physics suite (hexcore.physics_suites; `gpuwm-hex physics "
+             "list`). With no suite flag the run is arwen_mpas_column, the "
+             "proven suite. rrfs_v2_dev is shaped after RRFS v2 (hrrrv5) and "
+             "lists every difference from it; MPAS's own suite names "
+             "(mesoscale_reference, convection_permitting, hrrrv5) resolve as "
+             "MPAS resolves them, and an option hex cannot run is refused by name")
+    parser.add_argument(
+        "--physics", action="append", default=None, metavar="KEY=VALUE",
+        help="override one physics option, repeatable: an MPAS selector "
+             "(config_microp_scheme, config_convection_scheme, config_pbl_scheme, "
+             "config_sfclayer_scheme, config_lsm_scheme, config_gwdo_scheme, "
+             "config_radt_lw_scheme, config_radt_sw_scheme, config_radt_cld_scheme), "
+             "a WOOF generation selector (thompson_version, thompson_fork_snow_fall, "
+             "bl_mynn_version, bl_mynn_mixlength, mynn_sfclay_variant, "
+             "rrtmg_cloud_optics_form) or config_frac_seaice. Recorded as an "
+             "override in the receipt")
+    parser.add_argument(
+        "--physics-namelist", type=Path, default=None, metavar="FILE",
+        help="an MPAS namelist.atmosphere whose physics the run takes "
+             "(config_physics_suite, the scheme selectors, num_soil_layers, "
+             "config_frac_seaice, the radiation interval). Every option is "
+             "admitted, ignored as MPAS ignores it, or refused by name; a "
+             "refused option refuses the run unless --physics overrides it. "
+             "`gpuwm-hex physics import FILE` prints the verdict per option")
+    parser.add_argument(
+        "--physics-mode", choices=("correct", "exact"), default=None,
+        help="physics.mode on every route. 'correct' (the default when the run names no mode, owner "
+             "ruling 2026-10-13: correct mode is the standard) applies the fixes this tree and the engine "
+             "carry: on an MPAS suite route (--physics-suite or the namelist's config_physics_suite) the "
+             "fixes for native MPAS v8.4.2 defects (hexcore.mpasphys.driver_v842.CORRECTIONS_V842); on the "
+             "ArWen route the engine's corrections (hexcore.correct_mode: WB4 New Tiedtke dry-mass "
+             "coupling, WB5 WSM6 conservative surface integral).  A finding the run cannot apply is listed "
+             "as a named gap in the receipt (correct_mode.gaps) and printed at startup, never refused. "
+             "'exact' reproduces the matched arithmetic bit for bit; every identity proof names it. "
+             "Same key as the namelist's config_physics_mode in &nhyd_model")
+    parser.add_argument(
+        "--physics-default-backend", choices=("hex-cuda", "native-cpu"), default=None,
+        help="the backend every MPAS-suite physics slot takes unless its config_*_backend names one. "
+             "Without it each route takes its own: hex-cuda on the MPAS-A v8.4.2 suites, so every slot runs "
+             "its GPU port, and a slot this install cannot run on the GPU runs MPAS's own Fortran on the CPU "
+             "and is named at start-up (PHYSICS ON CPU) and in the receipt (physics.cpu_slots). native-cpu "
+             "runs MPAS's own Fortran in every slot: the native referee")
+    parser.add_argument(
+        "--physics-correct-skip", action="append", default=None, metavar="FINDING",
+        help="leave one correction out of a correct-mode run (an observation A/B arm), by finding id "
+             "(hexcore.correct_mode.known_findings: the MPAS driver's CORRECTIONS_V842 and the ArWen "
+             "route's engine findings); repeatable or comma-separated. Same key as the namelist's "
+             "config_physics_correct_skip")
+    parser.add_argument(
+        "--licence-opt-in", action="append", default=None, metavar="TERMS",
+        help="run an MPAS suite selection whose upstream code is under terms that do not permit an Apache-2.0 "
+             "distribution that may be sold, naming those terms (hexcore.licence_gate; "
+             "data/profiles/licence-gates.v1.json): 'ucar-noahmp' for Noah-MP v5.0 "
+             "(config_lsm_scheme='sf_noahmp' on an MPAS suite or the RRFS stage; UCAR's terms forbid selling it "
+             "or any work containing it). Repeatable or comma-separated; GPUWM_HEX_LICENCE_OPT_IN does the same. "
+             "Without it such a run is refused by name; no default selects one. Recorded in the receipt "
+             "(physics.licence_opt_in). UGWP selections require 'ugwp-held'; an opt-in cannot restore a port "
+             "withheld from the public distribution. Other RRFS NOAA GSL components need no opt-in. "
+             "The former name 'noaa-gsl-unlicensed' is not accepted")
+    parser.add_argument("--stream-list-directory", type=Path, default=None,
+                        help="directory of the native stream field-list files")
+    parser.add_argument("--streams", type=Path, default=None,
+                        help="MPAS streams.atmosphere for the explicit MPAS physics route")
+    parser.add_argument("--stream-input", action="append", default=None, metavar="NAME=FILE",
+                        help="bind an MPAS input stream to a file (repeatable)")
+    parser.add_argument("--native-physics-library", type=Path, default=None,
+                        help="strict test-only MPAS physics library and ABI receipt")
+    parser.add_argument("--native-physics-tables", type=Path, action="append", default=None,
+                        help="additional pinned native table directory (repeatable)")
+    parser.add_argument("--physics-resources", type=Path, default=None,
+                        help="certified immutable resources for selected MPAS CUDA slots")
+    parser.add_argument("--native-pool-reader", type=Path, default=None,
+                        help="Rust MPAS Registry pool transport executable")
+    parser.add_argument("--mpas-source", type=Path, default=None,
+                        help="pinned read-only MPAS v8.4.2 source (Registry authority)")
+    parser.add_argument(
+        "--orographic-statistics", type=Path, default=None, metavar="FILE",
+        help="the mesh's GSL drag statistics (<mesh>.ugwp_oro_data.nc), read "
+             "when the physics selects config_gwdo_scheme='bl_ugwp_gwdo' "
+             "(default: the file of that name beside --grid)")
     parser.add_argument(
         "--source-table", type=Path, default=None, metavar="FILE",
         help="a point-source table the selected row's seam releases from "
@@ -2097,11 +4012,65 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
         "--hours", type=float, default=None, metavar="H",
         help="forecast length; must be a whole number of the row's timesteps")
     parser.add_argument(
-        "--history-every-minutes", type=int, default=None, metavar="M",
+        "--dt", default=None, metavar="{auto,row,SECONDS}",
+        help="model timestep. 'auto' (the default) is MPAS-A's rule, 6 s per "
+             "km of the mesh's nominalMinDc rounded down to divide the "
+             "radiation interval (15 km -> 90 s, 30 km -> 180 s, 60 km -> "
+             "360 s); 'row' is the timestep the mesh row was registered "
+             "with; a number is used as given. The bind measures it against "
+             "the mesh's real dcEdge and refuses only an unstable step")
+    parser.add_argument(
+        "--time-integration-order", type=int, choices=(2, 3), default=None,
+        help="RK order (default 2, MPAS-A Registry.xml:69)")
+    parser.add_argument(
+        "--acoustic-substeps", type=int, default=None,
+        help="acoustic sub-steps per RK step (default 4, MPAS-A v8.4.2 "
+             "Registry.xml:104; 2 was the default through v8.4.1 and costs "
+             "less, at the price of small-scale noise in the jets)")
+    parser.add_argument(
+        "--radiation-seconds", type=float, default=None,
+        help="radiation cadence in seconds (default 1800, MPAS-A's "
+             "config_radtlw/sw_interval 00:30:00, or the "
+             "--physics-namelist's radiation interval)")
+    parser.add_argument(
+        "--monotonic", action=argparse.BooleanOptionalAction, default=None,
+        help="the native flux-corrected scalar limiter (default on, MPAS-A "
+             "Registry.xml:239); --no-monotonic turns it off")
+    parser.add_argument("--cam-coefficient",type=float,default=0.0)
+    parser.add_argument("--cam-damping-levels",type=int,default=4)
+    parser.add_argument("--rayleigh-u",action="store_true")
+    parser.add_argument("--damping-start-m",type=float,default=22000.0)
+    parser.add_argument(
+        "--max-wind", type=float, default=None, metavar="M_PER_S",
+        help="the largest horizontal wind the timestep stability estimate "
+             "assumes (default 125 m/s, or the mesh row's own bound).  The "
+             "estimate does not read the case's winds; state a lower bound "
+             "to run a longer step, a higher one for a stricter check")
+    parser.add_argument(
+        "--dynamics", action="append", default=None, metavar="KEY=VALUE",
+        help="set a dynamics option that has no flag of its own, by its "
+             "MPAS namelist name (repeatable): config_apvm_upwinding=0.25, "
+             "config_smdiv=0.2, config_coef_3rd_order=1.0, config_xnutr=0.2, "
+             "config_positive_definite=true, config_smagorinsky_coef=0.125.  "
+             "A --physics-namelist's dynamics options are taken the same "
+             "way; a value given both ways must agree")
+    parser.add_argument(
+        "--history-every-minutes", type=float, default=None, metavar="M",
         help="history cadence; must divide the run into whole steps")
+    parser.add_argument("--history-from-minutes", type=float, default=0.0,
+                        help="write scheduled history frames starting at this lead minute")
+    parser.add_argument(
+        "--fingerprint-every", type=int, default=0, metavar="STEPS",
+        help="boundary identity fingerprint interval; zero disables recording")
     parser.add_argument(
         "--out", type=Path, default=None, metavar="DIR",
         help="fresh directory for history frames and the run receipt")
+    parser.add_argument("--stochastic", default=None, metavar="JSON",
+                        help="per-member SPPT/SKEB configuration, default off; see stochastic.py")
+    parser.add_argument("--members", type=Path, default=None, metavar="JSON",
+                        help="opt-in roster of 1 to 4 resident point-cull members on one card")
+    parser.add_argument("--member-buffers", choices=("auto", "nvme"), default="auto",
+                        help="shared read-only tables: checked shm with NVMe fallback, or NVMe")
     parser.add_argument(
         "--scratch", type=Path, default=None, metavar="DIR",
         help="kernel-cache dir OUTSIDE --out "
@@ -2129,16 +4098,20 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "control lane, reported as the configuration native itself "
              "cannot integrate on convective cases (default: 2d_smagorinsky)")
     parser.add_argument(
-        "--convection", choices=("auto", "off", "gf"), default="auto",
-        help="cumulus selection. The default 'auto' switches the cumulus "
+        "--convection", default="auto", metavar="SCHEME",
+        help="cumulus selection: auto, off, gf, ntiedtke, or any cumulus "
+             "option of WOOF's physics registry by MPAS name, registry option "
+             "id or cu_physics number (kain-fritsch, cu_tiedtke, 6). "
+             "The default 'auto' switches the cumulus "
              "scheme off where the bound mesh's finest spacing is below 3 km, "
              "with no flag passed: Grell-Freitas is called every model step, "
              "so a fine mesh's short step calls it up to 24 times as often as "
              "the proven 120 s, which measured as a different solution "
              "(vertical velocity still climbing past 80 m/s at 2 h), and "
              "convection is resolved explicitly at those spacings. 'off' and "
-             "'gf' are explicit A/B arms and record themselves as explicit "
-             "(default: auto)")
+             "'gf' are explicit A/B arms and record themselves as explicit; "
+             "'ntiedtke' selects New Tiedtke, which is also what 'auto' "
+             "picks at 20 km and coarser (default: auto)")
     parser.add_argument(
         "--preset", choices=forecast_preset.preset_names(),
         default=forecast_preset.DEFAULT_PRESET,
@@ -2206,13 +4179,57 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
         help="this card's measured per-cell slope; supply with "
              "--device-fixed-mib")
     parser.add_argument(
+        "--checkpoint-hours", default=None, metavar="H[,H...]",
+        help="forecast hours (each a history frame) at which to write a restart "
+             "checkpoint; the driver resolves them")
+    parser.add_argument(
+        "--restart-from", type=Path, default=None, metavar="PKL",
+        help="resume from a checkpoint this run wrote; --start-time/--hours "
+             "name the ORIGINAL run")
+    parser.add_argument(
+        "--da-analysis", type=Path, default=None, metavar="NC",
+        help="DA-cycling restart: with --restart-from, replace the dycore "
+             "state by this analysis; physics resumes from the checkpoint")
+    parser.add_argument(
+        "--jedi-background", action="store_true",
+        help="at every history frame also write the JEDI background file")
+    parser.add_argument(
         "--stop-on-refusal", action="store_true",
         help="when the model refuses to publish a step, stop and write the "
              "receipt for the frames already committed instead of aborting "
              "with none. No validation is relaxed")
     parser.add_argument(
+        "--iau-analysis", type=Path, default=None, metavar="INIT",
+        help="incremental analysis update: --init is the background and this file the analysis "
+             "(same mesh and cell order); their difference enters over --iau-window-seconds instead "
+             "of being inserted at the start, by --iau-route")
+    parser.add_argument(
+        "--iau-window-seconds", type=float, default=None, metavar="S",
+        help="IAU window length from the start of the run")
+    parser.add_argument(
+        "--balance-series", action="store_true",
+        help="write balance-series.jsonl: surface-pressure tendency statistics at every macro "
+             "boundary (the initialization-shock measure)")
+    from .analysis_door import add_analysis_arguments
+
+    add_analysis_arguments(parser)
+    parser.add_argument(
         "--preflight", action="store_true",
         help="resolve, bind and admit without touching the integration")
+    parser.add_argument(
+        "--no-products", action="store_true",
+        help="end at the history frames instead of drawing the standard "
+             "product set (maps on every view the mesh has, soundings, "
+             "meteograms) into <out>/products; prints the products command "
+             "instead")
+    parser.add_argument(
+        "--products-detached", action=argparse.BooleanOptionalAction, default=True,
+        help="the product stage runs as its own CPU-only process (log: "
+             "<out>/products.log) and this command returns as soon as the "
+             "receipt is written, so the cards are released while the maps "
+             "draw (the default). --no-products-detached runs it inside this "
+             "command instead, which keeps this process -- and every card it "
+             "holds -- alive until the products are on disk")
 
 
 def add_forecast_parser(commands: Any) -> None:
@@ -2221,7 +4238,7 @@ def add_forecast_parser(commands: Any) -> None:
         help="run the model on a registered mesh from an init "
              "(GPU)",
         description=(
-            "Drive the v8.4.1 CUDA forecast on a registered mesh. The door "
+            "Drive the MPAS-A v8.4.2 CUDA forecast on a registered mesh. The door "
             "binds the mesh against the registry's pinned bytes, admits the "
             "request against device memory measured at that moment, runs the "
             "integration, and writes history frames the render door consumes "

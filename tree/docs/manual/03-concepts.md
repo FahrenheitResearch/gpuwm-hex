@@ -56,24 +56,37 @@ Two different correctness standards apply to the two halves of the model,
 and the difference is the most important thing in this manual.
 
 **The dynamical core is pinned.** The dynamics — the fluid-motion numerics —
-is a port of MPAS-Atmosphere v8.4.1, and it is held byte-identical to the
-native source's arithmetic as its correctness anchor, kernel by kernel, with
-pinned source-line citations. Byte-identity is achievable there, it was
-achieved, and every change to the executing modules is guarded by SHA-256
-pins so it cannot drift silently. When this manual says "deterministic," it
+is a line-for-line GPU implementation of MPAS-Atmosphere v8.4.x numerics,
+pinned to v8.4.2 with source-line citations. Against native MPAS built with
+the pinned strict GNU recipe it is byte-identical: every 32-bit word of every
+compared field matched over five-day dry runs on two dates, after one dry step
+on the small test mesh, and over five days with water vapour and five
+condensates transported. Against a fast (optimised) native build, hex differs
+exactly as much as two native builds differ from each other. The claim is
+scoped to what was measured (physics off, one host and its C maths library,
+the listed meshes); see [compatibility](../mpas-compatibility.md) for the
+configurations, tables and what is not claimed.
+SHA-256 pins record changes to executing modules. When this manual says "deterministic," it
 is backed by dual runs compared byte for byte.
 
-**The physics is not MPAS's, so agreement with MPAS is not its standard.**
-gpuwm-hex runs the ArWen engine's physics suite through a pinned seam.
-Whole-model agreement with native MPAS stopped being reachable the moment
-that choice was made — so physics parity with MPAS is **retired as a goal**,
-and the physics is judged by **skill against observations** (MRMS
-precipitation and radar products, ASOS surface stations). Matching another
-model's choices was never evidence of being right; matching the atmosphere
-is.
+**The MPAS physics suites are matched against native MPAS.** Each ported
+scheme is bitwise against native MPAS-A v8.4.2 on real inputs captured from a
+native run, and one 24-hour forecast with every scheme of the
+`convection_permitting` suite on the GPU matches native in every field hex
+writes. Correct mode, the default on those suites, fixes five native defects,
+each checked against its own native referee build; `--physics-mode exact` is
+the matched arithmetic. See [the MPAS physics seam](mpas-physics-seam.md).
 
-**A declared divergence** is the stated-in-full form of a known difference: measured
-magnitude, named mechanism, named observational referee. There are three
+**ArWen's physics is not MPAS's, so agreement with MPAS is not its standard.**
+On the default route gpuwm-hex runs the ArWen engine's physics suite through a
+pinned seam, and that physics is judged by **skill against observations**
+(MRMS precipitation and radar products, ASOS surface stations). Matching
+another model's choices was never evidence of being right; matching the
+atmosphere is.
+
+**A declared divergence** is the stated-in-full form of a known difference
+between the ArWen route and native MPAS: measured magnitude, named mechanism,
+named observational referee. There are three
 ([`docs/declared-divergences.md`](../declared-divergences.md) is the
 register; the README quantifies them).
 

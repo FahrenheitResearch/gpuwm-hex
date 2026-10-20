@@ -1,0 +1,9 @@
+GRIB1| Level| From |  To  | metgrid  | metgrid | metgrid                                 |GRIB2|GRIB2|GRIB2|GRIB2|
+Param| Type |Level1|Level2| Name     | Units   | Description                             |Discp|Catgy|Param|Level|
+-----+------+------+------+----------+---------+-----------------------------------------+-----------------------+
+  11 |   1  |   0  |      | SKINTEMP | K       | Skin temperature                        |  0  |  0  |  0  |   1 |
+  91 |   1  |   0  |      | SEAICE   | fraction| Sea ice area fraction                   | 10  |  2  |  0  |   1 |
+  81 |   1  |   0  |      | LANDSEA  | flag    | Land sea flag                           |  2  |  0  |  0  |   1 |
+  66 |   1  |   0  |      | SNOWH    | m       | Physical snow depth                     |  0  |  1  | 11  |   1 |
+-----+------+------+------+----------+---------+-----------------------------------------+-----------------------+
+# Physical SNOD, rather than a snow-water-equivalent conversion.

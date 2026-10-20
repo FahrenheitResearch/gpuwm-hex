@@ -132,8 +132,9 @@ extern "C" __global__ void recover_edge_f32(
         const float u = mpas_div(rho_u[tid], edge_rho);
         rho_edge[tid] = edge_rho;
         normal_velocity[tid] = u;
-        ke_edge[tid] = mpas_mul(mpas_mul(mpas_mul(
-            dc_edge[edge], dv_edge[edge]), u), u);
+        // Native MPAS: efac*u**2. Round the square before the area product.
+        ke_edge[tid] = mpas_mul(mpas_mul(
+            dc_edge[edge], dv_edge[edge]), mpas_mul(u, u));
     }
 }
 
@@ -160,8 +161,9 @@ extern "C" __global__ void edge_fields_from_saved_u_f32(
         ));
         const float u = normal_velocity[tid];
         rho_edge[tid] = edge_rho;
-        ke_edge[tid] = mpas_mul(mpas_mul(mpas_mul(
-            dc_edge[edge], dv_edge[edge]), u), u);
+        // Native MPAS: efac*u**2. Round the square before the area product.
+        ke_edge[tid] = mpas_mul(mpas_mul(
+            dc_edge[edge], dv_edge[edge]), mpas_mul(u, u));
     }
 }
 
@@ -1592,6 +1594,8 @@ class CudaHorizontal:
         spec_zone_mask_edge: Any | None = None,
         n_cells_solve: int | None = None,
         in_place: bool = False,
+        native_stored_inverse: bool = False,
+        _partition_edges: Any | None = None,
     ) -> Any:
         """Apply the frozen post-acoustic 3-D divergence damping update."""
 
@@ -1632,16 +1636,12 @@ class CudaHorizontal:
         if not isinstance(in_place, (bool, np.bool_)):
             raise TypeError("in_place must be boolean")
         out = ru if bool(in_place) else ru.copy()
+        base_coefficient = np.float32(2.0) * np.float32(smdiv) * np.float32(length)
         coefficient = np.float32(
-            np.float32(2.0)
-            * np.float32(smdiv)
-            * np.float32(length)
-            / np.float32(timestep)
+            base_coefficient * (np.float32(1.0) / np.float32(timestep))
+            if native_stored_inverse else base_coefficient / np.float32(timestep)
         )
-        self._launch(
-            "divergence_damping_f32",
-            self.nedges,
-            (
+        arguments = (
                 theta,
                 current,
                 previous,
@@ -1653,8 +1653,12 @@ class CudaHorizontal:
                 np.int32(self.ncells),
                 np.int32(self.nedges),
                 out,
-            ),
         )
+        if _partition_edges is None:
+            self._launch("divergence_damping_f32", self.nedges, arguments)
+        else:
+            from .partition_overlap_v841 import launch_selected
+            launch_selected(self, self.nedges, arguments, _partition_edges)
         return out
 
 

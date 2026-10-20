@@ -27,13 +27,22 @@ global case.
 ## What it is, precisely
 
 - **The dynamics** (the fluid-motion core) is a port of MPAS-Atmosphere
-  v8.4.1, held **byte-identical** to the native model as its correctness
-  anchor, and deterministic: two runs of the same case produce
+  v8.4.2, byte-identical to native MPAS built with the pinned strict recipe on
+  the measured cases (dry, and with water vapour and five condensates), which
+  `gpuwm-hex verify-dycore` re-checks to 0 differing words (see
+  [compatibility](../mpas-compatibility.md) for the scope), and
+  deterministic: two runs of the same case produce
   byte-for-byte identical output.
-- **The physics** (radiation, clouds, rain, turbulence, land surface) is the
-  ArWen engine's suite, reached through a pinned seam, so gpuwm-hex and the
-  `gpuwm` distribution share one physics implementation rather than two that
-  drift.
+- **The physics** (radiation, clouds, rain, turbulence, land surface) comes in
+  two kinds. By default it is the ArWen engine's suite, reached through a
+  pinned seam, so gpuwm-hex and the `gpuwm` distribution share one physics
+  implementation. Or it is one of MPAS-A v8.4.2's own suites
+  (`mesoscale_reference`, `convection_permitting`), ported scheme by scheme
+  and checked bit for bit against native MPAS; a 24-hour forecast with every
+  scheme of `convection_permitting` on the GPU matches native MPAS in every
+  field hex writes. On the MPAS suites hex runs **correct mode** by default,
+  which fixes five defects found in native MPAS; `--physics-mode exact`
+  reproduces native bit for bit.
 - **The tooling** is a set of doors: `doctor` reports what your install can
   reach, `mesh-check` validates a mesh, `cull` cuts a limited-area case out
   of a global one, `init` builds initial conditions, `forecast` runs the
@@ -66,24 +75,31 @@ Measured, not promised (the README states each measurement):
 
 ## What it cannot do, stated up front
 
-- **It is not bit-identical to native MPAS-Atmosphere and cannot be** —
-  native is single-precision CPU; this is CUDA. Beyond the expected
-  chaos-shaped divergence there are **three measured, one-signed
-  differences** — the declared divergences of chapter 3. Read them before
-  trusting a number.
-- **No multi-GPU.** Two-node execution is built and proven bitwise
-  partition-invariant, but it is not part of this release.
+- **Each identity claim has a scope.** The dycore identity is measured with
+  physics off on the listed meshes; the all-GPU MPAS physics match is one
+  24-hour forecast on the 480 km mesh, one process; every other MPAS scheme is
+  bitwise on captured inputs. Correct mode differs from native wherever a fix
+  acts, by design.
+- **ArWen's physics is not MPAS's.** On the default route a full-physics
+  forecast is not identical to native MPAS, and the dycore check does not
+  qualify one. Beyond the expected chaos-shaped divergence there are **three
+  measured, one-signed differences**, the declared divergences of chapter 3.
+  Read them before trusting a number from that route.
+- **No multi-node.** Two-node execution is built and proven bitwise
+  partition-invariant, but it is not part of this release. Several cards on
+  one host is a door (chapter 12) whose qualification is not complete.
 - **Forecasting runs from the wheel.** Since 0.3.2 `gpuwm-hex forecast`
   needs no checkout of either project: its drivers ship in the package and
   the physics seam is the installed `gpuwm`, named in every receipt by
   version and `RECORD` digest (chapter 6.1). `cycle run` still needs a
   gpuwm-hex checkout for its per-cycle contract deck (chapter 6.9).
 - **No data fetching.** gpuwm-hex ships no meshes, no static files, no
-  meteorological data, and has no download command for them. Chapter 2 states
+  meteorological data. `verify-dycore` downloads only its small public test
+  mesh and builds its native reference. Chapter 2 states
   plainly where each asset comes from.
-- **Not long-range.** The measured upper-level warm drift (chapter 3)
-  disqualifies this version for multi-day stratospheric work; it is bounded
-  and fine at 24 h.
+- **Not long-range on the ArWen route.** The measured upper-level warm drift
+  (chapter 3) disqualifies that route for multi-day stratospheric work; it is
+  bounded and fine at 24 h.
 - **A run can stop early.** When a step fails validation — for example a
   vertical-velocity spike past 200 m/s — the model refuses to publish the
   step and stops rather than writing output it does not trust. A refusal is

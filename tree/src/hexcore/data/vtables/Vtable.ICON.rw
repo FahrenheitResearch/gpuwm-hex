@@ -1,0 +1,65 @@
+GRIB1| Level| From |  To  | metgrid  | metgrid | metgrid                                  |GRIB2|GRIB2|GRIB2|GRIB2|
+Param| Type |Level1|Level2| Name     | Units   | Description                              |Discp|Catgy|Param|Level|
+-----+------+------+------+----------+---------+------------------------------------------+-----------------------+
+  11 | 100  |   *  |      | TT       | K       | Temperature                              |  0  |  0  |  0  | 100 |
+  33 | 100  |   *  |      | UU       | m s-1   | U                                        |  0  |  2  |  2  | 100 |
+  34 | 100  |   *  |      | VV       | m s-1   | V                                        |  0  |  2  |  3  | 100 |
+  52 | 100  |   *  |      | RH       | %       | Relative Humidity (over water)           |  0  |  1  |  1  | 100 |
+   6 | 100  |   *  |      | GEOPT    | m2 s-2  |                                          |  0  |  3  |  4  | 100 |
+     | 100  |   *  |      | HGT      | m       | Height                                   |     |     |     |     |
+  11 | 105  |   2  |      | TT       | K       | Temperature at 2 m                       |  0  |  0  |  0  | 103 |
+  17 | 105  |   2  |      | DEWPT    | K       |                                          |  0  |  0  |  6  | 103 |
+  33 | 105  |  10  |      | UU       | m s-1   | U at 10 m                                |  0  |  2  |  2  | 103 |
+  34 | 105  |  10  |      | VV       | m s-1   | V at 10 m                                |  0  |  2  |  3  | 103 |
+   1 |   1  |   0  |      | PSFC     | Pa      | Surface Pressure                         |  0  |  3  |  0  |  1  |
+   2 | 102  |   0  |      | PMSL     | Pa      | Sea-level Pressure                       |  0  |  3  |  1  | 101 |
+  11 |   1  |   0  |      | SKINTEMP | K       | Skin temperature (T_G)                   |  0  |  0  |  0  |  1  |
+   8 |   1  |   0  |      | SOILHGT  | m       | Terrain height of source analysis (HSURF)|  0  |  3  |  6  |  1  |
+  81 |   1  |   0  |      | LANDSEA  | proprtn | Land/Sea flag (from FR_LAND)             |  2  |  0  |  0  |  1  |
+  65 |   1  |   0  |      | SNOW     | kg m-2  | Water equivalent of snow (W_SNOW)        |  0  |  1  | 60  |  1  |
+  66 |   1  |   0  |      | SNOWH    | m       | Physical snow depth (H_SNOW)             |  0  |  1  | 11  |  1  |
+  91 |   1  |   0  |      | SEAICE   | proprtn | Sea-ice area fraction (FR_ICE)           | 10  |  2  |  0  |  1  |
+  85 | 112  |   1  |   0  | SOILT001 | K       | T_SO node 0.5 cm (TERRA layer 0-1 cm)    |  2  |  3  | 18  | 106 |
+  85 | 112  |   2  |   0  | SOILT002 | K       | T_SO node 2 cm (layer 1-3 cm)            |  2  |  3  | 18  | 106 |
+  85 | 112  |   6  |   0  | SOILT006 | K       | T_SO node 6 cm (layer 3-9 cm)            |  2  |  3  | 18  | 106 |
+  85 | 112  |  18  |   0  | SOILT018 | K       | T_SO node 18 cm (layer 9-27 cm)          |  2  |  3  | 18  | 106 |
+  85 | 112  |  54  |   0  | SOILT054 | K       | T_SO node 54 cm (layer 27-81 cm)         |  2  |  3  | 18  | 106 |
+  85 | 112  | 162  |   0  | SOILT162 | K       | T_SO node 162 cm (layer 81-243 cm)       |  2  |  3  | 18  | 106 |
+  85 | 112  | 486  |   0  | SOILT486 | K       | T_SO node 486 cm (layer 243-729 cm)      |  2  |  3  | 18  | 106 |
+  85 | 112  | 1458 |   0  | SOILT999 | K       | T_SO node 1458 cm (layer 729-2187 cm)    |  2  |  3  | 18  | 106 |
+  86 | 112  |   0  |   1  | SOILW001 | kg m-2  |                                          |  2  |  3  | 20  | 106 |
+  86 | 112  |   1  |   3  | SOILW002 | kg m-2  |                                          |  2  |  3  | 20  | 106 |
+  86 | 112  |   3  |   9  | SOILW006 | kg m-2  |                                          |  2  |  3  | 20  | 106 |
+  86 | 112  |   9  |  27  | SOILW018 | kg m-2  |                                          |  2  |  3  | 20  | 106 |
+  86 | 112  |  27  |  81  | SOILW054 | kg m-2  |                                          |  2  |  3  | 20  | 106 |
+  86 | 112  |  81  | 243  | SOILW162 | kg m-2  |                                          |  2  |  3  | 20  | 106 |
+  86 | 112  | 243  | 729  | SOILW486 | kg m-2  |                                          |  2  |  3  | 20  | 106 |
+  86 | 112  | 729  | 2187 | SOILW999 | kg m-2  |                                          |  2  |  3  | 20  | 106 |
+     | 112  |      |      | SOILM001 | fraction| Soil moisture of TERRA layer 0-1 cm      |     |     |     |     |
+     | 112  |      |      | SOILM002 | fraction| Soil moisture of TERRA layer 1-3 cm      |     |     |     |     |
+     | 112  |      |      | SOILM006 | fraction| Soil moisture of TERRA layer 3-9 cm      |     |     |     |     |
+     | 112  |      |      | SOILM018 | fraction| Soil moisture of TERRA layer 9-27 cm     |     |     |     |     |
+     | 112  |      |      | SOILM054 | fraction| Soil moisture of TERRA layer 27-81 cm    |     |     |     |     |
+     | 112  |      |      | SOILM162 | fraction| Soil moisture of TERRA layer 81-243 cm   |     |     |     |     |
+     | 112  |      |      | SOILM486 | fraction| Soil moisture of TERRA layer 243-729 cm  |     |     |     |     |
+     | 112  |      |      | SOILM999 | fraction| Soil moisture of TERRA layer 729-2187 cm |     |     |     |     |
+-----+------+------+------+----------+---------+------------------------------------------+-----------------------+
+#  DWD ICON global open data, AFTER gdt101_remap has put each record on a
+#  regular latitude-longitude grid (the native product is GRIB2 grid
+#  template 101, which this writer does not read).  Authored from the real
+#  2026-10-11 12Z step-0 bytes through grib2_inventory (centre 78, local
+#  table 1).  Use with --map-source dwd.
+#  Soil temperature T_SO is published at TERRA's nodes, each the midpoint
+#  of a layer, on type 106 with no second surface; GRIB2 carries the depth
+#  in metres, the Level1 column carries it in cm rounded as this writer
+#  rounds it (0.005 m -> 1), and Level2 is the missing second surface (0).
+#  The SOILTnnn names are the init's TERRA layer names (nnn = layer
+#  thickness in cm, 999 for 1458).
+#  Soil water W_SO is a MASS per layer (kg m-2) on type 106 depth pairs.
+#  SOILW is scratch (blank description); the blank-selector SOILM rows
+#  declare the writer's SOILM = SOILW / (1000 x layer thickness) output.
+#  Terrain is HSURF in metres directly; the land field is FR_LAND, a
+#  fraction, which the dwd map-source row flags at 0.5.  2 m humidity is
+#  dewpoint (scratch); the writer derives RH.  Pressure-level RELHUM is over
+#  water, so the dwd row leaves the over-ice conversion off.
+#  Geopotential FI becomes HGT through the GEOPT rule.

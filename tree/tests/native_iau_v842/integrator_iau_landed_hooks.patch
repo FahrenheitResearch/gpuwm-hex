@@ -1,0 +1,89 @@
+--- a/tree/src/hexcore/mpasphys/driver_v842.py
++++ b/tree/src/hexcore/mpasphys/driver_v842.py
+@@ -803,6 +803,25 @@
+         self._tendencies_ready = True
+         return self._tendencies
+ 
++    def add_iau_tendencies(self, *, configs: Any, structs: Any,
++                           tend_ru: Any, tend_rtheta: Any, tend_rho: Any,
++                           cache: Any) -> None:
++        """mpas_atm_time_integration.F:2166-2174: once before dynamics."""
++        if self._pending is None:
++            raise RuntimeError("IAU requires an active outer timestep")
++        step, time, _, _ = self._pending
++        if getattr(self, '_iau_step', None) == step:
++            raise RuntimeError("IAU was already added to this outer timestep")
++        from ..iau_v842 import (pre_add_tend_anal_incr,
++            atm_add_tend_anal_incr, post_add_tend_anal_incr)
++        pre_add_tend_anal_incr(configs, structs)
++        atm_add_tend_anal_incr(configs, structs, step, float(self.manager.dt),
++                              tend_ru, tend_rtheta, tend_rho, cache=cache)
++        post_add_tend_anal_incr(configs, structs, tend_ru, tend_rtheta, tend_rho)
++        self._iau_step = step
++        self.calls.append(dict(operation="atm_add_tend_anal_incr", slot="iau",
++            backend="hex-cuda", itimestep=step, time_seconds=time))
++
+     def finish_step(self, *, pools: Any) -> Any:
+         """Post-transport microphysics; mpas_atm_time_integration.F:2770-2816."""
+         if self._pending is None:
+--- a/tree/src/hexcore/mpasphys/runtime_v842.py
++++ b/tree/src/hexcore/mpasphys/runtime_v842.py
+@@ -35,6 +35,17 @@
+             cache_dir=Path(dycore.cache.cache_directory)/'mpasphys')
+         self.sources = None
+         self.transport = None
++        # Registry.xml:423-430,3972-4011: transport owns the increment pool.
++        from ..iau_v842 import IAUConfig
++        configs = session.layout.configs
++        self.iau_config = IAUConfig(configs['config_IAU_option'],
++                                    configs['config_IAU_window_length_s'])
++        self.iau_increments = None
++        self.iau_calls = 0
++        if self.iau_config.config_IAU_option.rstrip(' ') != 'off':
++            self.iau_increments = {name: self.cp.ascontiguousarray(self.cp.asarray(
++                session.native.get_field('tend_iau',name)[...,:-1]))
++                for name in ('u','rho','theta','scalars')}
+ 
+     def synchronize(self, atmosphere, *, level=1):
+         """Copy native carriers/diagnostics; mpas_atmphys_interface.F:284-305."""
+@@ -82,6 +93,30 @@
+             self.sources=CudaMpasStageSourcesV842(*(self.cp.ascontiguousarray(self.cp.asarray(value))
+                               for value in (sources.rho,sources.rho_u,sources.rho_theta,sources.scalars)),
+                               diabatic_theta=diabatic)
++            # MPAS holds these sources once, before DYNAMICS_SUBSTEPS;
++            # mpas_atm_time_integration.F:2145-2174; mpas_atm_iau.F:152-292.
++            if self.iau_increments is not None:
++                nl, nc = state.rho.shape
++                ne = diagnostics.h_edge.shape[1]
++                dims = self.session.layout.dimensions
++                indices = self.session.layout.indices
++                structs = dict(
++                    mesh=dict(nVertLevels=nl,nCells=nc,nEdges=ne,
++                        nCellsSolve=dims['nCellsSolve'],nEdgesSolve=dims['nEdgesSolve'],
++                        zz=self.dycore.atmosphere.vertical.zz),
++                    state=dict(theta_m=saved.theta_m,rho_zz=state.rho,
++                        scalars=state.scalars,
++                        moist_start=indices['state','moist_start'],
++                        moist_end=indices['state','moist_end'],
++                        index_qv=indices['state','index_qv']),
++                    diag=dict(rho_edge=diagnostics.h_edge),
++                    tend=dict(scalars_tend=self.sources.scalars),
++                    tend_iau=self.iau_increments)
++                self.session.driver.add_iau_tendencies(configs=self.iau_config,
++                    structs=structs,tend_ru=self.sources.rho_u,
++                    tend_rtheta=self.sources.rho_theta,tend_rho=self.sources.rho,
++                    cache=self.dycore.cache)
++                self.iau_calls += 1
+         return self.sources
+ 
+     def post_transport(self, *, state, saved, outer_state, modified_theta_dynamics_rate):
+@@ -237,6 +272,9 @@
+     """Initial time and stream alarms; mpas_atm_core.F:264-277,667-672."""
+     native.initialize_state_time()
+     for stream in streams:
++        # mpas_atm_core.F:222-233: initialization consumes the iau input.
++        if stream.name == 'iau' and 'input' in stream.directions:
++            native.reset_alarm('iau:in')
+         if ('output' in stream.directions and stream.output_interval != 'none'
+                 and (stream.name == 'restart' or restarting
+                      and stream.name in ('output','diagnostics'))):

@@ -165,7 +165,7 @@ RULER_POLICY_SPECS: dict[str, tuple[str, str, int, str, bool]] = {
     ),
     "state.qv": (
         "state.qv", "state.qv", 0,
-        "the compiled fixture tracer is identically zero and must remain bitwise exact",
+        "the compiled fixture tracer is zero and must remain exactly zero",
         True,
     ),
     "saved.theta_m": (

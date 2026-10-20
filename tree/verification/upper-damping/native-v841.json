@@ -1,0 +1,23 @@
+{
+  "source_commit": "91c5eac175eebeaf4206bacd5cb50c39dff3c152",
+  "source_urls": [
+    "https://github.com/MPAS-Dev/MPAS-Model/blob/91c5eac175eebeaf4206bacd5cb50c39dff3c152/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L6390",
+    "https://github.com/MPAS-Dev/MPAS-Model/blob/91c5eac175eebeaf4206bacd5cb50c39dff3c152/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L6607"
+  ],
+  "native_blocks_sha256": "df73e4258c85d67a335a34cb1abef4999faba8fb4cdb4b5df8c8843ddc00cd52",
+  "input_sha256": "175075638b8d4916c110acc536139439bea6805f10390072a6d71ac6871dd70c",
+  "output_sha256": "7884ff5ea2e50aa95d0b98c637473d5245763ca005c72fdcfeff321a86ed37f1",
+  "compiler": "ifx -O0 -fp-model=source -no-fma",
+  "dtype": "float32",
+  "levels": 59,
+  "cam_levels": 8,
+  "cam_coefficient": 2.0,
+  "rayleigh_levels": 6,
+  "rayleigh_days": 5.0,
+  "cpu_native_different_bits": 0,
+  "cuda_native_different_bits": 0,
+  "driver_cam_calls": 3,
+  "driver_rayleigh_calls": 9,
+  "device_repeats_match": true,
+  "scope": "native source-block contracts and real-mesh execution; no native forecast endpoint qualification"
+}

@@ -1,0 +1,14 @@
+{
+  "schema": "mpas-o2.committed-real-replay-contract/v1",
+  "authorities": {
+    "mesoscale": "7274adc476958afae8e3ae8da11478101f62a537fd7fc65a3da46b4942ce6485",
+    "convection": "f27006683ff5d8fa84191baf837c022c7ce5296b6ea8c8b6ea2d1b96d2ab9ff0"
+  },
+  "native_source": {
+    "src/core_atmosphere/diagnostics/mpas_isobaric_diagnostics.F": "b7c5ffed6c43f1ee86612174fb1aac4d33051a29a945fb39d93e67170b855de0",
+    "src/core_atmosphere/diagnostics/mpas_atm_diagnostics_utils.F": "765bdda0c7e4d16cc055c6e9be6ad0f0968ef7585227fa604f4c38a6a43f625d",
+    "src/core_atmosphere/diagnostics/mpas_atm_diagnostic_template.F": "268e81d02b5082fcb20df74f880014d658d547d3a9207825f3a7658f1250fd26",
+    "src/core_atmosphere/diagnostics/mpas_atm_diagnostics_manager.F": "f32fc1f246e35f37330e40002df12500fb3efc4738a27cef1c2af8a09fab2e97",
+    "src/core_atmosphere/mpas_atm_core.F": "63a5f4af2eb6ccf3de962aebf922b65ec01d4f6af05a5031d3f0bec3f500838d"
+  }
+}

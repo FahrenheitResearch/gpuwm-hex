@@ -21,6 +21,7 @@ final four-byte validation transfer, and never mutates its inputs.
 """
 
 from __future__ import annotations
+from hexcore import numerics as _hex_numerics
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -629,11 +630,12 @@ def native_cell_dx_m(
     length = _f32(effective_length_scale_m)
     if not np.isfinite(length) or length <= _f32(0.0):
         raise ValueError("effective_length_scale_m must be finite and positive")
-    # Element-wise in the same FP32 order the scalar helpers use, so the
-    # vector and the per-cell oracle path agree bit for bit.
-    out = np.empty_like(md)
-    for index in range(md.size):
-        out[index] = _div(length, _pow(md[index], _f32(0.25)))
+    # Keep the scalar oracle's two FP32 ufunc operations in the same order.
+    # Batching removes per-cell Python dispatch; reuse only our power result,
+    # never the caller's density carrier. Do not substitute sqrt/sqrt or a
+    # reciprocal: those change the rounding path used by native physics.
+    out = np.power(md, _f32(0.25))
+    np.divide(length, out, out=out)
     out.setflags(write=False)
     return out
 
@@ -1483,7 +1485,7 @@ def _require_kernel_cache_contract(cache: KernelCache) -> None:
     if not isinstance(cache, KernelCache):
         raise TypeError("kernel_cache must be a KernelCache")
     options = tuple(cache.base_options)
-    if options != _REQUIRED_KERNEL_CACHE_OPTIONS:
+    if options != _hex_numerics.kernel_base():
         raise TypeError(
             "v8.4.1 YSU-GWDO KernelCache base_options must be exactly "
             f"{_REQUIRED_KERNEL_CACHE_OPTIONS}; got {options}"

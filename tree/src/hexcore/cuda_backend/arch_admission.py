@@ -41,11 +41,13 @@ WHAT STILL REFUSES, EACH NAMING ITS BREAKAGE (the gate law).
   block, IEEE FP64 arithmetic and float/integer bit reinterpretation; no warp
   intrinsics, no half or bfloat16 types, no inline PTX and no cooperative
   groups (a census of every CUDA source string in this package, 2026-09-29).
-  So the floor is the toolchain's, not the kernels': the port requires the
-  CUDA 13 runtime (``require_cuda``'s ``min_runtime_version``), whose NVRTC
-  generates code for compute_75 (Turing) and newer.  The check asks NVRTC
-  itself (:func:`nvrtc_target_archs`), so a toolkit that adds or drops a
-  target moves the answer without an edit here.
+  So the floor is the toolchain's, not the kernels': the port runs on a
+  CUDA 12 or CUDA 13 runtime (``require_cuda``'s ``min_runtime_version`` is
+  12000), and the cards it can build for are the ones that toolkit's NVRTC
+  targets (CUDA 13: compute_75, Turing, and newer; CUDA 12.8 and newer also
+  reach compute_120).  The check asks NVRTC itself
+  (:func:`nvrtc_target_archs`), so a toolkit that adds or drops a target
+  moves the answer without an edit here.
 * **A card whose predicted memory does not fit**, in
   :mod:`hexcore.device_admission`, unchanged.
 * **A card whose ordinary arithmetic is not IEEE** (:func:`numeric_route_refusal`),
@@ -415,7 +417,9 @@ def nvrtc_refusal(compute: tuple[int, int], targets: tuple[int, ...]) -> str:
         f"when the run starts, so on this card none of them could be built "
         f"and the run would stop at its first kernel.  The kernels "
         f"themselves need nothing newer than the oldest of those targets; "
-        f"the floor is the CUDA 13 toolkit's"
+        f"the floor is the installed CUDA toolkit's NVRTC, so a toolkit "
+        f"whose NVRTC targets this card (for compute_120, CUDA 12.8 or "
+        f"newer) is the remedy"
     )
 
 
@@ -477,8 +481,9 @@ def below_floor_refusal(
 # ---------------------------------------------------------------------------
 NUMERIC_ROUTE_SCHEMA = "gpuwm-hex.numeric-route/v1"
 
-#: The compile options every port kernel is built with
-#: (``KernelCache``'s ``base_options``); CuPy appends ``-ftz=true`` itself.
+#: The compile options every port kernel is built with under strict numerics
+#: (``KernelCache``'s ``base_options``); CuPy appends ``-ftz=true`` itself.  The probe
+#: compiles with the run's own mode (:func:`hexcore.numerics.kernel_base`), fast by default.
 NUMERIC_ROUTE_OPTIONS: tuple[str, ...] = ("--std=c++17", "--fmad=false")
 
 #: An FP32 subnormal (the transport deck's own witness value, 0x000116c2).
@@ -555,7 +560,7 @@ def _expected_bits() -> dict[str, int]:
 
 
 def classify_numeric_route(
-    f32_out: tuple[int, ...], f64_out: tuple[int, ...]
+    f32_out: tuple[int, ...], f64_out: tuple[int, ...], numerics: str = "strict"
 ) -> dict[str, object]:
     """Turn the probe's raw output bits into the route's named behaviours."""
 
@@ -595,13 +600,20 @@ def classify_numeric_route(
         "contraction": contraction,
         "normal_range": normal_range,
         "fp64_keeps_binary32_subnormals": fp64_keeps,
-        # The behaviour every anchored architecture measured (sm_120, sm_89,
-        # sm_86): the route flushes, the guarded fallback restores the IEEE
-        # answer, --fmad=false keeps a*b+c separately rounded.
+        # Strict: the behaviour every anchored architecture measured (sm_120,
+        # sm_89, sm_86): the route flushes, the guarded fallback restores the
+        # IEEE answer, --fmad=false keeps a*b+c separately rounded.  Fast: the
+        # route flushes and ordinary arithmetic is IEEE; contraction is on and
+        # the guarded fallback is compiled out by design (hexcore.numerics).
+        "numerics": numerics,
         "matches_anchored_route": (
             ftz_route == "flush-to-zero"
             and guarded == "ieee"
             and contraction == "separately-rounded"
+            and normal_range == "ieee"
+            and fp64_keeps
+        ) if numerics == "strict" else (
+            ftz_route == "flush-to-zero"
             and normal_range == "ieee"
             and fp64_keeps
         ),
@@ -631,10 +643,15 @@ def measure_numeric_route(cupy_module=None) -> dict[str, object]:
     import numpy as np
 
     from ..cuda_fp32 import CUDA_FTZ_HELPERS
+    from .. import numerics as _numerics
 
+    route_options = _numerics.kernel_base()
     if cupy_module is None:
         import cupy as cupy_module
     cp = cupy_module
+    if getattr(cupy_module, "__name__", None) == "cupy":
+        from .aot import install
+        install(cp)
     started = time.perf_counter()
     f32_in, f64_in = _probe_inputs()
     previous = os.environ.get("CUPY_CACHE_DIR")
@@ -645,7 +662,7 @@ def measure_numeric_route(cupy_module=None) -> dict[str, object]:
         try:
             module = cp.RawModule(
                 code=CUDA_FTZ_HELPERS + _PROBE_KERNEL,
-                options=NUMERIC_ROUTE_OPTIONS,
+                options=route_options,
                 backend="nvrtc",
                 enable_cooperative_groups=False,
             )
@@ -676,10 +693,10 @@ def measure_numeric_route(cupy_module=None) -> dict[str, object]:
                 os.environ.pop("CUPY_CACHE_DIR", None)
             else:
                 os.environ["CUPY_CACHE_DIR"] = previous
-    record = classify_numeric_route(*runs[0])
+    record = classify_numeric_route(*runs[0], numerics=_numerics.mode())
     record.update(
         schema=NUMERIC_ROUTE_SCHEMA,
-        options=list(NUMERIC_ROUTE_OPTIONS),
+        options=list(route_options),
         dual_run_identical=runs[0] == runs[1],
         seconds=round(time.perf_counter() - started, 3),
     )

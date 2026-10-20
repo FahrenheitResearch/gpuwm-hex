@@ -1,0 +1,95 @@
+--- a/tree/src/hexcore/mpasphys/runtime_v842.py
++++ b/tree/src/hexcore/mpasphys/runtime_v842.py
+@@ -19,6 +19,8 @@
+ from .native_backend import NativePhysics
+ from .pool_v842 import NativePoolHydration
+ from .session_v842 import NativePhysicsSession, native_working_directory
++from ..restart_v842 import NativePoolStreams, RestartControl
++from ..streams_v842 import parse_streams
+ 
+ 
+ class ResidentNativeCoupling:
+@@ -275,7 +277,10 @@
+     from ..vector import initialize_reconstruction_coefficients
+     from ..driver import load_mpas_vertical_grid,load_mpas_initial_state
+     from ..dynamics_v841 import load_v841_reference_wind_profiles
+-    init=Path(arguments.init)
++    control=RestartControl(layout.configs['config_do_restart'],layout.configs['config_do_DAcycling'])
++    from .forecast_v842 import stream_input_bindings
++    bindings=stream_input_bindings(getattr(arguments,'stream_input',None))
++    init=Path(bindings.get('restart',arguments.init) if control.config_do_restart else arguments.init)
+     hydration=NativePoolHydration(None,layout,payload)
+     # The native input stream overlays the grid with initialized mesh fields,
+     # including fEdge/fVertex; Registry.xml:498-545; mpas_atm_core.F:116-151.
+@@ -291,7 +296,7 @@
+     names=next(r['components'] for r in layout.fields if r['pool']=='state' and r['name']=='scalars')
+     state,reference,saved=load_mpas_initial_state(init,mesh,grid.vertical_grid,
+             scalar_names=(),reference_path=init,terrain_metrics=grid.terrain_metrics,
+-            return_saved_diagnostics=True,cold_start=True)
++            return_saved_diagnostics=True,cold_start=control.initialize_coupled_diagnostics)
+     # Native allocates every selected carrier, including absent input species;
+     # Registry.xml:1701-1754; mpas_atmphys_init_microphysics.F:98-226. Rust already
+     # applied their Registry defaults while decoding the complete scalar buffer.
+@@ -347,8 +352,31 @@
+             post_transport=lambda call:coupling.prepare_transport(call),cuda_device=dycore.cp,
+             cuda_resources=getattr(arguments,'physics_resources',None))
+         receipt['missing_fields']=_configure_streams(native,streams,out,layout)
++        receipt['driver_missing_fields']={name:list(fields)
++            for name,fields in receipt['missing_fields'].items()}
++        declared=parse_streams(arguments.streams,
++            list_directory=getattr(arguments,'stream_list_directory',None))
++        selected={name:set(stream.fields(layout.packages,streams=declared))
++            for name,stream in declared.items()}
++        # Native package selection: Registry.xml:498-1349;
++        # mpas_stream_manager.F:4577-4666. Keep the original missing inventory.
++        unavailable={name:set(fields)&selected[name]
++            for name,fields in receipt['missing_fields'].items()}
++        receipt['driver_inventory_package_inactive_fields']={
++            name:sorted(set(fields)-selected[name])
++            for name,fields in receipt['missing_fields'].items()
++            if set(fields)-selected[name]}
++        pool_streams=NativePoolStreams(native,layout,arguments.streams,out,
++            list_directory=getattr(arguments,'stream_list_directory',None),final_time=stop,
++            unavailable_fields={name:fields for name,fields in unavailable.items() if fields})
++        source=next((Path(s.input_file) for s in streams
++            if s.name=='restart' and s.input_file),Path(arguments.init))
++        pool_streams.read_input_attributes(source,scratch=out/'stream-metadata')
++        if pool_streams.control.config_do_restart:
++            receipt['restored_fields']=pool_streams.restore(source,scratch=out/'restart-decode')
++            receipt['restart_source_sha256']=hashlib.sha256(source.read_bytes()).hexdigest()
+         coupling=ResidentNativeCoupling(session,dycore,geometry,names)
+-        if not layout.configs['config_do_restart']:
++        if pool_streams.control.initialize_coupled_diagnostics:
+             from .diagnostics_v842 import initialize_thermodynamics
+             initialize_thermodynamics(dycore.atmosphere,coupling.physics_cache)
+         resident_reference=dycore.atmosphere.reference
+@@ -383,7 +411,14 @@
+                     with (out/'physics-calls.jsonl').open('a') as log:
+                         log.write(json.dumps(dict(step=step,calls=session.driver.calls))+'\n')
+                 coupling.synchronize(dycore.atmosphere)
+-                write_native_output(native,streams,step=step,receipt=receipt)
++                previous=len(receipt['streams'])
++                pool_streams.write(step=step,dt=dt,receipt=receipt)
++                written=receipt['streams'][previous:]
++                # Native output alarm reset; mpas_atm_core.F:720-724.
++                for row in written:
++                    native.reset_alarm(row['name']+':out')
++                if step and any(row['name']=='diagnostics' for row in written):
++                    reset_native_output_diagnostics(native)
+                 (out/'native-physics-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+             session.driver.finalize(session)
+     receipt['completed']=True
+--- a/tree/src/hexcore/mesh.py
++++ b/tree/src/hexcore/mesh.py
+@@ -972,7 +972,10 @@
+ 
+             grid_id = str(grid_attrs.get("file_id", "")).strip()
+             parent_id = str(static_attrs.get("parent_id", "")).strip()
+-            if grid_id and parent_id and grid_id != parent_id:
++            # Native records a newline-separated chain of parent IDs;
++            # MPAS v8.4.2 src/framework/mpas_bootstrapping.F:310-331.
++            ancestors = {item.strip() for item in parent_id.splitlines() if item.strip()}
++            if grid_id and parent_id and grid_id not in ancestors:
+                 raise MeshValidationError(
+                     "static parent_id does not match grid file_id: "
+                     f"{parent_id!r} != {grid_id!r}"

@@ -1,0 +1,40 @@
+{
+  "schema": "gpuwm-hex.init-source-evidence/v1",
+  "source_registry": "gpuwm.source_adapters",
+  "source_id": "ecmwf-open-data",
+  "aliases": ["ecmwf", "ifs"],
+  "intermediate_writer": "met_intermediate",
+  "vtable": "vtables/Vtable.ECMWF-OD.rw",
+  "map_source": "ecmwf",
+  "cycle_invariant_supplements": [
+    {
+      "field": "SOILGEO",
+      "publication_parameter": "z",
+      "publication_level_type": "sfc",
+      "data_role": "cycle_step_zero_terrain_only",
+      "time_alignment": "cycle_invariant_broadcast",
+      "grid_alignment": "identical_to_primary_land_mask",
+      "selection": "one GRIB2 record, discipline 0, category 3, parameter 4, level type 1",
+      "reason": "surface geopotential is omitted from the measured positive-lead publication; no atmospheric or changing surface field may come from this donor"
+    }
+  ],
+  "init_reader": "wps-intermediate",
+  "pressure_levels_hpa": [10, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000],
+  "nfglevels_with_surface": 15,
+  "nfgsoillevels": 4,
+  "soil_bounds_m": [[0, 0.07], [0.07, 0.28], [0.28, 1], [1, 2.89]],
+  "soil_output": "native MPAS midpoint interpolation to Noah, not the WRF mapped-composition conservative remap",
+  "use_spechumd": "no",
+  "gaps": {
+    "model_level_atmosphere": "pressure-level interpolation; upper extrapolation is declared by --extrap-airtemp",
+    "hydrometeors": "cold-start zero by the existing init engine, even when a source publishes condensate",
+    "vertical_velocity": "existing terrain-following continuity construction, not pressure omega ingestion",
+    "sea_ice_fraction": "absent in the measured 2026-10-03 12Z index; existing init leaves fraction zero; thickness is not fraction",
+    "soil_liquid_water": "existing land initialization starts sh2o at zero; water cells use one",
+    "initial_vapour_bounds": "the measured RH-based cold starts contain small negative qv interpolants; forecast step health and endpoints are checked separately; this is not a balanced-moist-analysis qualification",
+    "snow_density": "published rsn is not consumed by this init path; snowh uses the existing 200 kg m-3 assumption",
+    "deep_soil_temperature": "mesh static soiltemp with existing terrain correction",
+    "vegetation_albedo_soil_category": "mesh statics and existing monthly interpolation"
+  },
+  "qualification": "source metadata and measured cold-start capability; forecast skill requires the paired campaign; zero sea ice is not a qualified polar initialization"
+}

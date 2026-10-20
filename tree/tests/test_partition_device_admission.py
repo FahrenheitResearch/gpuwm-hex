@@ -57,7 +57,10 @@ def test_small_partitions_are_floored_above_the_retired_linear_shape() -> None:
     """The breakage the reroute fixes: with no fixed term the retired shape
     under-charges small partitions by the whole process fixed cost."""
 
-    for local in (10_000, 20_000, 40_962):
+    # Small partitions: below about 30,000 local columns the fixed cost is
+    # what the retired shape left out.  (At 40,962 today's build, the census
+    # cuts, costs less than the retired line charged.)
+    for local in (10_000, 20_000):
         retired = RETIRED_LINEAR(local, X4_CELLS)
         rerouted = scheduler.partition_min_free_bytes(local, X4_CELLS)
         assert retired < surface.FOOTPRINT_MODEL.predict_bytes(local), (

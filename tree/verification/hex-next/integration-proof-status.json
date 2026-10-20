@@ -1,0 +1,41 @@
+{
+  "schema": "gpuwm-hex.integration-proof-status/v1",
+  "measured_hex_commit": "148c11274e68a519ae70a3485a5f5c592cc1c153",
+  "engine_commit": "d547dc8c3fbb07fc25744afb92bbe72f0e830241",
+  "cpu": {
+    "passed": 3215, "failed": 17, "skipped": 133, "deselected": 62,
+    "all_failure_names_reproduced_on_each_parent": true,
+    "parents": ["58dc858", "161234d", "a3bc654", "b862f72", "09211dc", "42327df1", "a6259595", "5869f133"]
+  },
+  "memory_30km_one_card_6h": {
+    "status": "passed", "steps": 120, "finite_records": 120,
+    "peak_mib": 83777, "rollback_device_bytes": 0,
+    "max_abs_w_m_s": 6.311039447784424
+  },
+  "kain_fritsch_30km_one_card_1h": {
+    "status": "passed", "steps": 20, "cumulus_calls": 20,
+    "rainc_negative_values": 0, "rainc_range_mm": [0.0, 11.733192443847656]
+  },
+  "kessler_30km_one_card_1h": {
+    "status": "passed", "steps": 20, "convection": "off",
+    "rainnc_range_mm": [0.0, 17.592912673950195]
+  },
+  "native_x4_dycore_identity": {"status": "not run", "missing": "matching x4 assets and native reference"},
+  "global_15km_eight_card_6h": {
+    "status": "not run",
+    "reason": "fewer than eight cards granted; released before any forecast launch; competing and priority DA jobs occupy the authorized boxes",
+    "published_ops_stepping_s_per_hour": 35.7,
+    "comparison_measured": false
+  },
+  "render_companion_commit": "d09857183f57d2aa6d2caf98ad0063a36ff40442",
+  "native_render_smoke": {
+    "status": "passed",
+    "source_forecast": "existing 15 km 48 h forecast, read-only; not the integrated forecast proof",
+    "window": "global-mesh",
+    "grid_points": [2670, 1336],
+    "grid_spacing_km": 14.990,
+    "rendered": 1, "failed": 0,
+    "scope": "native spacing, model naming and basemap; source-version subtitle not qualified"
+  },
+  "scope": "Execution, finite-state and integration evidence; no observation-based forecast skill qualification"
+}

@@ -65,6 +65,19 @@ def test_policy_floor_sits_between_the_measured_anchors() -> None:
     assert floor > 1.6849e-04, "the measured generated-mesh dislocation class must be refused"
 
 
+def test_disabled_apvm_records_positive_roughness_but_keeps_zero_geometry_refusal():
+    dc = np.array([3000.0, 3000.0])
+    dv = np.array([35.7, 1500.0])
+    with pytest.raises(DualEdgeAdmissionError):
+        admit_dual_edges(dv, dc)
+    result = admit_dual_edges(dv, dc, policy=DualEdgePolicy(apvm_upwinding=0.0))
+    assert result.edges_below_floor == 1
+    assert result.minimum_ratio == pytest.approx(0.0119)
+    assert result.as_dict()["policy"]["ratio_floor_active"] is False
+    with pytest.raises(DualEdgeAdmissionError, match="zero dvEdge"):
+        admit_dual_edges(np.array([0.0, 1500.0]), dc, policy=DualEdgePolicy(apvm_upwinding=0.0))
+
+
 @pytest.mark.parametrize(
     ("label", "ratio"),
     [
@@ -102,7 +115,7 @@ def test_the_measured_dislocation_ratio_is_refused_by_name() -> None:
     assert "1 of 116565 edges" in message
     # The amplification is reported as the ratio it is: 38657 / 6.514.
     assert "5934" in message or "5935" in message
-    # And the remedy names the seeding that removes the defect class.
+    # And the remedy names the generator points that remove the defect class.
     assert "Goldberg" in message
 
 

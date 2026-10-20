@@ -1,0 +1,147 @@
+# MPAS-Model v8.4.2 -- the source lines hexcore.mpas_defaults cites
+#
+# Read 2026-10-11 from the public repository https://github.com/MPAS-Dev/MPAS-Model at tag v8.4.2
+# (commit f34984b2c89353cf31c235b08d3b4acd96b37bb3, tag object 2eee75b147d83d67835cecfb30c6fb3793e3042b)
+#   src/core_atmosphere/Registry.xml                     sha256 c2eff7d95ec3867af69a945908955076d5f97dfe943f2d25ad756d98b94d86b3
+#   src/core_atmosphere/dynamics/mpas_atm_time_integration.F sha256 579acb2819b565760822194401d5af9e33c129a4114ac03e6882d7abdbabc757
+#   src/core_atmosphere/physics/mpas_atmphys_manager.F   sha256 56450dea0b1bdbfe716a1acd0910e30076edc5100438a20713e359e499045285
+# Each block is 'FILE:FIRST-LAST' followed by those lines verbatim.
+# The record of the previous pin is verification/mpas-v8.4.1-registry/cited-lines.txt; the two differ
+# in one block, Registry.xml:104-107 (config_number_of_sub_steps default 2 -> 4).
+
+== Registry.xml:69-72
+                <nml_option name="config_time_integration_order" type="integer" default_value="2"
+                     units="-"
+                     description="Order for RK time integration"
+                     possible_values="2 or 3"/>
+
+== Registry.xml:74-77
+                <nml_option name="config_dt" type="real" default_value="720.0"
+                     units="s"
+                     description="Model time step, seconds"
+                     possible_values="Positive real values"/>
+
+== Registry.xml:99-102
+                <nml_option name="config_split_dynamics_transport" type="logical" default_value="true"
+                     units="-"
+                     description="Whether to super-cycle scalar transport"
+                     possible_values="Logical values"/>
+
+== Registry.xml:104-107
+                <nml_option name="config_number_of_sub_steps" type="integer" default_value="4"
+                     units="-"
+                     description="Number of acoustic steps per full RK step"
+                     possible_values="Positive, even integer values, typically 2, 4, or 6 depending on transport splitting"/>
+
+== Registry.xml:109-112
+                <nml_option name="config_dynamics_split_steps" type="integer" default_value="3"
+                     units="-"
+                     description="When config_split_dynamics_transport = T, the number of RK steps per transport step"
+                     possible_values="Positive integer values"/>
+
+== Registry.xml:239-242
+                <nml_option name="config_monotonic" type="logical" default_value="true"
+                     units="-"
+                     description="Whether to enable monotonic limiter in scalar advection"
+                     possible_values=".true. or .false."/>
+
+== Registry.xml:244-247
+                <nml_option name="config_coef_3rd_order" type="real" default_value="0.25"
+                     units="-"
+                     description="Upwinding coefficient in the 3rd order advection scheme"
+                     possible_values="0 $\leq$ config_coef_3rd_order $\leq$ 1"/>
+
+== Registry.xml:2316-2319
+                <nml_option name="config_radtlw_interval" type="character" default_value="00:30:00"
+                     units="-"
+                     description="time interval between calls to parameterization of long-wave radiation"
+                     possible_values="`DD_HH:MM:SS' or `none'"/>
+
+== Registry.xml:2321-2324
+                <nml_option name="config_radtsw_interval" type="character" default_value="00:30:00"
+                     units="-"
+                     description="time interval between calls to parameterization of short-wave radiation"
+                     possible_values="`DD_HH:MM:SS' or `none'"/>
+
+== Registry.xml:2326-2329
+                <nml_option name="config_conv_interval" type="character" default_value="none" in_defaults="false"
+                     units="-"
+                     description="time interval between calls to parameterization of convection"
+                     possible_values="`DD_HH:MM:SS' or `none'"/>
+
+== Registry.xml:2331-2334
+                <nml_option name="config_pbl_interval" type="character" default_value="none" in_defaults="false"
+                     units="-"
+                     description="time interval between calls to parameterization of planetary boundary layer"
+                     possible_values="`DD_HH:MM:SS' or `none'"/>
+
+== mpas_atm_time_integration.F:2064-2094
+      number_of_sub_steps = config_number_of_sub_steps
+
+      if(config_time_integration_order == 3) then
+
+        rk_timestep(1) = dt_dynamics/3.
+        rk_timestep(2) = dt_dynamics/2.
+        rk_timestep(3) = dt_dynamics
+
+        rk_sub_timestep(1) = dt_dynamics/3.
+        rk_sub_timestep(2) = dt_dynamics/real(number_of_sub_steps)
+        rk_sub_timestep(3) = dt_dynamics/real(number_of_sub_steps)
+
+        number_sub_steps(1) = 1
+        number_sub_steps(2) = max(1,number_of_sub_steps/2)
+        number_sub_steps(3) = number_of_sub_steps
+
+      else if (config_time_integration_order == 2) then
+
+        rk_timestep(1) = dt_dynamics/2.
+        rk_timestep(2) = dt_dynamics/2.
+        rk_timestep(3) = dt_dynamics
+
+        rk_sub_timestep(1) = dt_dynamics/real(number_of_sub_steps)
+        rk_sub_timestep(2) = dt_dynamics/real(number_of_sub_steps)
+        rk_sub_timestep(3) = dt_dynamics/real(number_of_sub_steps)
+
+        number_sub_steps(1) = max(1,number_of_sub_steps/2)
+        number_sub_steps(2) = max(1,number_of_sub_steps/2)
+        number_sub_steps(3) = number_of_sub_steps
+
+      end if
+
+== mpas_atmphys_manager.F:511-527
+ if(trim(config_conv_interval) /= "none") then
+    call mpas_set_timeInterval(alarmTimeStep,timeString=config_conv_interval,ierr=ierr)
+    alarmStartTime = startTime
+    call mpas_add_clock_alarm(clock,convAlarmID,alarmStartTime,alarmTimeStep,ierr=ierr)
+    if(ierr /= 0) &
+       call physics_error_fatal('subroutine physics_init: error creating convAlarmID')
+
+    call mpas_get_timeInterval(interval=alarmTimeStep,dt=dt_cu,ierr=ierr)
+    if(ierr /= 0) &
+       call physics_error_fatal('subroutine physics_run_init: error defining dt_cu')
+
+ elseif(trim(config_conv_interval) == "none") then
+    dt_cu = dt
+
+ else
+    call physics_error_fatal('subroutine physics_run_init: dt_cu is not defined')
+
+
+== mpas_atmphys_manager.F:530-546
+ if(trim(config_pbl_interval) /= "none") then
+    call mpas_set_timeInterval(alarmTimeStep,timeString=config_pbl_interval,ierr=ierr)
+    alarmStartTime = startTime
+    call mpas_add_clock_alarm(clock,pblAlarmID,alarmStartTime,alarmTimeStep,ierr=ierr)
+    if(ierr /= 0) &
+       call physics_error_fatal('subroutine physics_init: error creating pblAlarmID')
+
+    call mpas_get_timeInterval(interval=alarmTimeStep,dt=dt_pbl,ierr=ierr)
+    if(ierr /= 0) &
+       call physics_error_fatal('subroutine physics_run_init: error defining dt_pbl')
+
+ elseif(trim(config_pbl_interval) == "none") then
+    dt_pbl = dt
+
+ else
+    call physics_error_fatal('subroutine physics_run_init: dt_pbl is not defined')
+

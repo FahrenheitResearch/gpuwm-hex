@@ -1,16 +1,9 @@
-"""MPAS-compatible serial history output.
+"""Serial history snapshots and native MPAS-A v8.4.2 stream output.
 
-The file layout follows the frozen MPAS-A v8.2.3 ``output`` stream in
-``src/core_atmosphere/Registry.xml:851-974``.  In particular, mesh geometry
-and connectivity are invariant variables, while ``Time`` and model fields are
-record variables.  The definitions of ``initial_time``, ``xtime``, ``Time``,
-and ``u`` are at Registry lines 1520-1532.  MPAS's stream manager recognizes
-single/double precision and serial NetCDF/NetCDF-4 at
-``src/framework/xml_stream_parser.c:1239-1325``.
-
-This module implements the serial, separate-file part of that contract.  It
-does not pretend to schedule alarms or provide Parallel-NetCDF: every such
-stream option refuses by its MPAS knob name.
+Membership and metadata follow src/core_atmosphere/Registry.xml:927-1029.
+The snapshot API also accepts explicitly named extra diagnostic fields for
+existing consumers. Use write_native_stream for exact Registry membership,
+package activation and native attributes. File I/O is rw_mpas_stream Rust.
 """
 
 from __future__ import annotations
@@ -21,15 +14,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-from netCDF4 import Dataset
 from numpy.typing import NDArray
 
 from .errors import ConfigurationRefusal
+from .streams_v842 import _REGISTRY, _all_packages, field_definition, registry_stream
 
 
-_FROZEN_OUTPUT_SOURCE = (
-    "MPAS-Model-v8.2.3/src/core_atmosphere/Registry.xml:851-974,1520-1532"
-)
+_FROZEN_OUTPUT_SOURCE = "MPAS-Model-v8.4.2/src/core_atmosphere/Registry.xml:927-1029"
+HISTORY_OUTPUT_VARIABLES = registry_stream('output').fields(_all_packages())
+
 _STR_LEN = 64
 
 # The invariant fields named by the frozen atmosphere ``output`` stream.  A
@@ -94,49 +87,11 @@ _CONNECTIVITY_VARIABLES = {
 _ENTITY_DIMENSIONS = ("nCells", "nEdges", "nVertices")
 _VERTICAL_DIMENSIONS = ("nVertLevels", "nVertLevelsP1", "nVertLevelsP2")
 
-_FIELD_METADATA: dict[str, dict[str, str]] = {
-    "u": {"units": "m s^{-1}", "long_name": "Horizontal normal velocity at edges"},
-    "w": {"units": "m s^{-1}", "long_name": "Vertical velocity at vertical cell faces"},
-    "pressure": {"units": "Pa", "long_name": "Pressure"},
-    "surface_pressure": {"units": "Pa", "long_name": "Surface pressure"},
-    "rho": {"units": "kg m^{-3}", "long_name": "Dry air density"},
-    "theta": {"units": "K", "long_name": "Potential temperature"},
-    "relhum": {"units": "%", "long_name": "Relative humidity"},
-    "divergence": {"units": "s^{-1}", "long_name": "Horizontal divergence"},
-    "vorticity": {"units": "s^{-1}", "long_name": "Vertical vorticity"},
-    "ke": {"units": "m^2 s^{-2}", "long_name": "Kinetic energy"},
-    "uReconstructZonal": {
-        "units": "m s^{-1}",
-        "long_name": "Reconstructed zonal wind",
-    },
-    "uReconstructMeridional": {
-        "units": "m s^{-1}",
-        "long_name": "Reconstructed meridional wind",
-    },
-}
-
-# Frozen Registry logical (Fortran) dimensions for the core fields most often
-# handed directly from this port's level-first authority arrays.  Time is
-# inserted by the writer.  Unknown names still use size-based inference.
-_KNOWN_FIELD_DIMENSIONS: dict[str, tuple[str, ...]] = {
-    "u": ("nVertLevels", "nEdges"),
-    "w": ("nVertLevelsP1", "nCells"),
-    "pressure": ("nVertLevels", "nCells"),
-    "rho": ("nVertLevels", "nCells"),
-    "theta": ("nVertLevels", "nCells"),
-    "relhum": ("nVertLevels", "nCells"),
-    "divergence": ("nVertLevels", "nCells"),
-    "vorticity": ("nVertLevels", "nVertices"),
-    "ke": ("nVertLevels", "nCells"),
-    "uReconstructZonal": ("nVertLevels", "nCells"),
-    "uReconstructMeridional": ("nVertLevels", "nCells"),
-    "surface_pressure": ("nCells",),
-    "rainnc": ("nCells",),
-    "rainc": ("nCells",),
-    "u10": ("nCells",),
-    "v10": ("nCells",),
-    "q2": ("nCells",),
-    "t2m": ("nCells",),
+# v8.4.2 metadata and logical dimensions for all registered stream fields.
+_FIELD_METADATA = {name:dict(value['attrs']) for name,value in _REGISTRY['fields'].items()}
+_KNOWN_FIELD_DIMENSIONS = {
+    name:tuple(d for d in value['dimensions'] if d != 'Time')
+    for name,value in _REGISTRY['fields'].items()
 }
 
 
@@ -188,7 +143,7 @@ class HistoryStreamOptions:
                 raise ConfigurationRefusal(
                     original,
                     value,
-                    "the serial history writer has no implementation for this stream option",
+                    "this snapshot option has no defined effect; use parse_streams for native deck scheduling",
                     f"omit {original}",
                 )
             normalized[name] = value
@@ -199,15 +154,15 @@ class HistoryStreamOptions:
             raise ConfigurationRefusal(
                 "stream_name",
                 self.stream_name,
-                "only the frozen atmosphere output/history stream is implemented",
+                "this compatibility snapshot API handles output/history; use write_native_stream for other v8.4.2 streams",
                 "stream_name='output'",
             )
-        if self.io_type not in {"netcdf", "serial_netcdf", "netcdf4"}:
+        if self.io_type not in {"netcdf", "serial_netcdf", "netcdf4", "pnetcdf", "pnetcdf,cdf5"}:
             raise ConfigurationRefusal(
                 "io_type",
                 self.io_type,
-                "Parallel-NetCDF, CDF-5, and SIONlib backends are not ported",
-                "io_type='netcdf4' or io_type='netcdf'",
+                "the serial Rust bridge supports NetCDF, CDF-2, CDF-5 and NetCDF4 file formats",
+                "io_type='netcdf4', 'netcdf', 'pnetcdf', or 'pnetcdf,cdf5'",
             )
         if self.precision not in {"native", "single", "double"}:
             raise ConfigurationRefusal(
@@ -241,7 +196,7 @@ class HistoryStreamOptions:
                 raise ConfigurationRefusal(
                     knob,
                     value,
-                    "alarm scheduling and filename rotation belong to the unported stream manager",
+                    "snapshot calls do not consume stream alarms; use parse_streams and StreamAlarms for native decks",
                     f"{knob}=None and call write_history at the desired time",
                 )
         if self.reference_time != "initial_time":
@@ -255,7 +210,7 @@ class HistoryStreamOptions:
 
     @property
     def netcdf_format(self) -> str:
-        return "NETCDF4" if self.io_type == "netcdf4" else "NETCDF3_64BIT_OFFSET"
+        return {"netcdf4":"NETCDF4", "pnetcdf,cdf5":"NETCDF3_64BIT_DATA"}.get(self.io_type,"NETCDF3_64BIT_OFFSET")
 
 
 def format_mpas_filename(template: str, valid_time: datetime | str) -> str:
@@ -360,16 +315,6 @@ def _plain_attr(value: Any) -> Any:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
-
-
-def _set_attrs(target: Any, attrs: Mapping[str, Any]) -> None:
-    clean = {
-        str(name): _plain_attr(value)
-        for name, value in attrs.items()
-        if value is not None and name not in {"_FillValue", "_NCProperties"}
-    }
-    if clean:
-        target.setncatts(clean)
 
 
 def _field_parts(
@@ -533,86 +478,6 @@ def _canonical_dimension_order(dimensions: Sequence[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def _prepare_field(
-    name: str,
-    array: NDArray[Any],
-    dimensions: tuple[str, ...] | None,
-    sizes: dict[str, int],
-    n_times: int,
-) -> tuple[NDArray[Any], tuple[str, ...]]:
-    if array.ndim == 0:
-        array = array.reshape(())
-    if dimensions is None:
-        dimensions = _infer_field_dimensions(name, array, sizes, n_times)
-    if len(dimensions) != array.ndim:
-        raise ValueError(
-            f"{name}: {len(dimensions)} dimension names for shape {array.shape}"
-        )
-    if len(set(dimensions)) != len(dimensions):
-        raise ValueError(f"{name}: repeated dimension names are not supported: {dimensions}")
-    for axis, dim in enumerate(dimensions):
-        size = int(array.shape[axis])
-        if dim == "Time":
-            if size != n_times:
-                raise ValueError(f"{name}: Time axis has {size} records, expected {n_times}")
-            continue
-        existing = sizes.get(dim)
-        if existing is not None and existing != size:
-            raise ValueError(f"{name}: dimension {dim} has {size}, expected {existing}")
-        sizes[dim] = size
-
-    if "Time" not in dimensions:
-        array = np.broadcast_to(array, (n_times, *array.shape))
-        dimensions = ("Time", *dimensions)
-
-    disk_dimensions = _canonical_dimension_order(dimensions)
-    permutation = tuple(dimensions.index(dim) for dim in disk_dimensions)
-    if permutation != tuple(range(array.ndim)):
-        array = np.transpose(array, permutation)
-    return np.asarray(array), disk_dimensions
-
-
-def _disk_dtype(array: NDArray[Any], precision: str, netcdf_format: str) -> np.dtype[Any]:
-    dtype = np.dtype(array.dtype)
-    if dtype.kind == "f":
-        if precision == "single":
-            return np.dtype("float32")
-        if precision == "double":
-            return np.dtype("float64")
-        if dtype.itemsize not in (4, 8):
-            raise TypeError(f"only float32/float64 history fields are supported, got {dtype}")
-        return dtype
-    if dtype.kind == "b":
-        return np.dtype("int8")
-    if dtype.kind in "iu":
-        if netcdf_format.startswith("NETCDF3") and dtype.itemsize > 4:
-            info = np.iinfo(np.int32)
-            if array.size and (np.min(array) < info.min or np.max(array) > info.max):
-                raise OverflowError("integer field cannot be represented in serial NetCDF int32")
-            return np.dtype("int32")
-        return dtype
-    raise TypeError(f"unsupported NetCDF field dtype {dtype}")
-
-
-def _create_data_variable(
-    dataset: Dataset,
-    name: str,
-    data: NDArray[Any],
-    dimensions: tuple[str, ...],
-    attrs: Mapping[str, Any],
-    *,
-    precision: str,
-) -> None:
-    dtype = _disk_dtype(data, precision, dataset.data_model)
-    fill_value = attrs.get("_FillValue")
-    kwargs: dict[str, Any] = {}
-    if fill_value is not None:
-        kwargs["fill_value"] = np.asarray(fill_value, dtype=dtype).item()
-    variable = dataset.createVariable(name, dtype, dimensions, **kwargs)
-    _set_attrs(variable, attrs)
-    variable[...] = np.asarray(data, dtype=dtype)
-
-
 def _mesh_dims_for_array(
     name: str,
     array: NDArray[Any],
@@ -637,16 +502,6 @@ def _mesh_dims_for_array(
     return tuple(inferred)
 
 
-def _write_char_array(variable: Any, values: Sequence[str]) -> None:
-    result = np.full((len(values), _STR_LEN), b" ", dtype="S1")
-    for row, value in enumerate(values):
-        encoded = value.encode("ascii")
-        if len(encoded) > _STR_LEN:
-            raise ValueError(f"MPAS timestamp exceeds StrLen={_STR_LEN}: {value!r}")
-        result[row, : len(encoded)] = np.frombuffer(encoded, dtype="S1")
-    variable[...] = result
-
-
 def write_history(
     path: str | Path,
     mesh: object,
@@ -662,180 +517,92 @@ def write_history(
     include_mesh: bool = True,
     stream_options: HistoryStreamOptions | Mapping[str, Any] | None = None,
 ) -> Path:
-    """Write one MPAS-compatible serial atmosphere history file.
+    """Write legacy history snapshots through the real Rust stream artifact.
 
-    Float32 and float64 fields retain their dtype under the default
-    ``precision='native'``.  Mesh connectivity is converted back from the
-    port's zero-based/``-1`` authority form to MPAS's one-based/zero-padding
-    disk convention.
+    This API preserves snapshot consumers' float dtypes and CF time metadata.
+    Exact native membership is the write_native_stream contract below.
+    MPAS src/core_atmosphere/Registry.xml:927-1029,1674-1682.
     """
-
-    options = (
-        stream_options
-        if isinstance(stream_options, HistoryStreamOptions)
-        else HistoryStreamOptions.from_mapping(stream_options)
-    ).validate()
+    import tempfile
+    from .restart_v842 import _call, _json_attrs
+    from .history_writer import atomic_write
+    options = (stream_options if isinstance(stream_options, HistoryStreamOptions)
+               else HistoryStreamOptions.from_mapping(stream_options)).validate()
     destination = Path(path).expanduser().resolve()
-    if destination.exists() and options.clobber_mode == "never_modify":
-        raise FileExistsError(
-            f"clobber_mode='never_modify' refuses existing history file {destination}"
-        )
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
+    if destination.exists() and options.clobber_mode == 'never_modify':
+        raise FileExistsError(destination)
+    destination.parent.mkdir(parents=True,exist_ok=True)
     times = _time_values(valid_time)
     reference = _as_datetime(initial_time) if initial_time is not None else times[0]
     if time_seconds is None:
-        seconds = np.asarray([(value - reference).total_seconds() for value in times], dtype=np.float64)
+        seconds = [(t-reference).total_seconds() for t in times]
     elif np.isscalar(time_seconds):
-        if len(times) != 1:
-            raise ValueError("scalar time_seconds is only valid for one history record")
-        seconds = np.asarray([time_seconds], dtype=np.float64)
-    else:
-        seconds = np.asarray(tuple(time_seconds), dtype=np.float64)
-        if seconds.shape != (len(times),):
-            raise ValueError(f"time_seconds shape {seconds.shape} != ({len(times)},)")
-    if not np.all(np.isfinite(seconds)):
-        raise ValueError("time_seconds must be finite")
-
-    arrays = _mesh_arrays(mesh)
-    mesh_dims = _mesh_dimensions(mesh)
-    variable_dims = _mesh_variable_dimensions(mesh)
-    variable_attrs = _mesh_variable_attrs(mesh)
-    sizes = {name: size for name, size in mesh_dims.items() if name not in {"Time", "StrLen"}}
-    inferred_nlev = _infer_vertical_size(fields, field_dimensions, n_vert_levels)
-    if inferred_nlev is not None:
-        vertical = {
-            "nVertLevels": inferred_nlev,
-            "nVertLevelsP1": inferred_nlev + 1,
-            "nVertLevelsP2": inferred_nlev + 2,
-        }
-        for name, size in vertical.items():
-            if name in sizes and sizes[name] != size:
-                raise ValueError(f"mesh {name}={sizes[name]} disagrees with requested {size}")
-            sizes[name] = size
-
-    prepared: dict[str, tuple[NDArray[Any], tuple[str, ...], dict[str, Any]]] = {}
-    reserved = {"Time", "xtime", "initial_time"}
-    for name, raw in fields.items():
-        if name in reserved or (include_mesh and name in HISTORY_MESH_VARIABLES):
-            raise ValueError(f"history field name {name!r} is reserved")
-        array, dims, attrs = _field_parts(name, raw, field_dimensions, field_attrs)
-        data, disk_dims = _prepare_field(name, array, dims, sizes, len(times))
-        metadata = dict(_FIELD_METADATA.get(name, {}))
-        metadata.update(attrs)
-        prepared[name] = (data, disk_dims, metadata)
-
-    selected_mesh: dict[str, tuple[NDArray[Any], tuple[str, ...], Mapping[str, Any]]] = {}
-    if include_mesh:
-        for name in HISTORY_MESH_VARIABLES:
-            if name not in arrays:
-                continue
-            data = np.asarray(arrays[name])
-            dims = _mesh_dims_for_array(name, data, variable_dims, sizes)
-            for axis, dim in enumerate(dims):
-                expected = sizes.get(dim)
-                if expected is not None and expected != data.shape[axis]:
-                    raise ValueError(
-                        f"mesh variable {name} dimension {dim} has {data.shape[axis]}, expected {expected}"
-                    )
-                sizes[dim] = int(data.shape[axis])
-            selected_mesh[name] = (data, dims, variable_attrs.get(name, {}))
-
-    mode_clobber = options.clobber_mode in {"truncate", "replace_files"}
-    if destination.exists() and not mode_clobber:
-        raise FileExistsError(destination)
-
-    with Dataset(destination, "w", format=options.netcdf_format) as dataset:
-        dataset.createDimension("Time", None)
-        dataset.createDimension("StrLen", _STR_LEN)
-        used_dimensions: set[str] = set()
-        for _, dims, _ in selected_mesh.values():
-            used_dimensions.update(dims)
-        for _, dims, _ in prepared.values():
-            used_dimensions.update(dim for dim in dims if dim != "Time")
-        # Core horizontal and requested vertical dimensions are useful to MPAS
-        # readers even if a particular snapshot has no field on one of them.
-        used_dimensions.update(name for name in (*_ENTITY_DIMENSIONS, *_VERTICAL_DIMENSIONS) if name in sizes)
-        for name in sizes:
-            if name in used_dimensions and name not in dataset.dimensions:
-                dataset.createDimension(name, sizes[name])
-
-        inherited = dict(getattr(mesh, "attrs", {}))
-        inherited.pop("_NCProperties", None)
-        inherited.update(
-            {
-                "Conventions": "CF-1.10",
-                "source": "mpas-port serial atmosphere history writer",
-                "hexcore_evidence": "implemented-unverified",
-                "hexcore_frozen_source": _FROZEN_OUTPUT_SOURCE,
-                "stream_name": "output",
-            }
-        )
-        if global_attrs:
-            inherited.update(global_attrs)
-        _set_attrs(dataset, inherited)
-
-        initial = dataset.createVariable("initial_time", "S1", ("StrLen",))
-        _set_attrs(
-            initial,
-            {"units": "YYYY-MM-DD_hh:mm:ss", "long_name": "Model initialization time"},
-        )
-        initial_chars = np.full(_STR_LEN, b" ", dtype="S1")
-        encoded_initial = _mpas_time_string(reference).encode("ascii")
-        initial_chars[: len(encoded_initial)] = np.frombuffer(encoded_initial, dtype="S1")
-        initial[:] = initial_chars
-
-        xtime = dataset.createVariable("xtime", "S1", ("Time", "StrLen"))
-        _set_attrs(
-            xtime,
-            {"units": "YYYY-MM-DD_hh:mm:ss", "long_name": "Model valid time"},
-        )
-        _write_char_array(xtime, [_mpas_time_string(value) for value in times])
-
-        time_var = dataset.createVariable("Time", "f8", ("Time",))
-        _set_attrs(
-            time_var,
-            {
-                "units": f"seconds since {reference:%Y-%m-%d %H:%M:%S}",
-                "long_name": "CF-compliant valid time",
-                "standard_name": "time",
-                "calendar": "gregorian",
-            },
-        )
-        time_var[:] = seconds
-
-        converted = set(getattr(mesh, "converted_connectivity", ())) | _CONNECTIVITY_VARIABLES
-        for name, (data, dims, attrs) in selected_mesh.items():
-            disk_data = data
-            if name in converted:
-                # In-memory: 0..N-1 and -1 padding.  On disk: 1..N and 0.
-                disk_data = np.asarray(data, dtype=np.int64) + 1
-                if disk_data.size and (
-                    np.min(disk_data) < np.iinfo(np.int32).min
-                    or np.max(disk_data) > np.iinfo(np.int32).max
-                ):
-                    raise OverflowError(f"mesh connectivity {name} exceeds MPAS int32")
-                disk_data = disk_data.astype(np.int32)
-            _create_data_variable(
-                dataset,
-                name,
-                disk_data,
-                dims,
-                attrs,
-                precision=options.precision,
-            )
-
-        for name, (data, dims, attrs) in prepared.items():
-            _create_data_variable(
-                dataset,
-                name,
-                data,
-                dims,
-                attrs,
-                precision=options.precision,
-            )
-
+        if len(times)!=1: raise ValueError('scalar time_seconds requires one record')
+        seconds = [float(time_seconds)]
+    else: seconds = list(time_seconds)
+    if len(seconds)!=len(times) or not np.all(np.isfinite(seconds)):
+        raise ValueError('time_seconds must be finite with one value per record')
+    arrays=_mesh_arrays(mesh)
+    sizes={k:v for k,v in _mesh_dimensions(mesh).items() if k not in ('Time','StrLen')}
+    sizes.update(Time=len(times),StrLen=_STR_LEN)
+    nlev=_infer_vertical_size(fields,field_dimensions,n_vert_levels)
+    if nlev is not None:
+        for d,n in (('nVertLevels',nlev),('nVertLevelsP1',nlev+1),('nVertLevelsP2',nlev+2)):
+            if d in sizes and sizes[d]!=n:raise ValueError(f'mesh {d} disagrees with {n}')
+            sizes[d]=n
+    with tempfile.TemporaryDirectory(prefix='.history-stream-',dir=destination.parent) as temporary:
+        stage=Path(temporary);variables=[]
+        def handoff(name,array,dims,attrs,offset=0):
+            if not array.dtype.isnative:raise TypeError(f'{name}: handoff array must have native byte order')
+            if len(dims)!=array.ndim or len(set(dims))!=len(dims):raise ValueError(f'{name}: dimensions do not match shape')
+            for d,n in zip(dims,array.shape):
+                if d in sizes and sizes[d]!=n:raise ValueError(f'{name}: {d} has {n}, expected {sizes[d]}')
+                sizes[d]=int(n)
+            input_dtype=f'{array.dtype.kind}{array.dtype.itemsize}'
+            dtype=('f4' if options.precision=='single' else 'f8') if array.dtype.kind=='f' and options.precision!='native' else input_dtype
+            if offset:dtype='i4'
+            raw=stage/f'field-{len(variables)}.raw';array.tofile(raw)
+            disk_dims=_canonical_dimension_order(dims if name in HISTORY_MESH_VARIABLES and name not in fields else (dims if 'Time' in dims else ('Time',*dims)))
+            variables.append(dict(name=name,dtype=dtype,input_dtype=input_dtype,dimensions=disk_dims,
+                input_dimensions=dims,shape=array.shape,filename=str(raw),attrs=_json_attrs(attrs),connectivity_offset=offset))
+        for name,raw in fields.items():
+            if name in ('Time','xtime','initial_time') or (include_mesh and name in HISTORY_MESH_VARIABLES):
+                raise ValueError(f'history field name {name!r} is reserved')
+            array,dims,attrs=_field_parts(name,raw,field_dimensions,field_attrs)
+            if dims is None:dims=_infer_field_dimensions(name,array,sizes,len(times))
+            metadata=dict(_FIELD_METADATA.get(name,{}));metadata.update(attrs)
+            handoff(name,array,tuple(dims),metadata)
+        if include_mesh:
+            converted=set(getattr(mesh,'converted_connectivity',())) | _CONNECTIVITY_VARIABLES
+            for name in HISTORY_MESH_VARIABLES:
+                if name not in arrays:continue
+                array=np.asarray(arrays[name])
+                dims=_mesh_dims_for_array(name,array,_mesh_variable_dimensions(mesh),sizes)
+                attrs=dict(_FIELD_METADATA.get(name,{}));attrs.update(_mesh_variable_attrs(mesh).get(name,{}))
+                handoff(name,array,dims,attrs,1 if name in converted else 0)
+        variables.extend([
+            dict(name='initial_time',dtype='S1',dimensions=('StrLen',),text=[_mpas_time_string(reference)],attrs=_FIELD_METADATA['initial_time']),
+            dict(name='xtime',dtype='S1',dimensions=('Time','StrLen'),text=[_mpas_time_string(t) for t in times],attrs=_FIELD_METADATA['xtime'])])
+        handoff('Time',np.asarray(seconds,dtype=np.float64),('Time',),dict(units=f'seconds since {reference:%Y-%m-%d %H:%M:%S}',long_name='CF-compliant valid time',standard_name='time',calendar='gregorian'))
+        inherited=dict(getattr(mesh,'attrs',{}))
+        inherited.update(Conventions='CF-1.10',source='mpas-port serial atmosphere history writer',
+                         hexcore_evidence='implemented-unverified',hexcore_frozen_source=_FROZEN_OUTPUT_SOURCE,stream_name='output')
+        if global_attrs:inherited.update(global_attrs)
+        used={d for v in variables for d in v['dimensions']}
+        used.update(d for d in (*_ENTITY_DIMENSIONS,*_VERTICAL_DIMENSIONS) if d in sizes)
+        def emit(target):
+            _call(dict(operation='write',path=str(target),format='netcdf' if options.io_type=='serial_netcdf' else options.io_type,
+                       dimensions={d:sizes[d] for d in used},variables=variables,global_attrs=_json_attrs(inherited)),stage)
+            return destination
+        # Replacing a frame also refreshes its matching durability marker.
+        atomic_write(emit,destination,replace=options.clobber_mode!='never_modify')
     return destination
+
+
+def write_native_stream(*args: Any, **kwargs: Any) -> Path:
+    """Exact native stream membership (Registry.xml:498-1349), via Rust."""
+    from .restart_v842 import write_stream
+    return write_stream(*args, **kwargs)
 
 
 def write_mpas_history(*args: Any, **kwargs: Any) -> Path:
@@ -850,6 +617,8 @@ write_history_file = write_mpas_history
 __all__ = [
     "Field",
     "HISTORY_MESH_VARIABLES",
+    "HISTORY_OUTPUT_VARIABLES",
+    "write_native_stream",
     "HistoryField",
     "HistoryStreamOptions",
     "format_mpas_filename",

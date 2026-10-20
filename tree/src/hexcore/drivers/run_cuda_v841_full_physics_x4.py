@@ -61,6 +61,7 @@ if str(SRC) not in sys.path:
 # execution set against whichever hexcore the interpreter ends up with, so a
 # gate never hashes one copy of a module while another copy executes.
 from hexcore import shipped_sources  # noqa: E402
+from hexcore.stochastic_timing import timed_arwen_step  # noqa: E402
 
 
 SCHEMA = "mpas-port.cuda-v841-real-x4-full-physics/v2"
@@ -228,7 +229,33 @@ NONCLAIMS = (
 # stale the first time somebody edits a docstring.  ``tools/repin_source_tables.py``
 # re-derives every row of it from the tree; the next rename is a re-run of that,
 # not a hand-patch of forty-odd hex strings.
+# Re-frozen 2026-10-14 for the public-release scrub: owner quotations and rented-host
+# names were reworded in comments and docstrings of config_v841, cuda_arwen_physics_v841,
+# cuda_ntiedtke_column_v841, cuda_seam_snapshot_v841, dt_admission and step_anchors.
+# MEASURED INERT: each file's pre- and post-scrub bytes parse to the identical AST once
+# docstrings are dropped and string constants normalised, with the same string-constant
+# count; no number, branch or name moved.  Pins that were already stale before the scrub
+# were left as they were.
+# Re-derived 2026-10-18 (unify hex/next): diagnostic_export.py and history_writer.py
+# are the union of the parked misc and speed sides (batched complete export, atomic
+# writes and history-ready recovery); these two rows are the merged files' digests.
+# No card run for this merge.
 EXECUTION_SOURCE_PINS: dict[str, str | None] = {
+    "src/hexcore/diagnostic_export.py": "6665cddccda8a968c1913f53ac804827bc4e6d9ee2ff5e457d7f0474dd6f8b36",
+    "src/hexcore/snapshot_transfer.py": "7064e74719933894c9d92dbfe06190b404801cd72ecc5e4fe2447b66124c5efb",
+    "src/hexcore/history_ready.py": "287840b7ece3cb97185340f3e161c997bbfd9a11233ff5da4198cca42e1f9523",
+    "src/hexcore/history_writer.py": "b0b6f8d27fce8478f0d78d3c4cc73bdc12bf5f4a625b7f45515b8f1206fd64a1",
+    "src/hexcore/cuda_arwen_helper_scope_v2.py": "cf179cb9e5650d5db36ccb8d60905a88140b360da9d54c6d8f94a8e032e00e07",
+    "src/hexcore/radiation_source_sets.json": "f0357c3b4613f2cd136d62f5cd2391d034d471acc59d6f956683082cc1fdc5a2",
+    "src/hexcore/data/profiles/engine-helper-sets.v1.json": "d4b070d3432951bf1f028419298762fd2901deda0a9374e3351757370ee1676a",
+    # Native upper damping: Rust and CUDA match compiled source blocks.
+    "src/hexcore/native/upper_damping.rs": "5483b2c1e7da45317ffe4213c5879b583070d9e28d591ec52a9c697a052e81f1",
+    "src/hexcore/upper_damping_v841.py": "c77cb8a360cb25f6eabf1aca6b9c50abb41e9fe603511aefc9c0c6df9117f4e1",
+    "src/hexcore/cuda_upper_damping_v841.py": "04f0b5b450c088575e589de943b7b44fff10b442d01ae0c0acc0a5e848748545",
+    # Re-frozen 2026-10-04 for monotonic scalar transport. The released
+    # limiter-off default remains byte-identical. The added execution branch
+    # has a native nonzero-tracer ruler and native regional mask contracts;
+    # it does not qualify the coupled physics against a native endpoint.
     # Re-frozen 2026-08-26 for the limited-area PHYSICS lane.  Two changes,
     # both inert on a closed sphere.  (1) The geometry object now records
     # which of its columns is native's garbage element, read off the mesh
@@ -241,14 +268,37 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # whole step, correctly -- no parameterisation has a table for it.  The
     # dycore state is not touched, because real elements gather its pool
     # values.  Every affected proof re-runs against this digest.
+    # 2026-10-18: consumer-specific post-RK preparation. H60 owner replay
+    # and separate device timeline are in the hex-diagnostics lane receipt.
     "src/hexcore/cuda_physics_prep_v841.py": (
-        "3bd2d6a1a0217f4a91c70f0179e9dfebe210426a4f3ab6e0d48b6e29a7855f72"
+        "cfa57a7c014e22df930457637c9de975d111925753bef15133c21d9f4b0fccdf"
     ),
     "src/hexcore/cuda_gwdo_v841.py": (
-        "5b9dd5980e33d7a0b1760281bc1553c93fa5f4c4395f7b107c8d61dabe1b9f23"
+        "af22e7a450d1bbdf1a1dc9dcdf2a7a9d0da13f7d230751941cdf0a3418f0f00b"
     ),
+    # Re-frozen 2026-10-11: commit_wsm6_state_v841_f32 takes the species
+    # row's block length in place of the literal 6.  THE BREAKAGE: a
+    # three-species block (Kessler, microphysics off) was copied three planes
+    # past both buffers and stopped the card with cudaErrorIllegalAddress at
+    # the first commit.  A six-species block runs the same six copies, so the
+    # default suite's history is unchanged (measured, 60 km and 30 km).
+    # Re-derived 2026-10-14 (release 0.4.0, H1 merged onto the H7 merge): the
+    # SG2 series (43ccb8b0) gives the held tendencies an optional
+    # diabatic_theta field, its residency check and receipt flag, and
+    # with_lagged_diabatic_theta_v841.  None (the first step, physics off, a
+    # backend without the producer) leaves the held tendencies as before.
+    # This file equals H1's byte for byte; the H1 lane receipt's dry derecho
+    # and ArWen exact identities ran on it.  No card run for this merge.
+    # Re-frozen 2026-10-15 (WSM6 SR envelope): _wsm6_sr_roundoff_limit_v841
+    # now prices the four per-step scalings WSM6 applies to each surface
+    # accumulation (fallsum*delz/denr*dtcld*1000), 7 ULPs at one minor loop
+    # where the stale copy allowed 3.  THE BREAKAGE: a default 2 h forecast
+    # (60/30/15 km, dt=90 s) stopped at 4590 s on SR=1.00000048.  Only the
+    # validation threshold moves; no field is written differently.
+    # Re-frozen for the Morrison row: per-bucket signed-fallout validation
+    # preserves native words; the default positive-sum policy is unchanged.
     "src/hexcore/cuda_physics_v841.py": (
-        "fed89ae26008b48a305f75af4db24c215cf5952d0ae28c67bbd05a5b925a569b"
+        "a8ca96d41d3cc79fa148caf8cbf60a020e626ee39a82fa33a4e791417ac1bd23"
     ),
     # Re-frozen during the 12 GiB capacity work: the dynamics subcycle stopped
     # copying a scalar block nothing writes, stopped taking a private image of
@@ -327,8 +377,104 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # change are message and metadata text (a card label, a ruling quotation,
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
+    # Re-frozen for order-2 stage orchestration. The order-3 defaults retain
+    # their coefficient recomputation, timings and scalar density weights.
+    # Order 2 uses the native half/half/full schedule, retains its first-stage
+    # coefficients and selects the half density weight. Native schedule bits,
+    # device repeatability and the scalar density contract are held separately
+    # from native endpoint qualification.
+    # Re-frozen 2026-10-05 for the startup lane: ``_validate_v841_host_mesh``
+    # and ``_validate_v841_host_coefficients`` are served by the content-keyed
+    # host-preparation cache (hexcore.prep_cache).  MEASURED: the mesh
+    # validation alone took 91.9 s of a 633 s cold start on the published
+    # 30 km mesh, re-proving the same connectivity of the same bytes every
+    # run.  A verdict is only replayed for a call whose every argument array,
+    # scalar and object field hashes to the key it was proven under; a
+    # refusal is never stored.  The CUDA source strings are byte-unchanged.
+    # Re-run against this digest: the CPU battery and the same-card identity
+    # pairs on conus12km and the published 30 km mesh
+    # (evidence/hex-startup-20261005/).  The x4 full-physics proof and the
+    # regional class mints did not re-run; their records are carried.
+    # Re-frozen 2026-10-10 (certificate gates retired, owner ruling): _validate_config no longer refuses
+    # config_scalar_advection=False, config_positive_definite=True (which
+    # runs the FCT branch, as native does) or apvm=0 for want of a native
+    # ruler; the split-three refusal names the missing code path; and a
+    # limited-area cull on the global path is refused for the breakage it
+    # is, whether or not a regional anchor exists.  The recorded x4 schedule
+    # executes the same code.
+    # WHAT RAN AGAINST THE 2026-10-10 DIGESTS, stated because an earlier
+    # note here said "every affected proof re-runs against this digest"
+    # and none had: the CPU battery on the 8-card RTX PRO 6000 host, and three 8-card forecasts on
+    # 8-card RTX PRO 6000 host from the 2026-10-03 12Z start (15 km 24 h on bare defaults, 30 km
+    # 48 h on bare defaults and on the old RK3/6/600 s schedule; receipts
+    # kept with the owner's 2026-10-10 release records).  The x4
+    # full-physics byte proof and the regional class mints did NOT re-run;
+    # their records are carried.
+    # Re-frozen again 2026-10-10 (audit of the retirement): the REGIONAL
+    # scalar path takes the limited routine on the last stage when
+    # config_monotonic OR config_positive_definite is on, as native
+    # (mpas_atm_time_integration.F:2953) and the global path do; it tested
+    # config_monotonic alone and passed positive_definite=False.  The global
+    # path and every default-configuration run execute the same code as
+    # before.  Re-run against this digest: the CPU battery, and the forecast
+    # named in the report beside the bundle.  No regional case ran on a card.
+    # Re-frozen 2026-10-13 (forecast batch, hex/gpu-forecast-batch): the host
+    # mesh validation evaluates its row laws over whole tables instead of row
+    # loops (tests/test_mesh_rows_vectorized.py keeps the loops and proves the
+    # same verdict and message, whole and class-local meshes and corrupted
+    # tables).  No CUDA source, launch or arithmetic line moved.  Re-run
+    # against this digest: the derecho 3 km patch, 30 members, histories
+    # bitwise equal to the separate-process runs of the previous digest.
+    # Re-frozen 2026-10-13 (landing wave 2, SG2): the lagged microphysics
+    # heating carry (e7be214b):
+    # add_lagged_diabatic_theta_v842_f32 (mpas_atm_time_integration.F:6931-6937)
+    # and the final-RK-stage removal in recover_cells_f32 (F:4436-4437).  CUDA
+    # source DID move.  Both are inactive unless the physics hands the
+    # dycore a diabatic_theta (has_diabatic 0 otherwise), and no producer in
+    # this tree does, so every run of this tree executes the old arithmetic.
+    # Re-run against this digest: the CPU pin/anchor tests only; no card run.
+    # Re-frozen 2026-10-13 (integration hex/correct-mode): correct/storm-growth
+    # adds the PRODUCER (lagged_heating_v841.py on the ArWen and suite
+    # backends) and the specified-zone zero kernel
+    # zero_speczone_lagged_diabatic_theta_v842_f32 (F:7949).  The sentence
+    # above ("no producer in this tree") no longer holds: with physics on the
+    # carry is active from the second step (SG2, class A, MPAS behaviour, no
+    # switch).  Dry runs launch neither kernel.  This file is byte-identical to
+    # correct/storm-growth 312cf586; the digest is that branch's.
+    # Re-frozen 2026-10-14 (release 0.4.0, lane H1, on integrate/hex-mpas): the
+    # integrate line's cuda_driver.py with the forecast-batch host mesh rows
+    # above and the SG2 producer series merged in.  Re-run against this digest:
+    # the dry derecho cap450 identity (fixed step 30 min, active LTS 1 h) and
+    # the ArWen physics-on exact identity in the lane receipt, and G1/G2.
+    # Re-derived 2026-10-14 (H1 merged onto the H7 merge): H1's file plus the
+    # 0.4.0 release scrub of one comment line (an owner ruling in place of a
+    # person).  No code line differs from the copy the H1 identities above
+    # ran on.  No card run for this merge.
     "src/hexcore/cuda_driver.py": (
-        "cb914d37558d65fc20582a1257e75fec0599e05d2af41044f79a8d8166d628b4"
+        "433a0e51eb948d7235fbab3aa7605c4f6135056e6c717abbbbaa0e6972fc1c0c"
+    ),
+    # THE BREAKAGE THIS PREVENTS: cuda_driver.py now executes host
+    # preparation through hexcore.prep_cache.  Unpinned, an edit to the key
+    # derivation or the result round trip could hand the frozen driver
+    # different arrays with every proof still reporting frozen sources.
+    # Re-frozen 2026-10-05 (start-up lane, second pass): the key now carries
+    # the binding of every name a cached function reaches (a rebound
+    # rkind_libm hook misses or bypasses), leaves out the mesh's file paths
+    # (the same bytes elsewhere are served), carries NumPy's CPU dispatch, and
+    # the disk layer is capped.  What re-ran against this digest: the CPU
+    # battery files for the cache, the pin and anchor tests, and the
+    # conus12km same-card identity pair on an RTX 5090, recorded in
+    # evidence/hex-startup-20261005/.  The x4 full-physics proof and the
+    # regional class mints did NOT re-run; their records are carried.
+    # Re-derived 2026-10-14 (0.4.0 release scrub): one docstring line names
+    # the card host by its hardware; docstring only, no code line moved.
+    # Re-derived 2026-10-16 (single-core setup fix): the three bytecode walks
+    # of the key derivation (_code_names, _code_reads, _local_hexcore_imports)
+    # are memoised per code object and return frozensets.  They are pure
+    # functions of the code object and package, so every key is the same; no
+    # array computation moved.  Re-ran: tests/test_prep_cache.py.
+    "src/hexcore/prep_cache.py": (
+        "891dd40787ac41848b4ecc36d337aabf139009402fbb7099cf6c395394c5d797"
     ),
     # THE BREAKAGE THIS PREVENTS: the same lane that re-froze cuda_driver.py
     # also changed ``recover_state`` -- it gained ``include_pressure`` and
@@ -338,7 +484,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # freely, so a later edit to the pressure-diagnostic path could change
     # forecast bytes with every proof still reporting frozen sources.
     "src/hexcore/cuda_backend/recovery.py": (
-        "66d023c9921c97961892d918620b50d58162bb215e71a495522a3d2a9baf54bc"
+        "9765e0d72853a2af1d4d7acf18db45e2c09e9a89ed3098e392a8ec8ebaab98ab"
     ),
     # Re-frozen for the regional CPU authority lane: the v8.4.1
     # config admits config_apply_lbcs and config_moist_physics behind the
@@ -384,9 +530,38 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # change are message and metadata text (a card label, a ruling quotation,
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
+    # Re-frozen 2026-10-03 (legacy config_epssm, twice: commit c656b69 moved
+    # this row without this note, and the follow-up moved it again).  The
+    # ADMITTED SET WIDENS on every v8.4.1 lane, this frozen x4 lane
+    # included: a nonzero config_epssm, which refused before, is now read
+    # and ignored with upstream's own warning (LegacyEpssmIgnored), exactly
+    # as native v8.4.1's mpas_atm_dynamics_checks does; only a non-real
+    # value refuses.  No configuration admitted before changes meaning: the
+    # default stays 0.0 and validates silently, and no v8.4.1 numeric path
+    # reads the knob.  MEASURED on an RTX 5090 (2026-10-03): the v8.4.1 dry lane
+    # on x1.2562 gives bitwise-identical states for config_epssm 0.0, 0.1
+    # and 0.5 on CPU and on CUDA; tests/test_epssm_v841.py carries that run
+    # and a source hold on every config_epssm read in driver.py and
+    # cuda_driver.py.  Every affected proof re-runs against this digest.
+    # Re-frozen for keyed order-2 dycore step certificates. Existing order-3
+    # configuration bytes and full-physics anchor semantics remain unchanged.
+    # Re-frozen 2026-10-10 (certificate gates retired): the column config's
+    # defaults are MPAS-A v8.4.1's Registry schedule (order 2, two sub-steps,
+    # radiation 1800 s, limiter on; hexcore.mpas_defaults), the timestep is
+    # admitted by cadence integrality and clock closure rather than by an
+    # anchor or step certificate, and the "exact" lane pins are retired.  The
+    # x4 proof passes mpas_defaults.X4_RECORDED_SCHEDULE explicitly, so the
+    # recorded configuration is unchanged.
     "src/hexcore/config_v841.py": (
-        "fdbb45990de9b4e77cbb1987e2b960554764d4c5f2a43dd7a28470e7502a8fc0"
+        "686740e58450f02655a54d3219490a41ac0cdb6e2aa9af07ffc31bd5255a393a"
     ),
+    # Order-2 admission depends on both the keyed certificate selector and
+    # its table. Moving either without this pin would change the admitted
+    # schedule while a frozen-source receipt still named the older config.
+    # Re-frozen 2026-10-10: the certificate table is a record
+    # (step_anchor_record), no longer a gate.
+    "src/hexcore/step_anchors.py": "31201be7d3692dc07ed2c9689c2a9d0211236e3f68d7484b68df018426dc4e0e",
+    "src/hexcore/data/dycore-step-anchors.v1.json": "f9a102a3f4fd848e95bf9fabe5a5ccd0579ba01de739de9e7da8e4ed7930e62d",
     # New pin (convection ruling, 2026-08-26): the frozen config ADMITS
     # config_convection_scheme from this module and the frozen timestep
     # registry keys on the selection it produces, so the pinned config's
@@ -411,8 +586,17 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # change are message and metadata text (a card label, a ruling quotation,
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
+    # Re-frozen 2026-10-10: the unknown-scheme refusal names the missing seam
+    # instead of an "unproven lane".  Message text only.
+    # Re-frozen 2026-10-11: a variable-resolution mesh reads the bands at
+    # its finest cell's scheme spacing (len_disp/meshDensity**0.25), not at
+    # min(dcEdge).  THE BREAKAGE: the 48-3 km patch mesh's min(dcEdge) of
+    # 2778.75 m switched cumulus off for the whole mesh, 48 km cells too.
+    # The x4 proof names cu_grell_freitas explicitly, so its configuration
+    # does not pass through the changed branch; uniform meshes are decided
+    # byte-identically (tests/test_convection_admission_variable_mesh.py).
     "src/hexcore/convection_admission.py": (
-        "e4b2101a63a7a6bf577744f27b53a4eb8b36e3f82f8239ae544ac5d8f9bd126f"
+        "874b0351d61f554e6bfe3d7d0dfbd8bfbe3ecea26fa06abc202f9a164137b27e"
     ),
     # THE BREAKAGE THIS PREVENTS: config_v841.validate() now ADMITS the
     # model timestep from this module, so the pinned config's meaning
@@ -473,8 +657,19 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # change are message and metadata text (a card label, a ruling quotation,
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
+    # Re-frozen 2026-10-10 (certificate gates retired): require_dt_anchor and
+    # its refusal builders are replaced by anchor_record (evidence) and
+    # require_cadences (cadence integrality and clock closure, the breakages
+    # that remain); the candidate mint no longer gates on a sentence.  The
+    # registered rows and their evidence are unchanged.
+    # Re-frozen again 2026-10-10 (audit): largest_admissible_dt is deleted.
+    # It applied the retired 0.90 x 125 m/s policy and nothing called it.
+    # Re-frozen 2026-10-14 (release hygiene N7): the 75 s anchor's evidence
+    # citations name the lab host neutrally (dt75-host-a).  String constants
+    # and one comment only, measured inert by AST; no number, branch or name
+    # moved.
     "src/hexcore/dt_admission.py": (
-        "8c4e1c45e89511409bef8f072f282f2ee01392238bfad8e59c38d6b299750078"
+        "a6c6b96ac32f5f1b079ce887f4be44ebb552b0c5848a3f71f0a44373a04a537c"
     ),
     # New pin (surface/PBL cadence, 2026-08-26): this module decides
     # config_bldt_seconds, a knob the frozen timestep registry keys on, so
@@ -501,8 +696,10 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # change are message and metadata text (a card label, a ruling quotation,
     # anchor basis prose) that nothing reads as a value.  Every affected proof
     # re-runs against this digest.
+    # Re-frozen 2026-10-10: the radiation default beside the decision is
+    # MPAS-A's 1800 s and callers pass the run's own cadence.
     "src/hexcore/pbl_cadence.py": (
-        "e3f5b865cb1b29b9031138b1630495862f0de67c207ffb416febeac04756a247"
+        "7564e462c14739e684d941e0552a087f0c96afaa5ec30aaaef5f9f976ba23621"
     ),
     # Re-frozen for the seam convergence: the Arwen seam pin moved
     # off the pin-only lineage onto the release line's seam-converge merge,
@@ -538,8 +735,67 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # it unless --stop-on-refusal reads it: 447 MB of device-to-host copies
     # and about 24 ms of host time a step on the 43,884-cell point mesh.
     # Every affected proof re-runs against this digest.
+    # Re-frozen 2026-10-05 for the New Tiedtke row (RRFS v2 at 12 km): the
+    # sealed constructor admits cumulus_scheme='ntiedtke' (every step, as GF),
+    # _new_seam builds that row's seam from cuda_ntiedtke_column_v841 after
+    # verifying the two engine files it executes, the radius guard admits
+    # exactly that subclass, and the receipt names the row.  The default
+    # (GF and convection-off) paths are unchanged; _ADAPTER_AUTHORITY and
+    # every contract digest are unchanged.
+    # Re-frozen 2026-10-10 (engine pin retired as a forecast gate, owner ruling): _verify_checkout_root no longer
+    # raises on an engine whose sixteen seam files, contract surface or
+    # composed glacier unit differ from the pinned engine's; it returns the
+    # tree's identity as found (engine_pin.identity_of) and the pin mapping
+    # and receipts record matches_measured_row, the moved and the absent
+    # paths.  The radius guard no longer re-hashes the sixteen files on each
+    # call.  Still refused, by breakage: a tree with no
+    # gpuwm/core/mpas_column_batch.py, a gpuwm imported from a tree other
+    # than the one named, and an engine whose column batch no longer runs
+    # PhysicsDriver.compute / microphysics.apply.  On an engine that IS the
+    # pin or an admitted row every recorded value is what it was;
+    # _ADAPTER_AUTHORITY and every contract digest are unchanged.  Re-run
+    # against this digest: the CPU battery and the forecast named in the
+    # report beside the bundle (gpuwm 2.8.9 against the 2.8.7 pin, no local
+    # edits).  The x4 full-physics proof did not re-run.
+    # Re-frozen 2026-10-13 for physics.mode (correct mode, findings WB4/WB5,
+    # branch correct/mpas-water-budget): the sealed constructor admits the
+    # optional physics_mode/physics_correct_skip keys and stores them only in
+    # correct mode, the backend records the engine's correct_mode receipt.
+    # Exact mode seals the same identity and passes the engine the same
+    # keywords; measured: hex global 120 km 1 h histories sha256-identical to
+    # 53fa27c6 + engine 4d1079249 (correct/mpas-water-budget).  The x4 proof
+    # did not re-run.
+    # Re-frozen 2026-10-13 (integration hex/correct-mode): the file now holds
+    # both correct/mpas-water-budget's physics.mode plumbing and
+    # correct/storm-growth's SG2 producer (lagged_heating_v841: stage in
+    # finish_step, publish in commit_step, carried in restart state).
+    # Re-frozen 2026-10-14 (release 0.4.0, lane H1): correct mode on an engine
+    # whose column batch takes no mode keywords is a named gap, not a refusal:
+    # the seam is built without the keywords and the receipt names WB4/WB5 as
+    # gaps (_engine_correct_mode, _engine_kwargs).  Exact mode builds the seam
+    # with the keywords of before.  No card run against this pin.
+    # Re-derived 2026-10-14 (H1 merged onto the H7 merge): H1's file plus the
+    # 0.4.0 release scrub of two docstring lines in _verify_checkout_root (an
+    # owner ruling and a host's hardware in place of names).  No code line
+    # differs from H1's copy.  No card run for this merge.
+    # Re-frozen 2026-10-17: shared GPU surface kernels now update the ArWen
+    # columns from a covering series; daily GFS words and unchanged C12
+    # output are checked by the surface lane receipts. No dycore pin moved.
+    # 2026-10-18: phase two requests only the columns its seam consumes.
+    # Re-derived 2026-10-18 (parked-merge hex-speed): that file plus the
+    # parked asynchronous history-ready seam; digest of the merged file.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "6a0c9401b71ef460fbd1de0b56a88c2701f46c43e0ba5e5d7227b35d4e18e440"
+        "7ade3174e32558f6045be17927dfea3bd975f4483df479ed374d7239c53262ca"
+    ),
+    # New pin 2026-10-05: the New Tiedtke row's seam (the frozen column-batch
+    # class subclassed, driver built at cu_physics=16, raw cumulus momentum
+    # added to du/dv as native todynamics does).  Executes only when the
+    # constructor selects ntiedtke.
+    "src/hexcore/cuda_ntiedtke_column_v841.py": (
+        "d5433a2ec3f45ec48462ecadea60e6cf4d2c1d1f2a11c56a5f2480da9c63d25a"
+    ),
+    "src/hexcore/cuda_seam_snapshot_v841.py": (
+        "095d0d3f52c1e5bed736c8b1a2fae515d2ffec233defcb03ef2d493d8ce2c2fe"
     ),
     # The v8.4.1 horizontal-mixing execution boundary (2-D Smagorinsky):
     # CPU authorities and the CUDA operator modules the RK1 saved-Euler
@@ -551,7 +807,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # (hexcore.rkind_libm; float64 evaluation is a byte no-op).  Every
     # affected proof re-runs against this digest.
     "src/hexcore/mixing.py": (
-        "7b5f9f8ac8f93f66e180d85f90ba3181eac2547c0ef7146b752eb5dd2c1a6433"
+        "1fd749a6c2a8599acf9bac7b2fc9764c0cb8ceb428be50b19a4e93e3a094d554"
     ),
     # Re-frozen for the regional CPU authority lane: the
     # deformation-weight halo guard now CYCLES exactly as native
@@ -564,22 +820,53 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # memory model on a regional mesh (garbage-element columns, stripped
     # after) -- a branch a global mesh never enters, since it has no
     # sentinel cellsOnEdge slot to detect.
+    # Re-frozen 2026-10-05 for the startup lane: the deformation weights
+    # (84.9 s of the 30 km cold start, 18.3 s of a conus12km warm start) are
+    # served by hexcore.prep_cache under the same rule as the host
+    # validations above.  No arithmetic line moved.  Re-run against this
+    # digest: the same set named at cuda_driver.py above; the x4
+    # full-physics proof and the regional class mints did not re-run.
+    # Re-frozen 2026-10-13 (forecast batch): a partition-local mesh takes each
+    # deformation-weight row whose inputs are bit-identical to its whole-mesh
+    # row from the (cached) whole-mesh weights and computes the rest with the
+    # unchanged per-cell code; byte-identical by test and by the 30 derecho
+    # member histories named at cuda_driver.py above.
+    # Re-frozen 2026-10-16 for hex/global-defects e88492b4: independent
+    # deformation rows run across processes, retaining the scalar expressions
+    # and GNU libm. Its serial/process byte tests and speed-2's landing decks
+    # are current-tree evidence. The archived x4 and regional mints did not
+    # re-run and retain their original scope.
     "src/hexcore/mixing_v841.py": (
-        "c5007fa65ddcf67759a7b89e24f2bef615c6a3201d0e8dd2affabd43138e7865"
+        "9d65837c5b42516865150193d647534f8acfd429612cd22a3899146ebd8b319b"
     ),
     "src/hexcore/cuda_horizontal.py": (
-        "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5"
+        "d4e4face383eab6f19f21598613b7bd58e37eb75e067b7b9e817060a2ec015cd"
     ),
     "src/hexcore/cuda_horizontal_v841.py": (
-        "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455"
+        "0f26e1e54ab4935aa4ce9c25d189d15b76b046e84dd015e15d2326c3a6bddf7d"
     ),
     # The two-rank (multi-GPU) execution boundary: the scalar-transport module
     # (which gained the guarded FCT halo-exchange hook and executes in every
     # lane) and the partition modules the 2-GPU runner executes.  Pinned here
     # so a partition-module drift refuses BEFORE CUDA on every lane that
     # verifies frozen sources, exactly as the mixing boundary was pinned.
+    # Re-frozen 2026-10-11: the flux-corrected limiter releases each work
+    # array after the last kernel that reads it (a one-card 30 km run on
+    # bare defaults ran out of device memory at step 18).  Seven `del`
+    # statements; no launch, argument or arithmetic line moved.  The x4
+    # recorded schedule runs with the limiter off and never enters this
+    # routine.  Re-run against this digest: the CPU battery and the
+    # one-card 30 km forecasts named in the report beside the bundle.
+    # Re-derived 2026-10-14 (0.4.0 release scrub): one comment line names the
+    # card host by its hardware; comment only, no launch, argument or
+    # arithmetic line moved.
+    # Re-frozen 2026-10-19 for d15ea3482cc5: restore the generic kernel
+    # cache key used by the LTS interception path. Dimension-specialized
+    # keys retain dimensions. CUDA source expressions did not change.
+    # This is the current execution identity, not a re-mint of archived x4
+    # or regional forecast evidence. Device requalification remains pending.
     "src/hexcore/cuda_transport_v841.py": (
-        "6ac4eece4ed080e7f76a2239b11dc59c984501ee52db900e35e5d74762f78252"
+        "32720d050fe1fa002c983f30dce85b823edf39b593c3811aa562de43e0a86255"
     ),
     # THE BREAKAGE THESE TWO PREVENT, found by the NVRTC reciprocal-rewrite
     # lane (the NVRTC reciprocal-rewrite defect): a pinned translation unit does not compile its own file.
@@ -593,16 +880,16 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # with the battery green.  Pinned here so the file that actually supplies
     # the bytes has to move deliberately.
     "src/hexcore/cuda_transport.py": (
-        "0cf68d55d00a094590d23ec0c7af6bae8595b2b954c2cdc8efc3e9eff49c112a"
+        "013ed46f8ef3bcc1a445b2e81135e262c23c49950e52e5b62b22e4274644b15e"
     ),
     "src/hexcore/cuda_fp32.py": (
         "ba6b962cac42454846b96d87bba73ef3ceedbf69cdf8ae6a7f880b31f25cc28e"
     ),
     "src/hexcore/partition_assets_v841.py": (
-        "affae3ab52f39a1be861e82230496a82233833db933f1a7ba482c9a3e2ee9248"
+        "61141b2d886bf45a1277eb64c60ed4a5517990ed708ce32899b0dcbeed25fcde"
     ),
     "src/hexcore/partition_local_mesh_v841.py": (
-        "f24e949f1d39c834d7ff1f16e93fce941422ef92e00a89fb884be1a95fea73d9"
+        "2b114c0e05748dee245381e522cdfb9d27a90b142bdf55289484d376ded86fb6"
     ),
     "src/hexcore/partition_state_v841.py": (
         "a504e6f5c5abc2014d40e4a8e3e89885f97d6456ff428c585fbaf57910eccbe8"
@@ -618,7 +905,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
         "b544707943ab75ce27e1972a7a57dd9a3eeed7aa23b2fa332e92594983de97e4"
     ),
     "src/hexcore/partition_executor_v841.py": (
-        "6343fe0f89f39d81b3ef0d61343330c2ad09f59e00295ceedc090c3e4a61879c"
+        "09e5a13e21a22087442e5834d0af0b7f6dd4716d92af3327d0914959df1907c7"
     ),
     "src/hexcore/partition_net_v841.py": (
         "30b0988b2d40bbda8d68be1ec236564ea87bb6690bfdcd08370eea12ca11753b"
@@ -646,7 +933,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "a9436205305c4127dc38399288ad47839dc797d0c786e1118e9e800cc7223c1d"
         ),
         "prep_kernel_sha256": (
-            "e5c5ebba387db8a8f82b2d0233ed3f9b336269d7e8b3dfbde746a56a14924710"
+            "a3dfefc8d4c80f2be88e3158f692f17c7b5c9427eae3e263d5ec555439c7b017"
         ),
         "gwdo_contract_sha256": (
             "f3c92686b2b0f86b7076e10bd261a7897ef42b3ebd7f7a60789e2b8ee95e96ef"
@@ -658,10 +945,10 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "332899f64a24b45fc93a686ce056a674a4bd07a26d635447d0aff884ce13d001"
         ),
         "coupling_kernel_sha256": (
-            "af9044f687dc9d50d66b035eba84373643218c55fb1872e0aeb7c523321c2365"
+            "fb0aa7da49c1a5e7f5d6bacce6503214d1e550b9a60c4faaaeff237e2d719e4b"
         ),
         "adapter_contract_sha256": (
-            "78e1ed04a85dfa96700af7166521dc2e27f009212b53197a95cdb4a976a41b6e"
+            "cfa5beb4c4ea77df52bbeb23ef4bd14136b974a8d21d4d49903ec3de03c3d07f"
         ),
         "arwen_contract_surface_sha256": ARWEN_CONTRACT_SURFACE_SHA256,
         "arwen_glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
@@ -990,11 +1277,9 @@ def sha256_file(path: str | Path) -> str:
     selected = Path(path)
     if not selected.is_file():
         raise FileNotFoundError(f"required ordinary file is missing: {selected}")
-    digest = hashlib.sha256()
-    with selected.open("rb") as stream:
-        for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    # The real SHA-256, computed once per file version (hexcore.file_digest).
+    from hexcore.file_digest import sha256_file as file_version_sha256
+    return file_version_sha256(selected)
 
 
 def canonical_json_sha256(value: Any) -> str:
@@ -1015,8 +1300,27 @@ def array_sha256(value: Any) -> str:
     digest.update(b"\0")
     digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode())
     digest.update(b"\0")
-    digest.update(array.tobytes(order="C"))
+    # A C-contiguous array's buffer IS its tobytes(order="C"); hashing the
+    # buffer in place skips a full copy and lets hashlib drop the GIL, so
+    # fingerprint_nested_arrays can hash arrays on several cores.  Object
+    # arrays (no buffer) keep the copy.
+    try:
+        payload = memoryview(array).cast("B") if array.size else b""
+    except (TypeError, ValueError):
+        payload = array.tobytes(order="C")
+    digest.update(payload)
     return digest.hexdigest()
+
+
+def _fingerprint_threads() -> int:
+    text = os.environ.get("GPUWM_HEX_FINGERPRINT_THREADS", "16")
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise ValueError("GPUWM_HEX_FINGERPRINT_THREADS must be a positive integer")
+    return value
 
 
 def arwen_source_manifest() -> Mapping[str, str]:
@@ -1297,6 +1601,45 @@ def require_frozen_execution_sources() -> dict[str, Any]:
             "sha256": actual,
         }
     return {"files": records, "sha256": canonical_json_sha256(records)}
+
+
+def measure_execution_sources() -> dict[str, Any]:
+    """Hash this port's own execution sources and record the pin match.
+
+    The FORECAST's call, in place of :func:`require_frozen_execution_sources`.
+
+    RETIRED 2026-10-10 as a forecast gate (owner ruling; Gate law, Refusals law): a forecast used to refuse with
+    "frozen execution source changed for <file>: <digest> != <digest>"
+    whenever any of this port's own modules differed from the digest
+    ``EXECUTION_SOURCE_PINS`` carries.  Two digests name no breakage; they
+    say the code was edited since the x4 proof last ran against it.  The
+    refusal closed the forecast after every edit to a pinned module until a
+    re-pin commit landed (``tools/repin_source_tables.py`` lists three
+    occasions; the 2026-10-10 8-card RTX PRO 6000 host proof runs were a fourth, commit
+    ``6757d6d``).  The x4 proof keeps the refusing function: byte identity
+    of the code under proof is what that harness measures.  A forecast
+    records the same files and digests, plus ``matches_pins`` and the moved
+    paths, and runs.
+    """
+
+    records: dict[str, Any] = {}
+    moved: list[str] = []
+    for relative, expected in EXECUTION_SOURCE_PINS.items():
+        path = shipped_sources.resolve(relative)
+        actual = sha256_file(path)
+        if expected is not None and actual != expected:
+            moved.append(relative)
+        records[relative] = {
+            "bytes": path.stat().st_size,
+            "sha256": actual,
+        }
+    return {
+        "files": records,
+        "sha256": canonical_json_sha256(records),
+        # Evidence, never a permission.
+        "matches_pins": not moved,
+        "moved_from_pins": sorted(moved),
+    }
 
 
 def negative_qv_fingerprint(logical_qv: Any) -> dict[str, Any]:
@@ -2547,6 +2890,13 @@ def _backend_transaction_identity(receipt: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _drag_composed(receipt: Mapping[str, Any]) -> bool:
+    """Whether the receipt says hex's own orographic drag is composed."""
+
+    gwdo = receipt.get("gwdo")
+    return isinstance(gwdo, Mapping) and gwdo.get("enabled") is True
+
+
 def _verify_backend_rollback_boundary(
     backend: Any,
     *,
@@ -2571,7 +2921,7 @@ def _verify_backend_rollback_boundary(
     # its exact public schema prevents an automatic_rollback receipt alone
     # from being mistaken for a successfully restored seam.
     restart = backend.restart_state()
-    if not isinstance(restart, Mapping) or set(restart) != {
+    if not isinstance(restart, Mapping) or set(restart) - {"lagged_heating", "surface_updates"} != {
         "schema",
         "identity",
         "seam",
@@ -2611,19 +2961,34 @@ def _verify_backend_rollback_boundary(
             if isinstance(dependencies, Mapping)
             else None
         ),
+        # The receipt's dependencies name the drag contract the adapter
+        # links whether or not the drag runs; the restart identity names it
+        # only when hex's drag is composed (gwdo.enabled), which is the
+        # fact a rollback must preserve.  Read it under the same rule.
+        # THE BREAKAGE: every rollback with hex's drag off (any suite or
+        # generic-seam backend) failed here on 'gwdo_contract_sha256' and
+        # buried the refusal that caused it (30 km global at TEMPO,
+        # 2026-10-11).
         "gwdo_contract_sha256": (
             dependencies.get("gwdo_contract_sha256")
-            if isinstance(dependencies, Mapping)
+            if isinstance(dependencies, Mapping) and _drag_composed(receipt)
             else None
         ),
     }
     for name, expected in expected_restart_identity.items():
+        if name == "gwdo_contract_sha256":
+            if restart_identity.get(name) != expected:
+                raise RuntimeError(
+                    f"adapter rollback restart identity changed field {name!r}"
+                )
+            continue
         if expected is not None and restart_identity.get(name) != expected:
             raise RuntimeError(
                 f"adapter rollback restart identity changed field {name!r}"
             )
 
 
+@timed_arwen_step
 def execute_composite_step(
     *,
     driver: Any,
@@ -2638,8 +3003,16 @@ def execute_composite_step(
     recover: Callable[..., Any] | None = None,
     physics_park: Any = None,
     refl_10cm_due: bool = False,
+    before_phase_two: Callable[[Any], None] | None = None,
+    held_forcing: Callable[..., None] | None = None,
 ) -> CompositeStepResult:
     """Execute exactly one staged two-owner full-physics transaction.
+
+    ``held_forcing`` (incremental analysis update, ``hexcore.iau_native`` or
+    ``hexcore.iau_forcing``) adds its share of an analysis increment to the held
+    physics tendencies after the coupling and before the dynamics, the slot
+    MPAS-A's ``atm_add_tend_anal_incr`` writes.  ``None`` (every run without an
+    IAU window) leaves the step exactly as before.
 
     ``refl_10cm_due`` is WRF's history-step ``diagflag`` for this step: the
     phase-two microphysics computes ``refl10cm`` at its own call time (the
@@ -2682,14 +3055,24 @@ def execute_composite_step(
     transaction_identity = _backend_transaction_identity(
         dict(backend.step_receipt())
     )
+    # Device memory a physics phase does not use is given back at its two
+    # boundaries (hexcore.device_memory_release; knobs GPUWM_HEX_POOL_RELEASE,
+    # GPUWM_HEX_LMEM_RELEASE): radiation blocks and the WSM6 frame store are
+    # not held through the dycore half of the step.
+    from hexcore.device_memory_release import phase_release
+
     try:
-        raw = backend.begin_step(
-            atmosphere=driver.atmosphere,
-            scalar_names=scalar_names,
-            dt=DT_SECONDS,
-            dynamics_tendencies=dynamics_tendencies,
-        )
+        with phase_release("arwen:phase1"):
+            raw = backend.begin_step(
+                atmosphere=driver.atmosphere,
+                scalar_names=scalar_names,
+                dt=DT_SECONDS,
+                dynamics_tendencies=dynamics_tendencies,
+            )
         backend_active = True
+        les = getattr(driver, "les_dissipation", None)
+        if les is not None:
+            backend.refresh_les(les)
         edge_fields = driver.horizontal.recover_edge_fields(
             start_state.rho, start_state.rho_u
         )
@@ -2701,13 +3084,35 @@ def execute_composite_step(
             rho_edge=edge_fields.rho_edge,
             kernel_cache=kernel_cache,
         )
+        # SG2: the previous step's microphysics heating rides every RK stage
+        # of this step (MPAS rt_diabatic_tend, mpas_atm_time_integration.F:6937).
+        from hexcore.cuda_physics_v841 import with_lagged_diabatic_theta_v841
+        held = with_lagged_diabatic_theta_v841(held, backend)
+        stochastic = getattr(driver, "stochastic", None)
+        if stochastic is not None:
+            stochastic.apply(held, state=start_state, rho_edge=edge_fields.rho_edge,
+                             normal_velocity=edge_fields.normal_velocity,
+                             time_seconds=start_time, dt=DT_SECONDS, names=tuple(scalar_names))
+        if held_forcing is not None:
+            held_forcing(held, start_time, DT_SECONDS, driver=driver,
+                         rho_edge=edge_fields.rho_edge,
+                         normal_velocity=edge_fields.normal_velocity,
+                         geometry=physics_geometry, state=start_state)
         if physics_park is not None:
             # The seam is not read again until finish_step.  Everything still
             # in flight -- the raw phase-1 tendencies, the coupled carriers,
             # the driver's own state -- is named here so the park's sharing
             # rule refuses to rebind any allocation the dycore still writes.
             physics_park.park(shared_roots=(driver, raw, held, edge_fields))
+        # Coupling and optional IAU/parking have consumed these carriers.
+        # In particular, neither recovered edge array belongs to the dycore
+        # transaction.  Returning them to the stream's pool here avoids
+        # retaining two full edge volumes across all three RK stages.
+        del edge_fields, raw
         candidate = driver.step_device_with_physics(held)
+        # The candidate owns the endpoint and next-step forcing.  Phase two
+        # and rollback never read the phase-one conservative tendencies.
+        del held
         # Read GF's next-step advective forcing here, BEFORE publication:
         # nothing after the driver commit is allowed to raise, and a dry
         # candidate legitimately carries none.  A driver that stops
@@ -2721,12 +3126,15 @@ def execute_composite_step(
         )
         if physics_park is not None:
             physics_park.unpark()
-        update = backend.finish_step(
-            atmosphere=candidate.atmosphere,
-            scalar_names=scalar_names,
-            dt=DT_SECONDS,
-            refl_10cm_due=refl_10cm_due,
-        )
+        if before_phase_two is not None:
+            before_phase_two(candidate.atmosphere)
+        with phase_release("arwen:phase2"):
+            update = backend.finish_step(
+                atmosphere=candidate.atmosphere,
+                scalar_names=scalar_names,
+                dt=DT_SECONDS,
+                refl_10cm_due=refl_10cm_due,
+            )
         if _phase_from_receipt(backend) != "finished_unpublished":
             raise RuntimeError("adapter finish did not remain staged and unpublished")
         recovery = recover(
@@ -2737,6 +3145,10 @@ def execute_composite_step(
             phase2_dt_seconds=DT_SECONDS,
             previous_surface_updates=previous_surface_updates,
         )
+        # Recovery retains the published surface/radius outputs and state.
+        # Drop the consumed update before commit rebuilds saved diagnostics,
+        # so its temporary dry theta need not overlap that workspace.
+        del update
         committed = driver.commit_post_wsm6_candidate(candidate, recovery)
         driver_committed = True
         backend.commit_step()
@@ -2777,7 +3189,18 @@ def execute_composite_step(
             except Exception as rollback_error:  # pragma: no cover - catastrophic path
                 rollback_errors.append(f"driver abort failed: {rollback_error}")
         rollback_not_armed = False
-        if backend_active:
+        if getattr(backend, "_phase", None) == "broken":
+            # The adapter's own rollback raised while rebuilding its seam
+            # (the reconstruction error is in this exception's chain).  There
+            # is no transaction left to abort and no boundary to verify:
+            # calling abort_step here only added "abort_step requires a begun
+            # or finished transaction" over the step's real refusal, and a
+            # phase-one failure was reported as a clean abort.
+            rollback_errors.append(
+                "the physics adapter could not rebuild its seam at the step "
+                "boundary, so the seam is retired (phase 'broken')"
+            )
+        elif backend_active:
             try:
                 phase = _phase_from_receipt(backend)
                 armed = (
@@ -2858,17 +3281,45 @@ def _name_mapping_difference(
 def require_arwen_v2_surface_execution(
     payload: Mapping[str, Any], *, executed: bool, label: str
 ) -> dict[str, Any]:
+    update = payload.get("surface_update", {})
+    alarmed = update.get("enabled") is True
+    expected_classification = (update["classification"] if alarmed else EXPECTED_SURFACE_CLASSIFICATION)
+    expected_census = EXPECTED_NOAHMP_CENSUS
+    if alarmed and executed and expected_census is not None:
+        used = update["physics_classification"]
+        expected_census = dict(land=used["sflx_land_columns"], water=used["open_water_columns"],
+                              sea_ice=used["sea_ice_columns"], glacier=used["glacier_columns"])
+        if expected_census["glacier"]:
+            expected_census["glacier_path"] = ARWEN_GLACIER_CUDA_PROVENANCE
     classification = payload.get("surface_classification")
     if not isinstance(classification, Mapping):
         raise ValueError(f"{label} lacks surface_classification")
-    if dict(classification) != dict(EXPECTED_SURFACE_CLASSIFICATION):
+    if dict(classification) != dict(expected_classification):
         raise ValueError(
             f"{label} surface classification changed: "
             + _name_mapping_difference(
-                dict(EXPECTED_SURFACE_CLASSIFICATION), dict(classification)
+                dict(expected_classification), dict(classification)
             )
         )
     census = payload.get("last_noahmp_census")
+    if expected_census is None:
+        # A suite row's land surface is not Noah-MP: it publishes its own
+        # census under its own key and never a Noah-MP one.  Either a
+        # Noah-MP census on such a frame or a missing land census after the
+        # physics ran is a frame that does not describe its own run.
+        if census is not None:
+            raise ValueError(f"{label} claims a NoahMP census on a non-NoahMP row")
+        land = payload.get("last_land_surface_census")
+        if executed and not isinstance(land, Mapping):
+            raise ValueError(
+                f"{label} carries no land-surface census, so nothing says how "
+                "many columns the land-surface model was handed"
+            )
+        return {
+            "surface_classification": dict(classification),
+            "last_noahmp_census": None,
+            "last_land_surface_census": None if land is None else dict(land),
+        }
     if not executed:
         if census is not None:
             raise ValueError(f"{label} unexpectedly claims NoahMP execution")
@@ -2878,17 +3329,35 @@ def require_arwen_v2_surface_execution(
             f"{label} carries no NoahMP census, so nothing says how many "
             "columns the land-surface model was handed"
         )
-    if dict(census) != dict(EXPECTED_NOAHMP_CENSUS):
+    if dict(census) != dict(expected_census):
         raise ValueError(
             f"{label} NoahMP census/provenance changed: "
             + _name_mapping_difference(
-                dict(EXPECTED_NOAHMP_CENSUS), dict(census)
+                dict(expected_census), dict(census)
             )
         )
     return {
         "surface_classification": dict(classification),
         "last_noahmp_census": dict(census),
     }
+
+
+def retain_initial_diagnostic_snapshot() -> bool:
+    """Whether the forecast stack keeps the start-time snapshot's device arrays.
+
+    Default no (memory lane, 2026-10-15).  ``stack["initial_diagnostic"]``
+    held the hour-0 ``diagnostic_snapshot()`` for the whole run: the
+    zero-filled GWDO level fields (dtaux3d, dtauy3d, rubldiff, rvbldiff), the
+    GWDO surface pair, and device copies of the surface, soil and
+    precipitation exports -- about 40 MB at x1.40962 (1 KB per column), live
+    on every device peak of route A.  Nothing reads the entry after the clock
+    check that follows the snapshot, and every history frame takes a fresh
+    snapshot.  The host-side metadata and receipt stay in the stack.
+    ``GPUWM_HEX_DIAG_KEEP_INITIAL_SNAPSHOT=1`` keeps the device groups as
+    well, for A/B runs.
+    """
+
+    return os.environ.get("GPUWM_HEX_DIAG_KEEP_INITIAL_SNAPSHOT", "0") == "1"
 
 
 def backend_diagnostic_mapping(snapshot: Any) -> dict[str, Any]:
@@ -2906,7 +3375,7 @@ def backend_diagnostic_mapping(snapshot: Any) -> dict[str, Any]:
     return mapped
 
 
-def _flatten_backend_diagnostics(snapshot: Mapping[str, Any], cp: Any) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+def _flatten_backend_diagnostics(snapshot: Mapping[str, Any], cp: Any, download=None) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     arrays: dict[str, np.ndarray] = {}
     metadata: dict[str, Any] = {}
 
@@ -2919,7 +3388,7 @@ def _flatten_backend_diagnostics(snapshot: Mapping[str, Any], cp: Any) -> tuple[
             name = prefix.rsplit("/", 1)[-1]
             if name in arrays:
                 raise ValueError(f"duplicate backend diagnostic leaf {name!r}")
-            arrays[name] = _host_array(value, cp)
+            arrays[name] = (download or _host_array)(value, cp)
             return
         metadata[prefix] = value
 
@@ -2937,6 +3406,7 @@ def capture_snapshot(
     kernel_cache: Any,
     f000_surface_diagnostics: Mapping[str, Any],
     expect_refl10cm: bool = False,
+    deferred: bool = False,
     solve_cells: int | None = None,
     scalar_names: Sequence[str] = SCALAR_NAMES,
     surface_accumulators: Sequence[str] = ("rainnc", "snownc", "graupelnc"),
@@ -2973,137 +3443,151 @@ def capture_snapshot(
         kernel_cache=kernel_cache,
         post_rk_wsm6=False,
     )
-    state = driver.atmosphere.state
-    saved = driver.atmosphere.saved
-    arrays = {
-        name: _host_array(state.scalars[index], cp)
-        for index, name in enumerate(scalar_names)
-    }
-    arrays.update(
-        {
-            "u_zonal": _host_array(prepared.u_p, cp),
-            "v_meridional": _host_array(prepared.v_p, cp),
-            "normal_u": _host_array(saved.normal_velocity, cp),
-            "rho": _host_array(prepared.rho_dry, cp),
-            "theta": _host_array(prepared.th_p, cp),
-            "pressure": _host_array(prepared.pres_p, cp),
-            "surface_pressure": _host_array(prepared.psfc_p, cp),
-            "w": _host_array(saved.vertical_velocity, cp),
+    from hexcore.snapshot_transfer import SnapshotTransfer, PendingSnapshot, array_records
+    from contextlib import nullcontext
+    with SnapshotTransfer(cp) if deferred else nullcontext(None) as transfer:
+        download = _host_array if transfer is None else transfer.download
+        state = driver.atmosphere.state
+        saved = driver.atmosphere.saved
+        arrays = {
+            name: download(state.scalars[index], cp)
+            for index, name in enumerate(scalar_names)
         }
-    )
-    backend_snapshot = backend_diagnostic_mapping(backend.diagnostic_snapshot())
-    executed = step > 0
-    require_arwen_v2_surface_execution(
-        dict(backend.step_receipt()), executed=executed, label=f"{label} step receipt"
-    )
-    require_arwen_v2_surface_execution(
-        backend_snapshot["metadata"], executed=executed, label=f"{label} metadata"
-    )
-    surface_execution = require_arwen_v2_surface_execution(
-        backend_snapshot["receipt"], executed=executed, label=f"{label} receipt"
-    )
-    diagnostics, diagnostic_metadata = _flatten_backend_diagnostics(
-        backend_snapshot, cp
-    )
-    arrays.update(diagnostics)
-    if expect_refl10cm:
-        staged_refl = backend.take_history_refl10cm()
-        if staged_refl is not None:
-            arrays["refl10cm"] = _host_array(staged_refl, cp)
-        elif step == 0:
-            # Native MPAS-A writes the allocated default at the initial
-            # time; the first microphysics call has not happened yet.
-            arrays["refl10cm"] = np.zeros((N_LEVELS, N_CELLS), dtype=np.float32)
-        else:
-            raise RuntimeError(
-                f"history frame {label} (step {step}) expected a committed "
-                "refl10cm and the backend holds none; the step loop failed "
-                "to pass refl_10cm_due to this step's microphysics, and "
-                "writing the frame without it would hand the obs referee a "
-                "model bundle with no reflectivity"
-            )
-    if solve_cells is not None:
-        # A limited-area device atmosphere is one column wider than the domain
-        # it solves: native allocates nCells+1 and maps every absent
-        # neighbour to that garbage element.  Every array downloaded above
-        # carries it.  It is stripped HERE, before the physical gate, the
-        # hash projection and the netCDF writer see any of them, so a
-        # limited-area history frame is the same shape as the domain's own
-        # cell count and a receipt from one is comparable, cell for cell,
-        # with a receipt from the global run over the same ground.
-        #
-        # THE BREAKAGE THIS PREVENTS: without the strip, every published
-        # frame carries one extra cell holding a duplicate column's physics,
-        # `write_snapshot_netcdf` writes nCells+1 rows against an nCells
-        # coordinate set, and the render window is sized from a mesh whose
-        # last cell is not on it.
-        keep = int(solve_cells)
-        for name, value in list(arrays.items()):
-            array = np.asarray(value)
-            if array.ndim >= 1 and int(array.shape[-1]) == keep + 1:
-                arrays[name] = np.ascontiguousarray(array[..., :keep])
-    f000_overlay = None
-    if step == 0:
-        if (
-            set(f000_surface_diagnostics) != {"arrays", "receipt"}
-            or not isinstance(f000_surface_diagnostics["arrays"], Mapping)
-            or not isinstance(f000_surface_diagnostics["receipt"], Mapping)
-        ):
-            raise ValueError("F000 initialized surface diagnostic carrier is malformed")
-        f000_overlay = {
-            "source": dict(f000_surface_diagnostics["receipt"]),
-            "overlay": overlay_f000_initialized_surface_diagnostics(
-                arrays, f000_surface_diagnostics["arrays"]
-            ),
-        }
-    required_diagnostics = {
-        "tsk",
-        "smois",
-        "tslb",
-        "hfx",
-        "qfx",
-        "lh",
-        "t2",
-        "u10",
-        "v10",
-        "rainc",
-        *surface_accumulators,
-        "dusfcg",
-        "dvsfcg",
-        "dtaux3d",
-        "dtauy3d",
-        "rubldiff",
-        "rvbldiff",
-    }
-    missing = sorted(required_diagnostics - set(arrays))
-    if missing:
-        raise RuntimeError(f"adapter diagnostic snapshot lacks required fields {missing}")
-    cp.cuda.get_current_stream().synchronize()
-    receipt = {
-        "schema": SNAPSHOT_SCHEMA,
-        "label": label,
-        "step": step,
-        "time_seconds": step * DT_SECONDS,
-        "arwen_v2_surface_execution": surface_execution,
-        "audit_d2h_outside_step_receipt": True,
-        "prep": prepared.receipt(),
-        "backend": dict(backend.step_receipt()),
-        "backend_diagnostic_metadata": diagnostic_metadata,
-        "f000_initialized_surface_diagnostics": f000_overlay,
-        "arrays": {
-            name: {
-                "dtype": value.dtype.str,
-                "shape": list(value.shape),
-                "sha256": array_sha256(value),
-                "minimum": float(value.min()) if value.size else None,
-                "maximum": float(value.max()) if value.size else None,
-                "nonzero": int(np.count_nonzero(value)),
-                "negative": int(np.count_nonzero(value < 0)) if value.dtype.kind == "f" else 0,
+        arrays.update(
+            {
+                "u_zonal": download(prepared.u_p, cp),
+                "v_meridional": download(prepared.v_p, cp),
+                "normal_u": download(saved.normal_velocity, cp),
+                "rho": download(prepared.rho_dry, cp),
+                "theta": download(prepared.th_p, cp),
+                "pressure": download(prepared.pres_p, cp),
+                "surface_pressure": download(prepared.psfc_p, cp),
+                "w": download(saved.vertical_velocity, cp),
             }
-            for name, value in sorted(arrays.items())
-        },
-    }
-    return {"arrays": arrays, "receipt": receipt}
+        )
+        diagnostic = (getattr(backend, "history_diagnostic_snapshot", backend.diagnostic_snapshot)
+                      if deferred else backend.diagnostic_snapshot)
+        backend_snapshot = backend_diagnostic_mapping(diagnostic())
+        executed = step > 0
+        require_arwen_v2_surface_execution(
+            dict(backend.step_receipt()), executed=executed, label=f"{label} step receipt"
+        )
+        require_arwen_v2_surface_execution(
+            backend_snapshot["metadata"], executed=executed, label=f"{label} metadata"
+        )
+        surface_execution = require_arwen_v2_surface_execution(
+            backend_snapshot["receipt"], executed=executed, label=f"{label} receipt"
+        )
+        diagnostics, diagnostic_metadata = _flatten_backend_diagnostics(
+            backend_snapshot, cp, download
+        )
+        arrays.update(diagnostics)
+        if expect_refl10cm:
+            staged_refl = backend.take_history_refl10cm()
+            if staged_refl is None and step == 0 and hasattr(backend, "initial_refl10cm"):
+                # Hour 0: the scheme's own reflectivity of the initial
+                # hydrometeors.  Native MPAS-A writes the allocated default
+                # here (its first microphysics call has not happened); hex
+                # declares that divergence (initial_refl10cm says why).
+                staged_refl, _ = backend.initial_refl10cm(
+                    atmosphere=driver.atmosphere, scalar_names=tuple(scalar_names))
+            if staged_refl is not None:
+                arrays["refl10cm"] = download(staged_refl, cp)
+            elif step == 0 or not getattr(backend, "computes_reflectivity", lambda: True)():
+                # No microphysics in the selection, or a scheme whose
+                # reflectivity the engine cannot separate from its step: the
+                # allocated default, as native MPAS-A writes at the initial time.
+                arrays["refl10cm"] = np.zeros((N_LEVELS, N_CELLS), dtype=np.float32)
+            else:
+                raise RuntimeError(
+                    f"history frame {label} (step {step}) expected a committed "
+                    "refl10cm and the backend holds none; the step loop failed "
+                    "to pass refl_10cm_due to this step's microphysics, and "
+                    "writing the frame without it would hand the obs referee a "
+                    "model bundle with no reflectivity"
+                )
+        prepared_receipt = prepared.receipt()
+        backend_receipt = dict(backend.step_receipt())
+        def finish():
+            nonlocal arrays
+            if solve_cells is not None:
+                # A limited-area device atmosphere is one column wider than the domain
+                # it solves: native allocates nCells+1 and maps every absent
+                # neighbour to that garbage element.  Every array downloaded above
+                # carries it.  It is stripped HERE, before the physical gate, the
+                # hash projection and the netCDF writer see any of them, so a
+                # limited-area history frame is the same shape as the domain's own
+                # cell count and a receipt from one is comparable, cell for cell,
+                # with a receipt from the global run over the same ground.
+                #
+                # THE BREAKAGE THIS PREVENTS: without the strip, every published
+                # frame carries one extra cell holding a duplicate column's physics,
+                # `write_snapshot_netcdf` writes nCells+1 rows against an nCells
+                # coordinate set, and the render window is sized from a mesh whose
+                # last cell is not on it.
+                keep = int(solve_cells)
+                for name, value in list(arrays.items()):
+                    array = np.asarray(value)
+                    if array.ndim >= 1 and int(array.shape[-1]) == keep + 1:
+                        arrays[name] = np.ascontiguousarray(array[..., :keep])
+            f000_overlay = None
+            if step == 0:
+                if (
+                    set(f000_surface_diagnostics) != {"arrays", "receipt"}
+                    or not isinstance(f000_surface_diagnostics["arrays"], Mapping)
+                    or not isinstance(f000_surface_diagnostics["receipt"], Mapping)
+                ):
+                    raise ValueError("F000 initialized surface diagnostic carrier is malformed")
+                f000_overlay = {
+                    "source": dict(f000_surface_diagnostics["receipt"]),
+                    "overlay": overlay_f000_initialized_surface_diagnostics(
+                        arrays, f000_surface_diagnostics["arrays"]
+                    ),
+                }
+            required_diagnostics = {
+                "tsk",
+                # A zero-level soil row (land surface off) publishes no soil column;
+                # any other row must carry both soil fields.
+                *(() if N_SOIL_LEVELS == 0 else ("smois", "tslb")),
+                "hfx",
+                "qfx",
+                "lh",
+                "t2",
+                "u10",
+                "v10",
+                "rainc",
+                *surface_accumulators,
+                "dusfcg",
+                "dvsfcg",
+                "dtaux3d",
+                "dtauy3d",
+                "rubldiff",
+                "rvbldiff",
+            }
+            missing = sorted(required_diagnostics - set(arrays))
+            if missing:
+                raise RuntimeError(f"adapter diagnostic snapshot lacks required fields {missing}")
+            if transfer is None:
+                cp.cuda.get_current_stream().synchronize()
+            receipt = {
+                "schema": SNAPSHOT_SCHEMA,
+                "label": label,
+                "step": step,
+                "time_seconds": step * DT_SECONDS,
+                "arwen_v2_surface_execution": surface_execution,
+                "audit_d2h_outside_step_receipt": True,
+                "prep": prepared_receipt,
+                "backend": backend_receipt,
+                "backend_diagnostic_metadata": diagnostic_metadata,
+                "f000_initialized_surface_diagnostics": f000_overlay,
+                "arrays": array_records(arrays, array_sha256),
+            }
+            return {"arrays": arrays, "receipt": receipt}
+
+        if transfer is None:
+            return finish()
+        transfer.seal()
+        return PendingSnapshot(transfer, finish)
 
 
 def physical_snapshot_gate(
@@ -3112,6 +3596,7 @@ def physical_snapshot_gate(
     allow_initial_negative_qv: bool,
     scalar_names: Sequence[str] = SCALAR_NAMES,
     surface_accumulators: Sequence[str] = ("rainnc", "snownc", "graupelnc"),
+    surface_accumulator_declarations: Sequence[Any] | None = None,
 ) -> dict[str, Any]:
     arrays = snapshot["arrays"]
     for name, value in arrays.items():
@@ -3133,10 +3618,22 @@ def physical_snapshot_gate(
         )
     if any(moisture_negative[name] for name in tuple(scalar_names)[1:]):
         raise FloatingPointError("a hydrometeor snapshot contains negative values")
-    smois = np.asarray(arrays["smois"])
-    if float(smois.min()) < 0.0 or float(smois.max()) > 1.0:
-        raise FloatingPointError("soil moisture lies outside [0,1]")
-    for name in ("rainc", *surface_accumulators):
+    if N_SOIL_LEVELS == 0:
+        # Land surface off: no soil column is published (capture_snapshot).
+        if "smois" in arrays or "tslb" in arrays:
+            raise ValueError("a zero-level soil row published a soil column")
+        soil_range = None
+    else:
+        smois = np.asarray(arrays["smois"])
+        if float(smois.min()) < 0.0 or float(smois.max()) > 1.0:
+            raise FloatingPointError("soil moisture lies outside [0,1]")
+        soil_range = [float(smois.min()), float(smois.max())]
+    signed_fallout = set()
+    if surface_accumulator_declarations is not None:
+        if tuple(item.name for item in surface_accumulator_declarations) != tuple(surface_accumulators):
+            raise ValueError("snapshot accumulator declarations do not match the published buckets")
+        signed_fallout = {item.name for item in surface_accumulator_declarations if item.signed_fallout}
+    for name in ("rainc", *(name for name in surface_accumulators if name not in signed_fallout)):
         if np.min(arrays[name]) < 0.0:
             raise FloatingPointError(f"negative accumulated precipitation in {name}")
     # Native q2 has 44 negative values.  It is published bitwise and stays
@@ -3146,8 +3643,10 @@ def physical_snapshot_gate(
         "finite_all_fields": True,
         "positive_rho_theta_pressure": True,
         "moisture_negative_counts": moisture_negative,
-        "soil_moisture_range": [float(smois.min()), float(smois.max())],
-        "precipitation_nonnegative": True,
+        "soil_moisture_range": soil_range,
+        "precipitation_nonnegative": all(np.min(arrays[name]) >= 0.0 for name in ("rainc", *surface_accumulators)),
+        "signed_fallout_accumulators": sorted(signed_fallout),
+        "precipitation_matches_scheme": True,
         "q2_policy": "published bitwise; negatives allowed (native parity); finiteness gated",
     }
 
@@ -3263,6 +3762,7 @@ def fingerprint_nested_arrays(value: Any, *, prefix: str = "") -> dict[str, Any]
 
     fields: dict[str, Any] = {}
     scalars: dict[str, Any] = {}
+    leaves: list[tuple[str, np.ndarray]] = []
 
     def walk(path: str, item: Any) -> None:
         if isinstance(item, Mapping):
@@ -3272,8 +3772,9 @@ def fingerprint_nested_arrays(value: Any, *, prefix: str = "") -> dict[str, Any]
             fields[path] = {
                 "dtype": item.dtype.str,
                 "shape": list(item.shape),
-                "sha256": array_sha256(item),
+                "sha256": None,
             }
+            leaves.append((path, item))
         elif isinstance(item, (str, int, float, bool)) or item is None:
             scalars[path] = item
         elif isinstance(item, (tuple, list)):
@@ -3283,6 +3784,22 @@ def fingerprint_nested_arrays(value: Any, *, prefix: str = "") -> dict[str, Any]
             scalars[path] = repr(item)
 
     walk(prefix, value)
+    # THE BREAKAGE THIS PREVENTS, MEASURED (unified image, 4x RTX PRO 6000
+    # box, 2026-10-16, cProfile of a 60 km 1 h forecast): the boundary
+    # fingerprints hashed every restart array one after another on one
+    # thread, about 15 s of one core with the card idle (the f000 boundary
+    # and the close).  Each array's digest is independent, so they are taken
+    # on GPUWM_HEX_FINGERPRINT_THREADS threads and placed by path; the record
+    # and its digest are the same bytes.
+    workers = min(_fingerprint_threads(), len(leaves), os.cpu_count() or 1)
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hex-fingerprint") as pool:
+            digests = list(pool.map(lambda leaf: array_sha256(leaf[1]), leaves))
+    else:
+        digests = [array_sha256(item) for _, item in leaves]
+    for (path, _), digest in zip(leaves, digests):
+        fields[path]["sha256"] = digest
     core = {"arrays": fields, "scalars": scalars}
     return {**core, "sha256": canonical_json_sha256(core)}
 
@@ -3482,23 +3999,38 @@ def _write_exclusive_json(path: Path, value: Any) -> None:
         stream.write(data)
 
 
-def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mapping[str, Any]) -> dict[str, Any]:
+def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mapping[str, Any],
+                          *, _hash_file: bool = True) -> dict[str, Any]:
     """Write one truthful native-grid CUDA history capsule for Rust rendering."""
 
     from netCDF4 import Dataset
+    from hexcore.history_chunks import write_variable
 
     if path.exists():
         raise FileExistsError(path)
     arrays = snapshot["arrays"]
+    valid_time = snapshot.get("valid_time")
+    if valid_time is not None:
+        # Public forecasts carry their schedule clock through both writer
+        # paths. Keep capsules without a schedule clock backward compatible.
+        valid_time = datetime.strptime(valid_time, "%Y-%m-%d_%H:%M:%S").strftime("%Y-%m-%d_%H:%M:%S")
     with Dataset(path, "w", format="NETCDF4_CLASSIC") as dataset:
         dataset.createDimension("Time", 1)
+        if valid_time is not None:
+            dataset.createDimension("StrLen", 64)
+            clock = dataset.createVariable("xtime", "S1", ("Time", "StrLen"))
+            clock.setncattr("units", "YYYY-MM-DD_hh:mm:ss")
+            clock[0, :] = np.frombuffer(valid_time.ljust(64).encode("ascii"), dtype="S1")
         dataset.createDimension("nCells", N_CELLS)
         dataset.createDimension("nVertLevels", N_LEVELS)
         dataset.createDimension("nEdges", N_EDGES)
         dataset.createDimension("nVertLevelsP1", N_INTERFACES)
-        dataset.createDimension("nSoilLevels", N_SOIL_LEVELS)
+        if N_SOIL_LEVELS:
+            # netCDF reads a zero-length dimension as UNLIMITED; a land-
+            # surface-off frame has no soil column and declares no soil axis.
+            dataset.createDimension("nSoilLevels", N_SOIL_LEVELS)
         dataset.setncattr("schema", SNAPSHOT_SCHEMA)
-        dataset.setncattr("source", "MPAS-A v8.4.1 full-physics CUDA port")
+        dataset.setncattr("source", "MPAS-A v8.4.2 full-physics CUDA port")
         dataset.setncattr("arwen_commit", ARWEN_COMMIT)
         dataset.setncattr("gf_native_parity_claim", "false")
         dataset.setncattr(
@@ -3528,8 +4060,23 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
         for name, dtype in (("indexToEdgeID", "i4"), ("latEdge", "f4"), ("lonEdge", "f4")):
             variable = dataset.createVariable(name, dtype, ("nEdges",))
             variable[:] = static[name]
+        from hexcore.species_row import species_row_for_names
+        species = species_row_for_names(SCALAR_NAMES)
+        if species.engine_scheme != "wsm6":
+            dataset.setncattr("refl10cm_provenance",
+                "native microphysics diagnostic from the due physics call; scheme=" + species.scheme_name)
+        if (snapshot.get("receipt") or {}).get("step") == 0:
+            dataset.setncattr(
+                "refl10cm_provenance",
+                "hour 0: the active scheme's own 10 cm reflectivity of the initial hydrometeors "
+                "(backend initial_refl10cm through gpuwm.da.obsop.simulated_reflectivity, temperature "
+                "from initial theta and pressure); native MPAS-A writes zero at the initial time, a "
+                "declared divergence. Zero only when the selection has no microphysics or the engine "
+                "cannot separate the scheme's reflectivity from its step",
+            )
         units = {
-            **{name: "kg kg^{-1}" for name in SCALAR_NAMES},
+            **{name: species.declaration(name).units for name in SCALAR_NAMES},
+            "tke": "m^2 s^{-2}",
             "u_zonal": "m s^{-1}",
             "v_meridional": "m s^{-1}",
             "normal_u": "m s^{-1}",
@@ -3539,6 +4086,9 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             "surface_pressure": "Pa",
             "w": "m s^{-1}",
             "tsk": "K",
+            "sst": "K",
+            "sstsk": "K",
+            "tmn": "K",
             "t2": "K",
             "q2": "kg kg^{-1}",
             "refl10cm": "dBZ",
@@ -3559,6 +4109,9 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             "dtauy3d": "m s^{-2}",
             "rubldiff": "m s^{-2}",
             "rvbldiff": "m s^{-2}",
+            "xice": "1",
+            "snow": "kg m^{-2}",
+            "snowh": "m",
         }
         for name, value in sorted(arrays.items()):
             array = np.asarray(value, dtype=np.float32)
@@ -3571,7 +4124,7 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             elif array.shape == (N_INTERFACES, N_CELLS):
                 dims = ("Time", "nCells", "nVertLevelsP1")
                 payload = array.T[None]
-            elif array.shape == (N_SOIL_LEVELS, N_CELLS):
+            elif N_SOIL_LEVELS and array.shape == (N_SOIL_LEVELS, N_CELLS):
                 dims = ("Time", "nCells", "nSoilLevels")
                 payload = array.T[None]
             elif array.shape == (N_CELLS,):
@@ -3581,8 +4134,17 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
                 continue
             variable = dataset.createVariable(name, "f4", dims, zlib=True, complevel=1)
             variable.setncattr("units", units.get(name, ""))
-            variable[:] = payload
-    return {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256_file(path)}
+            write_variable(variable, payload)
+    record = {"path": str(path), "bytes": path.stat().st_size}
+    if _hash_file:
+        record["sha256"] = sha256_file(path)
+    return record
+
+
+# atomic_write can defer just this digest until after NetCDF has closed,
+# then compute it concurrently with the durable file flush. Direct calls
+# retain their complete digest-bearing result.
+write_snapshot_netcdf.__history_digest__ = sha256_file
 
 
 def gpu_memory_admission(cp: Any, *, minimum: int = MIN_FREE_DEVICE_BYTES) -> dict[str, Any]:
@@ -3631,7 +4193,14 @@ def _prepare_host_execution(paths: Mapping[str, Path], authority_receipt: Mappin
     from hexcore.dynamics_v841 import load_v841_reference_wind_profiles
     from hexcore.mesh import load_precision_preserving_mesh_pair
 
-    config = V841MpasColumnPhysicsGwdoConfig()
+    # The x4 proof measures broad native full-physics consistency and hex
+    # self-reproducibility, so it runs the native reference schedule
+    # at, passed explicitly: since 2026-10-10 the config's defaults are
+    # MPAS-A's Registry defaults (order 2, two sub-steps, radiation 1800 s,
+    # limiter on), not the x4 run's (order 3, six sub-steps, 600 s, off).
+    from hexcore.mpas_defaults import X4_RECORDED_SCHEDULE
+
+    config = V841MpasColumnPhysicsGwdoConfig(**X4_RECORDED_SCHEDULE)
     config.validate()
     mesh, output_mesh, mesh_evidence = load_precision_preserving_mesh_pair(
         paths["grid"], paths["static"]
@@ -3725,7 +4294,9 @@ def _construct_device_stack(
     backend_restart: Mapping[str, Any] | None = None,
     gf_dynamics_tendencies: Mapping[str, Any] | None = None,
     backend_builder: Callable[..., Any] | None = None,
+    backend_initializer: Callable[[Any], None] | None = None,
     physics_rollback_snapshot: bool = True,
+    stochastic_restart: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from hexcore.cuda_arwen_physics_v841 import (
         PersistentTwoPhaseCudaPhysicsBackendV841,
@@ -3750,6 +4321,13 @@ def _construct_device_stack(
     # lane is what this branch exists to avoid: two constructions drift, and
     # the drift shows up as a physics difference nobody meant to make.
     regional = host.get("regional")
+    from hexcore import arwen_les
+    les = None
+    if arwen_les.active(host["config"]):
+        from hexcore.cuda_les_v842 import ResidentLesV842
+        les = ResidentLesV842(
+            prepared.mesh, prepared.vertical, prepared.reference_wind_profiles,
+            host["config"], host["scalar_names"], host["les_theta_initial"])
     if regional is None:
         driver = CudaDryDycoreDriver.from_host(
             prepared.mesh,
@@ -3762,6 +4340,7 @@ def _construct_device_stack(
             advection_coefficients=prepared.advection_coefficients,
             kernel_cache=cache,
             reference_wind_profiles=prepared.reference_wind_profiles,
+            les_dissipation=les,
         )
         physics_mesh = prepared.mesh
     else:
@@ -3778,6 +4357,7 @@ def _construct_device_stack(
             prepared.terrain_metrics,
             host["config"],
             reference_wind_profiles=prepared.reference_wind_profiles,
+            les_dissipation=les,
             lbc_paths=regional["lbc_paths"],
             start_time=regional["start_time"],
             kernel_cache=cache,
@@ -3792,8 +4372,21 @@ def _construct_device_stack(
         physics_mesh = driver.regional_v841.padded
     prep_geometry = CudaMpasToPhysGeometryV841.from_host(physics_mesh)
     physics_geometry = CudaPhysicsGeometryV841.from_host(physics_mesh)
-    gwdo_static = CudaYsuGwdoStaticV841.from_host(host["gwdo_host"])
-    constructor = SealedArwenConstructorV841.from_mapping(host["constructor_values"])
+    # A suite row runs its drag inside the engine's PBL slot and hands no
+    # hex-side YSU-GWDO statics (host["gwdo_host"] is None); it also seals
+    # its own constructor, whose soil column and drag statistics are not the
+    # frozen mapping's.  The frozen row takes both defaults, unchanged.
+    gwdo_static = (
+        None
+        if host["gwdo_host"] is None
+        else CudaYsuGwdoStaticV841.from_host(host["gwdo_host"])
+    )
+    sealer = getattr(backend_builder, "seal_constructor", None)
+    constructor = (
+        SealedArwenConstructorV841.from_mapping(host["constructor_values"])
+        if sealer is None
+        else sealer(host["constructor_values"])
+    )
     if backend_builder is None:
         backend = PersistentTwoPhaseCudaPhysicsBackendV841(
             constructor=constructor,
@@ -3816,16 +4409,35 @@ def _construct_device_stack(
             prep_geometry=prep_geometry,
             kernel_cache=cache,
             gwdo_static=gwdo_static,
-            gwdo_kernel_cache=cache,
+            gwdo_kernel_cache=None if gwdo_static is None else cache,
             checkout=arwen_checkout,
             physics_mesh=physics_mesh,
+            rollback_snapshot=bool(physics_rollback_snapshot),
         )
+    from hexcore.stochastic import StochasticConfig, StochasticPhysics
+    stochastic_config = StochasticConfig.parse(host.get("stochastic"))
+    if stochastic_config.enabled:
+        driver.stochastic = StochasticPhysics(prepared.mesh, prepared.vertical, stochastic_config)
+        if stochastic_restart is not None:
+            driver.stochastic.process.restore(stochastic_restart)
+        elif float(driver.atmosphere.state.time_seconds) or stochastic_config.restart_required:
+            raise ValueError("stochastic restart is absent from this checkpoint")
+    elif stochastic_restart is not None:
+        raise ValueError("checkpoint stochastic physics must remain enabled on resume")
     api = require_staged_backend_api(backend)
     if backend_restart is not None:
         backend.restore_restart_state(backend_restart)
+    if backend_initializer is not None:
+        backend_initializer(backend)
     diagnostic = backend_diagnostic_mapping(backend.diagnostic_snapshot())
     if float(driver.atmosphere.state.time_seconds) != float(diagnostic["metadata"]["time_seconds"]):
         raise RuntimeError("driver and public backend diagnostic clocks differ")
+    if not retain_initial_diagnostic_snapshot():
+        # The start-time snapshot's device groups (GWDO level fields, surface,
+        # soil and precipitation copies, about 1 KB per column) were read only
+        # by the clock check above; every history frame takes its own
+        # snapshot.  Keep the host groups and release the device copies.
+        diagnostic = {name: diagnostic[name] for name in ("metadata", "receipt")}
     stack: dict[str, Any] = {
         "driver": driver,
         "backend": backend,
@@ -4716,7 +5328,8 @@ def installed_engine_provenance(root: Path) -> dict[str, Any] | None:
 
 
 def verify_arwen_checkout_git(
-    checkout: Path, manifest: Mapping[str, str] | None = None
+    checkout: Path, manifest: Mapping[str, str] | None = None,
+    *, require_committed: bool = True,
 ) -> dict[str, Any]:
     """Admit an Arwen tree iff its executed seam source is the proven one.
 
@@ -4747,21 +5360,25 @@ def verify_arwen_checkout_git(
 
     root = checkout.resolve(strict=True)
 
-    probe = subprocess.run(
-        [
-            "git",
-            "-c",
-            f"safe.directory={root}",
-            "-C",
-            str(root),
-            "rev-parse",
-            "--show-toplevel",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        probe = subprocess.run(
+            [
+                "git",
+                "-c",
+                f"safe.directory={root}",
+                "-C",
+                str(root),
+                "rev-parse",
+                "--show-toplevel",
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        # Installed wheels carry RECORD provenance even when git is absent.
+        probe = None
     installed: dict[str, Any] | None = None
-    if probe.returncode != 0:
+    if probe is None or probe.returncode != 0:
         installed = installed_engine_provenance(root)
         if installed is None:
             raise RuntimeError(
@@ -4833,22 +5450,27 @@ def verify_arwen_checkout_git(
         target = root / relative
         if not target.is_file():
             raise RuntimeError(
-                f"{relative} is missing from the Arwen checkout {root} — the "
+                f"{relative} is missing from the Arwen checkout {root} â€” the "
                 "seam's executed source moved; re-prove before running"
             )
         actual = sha256_file(target)
         if actual != expected:
             raise RuntimeError(
                 f"{relative} does not match the proven manifest (expected "
-                f"{expected}, found {actual}) — the seam's executed source "
+                f"{expected}, found {actual}) â€” the seam's executed source "
                 "moved; re-prove before running"
             )
         files[relative] = actual
 
     dirty_manifest = sorted(set(dirty_paths) & set(manifest))
-    if dirty_manifest:
+    # ``require_committed=False`` is the FORECAST's call (2026-10-10): a
+    # forecast on an engine tree with uncommitted seam edits runs, and the
+    # receipt names those files by path and by the digest found
+    # (``dirty_manifest_paths`` below, ``manifest.files``).  The x4 proof
+    # keeps the refusal, because its receipt is a claim about a commit.
+    if dirty_manifest and require_committed:
         raise RuntimeError(
-            f"{dirty_manifest[0]} is dirty in the Arwen checkout — its bytes "
+            f"{dirty_manifest[0]} is dirty in the Arwen checkout â€” its bytes "
             "cannot be provenanced to any commit; commit or restore it, then "
             "re-prove before running"
         )
@@ -4872,6 +5494,7 @@ def verify_arwen_checkout_git(
         "tree": tree,
         "clean": not dirty_paths,
         "dirty_paths": dirty_paths,
+        "dirty_manifest_paths": dirty_manifest,
         "provenance": (
             "head/tree/dirty-state (git) or version/RECORD digest (install) "
             "are recorded, not gates; the gate is the sixteen-file "

@@ -27,6 +27,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from .errors import ConfigurationRefusal
+from .prep_cache import cached
 
 
 FloatArray = NDArray[np.floating[Any]]
@@ -325,11 +326,25 @@ def _topology(
         cells_on_edge = np.where(
             cells_on_edge < 0, regional_garbage_index, cells_on_edge
         )
-    for cell in range(n_cells):
-        count = int(counts[cell])
-        if np.any(edges_on_cell[cell, :count] < 0) or np.any(edges_on_cell[cell, :count] >= n_edges):
+    # Check active slots in row batches. The old loop dispatched three NumPy
+    # reductions per cell under the GIL (1.1 s at 60 km in a cold preflight).
+    # Return the first bad row from each slice, then preserve the old row and
+    # edge-before-neighbor refusal order, including when both errors occur.
+    width = edges_on_cell.shape[1]
+    def check_rows(lo, hi):
+        active = np.arange(width)[None, :] < counts[lo:hi, None]
+        edges = edges_on_cell[lo:hi]
+        bad_edge = np.any(active & ((edges < 0) | (edges >= n_edges)), axis=1)
+        bad_neighbor = np.any(active & (cells_on_cell[lo:hi, :width] < 0), axis=1)
+        bad = np.flatnonzero(bad_edge | bad_neighbor)
+        return None if bad.size == 0 else bool(bad_edge[bad[0]])
+
+    for bad_edge in _map_prep_rows(n_cells, check_rows):
+        if bad_edge is None:
+            continue
+        if bad_edge:
             raise ValueError("active edgesOnCell entry is out of range")
-        if np.any(cells_on_cell[cell, :count] < 0):
+        else:
             raise ConfigurationRefusal(
                 "config_apply_lbcs",
                 False,
@@ -466,6 +481,7 @@ def _normalize_deriv_two(value: ArrayLike, n_edges: int) -> FloatArray:
     )
 
 
+@cached("advection-coefficients", salt=lambda: __import__("hexcore.rust_hostprep",fromlist=["_engine_digest"])._engine_digest())
 def build_advection_coefficients(
     mesh: Any,
     deriv_two: ArrayLike | None = None,
@@ -479,8 +495,9 @@ def build_advection_coefficients(
     """Compress cell second-derivative stencils onto each edge.
 
     This is helpers.F:87-302 with the published Python/netCDF array order.
-    The unique stencil is sorted by ``indexToCellID`` exactly as the helper
-    routine does.  On meshes without global IDs, zero-based cell indices are
+    The legacy stencil is sorted by ``indexToCellID``. The v8.4.1 path
+    preserves native ``atm_adv_coef_compression`` insertion order. On meshes
+    without global IDs, zero-based cell indices are
     the deterministic IDs.
 
     On a regional cull (``allow_regional_sentinels=True``) the ring-7
@@ -508,78 +525,24 @@ def build_advection_coefficients(
         raise ValueError("indexToCellID must contain one unique ID per cell")
 
     width = deriv.shape[2]
-    adv = np.zeros((n_edges, width), dtype=dtype)
-    adv3 = np.zeros((n_edges, width), dtype=dtype)
-    adv_cells = np.full((n_edges, width), -1, dtype=np.int64)
-    n_adv = np.zeros(n_edges, dtype=np.int64)
-    half = dtype.type(0.5)
-    twelve = dtype.type(12.0)
-
-    garbage = n_cells if allow_regional_sentinels else -1
-
-    def _cell_count(cell: int) -> int:
-        # nEdgesOnCell of the garbage element is 0 by pool allocation.
-        return 0 if cell == garbage else int(counts[cell])
-
-    def _cell_id(cell: int) -> int:
-        # The garbage element orders last: culled meshes carry contiguous
-        # 1..N indexToCellID, so any value beyond them is stable.
-        return n_cells + 1 if cell == garbage else int(ids[cell])
-
-    for edge in range(n_edges):
-        cell1 = int(cells_on_edge[edge, 0])
-        cell2 = int(cells_on_edge[edge, 1])
-        unique = {cell1, cell2}
-        for slot in range(_cell_count(cell1)):
-            unique.add(int(cells_on_cell[cell1, slot]))
-        for slot in range(_cell_count(cell2)):
-            unique.add(int(cells_on_cell[cell2, slot]))
-        ordered = sorted(unique, key=_cell_id)
-        if len(ordered) > width:
-            raise ValueError(
-                f"edge {edge} needs {len(ordered)} advection cells but deriv_two has width {width}"
-            )
-        n_adv[edge] = len(ordered)
-        adv_cells[edge, : len(ordered)] = ordered
-        position = {cell: slot for slot, cell in enumerate(ordered)}
-
-        target = position[cell1]
-        adv[edge, target] = adv[edge, target] + deriv[edge, 0, 0]
-        adv3[edge, target] = adv3[edge, target] + deriv[edge, 0, 0]
-        for neighbor_slot in range(_cell_count(cell1)):
-            target = position[int(cells_on_cell[cell1, neighbor_slot])]
-            value = deriv[edge, 0, neighbor_slot + 1]
-            adv[edge, target] = adv[edge, target] + value
-            adv3[edge, target] = adv3[edge, target] + value
-
-        target = position[cell2]
-        adv[edge, target] = adv[edge, target] + deriv[edge, 1, 0]
-        adv3[edge, target] = adv3[edge, target] - deriv[edge, 1, 0]
-        for neighbor_slot in range(_cell_count(cell2)):
-            target = position[int(cells_on_cell[cell2, neighbor_slot])]
-            value = deriv[edge, 1, neighbor_slot + 1]
-            adv[edge, target] = adv[edge, target] + value
-            adv3[edge, target] = adv3[edge, target] - value
-
-        if source_order_v841:
-            dc_squared = dc_edge[edge] ** 2
-            for slot in range(len(ordered)):
-                adv[edge, slot] = (
-                    -dc_squared * adv[edge, slot] / twelve
-                )
-                adv3[edge, slot] = (
-                    -dc_squared * adv3[edge, slot] / twelve
-                )
-        else:
-            scale = -(dc_edge[edge] * dc_edge[edge]) / twelve
-            for slot in range(len(ordered)):
-                adv[edge, slot] = scale * adv[edge, slot]
-                adv3[edge, slot] = scale * adv3[edge, slot]
-        adv[edge, position[cell1]] = adv[edge, position[cell1]] + half
-        adv[edge, position[cell2]] = adv[edge, position[cell2]] + half
-        for slot in range(len(ordered)):
-            adv[edge, slot] = dv_edge[edge] * adv[edge, slot]
-            adv3[edge, slot] = dv_edge[edge] * adv3[edge, slot]
+    from .rust_hostprep import compress_advection
+    adv,adv3,n_adv,adv_cells = compress_advection(counts=counts,edges=_rows(_mesh_array(mesh,"edgesOnCell"),n_cells,"edgesOnCell"),
+        cells_on_cell=cells_on_cell[:,:_rows(_mesh_array(mesh,"edgesOnCell"),n_cells,"edgesOnCell").shape[1]],
+        cells_on_edge=cells_on_edge,ids=ids,deriv=deriv,dc=dc_edge,dv=dv_edge,
+        source_order=source_order_v841,garbage=n_cells if allow_regional_sentinels else -1)
+    if source_order_v841:
+        # atm_adv_coef_compression preserves insertion order: the two owners,
+        # cell1's neighbors, then cell2's previously unseen neighbors.
+        # The bridge sorts by global ID. Reorder its bit-identical coefficients
+        # before any flux sum, without changing coefficient construction.
+        adv, adv3, adv_cells = _native_advection_order(
+            counts, cells_on_cell, cells_on_edge, adv, adv3, n_adv, adv_cells,
+            garbage=n_cells if allow_regional_sentinels else -1,
+        )
+        adv, adv3 = _native_advection_compression(
+            counts, cells_on_cell, cells_on_edge, deriv, dc_edge, dv_edge,
+            n_adv, adv_cells,
+        )
 
     mask: NDArray[np.int8] | None = None
     if boundary_cell is not None:
@@ -644,7 +607,12 @@ def _arc_bisect(a: FloatArray, b: FloatArray, dtype: np.dtype[Any]) -> FloatArra
     return radius * midpoint / distance
 
 
-def initialize_deriv_two(mesh: Any, *, stencil_width: int | None = None) -> FloatArray:
+def initialize_deriv_two(
+    mesh: Any,
+    *,
+    stencil_width: int | None = None,
+    allow_regional_sentinels: bool = False,
+) -> FloatArray:
     """Initialize the quadratic-fit directional second derivatives.
 
     This ports helpers.F:315-722 and the called weighted least-squares formula
@@ -1090,6 +1058,7 @@ def monotonic_tracer_advection_tendency(
     edge_sign_on_cell: ArrayLike | None = None,
     n_cells_solve: int | None = None,
     in_place: bool = False,
+    allow_regional_sentinels: bool = False,
 ) -> FloatArray:
     """Port the helpers-based FCT routine ``mpas_tracer_advection_mono_tend``."""
 
@@ -2122,16 +2091,36 @@ def advance_scalars_monotonic(
         scale_columns = n_cells if mask_cell_array is None else n_cells + 1
         scale_in = np.zeros((n_levels, scale_columns), dtype=dtype)
         scale_out = np.zeros((n_levels, scale_columns), dtype=dtype)
+        # v8.4.x restructured this update around flux_upwind_arr: every level
+        # first loses its upper interface's upwind flux, then gains its lower
+        # one (mpas_atm_time_integration.F v8.4.2, the two k loops after
+        # flux_upwind_arr).  v8.2.3 walks interfaces and so adds before it
+        # subtracts.  The stored-inverse selector is the v8.4.1 source lane.
+        v841_source_order = inv_area_cell is not None
         for cell in range(n_cells):
-            for interface in range(1, n_levels):
-                velocity = vertical_velocity[interface, cell]
-                flux_upwind = step * (
-                    max(zero, velocity) * old_scalar[interface - 1, cell]
-                    + min(zero, velocity) * old_scalar[interface, cell]
-                )
-                mass[interface - 1, cell] = mass[interface - 1, cell] - flux_upwind * rdnw[interface - 1]
-                mass[interface, cell] = mass[interface, cell] + flux_upwind * rdnw[interface]
-                vertical_residual[interface, cell] = vertical_residual[interface, cell] - flux_upwind
+            if v841_source_order:
+                flux_column = [zero] * (n_levels + 1)
+                for interface in range(1, n_levels):
+                    velocity = vertical_velocity[interface, cell]
+                    flux_column[interface] = step * (
+                        max(zero, velocity) * old_scalar[interface - 1, cell]
+                        + min(zero, velocity) * old_scalar[interface, cell]
+                    )
+                for level in range(n_levels - 1):
+                    mass[level, cell] = mass[level, cell] - flux_column[level + 1] * rdnw[level]
+                for level in range(1, n_levels):
+                    mass[level, cell] = mass[level, cell] + flux_column[level] * rdnw[level]
+                    vertical_residual[level, cell] = vertical_residual[level, cell] - flux_column[level]
+            else:
+                for interface in range(1, n_levels):
+                    velocity = vertical_velocity[interface, cell]
+                    flux_upwind = step * (
+                        max(zero, velocity) * old_scalar[interface - 1, cell]
+                        + min(zero, velocity) * old_scalar[interface, cell]
+                    )
+                    mass[interface - 1, cell] = mass[interface - 1, cell] - flux_upwind * rdnw[interface - 1]
+                    mass[interface, cell] = mass[interface, cell] + flux_upwind * rdnw[interface]
+                    vertical_residual[interface, cell] = vertical_residual[interface, cell] - flux_upwind
             for level in range(n_levels):
                 scale_in[level, cell] = -rdnw[level] * (
                     min(zero, vertical_residual[level + 1, cell])
@@ -2316,3 +2305,202 @@ vflux3 = vertical_flux_3
 vflux4 = vertical_flux_4
 atm_advance_scalars_work = advance_scalars
 atm_advance_scalars_mono_work = advance_scalars_monotonic
+
+
+def _map_prep_rows(n_rows, function):
+    """Bounded NumPy row workers; results and errors remain in slice order."""
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = max(1, int(os.environ.get("GPUWM_HEX_HOSTPREP_THREADS", "4")))
+    workers = min(workers, max(1, n_rows // 16384))
+    if workers == 1:
+        return [function(0, n_rows)]
+    error_mode = np.geterr()
+    def run(index):
+        with np.errstate(**error_mode):
+            return function(n_rows * index // workers, n_rows * (index + 1) // workers)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hex-advection-prep") as pool:
+        return list(pool.map(run, range(workers)))
+
+
+def _native_advection_order(counts, neighbors, owners, adv, adv3, n_adv, cells, *, garbage):
+    def rows(lo, hi):
+        return _native_advection_order_rows(counts, neighbors, owners[lo:hi],
+            adv[lo:hi], adv3[lo:hi], n_adv[lo:hi], cells[lo:hi], garbage=garbage)
+    try:
+        chunks = _map_prep_rows(cells.shape[0], rows)
+    except ValueError:
+        # A malformed stencil can fail at different stages in two slices.
+        # Replay only this refusal path to retain the original stage priority.
+        return rows(0, cells.shape[0])
+    return tuple(np.concatenate(parts, axis=0) for parts in zip(*chunks)) if len(chunks) > 1 else chunks[0]
+
+
+def _native_advection_order_rows(counts, neighbors, owners, adv, adv3, n_adv, cells, *, garbage):
+    """Vectorize native insertion order over edges, retaining every coefficient."""
+    ne, width = cells.shape
+    active_edge = np.any((owners >= 0) & (owners < counts.size), axis=1)
+    ordered = cells.copy()
+    ordered[active_edge] = -1
+    filled = n_adv.copy()
+    rows = np.arange(ne)
+    ordered[active_edge, :2] = owners[active_edge]
+    filled[active_edge] = 2
+    for side in (0, 1):
+        owner = owners[:, side]
+        valid_owner = (owner >= 0) & (owner < counts.size)
+        safe_owner = np.where(valid_owner, owner, 0)
+        owner_count = np.where(valid_owner, counts[safe_owner], 0)
+        for slot in range(neighbors.shape[1]):
+            candidate = neighbors[safe_owner, slot]
+            add = active_edge & (slot < owner_count) & ~np.any(ordered == candidate[:, None], axis=1)
+            if np.any(filled[add] >= width):
+                raise ValueError("native advection stencil exceeds coefficient width")
+            ordered[rows[add], filled[add]] = candidate[add]
+            filled[add] += 1
+    if not np.array_equal(filled, n_adv):
+        raise ValueError("native and bridge advection stencil counts differ")
+    permutation = np.zeros_like(cells)
+    for slot in range(width):
+        active = active_edge & (slot < n_adv)
+        matches = cells == ordered[:, slot, None]
+        if np.any(active & ~np.any(matches, axis=1)):
+            raise ValueError("native advection cell is absent from bridge stencil")
+        permutation[:, slot] = np.argmax(matches, axis=1)
+    # Inactive slots remain zeros and garbage IDs, as returned by the bridge.
+    active = active_edge[:, None] & (np.arange(width)[None, :] < n_adv[:, None])
+    return (
+        np.where(active, np.take_along_axis(adv, permutation, axis=1), adv),
+        np.where(active, np.take_along_axis(adv3, permutation, axis=1), adv3),
+        np.where(active, ordered, cells),
+    )
+
+
+def _compress_advection_coefficients_serial(counts,cells_on_cell,cells_on_edge,ids,deriv,dc_edge,dv_edge,*,source_order_v841,allow_regional_sentinels):
+    """Unchanged independent scalar authority for exactness checks."""
+    n_cells=counts.size; n_edges=cells_on_edge.shape[0]; width=deriv.shape[2]; dtype=deriv.dtype
+    adv = np.zeros((n_edges, width), dtype=dtype)
+    adv3 = np.zeros((n_edges, width), dtype=dtype)
+    adv_cells = np.full((n_edges, width), -1, dtype=np.int64)
+    n_adv = np.zeros(n_edges, dtype=np.int64)
+    half = dtype.type(0.5)
+    twelve = dtype.type(12.0)
+
+    garbage = n_cells if allow_regional_sentinels else -1
+
+    def _cell_count(cell: int) -> int:
+        # nEdgesOnCell of the garbage element is 0 by pool allocation.
+        return 0 if cell == garbage else int(counts[cell])
+
+    def _cell_id(cell: int) -> int:
+        # The garbage element orders last: culled meshes carry contiguous
+        # 1..N indexToCellID, so any value beyond them is stable.
+        return n_cells + 1 if cell == garbage else int(ids[cell])
+
+    for edge in range(n_edges):
+        cell1 = int(cells_on_edge[edge, 0])
+        cell2 = int(cells_on_edge[edge, 1])
+        unique = {cell1, cell2}
+        for slot in range(_cell_count(cell1)):
+            unique.add(int(cells_on_cell[cell1, slot]))
+        for slot in range(_cell_count(cell2)):
+            unique.add(int(cells_on_cell[cell2, slot]))
+        if source_order_v841:
+            ordered = [cell1, cell2]
+            for cell in (cell1, cell2):
+                for slot in range(_cell_count(cell)):
+                    neighbor = int(cells_on_cell[cell, slot])
+                    if neighbor not in ordered:
+                        ordered.append(neighbor)
+        else:
+            ordered = sorted(unique, key=_cell_id)
+        if len(ordered) > width:
+            raise ValueError(
+                f"edge {edge} needs {len(ordered)} advection cells but deriv_two has width {width}"
+            )
+        n_adv[edge] = len(ordered)
+        adv_cells[edge, : len(ordered)] = ordered
+        position = {cell: slot for slot, cell in enumerate(ordered)}
+
+        target = position[cell1]
+        adv[edge, target] = adv[edge, target] + deriv[edge, 0, 0]
+        adv3[edge, target] = adv3[edge, target] + deriv[edge, 0, 0]
+        for neighbor_slot in range(_cell_count(cell1)):
+            target = position[int(cells_on_cell[cell1, neighbor_slot])]
+            value = deriv[edge, 0, neighbor_slot + 1]
+            adv[edge, target] = adv[edge, target] + value
+            adv3[edge, target] = adv3[edge, target] + value
+
+        target = position[cell2]
+        adv[edge, target] = adv[edge, target] + deriv[edge, 1, 0]
+        adv3[edge, target] = adv3[edge, target] - deriv[edge, 1, 0]
+        for neighbor_slot in range(_cell_count(cell2)):
+            target = position[int(cells_on_cell[cell2, neighbor_slot])]
+            value = deriv[edge, 1, neighbor_slot + 1]
+            adv[edge, target] = adv[edge, target] + value
+            adv3[edge, target] = adv3[edge, target] - value
+
+        if source_order_v841:
+            dc_squared = dc_edge[edge] * dc_edge[edge]
+            for slot in range(len(ordered)):
+                adv[edge, slot] = (
+                    -dc_squared * adv[edge, slot] / twelve
+                )
+                adv3[edge, slot] = (
+                    -dc_squared * adv3[edge, slot] / twelve
+                )
+        else:
+            scale = -(dc_edge[edge] * dc_edge[edge]) / twelve
+            for slot in range(len(ordered)):
+                adv[edge, slot] = scale * adv[edge, slot]
+                adv3[edge, slot] = scale * adv3[edge, slot]
+        adv[edge, position[cell1]] = adv[edge, position[cell1]] + half
+        adv[edge, position[cell2]] = adv[edge, position[cell2]] + half
+        for slot in range(len(ordered)):
+            adv[edge, slot] = dv_edge[edge] * adv[edge, slot]
+            adv3[edge, slot] = dv_edge[edge] * adv3[edge, slot]
+
+    return adv,adv3,n_adv,adv_cells
+
+
+
+def _native_advection_compression(counts, neighbors, owners, deriv, dc, dv, n_adv, cells):
+    def rows(lo, hi):
+        return _native_advection_compression_rows(counts, neighbors, owners[lo:hi],
+            deriv[lo:hi], dc[lo:hi], dv[lo:hi], n_adv[lo:hi], cells[lo:hi])
+    chunks = _map_prep_rows(cells.shape[0], rows)
+    return tuple(np.concatenate(parts, axis=0) for parts in zip(*chunks)) if len(chunks) > 1 else chunks[0]
+
+
+def _native_advection_compression_rows(counts, neighbors, owners, deriv, dc, dv, n_adv, cells):
+    """Match core.F:1475-1529 across edges, retaining native rounding points."""
+    ne, width = cells.shape
+    rows = np.arange(ne)
+    dtype = deriv.dtype
+    adv = np.zeros((ne, width), dtype=dtype)
+    adv3 = np.zeros_like(adv)
+    active_edge = np.any((owners >= 0) & (owners < counts.size), axis=1)
+    for side in (0, 1):
+        owner = owners[:, side]
+        valid = (owner >= 0) & (owner < counts.size)
+        safe = np.where(valid, owner, 0)
+        count = np.where(valid, counts[safe], 0)
+        for slot in range(neighbors.shape[1] + 1):
+            cell = owner if slot == 0 else neighbors[safe, slot - 1]
+            used = active_edge if slot == 0 else active_edge & (slot <= count)
+            position = np.argmax(cells == cell[:, None], axis=1)
+            rr, pp = rows[used], position[used]
+            value = deriv[used, side, slot]
+            adv[rr, pp] = adv[rr, pp] + value
+            adv3[rr, pp] = adv3[rr, pp] + value if side == 0 else adv3[rr, pp] - value
+    active = active_edge[:, None] & (np.arange(width)[None, :] < n_adv[:, None])
+    # Integer exponent two in native is one rounded multiply, not a library power.
+    dc_squared = dc * dc
+    adv = np.where(active, (-dc_squared[:, None] * adv) / dtype.type(12.0), dtype.type(0.0))
+    adv3 = np.where(active, (-dc_squared[:, None] * adv3) / dtype.type(12.0), dtype.type(0.0))
+    for side in (0, 1):
+        position = np.argmax(cells == owners[:, side, None], axis=1)
+        rr, pp = rows[active_edge], position[active_edge]
+        adv[rr, pp] = adv[rr, pp] + dtype.type(0.5)
+    return adv * dv[:, None], adv3 * dv[:, None]

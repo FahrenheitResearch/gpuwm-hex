@@ -1,0 +1,15 @@
+[package]
+name = "rw-surface"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[features]
+static-netcdf = []
+
+[lib]
+name = "rw_surface"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]

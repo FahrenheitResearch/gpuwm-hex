@@ -1,0 +1,53 @@
+AER RRTMG: the copyright notice as MPAS-Model v8.4.2 distributes it
+
+src/hexcore/mpasphys/rrtmg_lw_v842.py and rrtmg_sw_v842.py port the RRTMG
+longwave and shortwave schemes from MPAS-Model v8.4.2 (commit
+f34984b2c89353cf31c235b08d3b4acd96b37bb3):
+src/core_atmosphere/physics/physics_wrf/module_ra_rrtmg_lw.F (sha256
+b06b05f835700f209414a1faa02e808a28e5850644fae7122619d576780f0ca0) and
+module_ra_rrtmg_sw.F (sha256
+8a33ce7a6516377148fa932ce4d0e9e9cb9bb029d115ca9396e346df2027fe42).
+
+That code is AER's. MPAS's copy keeps AER's notice in three copyright-year
+spans, reproduced verbatim below. gpuwm-hex takes the RRTMG material under
+AER's own current BSD-3-Clause grant
+(LICENSE-AER-RRTMG-BSD-3-Clause.txt), which has no condition about sale; the
+notice below is reproduced because it is the notice the distributed copy
+carries.
+
+Twelve occurrences across the two files (4 in module_ra_rrtmg_lw.F, 8 in
+module_ra_rrtmg_sw.F) read:
+
+!  --------------------------------------------------------------------------
+! |                                                                          |
+! |  Copyright 2002-2008, Atmospheric & Environmental Research, Inc. (AER).  |
+! |  This software may be used, copied, or redistributed as long as it is    |
+! |  not sold and this copyright notice is reproduced on each copy made.     |
+! |  This model is provided as is without any express or implied warranties. |
+! |                       (http://www.rtweb.aer.com/)                        |
+! |                                                                          |
+!  --------------------------------------------------------------------------
+
+Two occurrences (both in module_ra_rrtmg_lw.F) read:
+
+!  --------------------------------------------------------------------------
+! |                                                                          |
+! |  Copyright 2002-2009, Atmospheric & Environmental Research, Inc. (AER).  |
+! |  This software may be used, copied, or redistributed as long as it is    |
+! |  not sold and this copyright notice is reproduced on each copy made.     |
+! |  This model is provided as is without any express or implied warranties. |
+! |                       (http://www.rtweb.aer.com/)                        |
+! |                                                                          |
+!  --------------------------------------------------------------------------
+
+Two occurrences (one in each file) read:
+
+!  --------------------------------------------------------------------------
+! |                                                                          |
+! |  Copyright 2006-2008, Atmospheric & Environmental Research, Inc. (AER).  |
+! |  This software may be used, copied, or redistributed as long as it is    |
+! |  not sold and this copyright notice is reproduced on each copy made.     |
+! |  This model is provided as is without any express or implied warranties. |
+! |                       (http://www.rtweb.aer.com/)                        |
+! |                                                                          |
+!  --------------------------------------------------------------------------

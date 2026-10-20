@@ -402,7 +402,7 @@ def test_the_boundary_nudge_only_drives_species_the_stream_carries():
     |w| = 179.1 m/s at boundary ring 5.
     """
 
-    from hexcore.lbc import LBC_REQUIRED_VARIABLES
+    from hexcore.lbc import LBC_REQUIRED_VARIABLES, LBC_OPTIONAL_SCALAR_VARIABLES
 
     source = (SRC / "cuda_regional_forecast_v841.py").read_text(encoding="utf-8")
     body = _between(
@@ -422,7 +422,9 @@ def test_the_boundary_nudge_only_drives_species_the_stream_carries():
     assert "self._driven_tracer_count(scalars)" in reset
     # The stream's own contract says which species exist to be driven, so the
     # forecast door derives the list rather than hard-coding three.
-    assert {"lbc_qv", "lbc_qc", "lbc_qr"} <= set(LBC_REQUIRED_VARIABLES)
+    assert "lbc_qv" in LBC_REQUIRED_VARIABLES
+    # Native Registry.xml:2154-2161 activates condensates by package.
+    assert {"lbc_qc", "lbc_qr"} <= set(LBC_OPTIONAL_SCALAR_VARIABLES)
     assert "lbc_qi" not in LBC_REQUIRED_VARIABLES
 
 
@@ -472,7 +474,7 @@ def test_the_step_loop_is_the_same_loop():
     # behind ``driver.regional_v841`` in cuda_driver, which both lanes run.
     # (The receipt block AFTER the loop does read the runtime, to record what
     # drove the boundary; that is provenance, not a second execution path.)
-    loop = _between(body, "for step in range(1, steps + 1):", "    loop_seconds =")
+    loop = _between(body, "for step in range(start_step + 1, steps + 1):", "    loop_seconds =")
     assert "regional" not in loop
     assert "lbc" not in loop
 

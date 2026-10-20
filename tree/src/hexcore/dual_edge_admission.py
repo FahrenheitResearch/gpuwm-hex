@@ -29,8 +29,9 @@ THE FLOOR IS THE RATIO, NOT THE LENGTH.  Amplification is ``dc/dv``, which is
 scale-free, so a finer mesh is not penalised for being fine.  The published
 family measures 0.394477 (``x1.40962``) and 0.033650 (``x4.163842``); the
 generator refuses its own emissions below 0.02 for the same reason.  The
-same 0.02 is used here so a mesh that the generator would not emit today
-cannot be run today either, whatever produced its bytes.  An absolute
+same 0.02 is used here when APVM is active. With APVM disabled the cited
+gradient kernel is not launched, so the ratio is recorded and positive
+geometry remains required. This does not qualify a forecast on its own. An absolute
 minimum ``dvEdge`` floor is deliberately NOT applied: the frozen native
 ``x4.163842`` measures 1,170 m and integrates, so an absolute floor would
 refuse the correctness anchor itself.
@@ -60,6 +61,7 @@ class DualEdgeAdmissionError(RuntimeError):
 class DualEdgePolicy:
     schema: str = "gpuwm-hex.dual-edge-admission/v1"
     minimum_dv_over_dc: float = 0.02
+    apvm_upwinding: float = 0.5
     description: str = (
         "TRiSK tangential terms divide by dvEdge; the amplification of a "
         "tangential gradient over a normal one is dcEdge/dvEdge. The floor sits "
@@ -69,6 +71,8 @@ class DualEdgePolicy:
     )
 
     def validate(self) -> None:
+        if not math.isfinite(self.apvm_upwinding) or self.apvm_upwinding < 0.0:
+            raise DualEdgeAdmissionError("APVM coefficient must be finite and nonnegative")
         if (
             not math.isfinite(self.minimum_dv_over_dc)
             or not 0.0 < self.minimum_dv_over_dc < 1.0
@@ -79,7 +83,7 @@ class DualEdgePolicy:
 
     def as_dict(self) -> dict[str, Any]:
         self.validate()
-        return asdict(self)
+        return {**asdict(self), "ratio_floor_active": self.apvm_upwinding > 0.0}
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +181,17 @@ def admit_dual_edges(
         edges_below_floor=below,
         policy=selected,
     )
+    if selected.apvm_upwinding == 0.0:
+        # The measured runaway mechanism is the APVM tangential gradient.
+        # cuda_horizontal_v841.py launches pv_apvm_v841_f32 only for a
+        # positive coefficient. UCAR requires APVM=0 for its dense refined
+        # meshes. Keep positivity for the other inverse-geometry consumers;
+        # record roughness rather than refusing an operator that is not run.
+        if minimum <= 0.0:
+            raise DualEdgeAdmissionError(
+                f"dual edge {worst} has zero dvEdge; disabling APVM does not "
+                "make zero inverse-geometry denominators valid")
+        return admission
     if minimum >= selected.minimum_dv_over_dc:
         return admission
 

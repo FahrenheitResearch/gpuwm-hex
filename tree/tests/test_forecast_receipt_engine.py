@@ -38,15 +38,22 @@ def test_a_pinned_engine_is_named_by_the_pin_not_by_the_proof(
 
     record = forecast.measured_engine_identity(tmp_path)
 
+    pin = record.pop("arwen_engine_pin")
     assert record == {
         "arwen_commit": pinned.build_commit,
         "arwen_engine_version": pinned.version,
         "arwen_glacier_composed_tu_sha256": pinned.glacier_composed_tu_sha256,
     }
     assert record["arwen_commit"] != proof.ARWEN_COMMIT
+    assert pin["matches_measured_row"] is True and pin["moved_from_pin"] == []
+    assert pin["measured_row"] == pinned.version
 
 
-def test_bytes_that_match_no_engine_name_none(monkeypatch, tmp_path):
+def test_bytes_that_match_no_engine_are_named_as_found(monkeypatch, tmp_path):
+    """An engine no measured row names RUNS (the byte match stopped being a
+    gate on 2026-10-10).  Its receipt names the version it declares, carries
+    no measured row's commit or glacier digest, and lists what moved."""
+
     manifest = sorted(engine_pin.seam_manifest())
     monkeypatch.setattr(
         engine_pin,
@@ -58,7 +65,15 @@ def test_bytes_that_match_no_engine_name_none(monkeypatch, tmp_path):
 
     record = forecast.measured_engine_identity(tmp_path)
 
-    assert set(record.values()) == {None}
+    pin = record.pop("arwen_engine_pin")
+    assert record == {
+        "arwen_commit": None,
+        "arwen_engine_version": engine_pin.wanted_version(),
+        "arwen_glacier_composed_tu_sha256": None,
+    }
+    assert pin["matches_measured_row"] is False and pin["measured_row"] is None
+    assert pin["moved_from_pin"] == [manifest[0]]
+    assert pin["pinned_engine_version"] == engine_pin.wanted_version()
 
 
 def test_the_receipt_no_longer_restates_the_proof_constants():

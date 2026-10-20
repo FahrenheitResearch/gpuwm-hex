@@ -33,7 +33,14 @@ is the digest of that json, so writing the first value moves the second's
 input.  ``--write`` therefore iterates until a whole pass changes nothing, and
 refuses to claim success if it does not converge.
 
-WHAT THIS PROGRAM MUST NEVER TOUCH, and does not:
+The default mode never changes engine pins. An explicit engine repin uses
+``--engine-tree TREE --engine-commit SHA --engine-version VERSION
+--engine-git TAG_REPO --wheel-cache CACHE --engine-receipt JSON``. It verifies
+the checked-out commit and every seam byte against all published platform
+wheels before writing. This prevents an engine pin from naming a different
+checkout or admitting a wheel whose physics bytes the port did not measure.
+
+WHAT THE DEFAULT MODE MUST NEVER TOUCH:
 
 * ``ARWEN_SOURCE_MANIFEST`` and ``ARWEN_BUILD_COMMIT`` in
   ``hexcore.cuda_arwen_physics_v841`` -- sixteen files of the gpuwm ENGINE at
@@ -50,7 +57,7 @@ WHAT THIS PROGRAM MUST NEVER TOUCH, and does not:
   are measurements of data or of a card, not of this repository's source, and
   re-deriving one from the tree would be a fabrication.
 
-Usage:  ``--check`` (the default) exits 1 on any drift and prints it;
+Usage:  no arguments (the default check) exits 1 on any drift and prints it;
         ``--write`` rewrites in place and re-checks until it converges.
 """
 
@@ -60,6 +67,7 @@ import argparse
 import ast
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, NamedTuple
@@ -678,10 +686,239 @@ def collect() -> list[Drift]:
     return out
 
 
-def main() -> int:
+def verify_engine_tree(root: Path, commit: str, version: str, paths: list[str]) -> dict[str, str]:
+    """Read a clean, exact engine commit without changing its repository."""
+
+    import measure_engine_verdicts as measurement
+
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise SystemExit("--engine-commit needs a full immutable commit SHA")
+    root = root.resolve()
+    head = measurement._git(root, "rev-parse", "HEAD")
+    if head != commit:
+        raise SystemExit(f"engine HEAD {head} != requested {commit}; refusing false provenance")
+    checked = ["pyproject.toml", *paths]
+    for relative in checked:
+        key = Path(relative)
+        if key.is_absolute() or ".." in key.parts or not relative.startswith(("gpuwm/", "docs/", "pyproject.toml")):
+            raise SystemExit(f"unsafe engine manifest path {relative!r}")
+        path = root / relative
+        if not path.resolve().is_relative_to(root):
+            raise SystemExit(f"engine path escapes its checkout: {relative}")
+        committed = measurement._git(root, "show", f"{commit}:{relative}", binary=True)
+        if not path.is_file() or path.read_bytes() != committed:
+            raise SystemExit(f"engine {relative} differs from {commit}; refusing false provenance")
+    actual = measurement.tree_version(root)
+    if actual != version:
+        raise SystemExit(f"engine version {actual} != requested {version}")
+    return measurement.tree_digests(root, paths)[0]
+
+
+def measured_requirement(rows: list[dict]) -> str:
+    """The existing dependency rule, applied to freshly measured rows."""
+
+    import measure_engine_verdicts as measurement
+
+    def usable(row):
+        return row["on_pypi"] and not row["moved"] and row["offline_build_road"]
+
+    ordered = sorted(rows, key=lambda row: measurement.version_key(row["version"]))
+    accepted = [row for row in ordered if usable(row)]
+    if not accepted:
+        raise SystemExit("no measured published engine satisfies the new seam pin and build road")
+    floor = accepted[0]["version"]
+    # The floor's whole minor (plan call 14; hexcore.engine_pin.gpuwm_ceiling):
+    # a one-patch range made pip downgrade a user's engine (open defect B2).
+    major, minor = measurement.version_key(floor)[:2]
+    return f"gpuwm>={floor},<{major}.{minor + 1}"
+
+
+def measure_engine_repin(arguments) -> dict:
+    """Finish all external measurements before the first hex file is written."""
+
+    import datetime
+    import measure_engine_verdicts as measurement
+
+    adapter = TREE / "src/hexcore/cuda_arwen_physics_v841.py"
+    paths = sorted(measurement.shipped_manifest(adapter))
+    manifest = verify_engine_tree(arguments.engine_tree, arguments.engine_commit,
+                                  arguments.engine_version, paths)
+    store = measurement.WheelStore(arguments.wheel_cache, arguments.offline)
+    wheel_manifest, tag_commit = measurement.pinned_manifest(
+        arguments.engine_version, paths, store, arguments.engine_git)
+    differing = [path for path in paths if manifest[path] != wheel_manifest[path]]
+    if differing:
+        raise SystemExit(f"engine commit and published wheels disagree on {differing}; "
+                         "the checkout guard would refuse the dependency pip installs")
+    glacier = measurement._glacier_digest_from_root(arguments.engine_tree.resolve())
+    wheel_glacier = measurement.glacier_composed_digest(arguments.engine_version, store)
+    if glacier != wheel_glacier:
+        raise SystemExit("engine and wheel composed glacier kernels differ; refusing false kernel provenance")
+    surface = contract_surface_digest(arguments.engine_tree.resolve(), manifest)
+    helper_set = helper_set_row(arguments.engine_tree, arguments.engine_commit, arguments.engine_version)
+    rows = measurement.measure(manifest=manifest, store=store,
+                               engine_git=arguments.engine_git, floor=measurement.DEFAULT_FLOOR)
+    requirement = measured_requirement(rows)
+    return {
+        "instrument": "tools/repin_source_tables.py",
+        "instrument_sha256": sha256_file(Path(__file__)),
+        "measured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "distribution": "gpuwm",
+        "manifest_source": "checked engine commit and matching published platform wheels",
+        "pin": {"version": arguments.engine_version,
+                "build_commit": arguments.engine_commit, "tag_commit": tag_commit,
+                "glacier_composed_tu_sha256": glacier,
+                "contract_surface_sha256": surface},
+        "manifest": manifest, "tags": rows, "requirement": requirement,
+        "helper_set": helper_set,
+        "build_road_files": list(measurement.BUILD_ROAD_FILES),
+    }
+
+
+#: The ArWen radiation helper sources the forecast door binds by digest
+#: (``hexcore.cuda_arwen_helper_scope_v2``), read from the same table it reads.
+HELPER_SETS = TREE / "src/hexcore/data/profiles/engine-helper-sets.v1.json"
+
+
+def helper_set_row(engine_tree: Path, commit: str, version: str) -> dict:
+    """The helper-set row a repin to ``version`` needs, measured from the clean commit.
+
+    THE BREAKAGE (verify-final-hex item 1, 2026-10-12): the repin rewrote the
+    sixteen-file manifest and the dependency range but never this table, so on
+    the frozen gpuwm 2.9.0 every default-physics forecast was refused at start
+    with "unknown or mixed gpuwm execution source set".  The row is part of
+    the repin now, measured from the same clean commit as the manifest.
+    """
+
+    sets = json.loads((TREE / "src/hexcore/radiation_source_sets.json").read_text(encoding="utf-8"))
+    names = sorted(sets["baseline"])
+    sources = verify_engine_tree(engine_tree, commit, version, names)
+    return {"id": f"engine-{version}-source", "engine_commit": commit,
+            "description": (f"Exact gpuwm {version} radiation helpers, measured by the engine repin "
+                            f"at {commit[:9]}. Admission establishes source identity only; it does "
+                            "not claim unchanged forecast numerics."),
+            "sources": dict(sorted(sources.items()))}
+
+
+def write_helper_set(row: dict) -> None:
+    document = json.loads(HELPER_SETS.read_text(encoding="utf-8"))
+    if any(existing["sources"] == row["sources"] for existing in document["sets"]):
+        return  # an admitted row already names these bytes
+    if any(existing["id"] == row["id"] for existing in document["sets"]):
+        raise SystemExit(f"{row['id']} is already a helper row with other bytes; a row is never "
+                         "rewritten in place, so give the new measurement its own id")
+    document["sets"].append(row)
+    HELPER_SETS.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="")
+
+
+def helper_set_admitted(row: dict) -> bool:
+    document = json.loads(HELPER_SETS.read_text(encoding="utf-8"))
+    return any(existing["sources"] == row["sources"] for existing in document["sets"])
+
+
+#: The adapter's seam-contract surface: the column batch and the seam document,
+#: hashed as one stream (``cuda_arwen_physics_v841._verify_checkout_root``).
+CONTRACT_SURFACE_PATHS = ("gpuwm/core/mpas_column_batch.py", "docs/mpas-seam.md")
+
+
+def contract_surface_digest(root: Path, manifest: dict[str, str]) -> str:
+    """``MPAS_SEAM_CONTRACT_SURFACE_SHA256`` for the engine being pinned.
+
+    THE BREAKAGE: an engine repin rewrote the sixteen-file manifest but left
+    this constant naming the old column batch, so the first engine whose
+    ``mpas_column_batch.py`` moved (the 2.8.9 RRFS composition: TEMPO
+    species) would pass the manifest and then refuse every forecast with
+    "pinned Arwen contract surface hash mismatch".  Both paths are manifest
+    paths, so their bytes are the ones just verified against the commit.
+    """
+
+    digest = hashlib.sha256()
+    for relative in CONTRACT_SURFACE_PATHS:
+        payload = (root / relative).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != manifest[relative]:
+            raise SystemExit(f"engine {relative} is not the manifest's bytes")
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def write_engine_repin(document: dict) -> None:
+    import measure_engine_verdicts as measurement
+
+    declaration = TREE / "pyproject.toml"
+    text = declaration.read_text(encoding="utf-8")
+    matches = list(re.finditer(r'"gpuwm>=\d+\.\d+\.\d+,<\d+\.\d+(?:\.\d+)?"', text))
+    if len(matches) != 1:
+        raise SystemExit("pyproject.toml must declare exactly one bounded gpuwm requirement")
+    match = matches[0]
+    new_declaration = text[:match.start()] + json.dumps(document["requirement"]) + text[match.end():]
+    measurement.write_manifest(TREE / "src/hexcore/cuda_arwen_physics_v841.py",
+                               document["manifest"], document["pin"]["build_commit"],
+                               document["pin"]["glacier_composed_tu_sha256"])
+    _rewrite_contract_surface(TREE / "src/hexcore/cuda_arwen_physics_v841.py",
+                              document["pin"]["contract_surface_sha256"])
+    measurement.splice(TREE / "src/hexcore/engine_pin.py", document["tags"])
+    write_helper_set(document["helper_set"])
+    declaration.write_text(new_declaration, encoding="utf-8", newline="")
+
+
+def _rewrite_contract_surface(adapter: Path, surface: str) -> None:
+    text = adapter.read_text(encoding="utf-8")
+    current = ast.literal_eval(module_assignment(parse(adapter), "MPAS_SEAM_CONTRACT_SURFACE_SHA256"))
+    if current != surface:
+        if text.count(current) != 1:
+            raise SystemExit("MPAS_SEAM_CONTRACT_SURFACE_SHA256 is not a unique literal in the adapter")
+        adapter.write_text(text.replace(current, surface), encoding="utf-8", newline="")
+
+
+def engine_repin_matches(document: dict) -> bool:
+    import measure_engine_verdicts as measurement
+
+    adapter = TREE / "src/hexcore/cuda_arwen_physics_v841.py"
+    module = parse(adapter)
+    commit = ast.literal_eval(module_assignment(module, "ARWEN_BUILD_COMMIT"))
+    glacier = ast.literal_eval(module_assignment(module, "ARWEN_GLACIER_COMPOSED_TU_SHA256"))
+    surface = ast.literal_eval(module_assignment(module, "MPAS_SEAM_CONTRACT_SURFACE_SHA256"))
+    pin_text = (TREE / "src/hexcore/engine_pin.py").read_text(encoding="utf-8")
+    declaration = (TREE / "pyproject.toml").read_text(encoding="utf-8")
+    return (measurement.shipped_manifest(adapter) == document["manifest"]
+            and commit == document["pin"]["build_commit"]
+            and glacier == document["pin"]["glacier_composed_tu_sha256"]
+            and surface == document["pin"]["contract_surface_sha256"]
+            and measurement.render_rows(document["tags"]) in pin_text
+            and json.dumps(document["requirement"]) in declaration
+            and helper_set_admitted(document["helper_set"]))
+
+
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="re-derive the self-referential pins")
     parser.add_argument("--write", action="store_true", help="rewrite in place")
-    arguments = parser.parse_args()
+    parser.add_argument("--engine-tree", type=Path, help="clean engine checkout to repin against")
+    parser.add_argument("--engine-commit", help="full SHA of that checkout")
+    parser.add_argument("--engine-version", help="published version whose wheels must match")
+    parser.add_argument("--engine-git", type=Path, help="read-only engine repository carrying release tags")
+    parser.add_argument("--wheel-cache", type=Path, help="public wheel measurement cache")
+    parser.add_argument("--engine-receipt", type=Path, help="write measured rows and commit provenance here")
+    parser.add_argument("--offline", action="store_true", help="use only existing public wheel cache")
+    arguments = parser.parse_args(argv)
+    engine_options = (arguments.engine_tree, arguments.engine_commit, arguments.engine_version,
+                      arguments.engine_git, arguments.wheel_cache, arguments.engine_receipt)
+    if any(value is not None for value in engine_options):
+        if not all(value is not None for value in engine_options):
+            parser.error("engine repin needs --engine-tree, --engine-commit, --engine-version, "
+                         "--engine-git, --wheel-cache and --engine-receipt together")
+        document = measure_engine_repin(arguments)
+        if arguments.write:
+            write_engine_repin(document)
+        arguments.engine_receipt.parent.mkdir(parents=True, exist_ok=True)
+        arguments.engine_receipt.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n",
+                                             encoding="utf-8", newline="")
+        print(f"measured engine {arguments.engine_version} at {arguments.engine_commit}; "
+              f"requirement {document['requirement']}")
+        if not engine_repin_matches(document):
+            print("engine pins or dependency rows differ from the measured engine")
+            return 1
+    elif arguments.offline:
+        parser.error("--offline applies only to an explicit engine repin")
 
     if not arguments.write:
         drifts = collect()

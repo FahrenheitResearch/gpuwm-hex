@@ -149,6 +149,16 @@ _GPUWM_PIN_PATHS = {
 }
 
 
+def _strict_proof(name: str) -> None:
+    """The FTZ binding measures the strict route (owner ruling 2026-10-16: strict is opt-in).
+
+    It selects strict numerics for its process; a process that already compiled fast kernels is refused by
+    name (hexcore.numerics.set_mode), since its kernels would not be the route the binding certifies."""
+    from . import numerics as _numerics
+    _numerics.set_mode("strict", source=f"{name} (the FTZ binding is a strict-numerics proof; "
+                                        "run it with --numerics strict)")
+
+
 class FtzContractError(RuntimeError):
     """The probe, source, compiler, or MPAS relation cannot be proved."""
 
@@ -1829,6 +1839,7 @@ def _run_transport_kernel_localization(
     cp: Any, cuda_transport: Any, cache: Any
 ) -> list[dict[str, Any]]:
     """Exercise every transport kernel at an answer-changing DAZ site."""
+    _strict_proof("hexcore.cuda_ftz._run_transport_kernel_localization")
 
     i32 = np.int32
     f32 = np.float32
@@ -2395,6 +2406,7 @@ def _normal_lane_scenarios() -> tuple[_DeckScenario, ...]:
 
 def run_scalar_transport_subnormal_deck() -> dict[str, Any]:
     """Certify the production fallback and an explicitly disabled mutation."""
+    _strict_proof("hexcore.cuda_ftz.run_scalar_transport_subnormal_deck")
 
     from .cuda_backend import KernelCache, require_cuda
     from . import cuda_transport
@@ -2665,6 +2677,7 @@ def _run_guarded_kernel_audit_once(
     transcript_cache_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run one exact production-kernel subnormal localization pass."""
+    _strict_proof("hexcore.cuda_ftz._run_guarded_kernel_audit_once")
 
     from . import cuda_acoustic, cuda_driver, cuda_horizontal
     from .cuda_backend import KernelCache, require_cuda
@@ -3503,6 +3516,11 @@ def _run_guarded_kernel_audit_once(
             zeros((1, 1)),
             device([[sub]]),
             device([[sub]]),
+            # SG2 lagged heating (has_diabatic, dt, diabatic_theta): off here,
+            # so the audited arithmetic is the carry-free recovery.
+            np.int32(0),
+            np.float32(0.0),
+            zeros((1, 1)),
             device([[1.0]]),
             device([[300.0]]),
             device([[1.0]]),
@@ -4110,6 +4128,7 @@ def _run_guarded_kernel_audit_once(
 
 def run_guarded_kernel_subnormal_audit() -> dict[str, Any]:
     """Prove all non-transport arithmetic classes and red mutations."""
+    _strict_proof("hexcore.cuda_ftz.run_guarded_kernel_subnormal_audit")
 
     first = _run_guarded_kernel_audit_once(fallback_disabled=False)
     second = _run_guarded_kernel_audit_once(fallback_disabled=False)
@@ -4179,6 +4198,7 @@ def run_normalized_fallback_performance_control(
     recorded-deviation row on sm_86; an unregistered architecture refuses
     by name).  The passes are interleaved to reduce clock drift.
     """
+    _strict_proof("hexcore.cuda_ftz.run_normalized_fallback_performance_control")
 
     if repeats < 8 or warmup < 2:
         raise ValueError("normalized performance control needs repeats>=8, warmup>=2")

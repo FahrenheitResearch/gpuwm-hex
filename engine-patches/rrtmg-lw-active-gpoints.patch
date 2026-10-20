@@ -1,0 +1,17 @@
+--- a/gpuwm/core/rrtmg_lw.py
++++ b/gpuwm/core/rrtmg_lw.py
+@@ -3746,7 +3746,13 @@
+                 'extern "C" __global__ void rlw_taugb%d' % band,
+                 '__device__ __forceinline__ void rlw_band%d' % band, 1)
+             ghelper = helper.replace("rlw_band%d(" % band, "rlw_gband%d(" % band, 1)
+-            ghelper = ghelper.replace("TAUGB_PROLOGUE", "TAUGB_GPOINT_PROLOGUE")
++            # No band has more than sixteen g-points. Padded lanes have
++            # no stores, including the fixed-index correction owners below.
++            # Retire them before the band-specific coefficient arithmetic.
++            ghelper = ghelper.replace(
++                "TAUGB_PROLOGUE",
++                "TAUGB_GPOINT_PROLOGUE\n    if (gpoint > %d) return;"
++                % int(NGC[band - 1]))
+             ghelper = ghelper.replace(
+                 "for (int ig = 1; ig <= ng%d; ++ig)" % band,
+                 "for (int ig = gpoint; ig <= ng%d; ig += 16)" % band)

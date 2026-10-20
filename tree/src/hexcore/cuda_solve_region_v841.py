@@ -23,7 +23,7 @@ the profile of one forecast step on the 43,884-cell point mesh
 The four kernels here do the same work in one launch each and never touch
 a value's arithmetic: they compare, they select, and they store a value that
 was handed to them.  Nothing they compute reaches a prognostic field, so the
-dycore's byte identity is untouched by construction; the envelope kernel
+hex self-reproducibility is unchanged by construction; the envelope kernel
 reports the same min, max, NaN verdict and first-index argmax the CuPy
 reductions reported, term for term.
 
@@ -329,6 +329,65 @@ def describe_field(array: Any, n_solve: int | None, *, name: str = "field") -> t
     return int(array.data.ptr), rows, stride, solve
 
 
+class PinnedWordBatch:
+    """Reusable device words and pinned host storage, with one async copy.
+
+    The event closes only this copy, on the producing stream. Host views
+    must be consumed before the next read; device inputs stay alive until
+    completion. No word or field is read on a different step.
+    """
+
+    def __init__(self) -> None:
+        self.capacity = 0
+        self.copies = 0
+        self.bytes = 0
+        self.device = None
+
+    def read(self, arrays: Sequence[Any]) -> list[np.ndarray]:
+        sizes = [int(array.nbytes) for array in arrays]
+        total = sum(sizes)
+        if not total:
+            return [np.empty(array.shape, dtype=array.dtype) for array in arrays]
+        cp = _cp()
+        if total > self.capacity:
+            self.capacity = total
+            self.pinned = cp.cuda.alloc_pinned_memory(total)
+            self.host = np.frombuffer(self.pinned, dtype=np.uint8, count=total)
+            self.done = cp.cuda.Event(disable_timing=True)
+        for array in arrays:
+            if not array.flags.c_contiguous:
+                raise ValueError("gate words must be contiguous")
+        stream = cp.cuda.get_current_stream()
+        if len(arrays) == 1:
+            # A dependency gate already is one device buffer. Do not add a
+            # packing launch or copy where no gathering is needed.
+            target = self.host[:total].view(arrays[0].dtype).reshape(arrays[0].shape)
+            arrays[0].get(out=target, stream=stream, blocking=False)
+        else:
+            if self.device is None or int(self.device.nbytes) < total:
+                self.device = cp.empty(total, dtype=cp.uint8)
+            offset = 0
+            for array, size in zip(arrays, sizes):
+                self.device[offset:offset + size] = array.view(cp.uint8).reshape(-1)
+                offset += size
+            self.device[:total].get(out=self.host[:total], stream=stream, blocking=False)
+        self.done.record(stream)
+        self.done.synchronize()
+        self.copies += 1
+        self.bytes += total
+        result = []
+        offset = 0
+        for array, size in zip(arrays, sizes):
+            result.append(self.host[offset:offset + size].view(array.dtype).reshape(array.shape))
+            offset += size
+        return result
+
+
+def read_validation_word(flag: Any, kernel_cache: Any) -> int:
+    """Read a dependency gate now, retaining its four-byte receipt."""
+    return int(SolveRegionKernels.for_cache(kernel_cache).word_batch.read([flag])[0][0])
+
+
 class SolveRegionKernels:
     """The four kernels, resolved through the run's KernelCache, and the
     descriptor tables they read.
@@ -348,6 +407,7 @@ class SolveRegionKernels:
         self._kernels: dict[str, Any] = {}
         self._tables: dict[tuple[tuple[int, ...], ...], Any] = {}
         self.table_uploads = 0
+        self.word_batch = PinnedWordBatch()
 
     _registry: "weakref.WeakKeyDictionary[Any, SolveRegionKernels]" = weakref.WeakKeyDictionary()
 
@@ -397,8 +457,18 @@ class SolveRegionKernels:
         an all-NaN view is the first element, as numpy's is.
         """
 
+        return self.envelope_with_flags(fields)[0]
+
+    def envelope_with_flags(
+        self, fields: Sequence[tuple[str, Any, int | None]], flags: Sequence[Any] = ()
+    ) -> tuple[dict[str, tuple[float, float, bool, int]], list[int]]:
+        """Copy the endpoint envelope and numeric gate words together."""
+        if any(tuple(flag.shape) != (1,) or np.dtype(flag.dtype) != np.dtype(np.int32)
+               for flag in flags):
+            raise TypeError("validation flag must be a resident int32[1]")
         if not fields:
-            return {}
+            words = self.word_batch.read(flags)
+            return {}, [int(word[0]) for word in words]
         cp = _cp()
         rows = []
         widest = 1
@@ -422,7 +492,8 @@ class SolveRegionKernels:
             (_ENVELOPE_THREADS,),
             (partials, np.int32(n_fields), np.int32(blocks), out),
         )
-        words = out.get().reshape(n_fields, _RESULT_WORDS)
+        copied = self.word_batch.read([out, *flags])
+        words = copied[0].reshape(n_fields, _RESULT_WORDS)
         result: dict[str, tuple[float, float, bool, int]] = {}
         for index, (name, _array, _n) in enumerate(fields):
             low = _from_bits(int(words[index, 0]))
@@ -432,7 +503,7 @@ class SolveRegionKernels:
             if argmax == 0x7FFFFFFFFFFFFFFF:
                 argmax = 0
             result[name] = (low, high, has_nan, argmax)
-        return result
+        return result, [int(word[0]) for word in copied[1:]]
 
     # -- validation -------------------------------------------------------
 

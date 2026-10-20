@@ -1,0 +1,11 @@
+{
+  "schema": "gpuwm-hex.integration-engine/v1",
+  "hex_branch": "integrate/hex-next",
+  "engine_commit": "d547dc8c3fbb07fc25744afb92bbe72f0e830241",
+  "engine_base": "9f3f52565678ce1ef36be0b67143caafb888c8fc",
+  "engine_branch": "fix/kf-rainc-engine",
+  "version": "2.8.9",
+  "purpose": "Arbitrary-physics generic seam with the Kain-Fritsch rain-flux rounding correction",
+  "published_wheel_pin": "unchanged; this is an integration checkout selection, not published-wheel qualification",
+  "proof_status": "CPU complete with 17 failures reproduced on all parents; bare 30 km one-card 6 h, KF 1 h and Kessler 1 h passed; 15 km eight-card was not run due to card availability; native x4 identity was not run due to missing assets/reference"
+}

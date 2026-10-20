@@ -1,0 +1,28 @@
+{
+  "schema": "i4-replay-post-integration-source-binding/v1",
+  "executed_hex_revision": "c420271d943955ea33ea97f877f8ad5ee9ec6747",
+  "post_integration_revision": "d0ff7f56407defd3e8e830f709fc248004863ce7",
+  "integrate_revision": "c871e1e52e1f6ff2bb285d7a2a39aa0917092a8c",
+  "gpuwm_revision": "01cff0a7acc8e57013de56d773abe0cb9df5253e",
+  "unchanged_replay_dependencies": [
+    {
+      "path": "tree/tests/gsl_proof/replay.sh",
+      "sha256": "6a58b128ba0df159749d614a38f4122b15207804eacef252a18b2f27be10d7f2"
+    },
+    {
+      "path": "tree/tests/gsl_proof/module_replay.py",
+      "sha256": "0c7f12994718456ad82f686d0614d4a22f8e401ea959742625c177539195b55d"
+    },
+    {
+      "path": "tree/tests/gsl_proof/module-replay-inputs.json",
+      "sha256": "bff115f76b96d5803694a3ad3c62a468adde28879ef6bba1a38d3eddfe739fd3"
+    },
+    {
+      "path": "tree/tests/gsl_proof/replay_archived_reads.py",
+      "sha256": "1f238db00c1dd8ff8c8c3b1744d42f669420b80ead56499d479bc39dc101777c"
+    }
+  ],
+  "replay_receipt_sha256": "501458f07188031053af877ed24c7f44634e22381ce746e6536209c226bab99e",
+  "compatibility_reproducer": "reproduce.sh forwards to replay.sh; old whole-forecast entry retained only under history",
+  "new_forecast_started": false
+}

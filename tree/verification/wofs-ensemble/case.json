@@ -1,0 +1,16 @@
+{
+  "start_time": "2022-06-13_18:00:00",
+  "cycle_hours": 6,
+  "source": {"bucket": "noaa-gefs-pds", "cycle": "20220613", "hour": "18", "forecast_hour": "000", "layout": "atmos/pgrb2{a,b}p5"},
+  "patch": {"center_deg": [42.5, -87.0], "square_side_km": 900, "shape": "cap", "core_radius_km": 650, "fine_spacing_km": 3, "background_spacing_km": 48, "transition_factor": 18, "ring_factor": 3},
+  "members": ["gec00", "gep01", "gep02", "gep03", "gep04", "gep05", "gep06", "gep07"],
+  "member_physics": {
+    "gep04": ["--physics", "config_microp_scheme=mp_thompson"],
+    "gep05": ["--physics", "config_microp_scheme=mp_thompson"],
+    "gep06": ["--physics", "config_microp_scheme=mp_thompson"],
+    "gep07": ["--physics", "config_microp_scheme=mp_thompson"]
+  },
+  "forecast_flags": ["--dt", "18.75", "--fullstep-local-timestep", "--fullstep-lts-mode", "active", "--fullstep-lts-max-rate", "8", "--convection", "ntiedtke"],
+  "convection_reason": "The generated mesh has minimum dcEdge 2444.395 m, so auto disables convection across the whole globe. Explicit scale-aware New Tiedtke retains parameterized convection in the 48 km background and suppresses it by each column's spacing toward the 3 km core.",
+  "observations": {"start": "2022-06-13T18:00:00Z", "end": "2022-06-14T00:00:00Z", "step_minutes": 60, "bbox": "-92.2,38.6,-81.8,46.4", "threshold_dbz": 35, "fss_neighborhood_km": [20, 50]}
+}

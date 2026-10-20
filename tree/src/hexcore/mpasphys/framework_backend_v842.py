@@ -1,0 +1,399 @@
+"""Single-process MPAS pools and clock, with no native framework library.
+
+Storage follows mpas_pool_routines.F and backend/runtime.f90. Numeric fields
+retain Registry dimension order, dummy entities and independent time levels.
+"""
+from __future__ import annotations
+
+from functools import partial
+import json
+from pathlib import Path
+
+import numpy as np
+
+from .framework_calendar_v842 import PhysicsClock, interval_from_rkind
+
+
+DATA = Path(__file__).resolve().parents[1] / 'data' / 'mpasphys-framework'
+
+
+def registry_source():
+    """Installed Registry metadata, rather than a downloaded engine tree."""
+    return DATA
+
+
+def _name(value):
+    encoded = value.encode('ascii')
+    if not encoded or len(encoded) >= 512 or b'\0' in encoded:
+        raise ValueError('MPAS names require 1..511 ASCII bytes without NUL')
+    return value
+
+
+def _host(value):
+    return np.asarray(value.get() if hasattr(value, 'get') else value)
+
+
+class FrameworkPhysics:
+    """Owned Python storage for the GPU route's MPAS framework boundary.
+
+    Unsupported physics operations fail explicitly. They never fall back to a
+    Fortran library. Device scheme implementations own their own table state.
+    """
+    framework_only = True
+    lib = None
+    pin_set = 'v8.4.2'
+
+    def __init__(self, *, layout=None, resources=None, stream_factory=None):
+        self.layout, self.resources = layout, resources
+        self.abi = json.loads((DATA / 'metadata.json').read_text())
+        self._pools, self._fields, self._configs, self._text_fields = {}, {}, {}, {}
+        self._dimensions, self._dimension_values = {}, {}
+        self._registered, self._registration, self._decompositions = {}, {}, {}
+        self._groups, self._storage, self._text, self._config_values = {}, {}, {}, {}
+        self._variables, self._tables, self._attachments = {}, {}, {}
+        self._core_dimensions = None
+        self._initialized = False
+        self.closed = False
+        self.clock_state = None
+        self.stream_manager = stream_factory(self) if stream_factory else None
+        for name, row in self.abi['variables'].items():
+            if row['rank'] == 0:
+                dtype = np.float32 if row['kind'] == 'real' else np.int32
+                self._variables[name] = (np.array(row.get('initial', 0), dtype=dtype), ())
+
+    def _check(self):
+        if self.closed:
+            raise RuntimeError('MPAS framework is closed')
+
+    def streams(self):
+        """Keep session initialization compatible with the native referee.
+
+        Runtime attaches the Python output writer after session.initialize().
+        The owned framework needs no native stream manager or output alarms.
+        """
+        self._check()
+
+    def pool(self, name):
+        self._check()
+        self._pools.setdefault(_name(name), name)
+        return name
+
+    def dimension(self, pool, name, value):
+        self.pool(pool)
+        _name(name)
+        a = np.asarray(value, dtype=np.int32)
+        if a.ndim > 1 or (a.ndim and not a.size):
+            raise ValueError('MPAS dimensions require a scalar or nonempty vector')
+        key, count = (pool, name), a.size if a.ndim else 0
+        if key in self._dimensions and self._dimensions[key] != count:
+            raise ValueError('MPAS dimension rank or size cannot change')
+        self._dimensions[key] = count
+        self._dimension_values[key] = int(a) if not count else a.copy()
+
+    def config(self, name, value, *, pool='configs'):
+        self.pool(pool)
+        _name(name)
+        if isinstance(value, (bool, np.bool_)):
+            kind, stored = 'logical', bool(value)
+        elif isinstance(value, (int, np.integer)):
+            kind, stored = 'integer', np.int32(value)
+        elif isinstance(value, (float, np.floating)):
+            kind, stored = 'real', np.float32(value)
+        elif isinstance(value, str):
+            b = value.encode('ascii')
+            if len(b) > 512 or b'\0' in b:
+                raise ValueError('MPAS config string exceeds StrKIND or contains NUL')
+            kind, stored = 'character', value
+        else:
+            raise TypeError('unsupported MPAS config type')
+        key = (pool, name)
+        if key in self._configs and self._configs[key] != kind:
+            raise TypeError('MPAS config type cannot change')
+        self._configs[key], self._config_values[key] = kind, stored
+
+    def get_real_config(self, name, *, pool='configs'):
+        self._check()
+        if self._configs[pool, name] != 'real':
+            raise TypeError('MPAS config is not real')
+        return self._config_values[pool, name]
+
+    def put_field(self, pool, name, value, *, level=1, nlevels=1):
+        self.pool(pool)
+        _name(name)
+        a = _host(value)
+        if not ((a.dtype == np.float32 and a.ndim <= 5) or
+                (a.dtype == np.int32 and a.ndim <= 3)):
+            raise TypeError('MPAS field requires RKIND rank <= 5 or integer rank <= 3')
+        if nlevels < 1 or not 1 <= level <= nlevels:
+            raise ValueError('invalid MPAS field time level')
+        key, metadata = (pool, name), (a.dtype, a.shape, nlevels)
+        if key in self._text_fields:
+            raise TypeError('MPAS field type cannot change')
+        if key in self._fields and self._fields[key] != metadata:
+            raise ValueError('MPAS field dtype, shape and time levels cannot change')
+        if key not in self._fields:
+            self._storage[key] = [np.zeros(a.shape, dtype=a.dtype, order='F') for _ in range(nlevels)]
+        self._fields[key] = metadata
+        np.copyto(self._storage[key][level-1], a)
+
+    def get_field(self, pool, name, *, level=1, out=None):
+        self._check()
+        dtype, shape, levels = self._fields[pool, name]
+        if not 1 <= level <= levels:
+            raise ValueError('invalid MPAS field time level')
+        result = self._storage[pool, name][level-1].copy(order='F')
+        if out is None:
+            return result
+        if out.shape != shape or out.dtype != dtype:
+            raise ValueError('MPAS output shape/dtype differs')
+        if hasattr(out, 'set'):
+            out.set(result)
+        else:
+            out[...] = result
+        return out
+
+    def put_fields(self, pools):
+        for pool, fields in pools.items():
+            for name, value in fields.items():
+                self.put_field(pool, name, value)
+
+    def put_text_field(self, pool, name, value, *, level=1, nlevels=1):
+        self.pool(pool)
+        _name(name)
+        encoded = value.encode('ascii')
+        if len(encoded) > 512 or b'\0' in encoded:
+            raise ValueError('MPAS text field exceeds StrKIND or contains NUL')
+        key = (pool, name)
+        if key in self._fields:
+            raise TypeError('MPAS field type cannot change')
+        if nlevels < 1 or not 1 <= level <= nlevels:
+            raise ValueError('invalid MPAS text time level')
+        if key in self._text_fields and self._text_fields[key] != nlevels:
+            raise ValueError('MPAS text time levels cannot change')
+        if key not in self._text:
+            self._text[key] = [b' ' * 512 for _ in range(nlevels)]
+        self._text_fields[key] = nlevels
+        self._text[key][level-1] = encoded.ljust(512, b' ')
+
+    def get_text_field_storage(self, pool, name, *, level=1):
+        self._check()
+        if not 1 <= level <= self._text_fields[pool, name]:
+            raise ValueError('invalid MPAS text time level')
+        return np.frombuffer(self._text[pool, name][level-1], dtype=np.uint8).copy()
+
+    def get_text_field(self, pool, name, *, level=1):
+        return self.get_text_field_storage(pool, name, level=level).tobytes().decode('ascii').rstrip(' ')
+
+    def block(self, **pools):
+        self._check()
+        for name in ('configs', 'mesh', 'diag_physics', 'sfc_input', 'atm_input'):
+            self.attach_pool(name, pool=pools.get(name, name))
+
+    def attach_pool(self, name, *, pool=None):
+        self._attachments[_name(name)] = self.pool(pool or name)
+
+    def framework_object(self, name):
+        self._check()
+        return {'clock': self.clock_state, 'block': self._attachments,
+                'domain': self, 'dminfo': self, 'stream_manager': self.stream_manager}[name]
+
+    def decomposition(self, element, *, global_ids, owned, halo_ends=None):
+        self._check()
+        if element not in ('nCells', 'nEdges', 'nVertices'):
+            raise ValueError('unknown MPAS decomposition entity')
+        ids = _host(global_ids)
+        if ids.dtype != np.int32 or ids.ndim != 1 or np.any(ids <= 0) or not 0 <= owned <= ids.size:
+            raise ValueError('MPAS decomposition requires positive int32 IDs and valid owned count')
+        if np.unique(ids[:owned]).size != owned:
+            raise ValueError('owned MPAS IDs must be unique')
+        ends = np.asarray([ids.size] if halo_ends is None else halo_ends, dtype=np.int32)
+        if (ends.ndim != 1 or not ends.size or ends[-1] != ids.size or
+                np.any(ends < owned) or np.any(ends > ids.size) or np.any(np.diff(ends) < 0)):
+            raise ValueError('halo ends must increase from owned count to total count')
+        local = {int(v): i for i, v in enumerate(ids[:owned])}
+        try:
+            sources = np.array([local[int(v)] for v in ids[owned:]], dtype=np.intp)
+        except KeyError as error:
+            raise ValueError('one-process halo ID has no owned source: ' + str(error)) from error
+        self._decompositions[element] = (owned, ids.copy(), ends.copy(), sources)
+
+    def register_field(self, pool, name, *, dimensions=(), decomposed=False,
+                       registry_name=None, components=(), has_time=None):
+        self._check()
+        key, registry_name = (pool, name), name if registry_name is None else registry_name
+        _name(registry_name)
+        if registry_name in self._registered or key in self._registered.values():
+            raise ValueError('MPAS Registry name or field storage already registered')
+        shape = () if key in self._text_fields else self._fields[key][1]
+        if len(dimensions) != len(shape):
+            raise ValueError('Registry dimensions must match field rank')
+        if components and (not shape or len(components) != shape[0] or len(set(components)) != len(components)):
+            raise ValueError('Registry constituents must be distinct and match first extent')
+        if decomposed and (not shape or dimensions[-1] not in self._decompositions):
+            raise ValueError('decomposed Registry field needs halo lists')
+        levels = self._text_fields[key] if key in self._text_fields else self._fields[key][2]
+        self._registered[registry_name] = key
+        self._registration[registry_name] = dict(dimensions=tuple(dimensions), decomposed=decomposed,
+            components=tuple(components), has_time=levels > 1 if has_time is None else bool(has_time))
+
+    def exchange_group(self, group, fields, *, level=1, halo_layers=None):
+        self._check()
+        if group in self._groups or level < 1:
+            raise ValueError('duplicate exchange group or invalid time level')
+        fields = tuple(fields)
+        layers = None if halo_layers is None else tuple(halo_layers)
+        if layers is not None and (not layers or any(v < 1 for v in layers)):
+            raise ValueError('halo layers must be positive')
+        for name in fields:
+            if level > self._fields[self._registered[name]][2]:
+                raise ValueError('exchange time level exceeds storage')
+        self._groups[group] = fields, level, layers
+
+    def exchange_halo(self, name, *, level=1, _layers=None):
+        self._check()
+        key = self._registered[name]
+        row = self._registration[name]
+        if not row['decomposed']:
+            return
+        if not 1 <= level <= self._fields[key][2]:
+            raise ValueError('invalid halo time level')
+        owned, ids, ends, sources = self._decompositions[row['dimensions'][-1]]
+        a = self._storage[key][level-1]
+        if _layers is None:
+            a[..., owned:ids.size] = a[..., sources]
+        else:
+            for layer in _layers:
+                if layer > len(ends):
+                    raise ValueError('halo layer exceeds decomposition')
+                start = owned if layer == 1 else int(ends[layer-2])
+                end = int(ends[layer-1])
+                a[..., start:end] = a[..., sources[start-owned:end-owned]]
+
+    def exchange_halo_group(self, group):
+        fields, level, layers = self._groups[group]
+        for name in fields:
+            self.exchange_halo(name, level=level, _layers=layers)
+
+    def clock(self, **kwargs):
+        self._check()
+        self.clock_state = PhysicsClock(**kwargs)
+
+    def advance_clock(self):
+        self._check()
+        self.clock_state.advance()
+
+    def initialize_state_time(self, *, pool='state'):
+        initial = self.get_text_field(pool, 'initial_time', level=1)
+        self.put_text_field(pool, 'initial_time', initial, level=2, nlevels=2)
+        for level in (1, 2):
+            self.put_text_field(pool, 'xtime', self.clock_state.start_time.stamp(), level=level, nlevels=2)
+        self.time_units = 'seconds since ' + initial.replace('_', ' ')
+
+    def update_state_time(self, dt, *, pool='state', clock_advanced=False, source_level=1, target_level=2):
+        time = self.clock_state.current_time
+        if not clock_advanced:
+            time = time.add(interval_from_rkind(dt))
+        self.put_text_field(pool, 'xtime', time.stamp(), level=target_level, nlevels=2)
+        value = np.float32(self.get_field(pool, 'Time', level=source_level) + np.float32(dt))
+        self.put_field(pool, 'Time', np.array(value), level=target_level, nlevels=2)
+
+    def get_constant(self, name):
+        self._check()
+        return np.array(self.abi['constants'][name.lower()]['word'], np.uint32).view(np.float32)[()]
+
+    def put_variable(self, name, value, *, lower=None):
+        self._check()
+        row, a = self.abi['variables'][name], _host(value)
+        dtype = np.float32 if row['kind'] == 'real' else np.int32
+        if a.ndim != row['rank'] or (row['kind'] != 'logical' and a.dtype != dtype):
+            raise TypeError('MPAS module variable rank/type differs')
+        lower = tuple(lower) if lower is not None else (1,) * a.ndim
+        if len(lower) != a.ndim:
+            raise ValueError('MPAS variable lower bound rank differs')
+        self._variables[name] = np.array(a, dtype=dtype, order='F', copy=True), lower
+
+    def get_variable(self, name):
+        self._check()
+        self.abi['variables'][name]
+        value = self._variables.get(name)
+        return None if value is None else (value[0].copy(order='F'), value[1])
+
+    def get_table(self, name):
+        self._check()
+        return self._tables[name]
+
+    def calendar_state(self, flags):
+        words = self.clock_state.calendar_words()
+        for name, flag in (('l_radtlw', 'radiation_lw'), ('l_radtsw', 'radiation_sw'),
+                           ('l_conv', 'convection'), ('doabsems', 'cam_abs'),
+                           ('l_camlw', 'cam_restart'),
+                           ('l_acrain', 'rain_bucket'), ('l_acradt', 'radiation_bucket'),
+                           ('l_diags', 'diagnostics')):
+            self.put_variable(name, np.array(bool(getattr(flags, flag)), np.int32))
+        self._tables['mpas_atmphys_manager.curr_julday'] = np.array(words['julian']), ()
+        time = self.clock_state.current_time
+        for name, value in (('year', time.year), ('month', time.month),
+                            ('day', time.day), ('julday', time.day_of_year)):
+            self._tables['mpas_atmphys_manager.' + name] = np.array(value, np.int32), ()
+        return words
+
+    def call(self, name, **arguments):
+        self._check()
+        if name == 'mpas_atm_set_dims':
+            self._core_dimensions = tuple(arguments[key] for key in
+                ('nvertlevels_val', 'maxedges_val', 'maxedges2_val', 'num_scalars_val'))
+        elif name.startswith('allocate_'):
+            self._allocate(name)
+        elif name.startswith('deallocate_'):
+            for variable in self.abi['allocations'].get(name.replace('deallocate_', 'allocate_', 1), {}):
+                self._variables.pop(variable, None)
+        elif name == 'atmphys_finalize':
+            self._initialized = False
+        else:
+            raise RuntimeError('MPAS framework operation has no Python implementation: ' + name)
+
+    def _allocate(self, name):
+        for variable, bounds in self.abi['allocations'][name].items():
+            if variable in self._variables:
+                continue
+            lower, shape = [], []
+            for lo, hi in bounds:
+                def bound(value):
+                    if value == 'nbndsw':
+                        return 14
+                    if value.isdigit():
+                        return int(value)
+                    # Generated expressions contain only module integer names and +/- integers.
+                    import re
+                    match = re.fullmatch(r'(\w+)([+-]\d+)?', value)
+                    if match is None:
+                        raise ValueError('unsupported module allocation bound: ' + value)
+                    return int(self._variables[match[1]][0]) + int(match[2] or 0)
+                l, h = bound(lo), bound(hi)
+                lower.append(l)
+                shape.append(max(0, h-l+1))
+            row = self.abi['variables'][variable]
+            dtype = np.float32 if row['kind'] == 'real' else np.int32
+            self._variables[variable] = np.zeros(shape, dtype=dtype, order='F'), tuple(lower)
+
+    def __getattr__(self, name):
+        if name in self.__dict__.get('abi', {}).get('entries', {}):
+            return partial(self.call, name)
+        raise AttributeError(name)
+
+    def close(self):
+        if self.closed:
+            return
+        if self.stream_manager is not None:
+            self.stream_manager.close()
+        self._storage.clear()
+        self._text.clear()
+        self._variables.clear()
+        self.closed = True
+
+    def __enter__(self):
+        self._check()
+        return self
+
+    def __exit__(self, *exc):
+        self.close()

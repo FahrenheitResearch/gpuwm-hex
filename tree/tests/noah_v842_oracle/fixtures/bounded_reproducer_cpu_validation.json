@@ -1,0 +1,8 @@
+{
+  "schema": "p16-noah-bounded-reproducer-cpu-validation-v1",
+  "receipt": "receipts/noah-bounded-reproducer-cpu-validation.json",
+  "sha256": "e5d5449ec4608dfc6e3925f3e858e9f7e4eeada6b1a2099f4393afe444e0b493",
+  "actual_exit": 0,
+  "passed_tests": 21,
+  "fresh_bounded_forecast_executed": false
+}

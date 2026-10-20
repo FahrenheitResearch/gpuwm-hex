@@ -23,6 +23,7 @@ for candidate in (str(ROOT / "src"), str(ROOT / "tools")):
         sys.path.insert(0, candidate)
 
 import build_swath_fixture_history as fixture  # noqa: E402
+import site_support  # noqa: E402
 from hexcore.swath import registry  # noqa: E402
 from hexcore.swath.errors import SwathDocumentError  # noqa: E402
 from hexcore.swath.geometry import (  # noqa: E402
@@ -33,6 +34,14 @@ from hexcore.swath.geometry import (  # noqa: E402
 from hexcore.swath.history import HistoryReader  # noqa: E402
 from hexcore.swath.hysteresis import SwathState  # noqa: E402
 from hexcore.swath.plan import plan_cycle, plan_document  # noqa: E402
+
+
+def _write_history(*args, **kwargs):
+    """fixture.build, after checking the engine carries the stream bridge the writer needs."""
+    from hexcore.restart_v842 import _STREAM_ENGINE
+
+    site_support.engine_bridge_or_skip(_STREAM_ENGINE, "writing the swath test history")
+    return fixture.build(*args, **kwargs)
 
 CELLS = 40962
 HOURS = [0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0]
@@ -59,7 +68,7 @@ SCENARIO = [
 @pytest.fixture(scope="module")
 def history(tmp_path_factory: pytest.TempPathFactory) -> Path:
     target = tmp_path_factory.mktemp("swath-plan") / "coarse.nc"
-    return fixture.build(target, cells=CELLS, hours=HOURS, scenario=SCENARIO)
+    return _write_history(target, cells=CELLS, hours=HOURS, scenario=SCENARIO)
 
 
 @pytest.fixture(scope="module")
@@ -67,7 +76,7 @@ def history_next(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The same world six hours later: the next cycle's coarse forecast."""
 
     target = tmp_path_factory.mktemp("swath-plan-next") / "coarse.nc"
-    return fixture.build(
+    return _write_history(
         target, cells=CELLS, hours=HOURS, scenario=SCENARIO, offset_hours=6.0
     )
 
@@ -461,7 +470,7 @@ def test_a_third_phenomenon_is_placed_by_the_same_code(
          "bearing_deg": 60.0, "speed_km_per_hour": 40.0, "radius_km": 500.0,
          "amplitude": 60.0},
     ]
-    path = fixture.build(
+    path = _write_history(
         tmp_path / "moist.nc", cells=CELLS, hours=HOURS, scenario=scenario
     )
     import netCDF4
@@ -684,7 +693,7 @@ def test_a_class_that_sweeps_the_ranking_cannot_sweep_the_budget(
     target.write_text(json.dumps(document, indent=2), encoding="utf-8", newline="\n")
     two_classes = registry.load_metrics(target)
 
-    path = fixture.build(
+    path = _write_history(
         tmp_path / "sweep.nc", cells=CELLS, hours=HOURS, scenario=SWEEP_SCENARIO
     )
     uncapped = _policy_from(
@@ -732,7 +741,7 @@ def test_commensurable_intensity_puts_two_fields_on_one_axis(
     target.write_text(json.dumps(document, indent=2), encoding="utf-8", newline="\n")
     two_classes = registry.load_metrics(target)
 
-    path = fixture.build(
+    path = _write_history(
         tmp_path / "axis.nc", cells=CELLS, hours=HOURS, scenario=SWEEP_SCENARIO
     )
     plan = _plan(path, two_classes, policy)
@@ -807,11 +816,11 @@ def test_the_frame_count_does_not_change_the_order(tmp_path, metrics, policy) ->
     score of 4.97 at a weight of only 0.5.
     """
 
-    sparse = fixture.build(
+    sparse = _write_history(
         tmp_path / "sparse.nc", cells=CELLS, hours=[0.0, 6.0, 12.0, 18.0],
         scenario=SCENARIO,
     )
-    dense = fixture.build(
+    dense = _write_history(
         tmp_path / "dense.nc", cells=CELLS,
         hours=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0], scenario=SCENARIO,
     )

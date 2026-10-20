@@ -1,10 +1,36 @@
 # Changelog
 
-*This file accumulated without a version cut through 0.1.0 and 0.1.1, so
-entries below carry work from those lines as well as this one, and no clean
-boundary can be drawn between them after the fact. The published release note
-for each shipped version is the summary of record for what that version
-contained. From 0.2.0 forward the file is cut at the release.*
+## 0.4.1
+
+Requires gpuwm>=2.9.2,<2.10.
+
+New:
+- MPAS-A v8.4.2 dycore, GPU physics and LES closures, with four acoustic substeps and a native-free framework. ArWen physics remains the default.
+- MPAS physics ports: WSM6, Thompson, Kain-Fritsch, Tiedtke, Grell-Freitas, revised MM5, MYNN, YSU, Noah, sea ice, RRTMG and CAM.
+- Real-data and idealized initialization, vertical grids, orographic statics, aerosol climatology, SST and sea-ice updates, IAU, limited-area boundaries, streams, restart and diagnostics.
+- Correct mode for MPAS and ArWen physics, with named corrections, switches and receipt records.
+- Global and country workflows, source-table initialization, analysis bundles, mesh remapping, cycling and subseasonal ensembles.
+- Forecast products, soundings, meteograms, NetCDF export and observation scorecards, including IGRA2 radiosondes for past cycles.
+- Ensemble and preset preparation, member queues, shared static caches, a pinned preparation store and suite-aware soil and aerosol initialization.
+- Storm-following regions with balanced conservative remapping, physics-state carry, restart and same-host multi-card execution.
+- MPAS physics tables fetched from pinned data-only assets in `physics-resources-v0.4.1`.
+- CUDA 12 and CUDA 13 installation extras, driver-aware diagnostics, bundled helpers and a manylinux_2_28 wheel.
+- Asynchronous history output, cached input digests, parallel host preparation, fine-terrain sampling and diagnostic export.
+- Kernel packs fetched on demand from `kernel-packs-v0.4.1`; `gpuwm-hex fetch-assets --from DIR` and `GPUWM_HEX_ASSETS_FROM` support offline staging.
+
+Fixed:
+- MPAS shortwave shape specialization and YSU memory probes support gpuwm 2.9.3.
+- Physics routing, vegetation, soil columns and variable-mesh convection follow the selected suite. MPAS physics without a namelist selects `mesoscale_reference`; default YSU timesteps respect engine limits and explicit selections.
+- WSM6 precipitation checks accept valid step scalings; limited-area forecasts avoid the first-step buffer failure, and CUDA graph replay refreshes heating and tendencies.
+- Same-host forecasts handle IAU, per-card kernels and memory admission; local time stepping supports even acoustic counts and exchanges multi-card interface fluxes.
+- Moving remaps extend below-ground states hydrostatically and evaporate subsaturated cloud water; unsupported move hooks are refused by name.
+- Static construction preserves grid precision and maps lake categories; vertical templates use the bundled CDF-5 copier.
+- Installed country, products and preset commands resolve their helpers; TEMPO checks aerosols before fetching tables, and table generators use pinned logarithm arithmetic.
+- Strict checks compare data and attributes without file identifiers, authenticate installed engine wheels by archive and RECORD hashes, and use bundled float32 geometry math across host glibc versions, built from the shipped sources in source checkouts; reference checks include staged changes, shell isolation, timestep and dycore anchors.
+- Windows source installs work without bash or netCDF-C development files; kernel and physics asset fetches, initialization, subseasonal runs and cycling use portable file locks.
+- RRFS-MPAS selections name the required site build when their native library is unavailable.
+- Public exports exclude UCAR Noah-MP v5 and UGWP implementations, with licence gates, native stubs and dependency notices.
+- The public release workflow builds the wheel: the renderer and surface-series helpers download by pinned hash beside the engine bridges. Packaging includes helper licences and METIS, checks sizes and excludes kernel packs. Fetches verify whole batches; doctor recognizes offline packs and reports MPAS physics-resource readiness. Release checks validate engine availability and public CI before preparing a cut.
 
 ## 0.3.3 (2026-09-29)
 
@@ -247,7 +273,7 @@ New:
   array; the garbage discipline restores every padded argument of a
   launch in one launch instead of one cupy fill per column. The kernels
   compare, select and store what they are handed and do no arithmetic on
-  the values, so the dycore's byte identity is untouched by construction;
+  the values, so the hex self-reproducibility is unchanged by construction;
   the measuring and audited forms of the discipline keep the per-column
   fills.
 - launch_checked in hexcore.cuda_backend: one launch, the error state
@@ -636,8 +662,8 @@ Changed:
   one token: `from mpas_port.X import Y` becomes `from hexcore.X import Y`.
   The distribution name (`gpuwm-hex`), the console script (`gpuwm-hex ...`)
   and every command surface are untouched. The old name overclaimed: this
-  project keeps MPAS-A v8.4.1's **dycore and mesh** byte-identical, pinned as
-  a specification, and deliberately does not match that model's physics,
+  project implements MPAS-A v8.4.x's **dycore numerics and mesh conventions**,
+  pinned as a specification and checked with stated one-step dry tolerances, and deliberately does not match that model's physics,
   which is WRF physics run through MPAS's own plumbing. Naming the package
   after another project put that project's name in every user's import line
   for a relationship holding over half the model. `hexcore` names what is

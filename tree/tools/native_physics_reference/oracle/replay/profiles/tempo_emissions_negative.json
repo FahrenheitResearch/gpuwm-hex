@@ -1,0 +1,34 @@
+{
+  "dimensions": {
+    "ids": 1,
+    "ide": 1,
+    "jds": 1,
+    "jde": 1,
+    "kds": 1,
+    "kde": 55,
+    "ims": 1,
+    "ime": 1,
+    "jms": 1,
+    "jme": 1,
+    "kms": 1,
+    "kme": 55,
+    "its": 1,
+    "ite": 1,
+    "jts": 1,
+    "jte": 1,
+    "kts": 1,
+    "kte": 55
+  },
+  "values": {
+    "dt": "60.0_real32",
+    "nwfa": "1.e6_real32",
+    "nwfa2d": "-0.02_real32",
+    "ims": "1",
+    "ime": "1",
+    "jms": "1",
+    "jme": "1",
+    "kms": "1",
+    "kme": "55",
+    "kts": "1"
+  }
+}

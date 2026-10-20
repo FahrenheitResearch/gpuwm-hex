@@ -9,15 +9,17 @@ from numpy.typing import NDArray
 
 from . import rkind_libm
 from .errors import ConfigurationRefusal
+from .prep_cache import cached
 
 FloatArray = NDArray[np.floating[Any]]
 
 V841_DSS_SOURCE = (
-    "MPAS-A v8.4.1 mpas_atm_core.F::atm_compute_damping_coefs; "
-    "commit=91c5eac175eebeaf4206bacd5cb50c39dff3c152"
+    "MPAS-A v8.4.2 mpas_atm_core.F::atm_compute_damping_coefs; "
+    "commit=f34984b2c89353cf31c235b08d3b4acd96b37bb3"
 )
 
 
+@cached("v841-vertical-velocity-damping", salt=lambda: __import__("hexcore.rust_hostprep",fromlist=["_engine_digest"])._engine_digest())
 def build_v841_vertical_velocity_damping(
     zgrid: FloatArray,
     *,
@@ -80,6 +82,58 @@ def build_v841_vertical_velocity_damping(
 
     half = dtype.type(0.5)
     pi = np.arccos(dtype.type(-1.0))
+    if dtype == np.dtype(np.float32):
+        # GNU strict core F:1310 uses host sinf, then one RKIND product
+        # for the literal square. The Rust correctly-rounded sine can
+        # differ from this native library evaluation.
+        from .native_geometry_math import sin
+        midpoint = half * (heights[:-1] + heights[1:])
+        if not np.all(np.isfinite(midpoint)):
+            raise ConfigurationRefusal("zgrid", "midpoint overflow",
+                "the v8.4.1 damping phase requires finite layer midpoints",
+                "zgrid whose source-order midpoint operations remain finite")
+        active = midpoint > start
+        denominator = np.broadcast_to(heights[-1] - start, midpoint.shape)
+        phase = (half * pi) * (midpoint[active] - start) / denominator[active]
+        sine = sin(phase)
+        values = xnutr_r * (sine * sine)
+        if not np.all(np.isfinite(phase)) or not np.all(np.isfinite(values)):
+            raise ConfigurationRefusal("zgrid", "non-finite damping phase",
+                "the v8.4.1 damping arithmetic must remain finite",
+                "zgrid and config_zd producing a finite damping phase")
+        dss[active] = values
+        return dss
+    from .rust_hostprep import vertical_velocity_damping
+    try:
+        dss=vertical_velocity_damping(heights,xnutr=xnutr_r,start=start,pi=pi)
+    except ValueError as error:
+        raise ConfigurationRefusal("zgrid",str(error),"the v8.4.1 damping arithmetic must remain finite","zgrid and config_zd producing a finite damping phase") from error
+    return dss
+
+
+def vertical_velocity_damping_reference(heights, *, xnutr, start, pi):
+    """The independent scalar authority below, with the Rust table's call signature.
+
+    ``hexcore.rust_hostprep.vertical_velocity_damping`` and this function take
+    the same arguments, so either can stand where the other is bound (the
+    prep-cache hook tests rebind one to the other).  ``pi`` must be the value
+    the cached builder passes, ``arccos(-1)`` in the heights' dtype; the
+    authority computes its own and a different value is refused rather than
+    ignored.
+    """
+
+    heights = np.asarray(heights)
+    if pi != np.arccos(heights.dtype.type(-1.0)):
+        raise ValueError(f"pi={pi!r} is not arccos(-1) in {heights.dtype}; the scalar authority computes its own")
+    return _vertical_velocity_damping_serial(heights, xnutr_r=heights.dtype.type(xnutr),
+                                             start=heights.dtype.type(start))
+
+
+def _vertical_velocity_damping_serial(heights, *, xnutr_r, start):
+    """Unchanged independent scalar authority for exactness checks."""
+    dtype=heights.dtype; nlev=heights.shape[0]-1; ncells=heights.shape[1]
+    damping_start_z=float(start); dss=np.zeros((nlev,ncells),dtype=dtype)
+    half=dtype.type(0.5); pi=np.arccos(dtype.type(-1.0))
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         for cell in range(ncells):
             top = heights[nlev, cell]

@@ -1,0 +1,12 @@
+{
+  "schema": "mpas.iau-owner-hook-proposal/v1",
+  "source_sha256": {
+    "tree/src/hexcore/mpasphys/driver_v842.py": "e6dec6fc772977cb6dcf59418f52552ad51f4d4f541fd4a1137ca1b82bc57862",
+    "tree/src/hexcore/mpasphys/runtime_v842.py": "9bf2c00377455647a8c48984db631bafdb3b273f90b796f59df6b983f3aeb562"
+  },
+  "patch_sha256": "53655bc8629adc7a122a5b5fe2a53abaf8c3b55011137e83c1e6835bf6f86d57",
+  "applied": false,
+  "syntax_checked": true,
+  "forecast_identity": false,
+  "remaining": "Rust NEAREST record selection and authentic read/dispatch witnesses; actual analysis-minus-background inputs"
+}

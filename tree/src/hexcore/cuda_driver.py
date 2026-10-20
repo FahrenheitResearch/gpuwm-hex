@@ -14,16 +14,21 @@ without fast math or fused multiply-add contraction.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 import hashlib
+import os
 import re
 import time
 from typing import TYPE_CHECKING, Any, Mapping
 
 import numpy as np
 
+from . import host_parallel
+from .host_parallel import all_finite, active_indices_in_range
 from .cuda_fp32 import CUDA_FTZ_HELPERS
+from .native_powf import CUDA_NATIVE_POWF
 
 from .cuda_acoustic import (
     CudaAcousticForcing,
@@ -32,9 +37,11 @@ from .cuda_acoustic import (
     compute_vertical_implicit_coefficients_cuda,
     convert_w_tendency_to_omega_cuda,
 )
+from . import cuda_acoustic_v841 as _acoustic_v841_module
 from .cuda_acoustic_v841 import (
     advance_acoustic_step_cuda_v841,
     compute_vertical_implicit_coefficients_cuda_v841,
+    short_lifetimes_enabled,
 )
 from .cuda_backend import (
     canonical_sha256,
@@ -72,6 +79,7 @@ from .driver import (
     _mixing_config,
 )
 from .damping_v841 import build_v841_vertical_velocity_damping
+from .arwen_les import model_row as arwen_model_row
 from .species_row import (
     species_row_for_names,
     species_row_for_scheme as species_row_for_selector,
@@ -80,6 +88,7 @@ from .dynamics_v841 import V841ReferenceWindProfiles
 from .errors import ConfigurationRefusal
 from .integration import RKSchedule
 from .offcentering_v841 import build_v841_acoustic_offcentering
+from .prep_cache import cached
 from .state import PrognosticState
 from .transport import build_advection_coefficients
 from .cuda_v841 import CudaV841Context
@@ -158,15 +167,15 @@ CUDA_AUTHORITY_RULER_SCHEMA = "mpas-port.cuda-authority-ruler/v2"
 CUDA_AUTHORITY_INITIAL_SCHEMA = "mpas-port.cuda-authority-initial/v2"
 FROZEN_CUDA_SOURCE = "MPAS-A v8.2.3 mpas_atm_time_integration.F:638-1224"
 V841_CUDA_SOURCE = (
-    "MPAS-A v8.4.1 tag-object=2a934b5008a7446df96d550bf2e21466feaec686; "
-    "commit=91c5eac175eebeaf4206bacd5cb50c39dff3c152; CUDA implementation-only"
+    "MPAS-A v8.4.2 tag-object=2eee75b147d83d67835cecfb30c6fb3793e3042b; "
+    "commit=f34984b2c89353cf31c235b08d3b4acd96b37bb3; CUDA implementation-only"
 )
 V841_MOIST_DYNAMICS_SOURCE = (
-    "MPAS-A v8.4.1 mpas_atm_time_integration.F:3188-3283,"
+    "MPAS-A v8.4.2 mpas_atm_time_integration.F:3188-3283,"
     "6458-6495,6778-6787"
 )
 V841_MOIST_DYNAMICS_SOURCE_SHA256 = (
-    "937e3191a646b0f3f14aaf1678f57b0d6880574f06e402a5053ff6ed12ab706b"
+    "579acb2819b565760822194401d5af9e33c129a4114ac03e6882d7abdbabc757"
 )
 CUDA_T0_EXACT_SIDECAR = "uploaded-exact-sidecar"
 CUDA_T0_REBUILT_DIAGNOSTICS = "device-rebuilt-public-t0"
@@ -266,7 +275,8 @@ def _v841_physics_receipt_lane(
     )
     from .cuda_physics_v841 import CudaPhaseOneExecutionProvenanceV841
 
-    config.validate()
+    from .arwen_les import validate
+    validate(config)
     if not isinstance(
         execution_provenance, CudaPhaseOneExecutionProvenanceV841
     ):
@@ -281,6 +291,12 @@ def _v841_physics_receipt_lane(
         "phase1_source_manifest": execution_provenance.source_manifest,
         "phase1_h_diabatic_applied": execution_provenance.h_diabatic_applied,
     }
+    def components(names):
+        if getattr(config, "config_les_model", "none") == "none":
+            return names
+        return tuple(name for name in names if name != "bl_ysu" and not (
+            name == "cu_grell_freitas" and config.config_convection_scheme == "off"
+        )) + ("cuda_les_v842",)
     for name, executed_value in aggregate_config.items():
         if getattr(config, name, None) != executed_value:
             raise ValueError(
@@ -296,7 +312,7 @@ def _v841_physics_receipt_lane(
             "candidate_evidence": CUDA_V841_PHYSICS_IMPLEMENTED_EVIDENCE,
             "committed_evidence": CUDA_V841_PHYSICS_COMMITTED_EVIDENCE,
             "authority_nonclaims": CUDA_V841_PHYSICS_AUTHORITY_NONCLAIMS,
-            "physics_components": CUDA_V841_PHYSICS_COMPONENTS,
+            "physics_components": components(CUDA_V841_PHYSICS_COMPONENTS),
             "gwd_scheme": "off",
             "gwd_evidence": None,
         }
@@ -312,7 +328,7 @@ def _v841_physics_receipt_lane(
         "candidate_evidence": CUDA_V841_PHYSICS_GWDO_IMPLEMENTED_EVIDENCE,
         "committed_evidence": CUDA_V841_PHYSICS_GWDO_COMMITTED_EVIDENCE,
         "authority_nonclaims": CUDA_V841_PHYSICS_GWDO_AUTHORITY_NONCLAIMS,
-        "physics_components": CUDA_V841_PHYSICS_GWDO_COMPONENTS,
+        "physics_components": components(CUDA_V841_PHYSICS_GWDO_COMPONENTS),
         "gwd_scheme": execution_provenance.gwd_selector,
         "gwd_evidence": {
             "composition_owner": execution_provenance.gwdo_composer,
@@ -383,13 +399,44 @@ def _authority_array_fingerprint(
     if array.dtype.hasobject:
         raise TypeError("authority arrays cannot use object dtype")
     contiguous = np.ascontiguousarray(array)
-    raw = contiguous.tobytes(order="C")
+    # A byte view keeps the exact C-order representation without a whole-array
+    # bytes allocation. Flatten before viewing to handle empty/structured and
+    # datetime arrays as well as the numeric forecast fields.
+    raw = memoryview(contiguous.reshape(-1).view(np.uint8))
     return {
         "dtype": contiguous.dtype.str,
         "shape": list(contiguous.shape),
         "c_bytes": len(raw),
         "c_bytes_sha256": hashlib.sha256(raw).hexdigest(),
     }
+
+
+def _authority_array_fingerprints(
+    arrays: Mapping[str, tuple[Any, Any]],
+) -> dict[str, Any]:
+    """Hash independent, stable host inputs with bounded CPU parallelism.
+
+    The 30 km preflight profile spent 5.1 s in array fingerprinting after
+    advection preparation was threaded. SHA-256 releases the GIL; each
+    worker preserves one array's entire digest and the caller's NumPy error
+    policy. Ordered map retains record order and first-refusal order. Small
+    groups stay serial, and no pool survives the fingerprint call.
+    """
+    workers = min(len(arrays), max(1, int(os.environ.get(
+        "GPUWM_HEX_HOSTPREP_THREADS", "4"))))
+    large = sum(value.nbytes for value, _ in arrays.values()
+                if isinstance(value, np.ndarray)) >= 16 * 1024 * 1024
+    error_policy = np.geterr()
+
+    def record(item):
+        name, (value, dtype) = item
+        with np.errstate(**error_policy):
+            return name, _authority_array_fingerprint(value, dtype=dtype)
+
+    if workers <= 1 or not large:
+        return dict(map(record, arrays.items()))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return dict(pool.map(record, arrays.items()))
 
 
 def _authority_member(value: Any, name: str, default: Any = None) -> Any:
@@ -415,10 +462,7 @@ def _authority_group_fingerprint(
             raise ValueError(f"authority scalar {name} must be finite numeric")
         normalized_scalars[name] = selected
     return {
-        "arrays": {
-            name: _authority_array_fingerprint(value, dtype=dtype)
-            for name, (value, dtype) in arrays.items()
-        },
+        "arrays": _authority_array_fingerprints(arrays),
         "scalars": normalized_scalars,
     }
 
@@ -447,14 +491,13 @@ def cuda_authority_initial_fingerprint(
     result = {
         "schema": CUDA_AUTHORITY_INITIAL_SCHEMA,
         "start_time_seconds": start_time,
-        "state": {
-            name: _authority_array_fingerprint(getattr(state, name))
-            for name in _AUTHORITY_STATE_FIELDS
-        },
-        "saved_diagnostics": {
-            name: _authority_array_fingerprint(getattr(saved_diagnostics, name))
+        "state": _authority_array_fingerprints({
+            name: (getattr(state, name), None) for name in _AUTHORITY_STATE_FIELDS
+        }),
+        "saved_diagnostics": _authority_array_fingerprints({
+            name: (getattr(saved_diagnostics, name), None)
             for name in _AUTHORITY_SIDECAR_FIELDS
-        },
+        }),
     }
     execution_values = (
         mesh,
@@ -880,7 +923,7 @@ def _resolve_cuda_receipt_provenance(
 
 
 _CUDA_SOURCE = (
-    CUDA_FTZ_HELPERS
+    CUDA_FTZ_HELPERS + CUDA_NATIVE_POWF
     + r"""
 #define C2(k,c,nc) ((k)*(nc) + (c))
 #define E2(k,e,ne) ((k)*(ne) + (e))
@@ -1147,6 +1190,151 @@ extern "C" __global__ void w_edge_flux_f32(
     }
 }
 
+#ifndef HEX_HOIST_ADV
+#define HEX_HOIST_ADV 10
+#endif
+/* Thread-per-edge forms of theta_edge_flux_f32 and w_edge_flux_f32.  The
+   edge's advection stencil (cells, both coefficient rows) is read once into
+   registers and the thread walks the levels; each level runs the element
+   body unchanged, so each flux carries the same bits. */
+extern "C" __global__ void theta_edge_flux_hoist_f32(
+    const int nlev, const int ncells, const int nedges, const int width,
+    const int rk_step, const float coefficient,
+    const float *theta, const float *theta_saved,
+    const float *ru, const float *ru_saved, const float *dv_edge,
+    const int *cells_on_edge, const float *adv, const float *adv3,
+    const int *n_adv, const int *adv_cells, float *flux, const int lpt)
+{
+    const int hex_rows = nlev;
+    const int hex_chunks = (hex_rows + lpt - 1) / lpt;
+    const int hex_element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (hex_element >= nedges * hex_chunks) return;
+    const int edge = hex_element % nedges;
+    const int hex_k0 = (hex_element / nedges) * lpt;
+    const int hex_k1 = min(hex_rows, hex_k0 + lpt);
+    const int c0 = cells_on_edge[2 * edge];
+    const int c1 = cells_on_edge[2 * edge + 1];
+    const int count = n_adv[edge];
+    if (count > HEX_HOIST_ADV) {
+        for (int k = hex_k0; k < hex_k1; ++k) {
+            const int index = E2(k, edge, nedges);
+            float edge_theta = 0.0f;
+            const float sign = mpas_copysign(1.0f, ru[index]);
+            for (int slot = 0; slot < count; ++slot) {
+                const int cell = adv_cells[ADV(edge, slot, width)];
+                const float weight = mpas_add(adv[ADV(edge, slot, width)],
+                    mpas_mul(mpas_mul(coefficient, sign),
+                        adv3[ADV(edge, slot, width)]));
+                edge_theta = mpas_add(edge_theta, mpas_mul(
+                    weight, theta[C2(k, cell, ncells)]));
+            }
+            float value = mpas_mul(ru[index], edge_theta);
+            if (rk_step > 1) {
+                value = mpas_add(value, mpas_mul(mpas_mul(mpas_mul(
+                    dv_edge[edge], mpas_sub(ru_saved[index], ru[index])), 0.5f),
+                    mpas_add(theta_saved[C2(k, c0, ncells)],
+                        theta_saved[C2(k, c1, ncells)])));
+            }
+            flux[index] = value;
+        }
+        return;
+    }
+    int cl[HEX_HOIST_ADV];
+    float a1[HEX_HOIST_ADV];
+    float a3[HEX_HOIST_ADV];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_ADV; ++slot) {
+        cl[slot] = slot < count ? adv_cells[ADV(edge, slot, width)] : c0;
+        a1[slot] = slot < count ? adv[ADV(edge, slot, width)] : 0.0f;
+        a3[slot] = slot < count ? adv3[ADV(edge, slot, width)] : 0.0f;
+    }
+    const float dv = dv_edge[edge];
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        const int index = E2(k, edge, nedges);
+        float edge_theta = 0.0f;
+        const float ru_k = ru[index];
+        const float sign = mpas_copysign(1.0f, ru_k);
+#pragma unroll
+        for (int slot = 0; slot < HEX_HOIST_ADV; ++slot) {
+            if (slot < count) {
+                const float weight = mpas_add(a1[slot],
+                    mpas_mul(mpas_mul(coefficient, sign), a3[slot]));
+                edge_theta = mpas_add(edge_theta, mpas_mul(
+                    weight, theta[C2(k, cl[slot], ncells)]));
+            }
+        }
+        float value = mpas_mul(ru_k, edge_theta);
+        if (rk_step > 1) {
+            value = mpas_add(value, mpas_mul(mpas_mul(mpas_mul(
+                dv, mpas_sub(ru_saved[index], ru_k)), 0.5f),
+                mpas_add(theta_saved[C2(k, c0, ncells)],
+                    theta_saved[C2(k, c1, ncells)])));
+        }
+        flux[index] = value;
+    }
+}
+
+extern "C" __global__ void w_edge_flux_hoist_f32(
+    const int nlev, const int ncells, const int nedges, const int width,
+    const float coefficient, const float *w, const float *ru,
+    const float *fzm, const float *fzp, const float *adv, const float *adv3,
+    const int *n_adv, const int *adv_cells, float *flux, const int lpt)
+{
+    /* rows 0..nlev of one edge; rows 0 and nlev are the element kernel's
+       zero rows, every other row runs its body unchanged. */
+    const int hex_rows = nlev + 1;
+    const int hex_chunks = (hex_rows + lpt - 1) / lpt;
+    const int hex_element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (hex_element >= nedges * hex_chunks) return;
+    const int edge = hex_element % nedges;
+    const int hex_k0 = (hex_element / nedges) * lpt;
+    const int hex_k1 = min(hex_rows, hex_k0 + lpt);
+    const int count = n_adv[edge];
+    const bool hoisted = count <= HEX_HOIST_ADV;
+    int cl[HEX_HOIST_ADV];
+    float a1[HEX_HOIST_ADV];
+    float a3[HEX_HOIST_ADV];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_ADV; ++slot) {
+        const bool live = hoisted && slot < count;
+        cl[slot] = live ? adv_cells[ADV(edge, slot, width)] : 0;
+        a1[slot] = live ? adv[ADV(edge, slot, width)] : 0.0f;
+        a3[slot] = live ? adv3[ADV(edge, slot, width)] : 0.0f;
+    }
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        const int index = E2(k, edge, nedges);
+        float value = 0.0f;
+        if (k > 0 && k < nlev) {
+            const float ru_interface = mpas_add(
+                mpas_mul(fzm[k], ru[E2(k, edge, nedges)]),
+                mpas_mul(fzp[k], ru[E2(k - 1, edge, nedges)]));
+            const float sign = mpas_copysign(1.0f, ru_interface);
+            float edge_w = 0.0f;
+            if (hoisted) {
+#pragma unroll
+                for (int slot = 0; slot < HEX_HOIST_ADV; ++slot) {
+                    if (slot < count) {
+                        edge_w = mpas_add(edge_w, mpas_mul(mpas_add(
+                            a1[slot], mpas_mul(mpas_mul(coefficient, sign), a3[slot])),
+                            w[C2(k, cl[slot], ncells)]));
+                    }
+                }
+            } else {
+                for (int slot = 0; slot < count; ++slot) {
+                    const int cell = adv_cells[ADV(edge, slot, width)];
+                    edge_w = mpas_add(edge_w, mpas_mul(mpas_add(
+                        adv[ADV(edge, slot, width)], mpas_mul(
+                            mpas_mul(coefficient, sign),
+                            adv3[ADV(edge, slot, width)])),
+                        w[C2(k, cell, ncells)]));
+                }
+            }
+            value = mpas_mul(ru_interface, edge_w);
+        }
+        flux[index] = value;
+    }
+}
+
 extern "C" __global__ void w_vertical_flux_f32(
     const int nlev, const int ncells, const float *w,
     const float *rw, float *flux)
@@ -1228,10 +1416,11 @@ extern "C" __global__ void scale_f32(
 }
 
 extern "C" __global__ void recover_cells_f32(
-    const int nlev, const int ncells, const int stage,
+    const int nlev, const int ncells, const int stage, const int native_gnu_powf,
     const float rgas, const float cp, const float p0,
     const float *rho_p_saved, const float *rtheta_p_saved,
     const float *rho_pp, const float *rtheta_pp,
+    const int has_diabatic, const float dt, const float *diabatic_theta,
     const float *rho_base, const float *rtheta_base,
     const float *exner_base, const float *zz,
     const float *exner_saved, const float *pressure_p_saved,
@@ -1242,9 +1431,14 @@ extern "C" __global__ void recover_cells_f32(
         const int index = element;
         const float density_p = mpas_add(
             rho_p_saved[index], rho_pp[index]);
-        const float theta_p = mpas_add(
+        float theta_p = mpas_add(
             rtheta_p_saved[index], rtheta_pp[index]);
         const float full_rho = mpas_add(density_p, rho_base[index]);
+        // mpas_atm_time_integration.F:4436-4437: remove lagged microphysics
+        // heating only at the final RK recovery, after the density update.
+        if (stage == 3 && has_diabatic)
+            theta_p = mpas_sub(theta_p,
+                mpas_mul(mpas_mul(dt, full_rho), diabatic_theta[index]));
         const float full_rtheta = mpas_add(theta_p, rtheta_base[index]);
         rho_p[index] = density_p;
         rtheta_p[index] = theta_p;
@@ -1254,7 +1448,11 @@ extern "C" __global__ void recover_cells_f32(
         if (stage == 3) {
             const float argument = mpas_mul(mpas_mul(
                 zz[index], mpas_div(rgas, p0)), full_rtheta);
-            const float value = powf(argument, rgas / (cp - rgas));
+            // v8.4.1 selects the GNU native powf polynomial; legacy retains double pow.
+            const float value = native_gnu_powf ? mpas_native_powf_positive(
+                argument, mpas_div(rgas, mpas_sub(cp, rgas))) : __double2float_rn(pow(
+                mpas_f32_to_f64_ieee(argument),
+                mpas_f32_to_f64_ieee(mpas_div(rgas, mpas_sub(cp, rgas)))));
             exner[index] = value;
             pressure_p[index] = mpas_mul(mpas_mul(zz[index], rgas),
                 mpas_add(mpas_mul(value, theta_p),
@@ -1276,7 +1474,7 @@ extern "C" __global__ void recover_edges_f32(
         const int index = element;
         ru[index] = mpas_add(ru_saved[index], ru_p[index]);
         flux_u[index] = mpas_add(ru_saved[index],
-            mpas_div(ru_avg_p[index], (float)acoustic_steps));
+            mpas_mul(ru_avg_p[index], mpas_div(1.0f, (float)acoustic_steps)));
     }
 }
 
@@ -1294,7 +1492,7 @@ extern "C" __global__ void recover_interfaces_f32(
             rw[index] = mpas_add(rw_saved[index], rw_p[index]);
         }
         flux_w[index] = mpas_add(rw_saved[index],
-            mpas_div(ww_avg_p[index], (float)acoustic_steps));
+            mpas_mul(ww_avg_p[index], mpas_div(1.0f, (float)acoustic_steps)));
     }
 }
 """
@@ -1390,7 +1588,8 @@ extern "C" __global__ void moist_dpdz_v841_f32(
 extern "C" __global__ void euler_w_moist_v841_f32(
     const int nlev, const int ncells, const float *pressure_p,
     const float *dpdz, const float *cqw, const float *rdzu,
-    const float *fzm, const float *fzp, float *result, int *invalid)
+    const float *fzm, const float *fzp, const int has_mixing,
+    const float *mixing, float *result, int *invalid)
 {
     const int cell = blockDim.x * blockIdx.x + threadIdx.x;
     if (cell >= ncells) return;
@@ -1405,13 +1604,42 @@ extern "C" __global__ void euler_w_moist_v841_f32(
             const float buoyancy = mpas_add(
                 mpas_mul(fzm[k], dpdz[C2(k, cell, ncells)]),
                 mpas_mul(fzp[k], dpdz[C2(k - 1, cell, ncells)]));
-            const float value = mpas_sub(0.0f, mpas_mul(cqw[index],
+            const float value = mpas_sub(has_mixing ? mixing[index] : 0.0f, mpas_mul(cqw[index],
                 mpas_sub(pressure_term, buoyancy)));
             if (!isfinite(cqw[index]) || !isfinite(value))
                 atomicExch(invalid, 1);
             result[index] = value;
         }
     }
+}
+
+// mpas_atm_time_integration.F:6931-6937: resolved tendency diagnostic
+// precedes the carried microphysics heating, Euler mixing and held physics.
+extern "C" __global__ void add_lagged_diabatic_theta_v842_f32(
+    const int nlev, const int ncells, const float *rho,
+    const float *diabatic_theta, float *tend_rt)
+{
+    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
+    if (cell >= ncells) return;
+    for (int k = 0; k < nlev; ++k) {
+        const int i = C2(k, cell, ncells);
+        tend_rt[i] = mpas_add(tend_rt[i], mpas_mul(rho[i], diabatic_theta[i]));
+    }
+}
+
+// mpas_atm_time_integration.F:7949 (atm_bdy_adjust_dynamics_speczone_tend):
+// a limited-area run zeroes rt_diabatic_tend in the specified zone at every
+// RK stage, in place, so the final recovery (:4436-4437) removes no carry
+// there.  Launched only when a carry exists.
+extern "C" __global__ void zero_speczone_lagged_diabatic_theta_v842_f32(
+    const int nlev, const int ncells, const int nspec,
+    const int *spec_cells, float *diabatic_theta)
+{
+    const int element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (element >= nlev * nspec) return;
+    const int slot = element % nspec;
+    const int k = element / nspec;
+    diabatic_theta[C2(k, spec_cells[slot], ncells)] = 0.0f;
 }
 
 extern "C" __global__ void modified_theta_dynamics_rate_v841_f32(
@@ -1532,8 +1760,7 @@ def _validate_v841_physics_candidate_receipt(
     # The RUN's scalar order, not the frozen lane's.  A receipt that names
     # WSM6's six on a P3 step is a receipt that lies about what integrated,
     # which is the stale-relay class this program has been bitten by.
-    receipt_scalar_order = species_row_for_selector(
-        getattr(config, "config_microp_scheme", "mp_wsm6")).names()
+    receipt_scalar_order = arwen_model_row(config).names()
 
     if not isinstance(receipt, CudaV841PhysicsStepReceipt):
         raise TypeError("pending full-physics candidate receipt type changed")
@@ -1695,6 +1922,26 @@ class _CudaDynamicsSubcycleResult:
     mass_flux_u: Any
     mass_flux_w: Any
     modified_theta_dynamics_rate: Any | None = None
+    stage_physics_tendencies: Any | None = None
+
+
+def diagnostics_lifetime_lean() -> bool:
+    """Whether a v8.4.1 step holds no solve-diagnostics set between substeps.
+
+    Default yes (memory lane, 2026-10-15).  The old flow formed the step-start
+    solve in ``_step_device_v841`` and carried each substep's stage-3 solve
+    into the next substep, so the caller held one full set (about 4.7 KB per
+    column at 55 levels) while every substep ran, and the last substep's set
+    -- read by nothing -- stayed live through the scalar transport and the
+    physics callbacks, which is where the moist step peaks.  Lean, each
+    substep forms its start solve from its own inputs and skips the unread
+    stage-3 solve; the arrays and kernels that form every set a stage reads
+    are unchanged, so the step's words are unchanged.  On the CUDA-graph path
+    the set is no longer a staged graph input either.
+    ``GPUWM_HEX_DIAG_LIFETIME=0`` restores the carried flow for A/B runs.
+    """
+
+    return os.environ.get("GPUWM_HEX_DIAG_LIFETIME", "1") != "0"
 
 
 def _zero_transfer() -> TransferStats:
@@ -1721,6 +1968,69 @@ def _copy_device_dataclass(value: Any, cp: Any) -> Any:
         if isinstance((item := getattr(value, field.name)), cp.ndarray)
     }
     return replace(value, **replacements)
+
+
+def state_levels_enabled() -> bool:
+    """Bind read-only time levels by reference instead of private copies.
+
+    Default on.  ``GPUWM_HEX_MEM_STATE_LEVELS=0`` restores the private
+    images of the step-start and subcycle-start levels, and keeps the
+    dynamics-only arrays alive through transport, for A/B measurement.
+    """
+
+    return os.environ.get("GPUWM_HEX_MEM_STATE_LEVELS", "1") != "0"
+
+
+class _StateLevelsWitness:
+    """Opt-in proof that the bound time levels are never written in place.
+
+    ``GPUWM_HEX_MEM_STATE_WITNESS=1`` keeps a private image of every array a
+    binding shares and compares the live words against it, as uint32 so a
+    NaN payload or a signed zero counts, at the binding's last reader.  A
+    changed word raises: binding by reference would then have changed the
+    forecast.  Off by default; it costs the very copies the binding removes.
+    """
+
+    checks = 0
+    arrays = 0
+    _registered = False
+
+    def __init__(self, cp: Any, label: str, **arrays: Any) -> None:
+        if not type(self)._registered:
+            import atexit
+            import sys
+
+            type(self)._registered = True
+            atexit.register(lambda: print(type(self).report(), file=sys.stderr, flush=True))
+        self.cp, self.label = cp, label
+        self.images = {
+            name: (value, cp.array(value, copy=True))
+            for name, value in arrays.items()
+            if isinstance(value, cp.ndarray)
+        }
+
+    @staticmethod
+    def enabled() -> bool:
+        return os.environ.get("GPUWM_HEX_MEM_STATE_WITNESS", "0") == "1"
+
+    def check(self, where: str) -> None:
+        cp = self.cp
+        changed = [
+            name for name, (live, image) in self.images.items()
+            if not bool(cp.array_equal(live.view(cp.uint32), image.view(cp.uint32)))
+        ]
+        type(self).checks += 1
+        type(self).arrays += len(self.images)
+        if changed:
+            raise RuntimeError(
+                f"state-levels witness: {self.label} changed in place before {where}: "
+                + ", ".join(changed)
+            )
+
+    @classmethod
+    def report(cls) -> str:
+        return (f"state-levels witness: {cls.checks} checks, "
+                f"{cls.arrays} array comparisons, 0 changed")
 
 
 def regional_bdy_mask_digest(mesh: Any) -> str | None:
@@ -1768,29 +2078,105 @@ def regional_bdy_mask_digest(mesh: Any) -> str | None:
 
 
 def _refuse_regional_execution(mesh: Any, n_cells: int) -> None:
-    """Refuse regional CUDA execution by name, through the anchor gate.
+    """Refuse a limited-area cull handed to the GLOBAL device path, by name.
 
-    It was ruled on 2026-08-25 that regional execution stays refused until
-    a registered regional anchor exists, mirroring the per-architecture
-    earned-anchor pattern.  The refusal names the breakage it prevents: a
-    regional forecast that carries a receipt nobody could verify.
+    RETIRED 2026-10-10 as an anchor gate: this used to pass a regional mesh
+    through when a registered regional anchor existed and refuse it when
+    none did.  Regional runs are built by the regional assembler
+    (hexcore.cuda_regional_forecast_v841), which pads the ring-7 sentinels
+    to an explicit garbage cell before this validator sees the mesh, so a
+    sentinel HERE means a cull reached the global path.  THE BREAKAGE: the
+    global kernels index cellsOnEdge directly and would read the sentinel
+    as a cell, and nothing would drive the boundary zone.  That is refused
+    whether or not any anchor exists.
     """
 
-    from .cuda_backend.regional_admission import require_regional_anchor
-
-    mesh_row = _authority_member(mesh, "registry_row")
-    try:
-        require_regional_anchor(
-            None if mesh_row is None else str(mesh_row),
-            bdy_mask_sha256=regional_bdy_mask_digest(mesh),
-            n_cells=int(n_cells),
-        )
-    except RuntimeError as error:
-        raise ConfigurationRefusal(
-            "config_apply_lbcs", True, str(error), "a registered regional anchor"
-        ) from error
+    raise ConfigurationRefusal(
+        "config_apply_lbcs",
+        True,
+        f"this {int(n_cells)}-cell mesh is a limited-area cull (stored-0 "
+        "cellsOnEdge sentinels or a nonzero specified zone) and reached the "
+        "global CUDA path, whose kernels would index the sentinels as cells "
+        "and leave the boundary zone undriven",
+        "a regional run through the forecast door with --lbc-dir (the "
+        "regional assembler pads the rings), or a global mesh",
+    )
 
 
+def _parallel_row_result(values, active, operation, dtype):
+    """Independent row reductions, with at most four private scratch buffers."""
+
+    if values.size < host_parallel.MIN_PARALLEL_ELEMENTS or host_parallel.threads() == 1:
+        return operation(values, active)
+    result = np.empty(values.shape[0], dtype=dtype)
+
+    def reduce(rows):
+        result[rows] = operation(values[rows], active[rows])
+
+    host_parallel.run_blocks(reduce, len(values), elements=values.size, worker_limit=4)
+    return result
+
+
+def _rows_outside(values: np.ndarray, active: np.ndarray, extent: int) -> np.ndarray:
+    """Rows with an active entry outside ``[0, extent)``."""
+
+    return _parallel_row_result(
+        values, active,
+        lambda block, used: np.any(used & ((block < 0) | (block >= extent)), axis=1),
+        bool,
+    )
+
+
+_ROW_SENTINEL = int(np.iinfo(np.int64).min)
+
+
+def _rows_not_unique(values: np.ndarray, active: np.ndarray) -> np.ndarray:
+    """Rows whose active entries repeat (``np.unique(row[:count]).size != count``)."""
+
+    if values.shape[1] < 2:
+        return np.zeros(values.shape[0], dtype=bool)
+    sentinel = _ROW_SENTINEL + np.arange(values.shape[1], dtype=np.int64)
+    def repeated(block, used):
+        ordered = np.sort(np.where(used, block, sentinel[None, :]), axis=1)
+        return np.any(ordered[:, 1:] == ordered[:, :-1], axis=1)
+
+    return _parallel_row_result(values, active, repeated, bool)
+
+
+def _rows_distinct_block(values: np.ndarray, active: np.ndarray) -> np.ndarray:
+    width = values.shape[1]
+    sentinel = _ROW_SENTINEL + np.arange(width, dtype=np.int64)
+    ordered = np.sort(np.where(active, values, sentinel[None, :]), axis=1)
+    real = ordered >= _ROW_SENTINEL + width
+    new = np.ones(ordered.shape, dtype=bool)
+    new[:, 1:] = ordered[:, 1:] != ordered[:, :-1]
+    return np.sum(new & real, axis=1)
+
+
+def _rows_distinct(values: np.ndarray, active: np.ndarray) -> np.ndarray:
+    """The number of distinct active entries per row (its set size)."""
+
+    return _parallel_row_result(values, active, _rows_distinct_block, np.int64)
+
+
+def _raise_first_row_failure(checks, rows_checked: np.ndarray | None) -> None:
+    """Raise what the scalar row loop raised: the first failing check of the
+    first failing checked row, rows in index order, checks in loop order."""
+
+    failing = None
+    for mask, _message in checks:
+        failing = np.array(mask, dtype=bool) if failing is None else failing | mask
+    if rows_checked is not None:
+        failing &= rows_checked
+    if failing is None or not failing.any():
+        return
+    row = int(np.argmax(failing))
+    for mask, message in checks:
+        if mask[row]:
+            raise ValueError(message)
+
+
+@cached("v841-host-mesh-validation")
 def _validate_v841_host_mesh(mesh: Any) -> tuple[int, int, int, int]:
     """Validate every v8.4.1 active connectivity row before CUDA probing."""
 
@@ -1842,9 +2228,6 @@ def _validate_v841_host_mesh(mesh: Any) -> tuple[int, int, int, int]:
                     f"partition {what} completeness mask does not match the mesh"
                 )
 
-    def _row_ok(mask: np.ndarray | None, row: int) -> bool:
-        return mask is None or bool(mask[row])
-
     cells_on_edge = index("cellsOnEdge", (n_edges, 2))
     if np.any(cells_on_edge >= n_cells):
         raise ConfigurationRefusal(
@@ -1855,10 +2238,8 @@ def _validate_v841_host_mesh(mesh: Any) -> tuple[int, int, int, int]:
         )
     if np.any(cells_on_edge < 0):
         # A negative entry here is the regional cull's stored-0 sentinel on a
-        # ring-7 row.  The regional kernels exist (hexcore.cuda_regional_v841,
-        # contract-proved against the CPU authority), so "the lane is
-        # closed/global" is no longer the reason this refuses -- the reason is
-        # the earned-anchor gate ruled on 2026-08-25.
+        # ring-7 row: a cull on the global path (see
+        # _refuse_regional_execution for why that cannot run).
         _refuse_regional_execution(mesh, n_cells)
     _same_endpoints = cells_on_edge[:, 0] == cells_on_edge[:, 1]
     if _edge_ok is not None:
@@ -1877,40 +2258,46 @@ def _validate_v841_host_mesh(mesh: Any) -> tuple[int, int, int, int]:
         raise ValueError("nEdgesOnCell is outside [0,maxEdges]")
     cells_on_cell = index("cellsOnCell", (n_cells, max_edges))
     vertices_on_cell = index("verticesOnCell", (n_cells, max_edges))
-    for cell in range(n_cells):
-        if not _row_ok(_cell_ok, cell):
-            continue
-        count = int(counts_cell[cell])
-        if (
-            np.any(edges_on_cell[cell, :count] < 0)
-            or np.any(edges_on_cell[cell, :count] >= n_edges)
-        ):
-            raise ValueError("active edgesOnCell entry is outside [0,nEdges)")
-        if (
-            np.any(cells_on_cell[cell, :count] < 0)
-            or np.any(cells_on_cell[cell, :count] >= n_cells)
-        ):
-            raise ValueError("active cellsOnCell entry is outside [0,nCells)")
-        if (
-            np.any(vertices_on_cell[cell, :count] < 0)
-            or np.any(vertices_on_cell[cell, :count] >= n_vertices)
-        ):
-            raise ValueError("active verticesOnCell entry is outside [0,nVertices)")
-        for name, row in (
-            ("edgesOnCell", edges_on_cell[cell, :count]),
-            ("cellsOnCell", cells_on_cell[cell, :count]),
-            ("verticesOnCell", vertices_on_cell[cell, :count]),
-        ):
-            if np.unique(row).size != count:
-                raise ValueError(f"active {name} entries must be unique per cell")
-        for slot in range(count):
-            edge = int(edges_on_cell[cell, slot])
-            endpoints = cells_on_edge[edge]
-            if cell not in endpoints:
-                raise ValueError("active edgesOnCell entry is not incident to its cell")
-            opposite = int(endpoints[1] if int(endpoints[0]) == cell else endpoints[0])
-            if int(cells_on_cell[cell, slot]) != opposite:
-                raise ValueError("cellsOnCell is not the opposite cell on edgesOnCell")
+    # The row laws below are evaluated over whole tables at once.  They are
+    # the scalar row loops they replace, check for check and in the same
+    # order: the first failing COMPLETE row (in row order) raises the message
+    # of its first failing check, exactly as the loops did.  THE COST THIS
+    # REMOVES (measured 2026-10-13, RTX PRO 6000 box, derecho 3 km patch,
+    # 167k cells): every ensemble member's rate classes are member-dependent
+    # (fullstep_lts_admission reads the initial state), so each member's
+    # class-local meshes missed the preparation cache and these loops cost
+    # 30 s + 5 s per member on the host.  tests/test_mesh_validation_rows.py
+    # holds the scalar loops and proves the same verdict and message on the
+    # same meshes, including mutated ones.
+    cell_index = np.arange(n_cells, dtype=np.int64)[:, None]
+    active_cell = np.arange(max_edges, dtype=np.int64)[None, :] < counts_cell[:, None]
+    clipped_edges = np.clip(edges_on_cell, 0, n_edges - 1)
+    endpoint0 = cells_on_edge[clipped_edges, 0]
+    endpoint1 = cells_on_edge[clipped_edges, 1]
+    incident = (endpoint0 == cell_index) | (endpoint1 == cell_index)
+    opposite = np.where(endpoint0 == cell_index, endpoint1, endpoint0)
+    incidence_fail = active_cell & ~incident
+    opposite_fail = active_cell & incident & (cells_on_cell != opposite)
+    slot_fail = incidence_fail | opposite_fail
+    first_slot = np.argmax(slot_fail, axis=1)
+    slot_row = slot_fail.any(axis=1)
+    incidence_first = slot_row & incidence_fail[np.arange(n_cells), first_slot]
+    _raise_first_row_failure((
+        (_rows_outside(edges_on_cell, active_cell, n_edges),
+         "active edgesOnCell entry is outside [0,nEdges)"),
+        (_rows_outside(cells_on_cell, active_cell, n_cells),
+         "active cellsOnCell entry is outside [0,nCells)"),
+        (_rows_outside(vertices_on_cell, active_cell, n_vertices),
+         "active verticesOnCell entry is outside [0,nVertices)"),
+        (_rows_not_unique(edges_on_cell, active_cell),
+         "active edgesOnCell entries must be unique per cell"),
+        (_rows_not_unique(cells_on_cell, active_cell),
+         "active cellsOnCell entries must be unique per cell"),
+        (_rows_not_unique(vertices_on_cell, active_cell),
+         "active verticesOnCell entries must be unique per cell"),
+        (incidence_first, "active edgesOnCell entry is not incident to its cell"),
+        (slot_row & ~incidence_first, "cellsOnCell is not the opposite cell on edgesOnCell"),
+    ), _cell_ok)
 
     raw_edges_on_edge = np.asarray(_authority_member(mesh, "edgesOnEdge"))
     if raw_edges_on_edge.ndim != 2:
@@ -1922,33 +2309,51 @@ def _validate_v841_host_mesh(mesh: Any) -> tuple[int, int, int, int]:
     counts_edge = index("nEdgesOnEdge", (n_edges,))
     if np.any(counts_edge < 0) or np.any(counts_edge > max_edges2):
         raise ValueError("nEdgesOnEdge is outside [0,maxEdges2]")
-    for edge in range(n_edges):
-        if not _row_ok(_edge_ok, edge):
-            continue
-        count = int(counts_edge[edge])
-        if (
-            np.any(edges_on_edge[edge, :count] < 0)
-            or np.any(edges_on_edge[edge, :count] >= n_edges)
-        ):
-            raise ValueError("active edgesOnEdge entry is outside [0,nEdges)")
-        neighbors = edges_on_edge[edge, :count]
-        if np.any(neighbors == edge) or np.unique(neighbors).size != count:
-            raise ValueError("active edgesOnEdge neighbors must be unique and non-self")
-        endpoints = set(map(int, cells_on_edge[edge]))
-        for neighbor in neighbors:
-            if not endpoints.intersection(map(int, cells_on_edge[int(neighbor)])):
-                raise ValueError("edgesOnEdge neighbors must share a cell endpoint")
-        expected_neighbors: set[int] = set()
-        for cell in endpoints:
-            cell_count = int(counts_cell[cell])
-            expected_neighbors.update(
-                map(int, edges_on_cell[cell, :cell_count])
-            )
-        expected_neighbors.discard(edge)
-        if set(map(int, neighbors)) != expected_neighbors:
-            raise ValueError(
-                "edgesOnEdge must contain the complete endpoint-cell edge union"
-            )
+    edge_index = np.arange(n_edges, dtype=np.int64)[:, None]
+    active_edge = np.arange(max_edges2, dtype=np.int64)[None, :] < counts_edge[:, None]
+    share_failure = np.empty(n_edges, dtype=bool)
+    union_failure = np.empty(n_edges, dtype=bool)
+    def check_edge_topology(block):
+        # Gather endpoint and neighbor tables inside bounded worker blocks.
+        # Only final row verdicts survive the block, not whole-mesh integer
+        # gather tables. Failure selection remains global and ordered below.
+        for start in range(block.start, block.stop, 65536):
+            rows = slice(start, min(start + 65536, block.stop))
+            neighbors = edges_on_edge[rows]
+            endpoints = cells_on_edge[rows]
+            neighbor = np.clip(neighbors, 0, n_edges - 1)
+            neighbor_cell0 = cells_on_edge[neighbor, 0]
+            neighbor_cell1 = cells_on_edge[neighbor, 1]
+            share = ((neighbor_cell0 == endpoints[:, 0, None])
+                     | (neighbor_cell0 == endpoints[:, 1, None])
+                     | (neighbor_cell1 == endpoints[:, 0, None])
+                     | (neighbor_cell1 == endpoints[:, 1, None]))
+            used = active_edge[rows]
+            share_failure[rows] = np.any(used & ~share, axis=1)
+            # Set semantics: all active edges of either endpoint, minus
+            # this edge itself. Inactive slots keep distinct sentinels.
+            union = np.concatenate((edges_on_cell[endpoints[:, 0]],
+                                    edges_on_cell[endpoints[:, 1]]), axis=1)
+            union_active = np.concatenate((active_cell[endpoints[:, 0]],
+                                           active_cell[endpoints[:, 1]]), axis=1)
+            union_size = _rows_distinct_block(union, union_active) - np.any(
+                union_active & (union == edge_index[rows]), axis=1)
+            in_union = np.any((neighbors[:, :, None] == union[:, None, :])
+                              & union_active[:, None, :], axis=2)
+            union_failure[rows] = (np.any(used & ~in_union, axis=1)
+                                   | (counts_edge[rows] != union_size))
+
+    host_parallel.run_blocks(check_edge_topology, n_edges, elements=edges_on_edge.size, worker_limit=4)
+    _raise_first_row_failure((
+        (_rows_outside(edges_on_edge, active_edge, n_edges),
+         "active edgesOnEdge entry is outside [0,nEdges)"),
+        (np.any(active_edge & (edges_on_edge == edge_index), axis=1)
+         | _rows_not_unique(edges_on_edge, active_edge),
+         "active edgesOnEdge neighbors must be unique and non-self"),
+        (share_failure, "edgesOnEdge neighbors must share a cell endpoint"),
+        (union_failure,
+         "edgesOnEdge must contain the complete endpoint-cell edge union"),
+    ), _edge_ok)
 
     vertices_on_edge = index("verticesOnEdge", (n_edges, 2))
     if np.any(vertices_on_edge < 0) or np.any(vertices_on_edge >= n_vertices):
@@ -1966,33 +2371,33 @@ def _validate_v841_host_mesh(mesh: Any) -> tuple[int, int, int, int]:
         raise ValueError("v8.4.1 CUDA requires exactly three valid edges per vertex")
     if np.any(cells_on_vertex < 0) or np.any(cells_on_vertex >= n_cells):
         raise ValueError("v8.4.1 CUDA requires exactly three valid cells per vertex")
-    for vertex in range(n_vertices):
-        if not _row_ok(_vertex_ok, vertex):
-            continue
-        if np.unique(edges_on_vertex[vertex]).size != 3:
-            raise ValueError("edgesOnVertex entries must be distinct")
-        if np.unique(cells_on_vertex[vertex]).size != 3:
-            raise ValueError("cellsOnVertex entries must be distinct")
-        for edge in edges_on_vertex[vertex]:
-            if vertex not in vertices_on_edge[int(edge)]:
-                raise ValueError("edgesOnVertex is not incident through verticesOnEdge")
-    for edge in range(n_edges):
-        if not _row_ok(_edge_ok, edge):
-            continue
-        for vertex in vertices_on_edge[edge]:
-            if not _row_ok(_vertex_ok, int(vertex)):
-                continue
-            if edge not in edges_on_vertex[int(vertex)]:
-                raise ValueError("verticesOnEdge is not reciprocal with edgesOnVertex")
-    for cell in range(n_cells):
-        if not _row_ok(_cell_ok, cell):
-            continue
-        for slot in range(int(counts_cell[cell])):
-            vertex = int(vertices_on_cell[cell, slot])
-            if not np.any(cells_on_vertex[vertex] == cell):
-                raise ValueError(
-                    "every active cell-vertex pair requires a kite-area association"
-                )
+    vertex_index = np.arange(n_vertices, dtype=np.int64)[:, None]
+    every_slot = np.ones((n_vertices, 3), dtype=bool)
+    through = ((vertices_on_edge[edges_on_vertex, 0] == vertex_index)
+               | (vertices_on_edge[edges_on_vertex, 1] == vertex_index))
+    _raise_first_row_failure((
+        (_rows_not_unique(edges_on_vertex, every_slot), "edgesOnVertex entries must be distinct"),
+        (_rows_not_unique(cells_on_vertex, every_slot), "cellsOnVertex entries must be distinct"),
+        (np.any(~through, axis=1), "edgesOnVertex is not incident through verticesOnEdge"),
+    ), _vertex_ok)
+
+    edge_column = np.arange(n_edges, dtype=np.int64)
+    unreciprocated = np.zeros(n_edges, dtype=bool)
+    for side in (0, 1):
+        vertex = vertices_on_edge[:, side]
+        listed = np.any(edges_on_vertex[vertex] == edge_column[:, None], axis=1)
+        checked = np.ones(n_edges, dtype=bool) if _vertex_ok is None else _vertex_ok[vertex]
+        unreciprocated |= checked & ~listed
+    _raise_first_row_failure((
+        (unreciprocated, "verticesOnEdge is not reciprocal with edgesOnVertex"),
+    ), _edge_ok)
+
+    kite_vertex = np.clip(vertices_on_cell, 0, n_vertices - 1)
+    kite = np.any(cells_on_vertex[kite_vertex] == cell_index[:, :, None], axis=2)
+    _raise_first_row_failure((
+        (np.any(active_cell & ~kite, axis=1),
+         "every active cell-vertex pair requires a kite-area association"),
+    ), _cell_ok)
 
     float_shapes = {
         "weightsOnEdge": (n_edges, max_edges2),
@@ -2087,7 +2492,7 @@ def _validate_v841_host_execution(
         array = np.asarray(value)
         if array.dtype != np.dtype(np.float32):
             raise TypeError(f"{name} must use exact float32 RKIND storage")
-        if array.shape != shape or not np.all(np.isfinite(array)):
+        if array.shape != shape or not all_finite(array):
             raise ValueError(f"{name} must be finite with shape {shape}")
         if not array.flags.c_contiguous:
             raise ValueError(f"{name} must be C-contiguous before CUDA upload")
@@ -2183,6 +2588,7 @@ def _validate_v841_host_execution(
     return nlev, n_cells, n_edges
 
 
+@cached("v841-host-coefficient-validation")
 def _validate_v841_host_coefficients(
     coefficients: Any,
     *,
@@ -2205,7 +2611,7 @@ def _validate_v841_host_coefficients(
         raise TypeError("n_adv_cells_for_edge must be one integer per edge")
     if cells.dtype.kind not in "iu":
         raise TypeError("adv_cells_for_edge must be integer")
-    if not np.all(np.isfinite(adv)) or not np.all(np.isfinite(adv3)):
+    if not all_finite(adv) or not all_finite(adv3):
         raise ValueError("v8.4.1 CUDA advection coefficients must be finite")
     for name, value in (
         ("adv_coefs", adv),
@@ -2218,12 +2624,8 @@ def _validate_v841_host_coefficients(
     width = int(adv.shape[1])
     if np.any(counts < 0) or np.any(counts > width):
         raise ValueError("n_adv_cells_for_edge is outside coefficient width")
-    for edge in range(n_edges):
-        count = int(counts[edge])
-        if np.any(cells[edge, :count] < 0) or np.any(
-            cells[edge, :count] >= n_cells
-        ):
-            raise ValueError("active adv_cells_for_edge entry is out of range")
+    if not active_indices_in_range(cells, counts, n_cells):
+        raise ValueError("active adv_cells_for_edge entry is out of range")
 
 
 class CudaDryDycoreDriver:
@@ -2239,9 +2641,11 @@ class CudaDryDycoreDriver:
         t0_diagnostics_source: str = CUDA_T0_EXACT_SIDECAR,
         authority_ruler: CudaAuthorityRulerBinder | None = None,
         v841_context: CudaV841Context | None = None,
+        les_dissipation: Any | None = None,
         _authority_initial_fingerprint: Mapping[str, Any] | None = None,
     ) -> None:
-        config.validate()
+        config.validate(**({"les_dissipation": les_dissipation} if les_dissipation is not None else {}))
+        self.les_dissipation = les_dissipation
         self._validate_config(config)
         source_release = getattr(config, "source_release", "v8.2.3")
         if source_release == "v8.4.1" and v841_context is None:
@@ -2319,6 +2723,7 @@ class CudaDryDycoreDriver:
         if (
             source_release == "v8.4.1"
             and config.config_horiz_mixing == "2d_smagorinsky"
+            and les_dissipation is None
         ):
             from .mixing_v841 import V841MixingConfig
 
@@ -2404,10 +2809,11 @@ class CudaDryDycoreDriver:
         kernel_cache: KernelCache | None = None,
         authority_ruler: CudaAuthorityRulerBinder | None = None,
         reference_wind_profiles: V841ReferenceWindProfiles | None = None,
+        les_dissipation: Any | None = None,
     ) -> "CudaDryDycoreDriver":
         """Upload every state/mesh/metric field once at the API boundary."""
 
-        config.validate()
+        config.validate(**({"les_dissipation": les_dissipation} if les_dissipation is not None else {}))
         cls._validate_config(config)
         source_release = getattr(config, "source_release", "v8.2.3")
         is_v841 = source_release == "v8.4.1"
@@ -2570,6 +2976,7 @@ class CudaDryDycoreDriver:
             t0_diagnostics_source=diagnostics_source,
             authority_ruler=authority_ruler,
             v841_context=v841_context,
+            les_dissipation=les_dissipation,
             _authority_initial_fingerprint=authority_initial_fingerprint,
         )
         if driver.mixing_config_v841 is not None:
@@ -2676,10 +3083,16 @@ class CudaDryDycoreDriver:
                     "V841DryDycoreConfig(source_release='v8.4.1')",
                 )
             if config.config_dynamics_split_steps != 3:
+                # A missing code path, not missing evidence: the v8.4.1 CUDA
+                # dynamics subcycle is written for three subcycles per scalar
+                # transport step and stops at its first call with "v8.4.1
+                # CUDA subcycle requires the outer split-three schedule".
                 raise ConfigurationRefusal(
                     "config_dynamics_split_steps",
                     config.config_dynamics_split_steps,
-                    "the first v8.4.1 CUDA lane mirrors the native split-three ruler",
+                    "the v8.4.1 CUDA dynamics subcycle is implemented for three "
+                    "subcycles per transport step only (MPAS-A's default, "
+                    "Registry.xml:109) and would stop at its first call",
                     "config_dynamics_split_steps=3",
                 )
             if not config.config_split_dynamics_transport:
@@ -2689,36 +3102,25 @@ class CudaDryDycoreDriver:
                     "native split-three performs one scalar RK after flux averaging",
                     "config_split_dynamics_transport=True",
                 )
-            if config.config_scalar_advection is not True:
-                raise ConfigurationRefusal(
-                    "config_scalar_advection",
-                    config.config_scalar_advection,
-                    "the exact v8.4.1 CUDA execution inventory includes scalar transport",
-                    "config_scalar_advection=True with at least one transported scalar",
-                )
-            if config.config_monotonic is not False:
-                raise ConfigurationRefusal(
-                    "config_monotonic",
-                    config.config_monotonic,
-                    "the v8.4.1 CUDA FCT branch has no native nonzero-tracer ruler",
-                    "config_monotonic=False",
-                )
-            if config.config_positive_definite is not False:
-                raise ConfigurationRefusal(
-                    "config_positive_definite",
-                    config.config_positive_definite,
-                    "the v8.4.1 CUDA positive-definite FCT branch has no native nonzero-tracer ruler",
-                    "config_positive_definite=False",
-                )
+            # RETIRED 2026-10-10 (owner ruling): three refusals that named an evidence inventory, not a
+            # breakage.  config_scalar_advection=False skips scalar transport
+            # (advance_scalar_transport_cuda_v841 returns the stage
+            # unchanged, as native does); config_positive_definite=True runs
+            # the monotonic FCT branch, which is exactly what native v8.4.1
+            # does with it (mpas_atm_dynamics_checks warns that the option
+            # "will enable monotonic advection"); and config_apvm_upwinding is
+            # a coefficient the APVM kernels read.  What stays refused is a
+            # value outside the Registry's own domain.
             if (
                 not np.isfinite(config.config_apvm_upwinding)
-                or config.config_apvm_upwinding <= 0.0
+                or config.config_apvm_upwinding < 0.0
             ):
                 raise ConfigurationRefusal(
                     "config_apvm_upwinding",
                     config.config_apvm_upwinding,
-                    "the exact v8.4.1 CUDA execution inventory includes the APVM kernels",
-                    "finite config_apvm_upwinding>0 (authority fixture uses 0.5)",
+                    "the APVM upwinding weight is a finite non-negative "
+                    "fraction (MPAS-A Registry.xml:269, default 0.5)",
+                    "finite config_apvm_upwinding>=0",
                 )
             # The v8.4.1 deformation-coefficient 2-D Smagorinsky branch IS
             # ported: kdiff mirrors smagorinsky_2d
@@ -2804,6 +3206,8 @@ class CudaDryDycoreDriver:
             "moist_dpdz_v841_f32",
             "euler_w_moist_v841_f32",
             "modified_theta_dynamics_rate_v841_f32",
+            "add_lagged_diabatic_theta_v842_f32",
+            "zero_speczone_lagged_diabatic_theta_v842_f32",
             "gf_dry_theta_dynamics_rate_v841_f32",
         ):
             raise KeyError(name)
@@ -2825,22 +3229,72 @@ class CudaDryDycoreDriver:
             ((count + threads - 1) // threads,), (threads,), args
         )
 
+    def _zero_speczone_lagged_heating(self, diabatic_theta: Any) -> None:
+        """SG2: ``rt_diabatic_tend(k,iCell) = 0`` in the specified zone.
+
+        Native ``atm_bdy_adjust_dynamics_speczone_tend``
+        (mpas_atm_time_integration.F:7938-7949) writes the zero into the
+        shared tend pool, so the carry stays zero there for the rest of the
+        step and the final recovery removes nothing in those cells.  This
+        writes the same zero into the carry plane the dycore was handed (the
+        backend's committed plane, which the next microphysics call replaces
+        whole, as native's microphysics_to_MPAS does).  THE BREAKAGE: without
+        it the stage-3 recovery subtracted dt*rho*carry in specified-zone
+        cells whose tendency had been replaced by the driving tendency, and
+        exner/pressure_p formed from that reduced rtheta reached WSM6 in the
+        two outermost rows (verifier, correct/storm-growth, 2026-10-13).
+        """
+
+        regional = self.regional_v841
+        if regional is None:
+            return
+        expected = (self.nlev, self.ncells)
+        if tuple(diabatic_theta.shape) != expected or diabatic_theta.dtype != self.cp.float32:
+            raise ValueError(
+                f"lagged heating carry must be float32 {expected}; got "
+                f"{diabatic_theta.dtype} {tuple(diabatic_theta.shape)}")
+        masks = regional.masks
+        nspec = int(masks.n_spec_cells)
+        if nspec == 0:
+            return
+        self._launch_physics_driver(
+            "zero_speczone_lagged_diabatic_theta_v842_f32",
+            self.nlev * nspec,
+            (np.int32(self.nlev), np.int32(self.ncells), np.int32(nspec),
+             masks.spec_cells, diabatic_theta),
+        )
+
     def _compute_moist_dynamics_coefficients_v841(
         self,
         scalars: Any,
         *,
-        scalar_names: tuple[str, ...],
+        scalar_names: tuple[str, ...] | None,
         validation_flag: Any,
+        n_mass_loading: int | None = None,
     ) -> _CudaV841MoistDynamicsCoefficients:
-        """Reproduce atm_compute_moist_coefficients from raw start-state q."""
+        """Reproduce atm_compute_moist_coefficients from raw start-state q.
+
+        ``scalar_names`` names a microphysics block; the species row says how
+        many leading species load the air.  The physics-off path carries no
+        scheme row and passes ``n_mass_loading`` instead (every species it can
+        carry is in native's moist group; see _step_device_v841).
+        """
 
         cp = self.cp
         # The species row replaces the WSM6 order assertion that stood here.
         # It answers the question the assertion was standing in for -- how
         # many LEADING species load the air -- for any declared scheme, and
         # it refuses a block that matches no row at all (hexcore.species_row).
-        species_row = species_row_for_names(scalar_names)
-        expected = (len(tuple(scalar_names)), self.nlev, self.ncells)
+        if (scalar_names is None) == (n_mass_loading is None):
+            raise ValueError("pass exactly one of scalar_names or n_mass_loading")
+        if scalar_names is not None:
+            n_species = len(tuple(scalar_names))
+            n_mass_loading = species_row_for_names(scalar_names).n_mass_loading
+        else:
+            n_species = int(scalars.shape[0])
+            if not 1 <= int(n_mass_loading) <= n_species:
+                raise ValueError("n_mass_loading must name a leading run of the scalar block")
+        expected = (n_species, self.nlev, self.ncells)
         if not isinstance(scalars, cp.ndarray):
             raise TypeError("moist dynamics scalars must remain a resident cupy.ndarray")
         if scalars.dtype != cp.dtype(cp.float32) or tuple(scalars.shape) != expected:
@@ -2866,7 +3320,7 @@ class CudaDryDycoreDriver:
             (
                 np.int32(self.nlev),
                 np.int32(self.ncells),
-                np.int32(species_row.n_mass_loading),
+                np.int32(n_mass_loading),
                 scalars,
                 qtot,
                 cqw,
@@ -2880,7 +3334,7 @@ class CudaDryDycoreDriver:
                 np.int32(self.nlev),
                 np.int32(self.ncells),
                 np.int32(self.nedges),
-                np.int32(species_row.n_mass_loading),
+                np.int32(n_mass_loading),
                 self.atmosphere.mesh.cells_on_edge,
                 scalars,
                 cqu,
@@ -2922,6 +3376,7 @@ class CudaDryDycoreDriver:
         dpdz: Any,
         cqw: Any,
         validation_flag: Any,
+        mixing_seed: Any | None = None,
     ) -> Any:
         result = self.cp.empty((self.nlev + 1, self.ncells), dtype=self.cp.float32)
         self._launch_physics_driver(
@@ -2936,6 +3391,8 @@ class CudaDryDycoreDriver:
                 self.atmosphere.vertical.rdzu,
                 self.atmosphere.vertical.fzm,
                 self.atmosphere.vertical.fzp,
+                np.int32(mixing_seed is not None),
+                dpdz if mixing_seed is None else mixing_seed,
                 result,
                 validation_flag,
             ),
@@ -3056,6 +3513,7 @@ class CudaDryDycoreDriver:
         pv_edge: Any,
         kinetic: Any,
         mass_divergence: Any,
+        initial_tendency: Any | None = None,
     ) -> Any:
         if self.v841_context is not None:
             return vector_momentum_tendency_cuda_v841(
@@ -3066,6 +3524,7 @@ class CudaDryDycoreDriver:
                 pv_edge=pv_edge,
                 kinetic_energy=kinetic,
                 horizontal_divergence=mass_divergence,
+                initial_tendency=initial_tendency,
                 kernel_cache=self.cache,
             )
         result = self.cp.empty_like(u)
@@ -3091,6 +3550,8 @@ class CudaDryDycoreDriver:
                 result,
             ),
         )
+        if initial_tendency is not None:
+            self._add(result, initial_tendency)
         return result
 
     def _theta_tendency(
@@ -3107,29 +3568,49 @@ class CudaDryDycoreDriver:
         edge_flux = cp.empty_like(state.rho_u)
         vertical_flux = cp.empty_like(state.rho_w)
         result = cp.empty_like(state.rho)
-        self._launch(
-            "theta_edge_flux_f32",
-            self.nedges * self.nlev,
-            (
-                np.int32(self.nlev),
-                np.int32(self.ncells),
-                np.int32(self.nedges),
-                np.int32(width),
-                np.int32(rk_step),
-                np.float32(self.config.config_coef_3rd_order),
-                theta,
-                theta_saved,
-                state.rho_u,
-                saved_state.rho_u,
-                self.atmosphere.mesh.dv_edge,
-                self.atmosphere.mesh.cells_on_edge,
-                coefficient.adv_coefs,
-                coefficient.adv_coefs_3rd,
-                coefficient.n_adv_cells_for_edge,
-                coefficient.adv_cells_for_edge,
-                edge_flux,
-            ),
+        # v8.4.1 accumulates the RK correction in a separate cell loop
+        # (native F:6814-6874; dycore-match 8322a3f).  A full-step LTS class
+        # driver keeps it inside the edge flux instead: its interface capture
+        # and the matched heat flux read the third-stage edge flux as the
+        # whole heat moved through an edge (rk_step 3 in argument 4), and with
+        # the correction moved to the cell loop every LTS step stopped with
+        # "the third-stage theta edge flux was not observed" (golden 0.4.0
+        # integration, G3, 2026-10-12).  LTS is a different time scheme by
+        # design and is not part of the byte-identity claim.
+        separate_correction = self.v841_context is not None and not getattr(
+            self, "lts_theta_correction_in_edge_flux", False)
+        theta_arguments = (
+            np.int32(self.nlev),
+            np.int32(self.ncells),
+            np.int32(self.nedges),
+            np.int32(width),
+            np.int32(1 if separate_correction else rk_step),
+            np.float32(self.config.config_coef_3rd_order),
+            theta,
+            theta_saved,
+            state.rho_u,
+            saved_state.rho_u,
+            self.atmosphere.mesh.dv_edge,
+            self.atmosphere.mesh.cells_on_edge,
+            coefficient.adv_coefs,
+            coefficient.adv_coefs_3rd,
+            coefficient.n_adv_cells_for_edge,
+            coefficient.adv_cells_for_edge,
         )
+        from . import cuda_edge_hoist
+        if cuda_edge_hoist.enabled(self.nedges):
+            lpt = cuda_edge_hoist.levels_per_thread(
+                "theta_edge_flux_hoist_f32", self.nedges, self.nlev, lambda value: self._launch(
+                    "theta_edge_flux_hoist_f32", self.nedges * cuda_edge_hoist.chunks(self.nlev, value),
+                    (*theta_arguments, edge_flux, np.int32(value))), cp)
+            self._launch("theta_edge_flux_hoist_f32", self.nedges * cuda_edge_hoist.chunks(self.nlev, lpt),
+                         (*theta_arguments, edge_flux, np.int32(lpt)))
+            if cuda_edge_hoist.check_wanted("theta_edge_flux_hoist_f32", cp):
+                element = cp.empty_like(edge_flux)
+                self._launch("theta_edge_flux_f32", self.nedges * self.nlev, (*theta_arguments, element))
+                cuda_edge_hoist.compare("theta_edge_flux_hoist_f32", edge_flux, element, cp)
+        else:
+            self._launch("theta_edge_flux_f32", self.nedges * self.nlev, (*theta_arguments, edge_flux))
         self._launch(
             "theta_vertical_flux_f32",
             self.ncells * (self.nlev + 1),
@@ -3154,6 +3635,8 @@ class CudaDryDycoreDriver:
                 vertical_flux=vertical_flux,
                 rdzw=self.atmosphere.vertical.rdzw,
                 n_vert_levels=self.nlev,
+                correction=(state.rho_u, saved_state.rho_u, theta_saved)
+                if rk_step > 1 and separate_correction else None,
                 kernel_cache=self.cache,
             )
         self._launch(
@@ -3183,26 +3666,35 @@ class CudaDryDycoreDriver:
         edge_flux = cp.empty((self.nlev + 1, self.nedges), dtype=cp.float32)
         vertical_flux = cp.empty_like(state.rho_w)
         result = cp.empty_like(state.rho_w)
-        self._launch(
-            "w_edge_flux_f32",
-            self.nedges * (self.nlev + 1),
-            (
-                np.int32(self.nlev),
-                np.int32(self.ncells),
-                np.int32(self.nedges),
-                np.int32(width),
-                np.float32(self.config.config_coef_3rd_order),
-                w,
-                state.rho_u,
-                self.atmosphere.vertical.fzm,
-                self.atmosphere.vertical.fzp,
-                coefficient.adv_coefs,
-                coefficient.adv_coefs_3rd,
-                coefficient.n_adv_cells_for_edge,
-                coefficient.adv_cells_for_edge,
-                edge_flux,
-            ),
+        w_arguments = (
+            np.int32(self.nlev),
+            np.int32(self.ncells),
+            np.int32(self.nedges),
+            np.int32(width),
+            np.float32(self.config.config_coef_3rd_order),
+            w,
+            state.rho_u,
+            self.atmosphere.vertical.fzm,
+            self.atmosphere.vertical.fzp,
+            coefficient.adv_coefs,
+            coefficient.adv_coefs_3rd,
+            coefficient.n_adv_cells_for_edge,
+            coefficient.adv_cells_for_edge,
         )
+        from . import cuda_edge_hoist
+        if cuda_edge_hoist.enabled(self.nedges):
+            lpt = cuda_edge_hoist.levels_per_thread(
+                "w_edge_flux_hoist_f32", self.nedges, self.nlev + 1, lambda value: self._launch(
+                    "w_edge_flux_hoist_f32", self.nedges * cuda_edge_hoist.chunks(self.nlev + 1, value),
+                    (*w_arguments, edge_flux, np.int32(value))), cp)
+            self._launch("w_edge_flux_hoist_f32", self.nedges * cuda_edge_hoist.chunks(self.nlev + 1, lpt),
+                         (*w_arguments, edge_flux, np.int32(lpt)))
+            if cuda_edge_hoist.check_wanted("w_edge_flux_hoist_f32", cp):
+                element = cp.empty_like(edge_flux)
+                self._launch("w_edge_flux_f32", self.nedges * (self.nlev + 1), (*w_arguments, element))
+                cuda_edge_hoist.compare("w_edge_flux_hoist_f32", edge_flux, element, cp)
+        else:
+            self._launch("w_edge_flux_f32", self.nedges * (self.nlev + 1), (*w_arguments, edge_flux))
         self._launch(
             "w_vertical_flux_f32",
             self.ncells * (self.nlev + 1),
@@ -3282,6 +3774,7 @@ class CudaDryDycoreDriver:
         stage: int,
         acoustic_steps: int,
         scalars: Any,
+        *, diabatic_theta: Any | None = None, large_timestep: float = 0.0,
     ) -> tuple[DevicePrognosticState, DeviceSavedDiagnostics, Any, Any]:
         cp = self.cp
         rho = cp.empty_like(saved_state.rho)
@@ -3298,6 +3791,7 @@ class CudaDryDycoreDriver:
                 np.int32(self.nlev),
                 np.int32(self.ncells),
                 np.int32(stage),
+                np.int32(self.source_release == "v8.4.1"),
                 np.float32(287.0),
                 np.float32(1004.5),
                 np.float32(100_000.0),
@@ -3305,6 +3799,8 @@ class CudaDryDycoreDriver:
                 saved_diag.rho_theta_perturbation,
                 acoustic.rho_pp,
                 acoustic.rtheta_pp,
+                np.int32(diabatic_theta is not None), np.float32(large_timestep),
+                saved_diag.density_perturbation if diabatic_theta is None else diabatic_theta,
                 self.atmosphere.reference.rho_base,
                 self.atmosphere.reference.rho_theta_base,
                 self.atmosphere.reference.exner_base,
@@ -3450,32 +3946,109 @@ class CudaDryDycoreDriver:
             cp.array(source.vertical_velocity, copy=True),
         )
 
+    def _shares_start_levels(self) -> bool:
+        """Whether this driver binds its start levels instead of copying them.
+
+        The regional lane keeps the private images: its garbage-cell
+        discipline classifies device blocks by ADDRESS (bind_state_rho,
+        _unit_pool), so an image and its source are not interchangeable
+        there.  A multi-card rank binds only when its halo exchanger declares
+        ``start_levels_read_only``: its in-step rounds (B stage entry, C
+        acoustic, D transport, E limiter scales) write owner truth into the
+        recovered candidate, the acoustic state, the transport stage block and
+        the scale factors, never into the step-start level, and its step
+        boundary round A writes the published level before the next step
+        binds it.  The same-host exchanger declares it; the LTS block
+        exchangers do not.  A driver with local time stepping attached
+        (``local_timestep``, cuda_driver_lts) keeps the images as well: its
+        rebound recovery reads the start level only, but no LTS deck has been
+        run against the binding, so the binding stays off that path until one
+        is.
+        """
+
+        exchanger = self.halo_exchanger_v841
+        return (
+            state_levels_enabled()
+            and self.regional_v841 is None
+            and getattr(self, "local_timestep", None) is None
+            and (exchanger is None
+                 or bool(getattr(exchanger, "start_levels_read_only", False)))
+        )
+
+    def _bind_state(
+        self, source: DevicePrognosticState, *, copy_scalars: bool = False,
+        copy_rho: bool = False,
+    ) -> DevicePrognosticState:
+        """A fresh container over ``source``'s arrays (no device copy).
+
+        ``copy_rho`` / ``copy_scalars`` keep a private image of just that
+        field, for the callers that read it after something may overwrite
+        the source.
+        """
+
+        return self._device_state(
+            self.cp.array(source.rho, copy=True) if copy_rho else source.rho,
+            source.rho_theta,
+            source.rho_u,
+            source.rho_w,
+            self.cp.array(source.scalars, copy=True) if copy_scalars else source.scalars,
+        )
+
+    def _bind_saved(
+        self, source: DeviceSavedDiagnostics
+    ) -> DeviceSavedDiagnostics:
+        """A fresh container over ``source``'s arrays (no device copy)."""
+
+        return self._device_saved(
+            source.theta_m,
+            source.exner,
+            source.density_perturbation,
+            source.rho_theta_perturbation,
+            source.pressure_perturbation,
+            source.normal_velocity,
+            source.vertical_velocity,
+        )
+
     def _advance_dynamics_subcycle_v841(
         self,
         state: DevicePrognosticState,
         *,
         time_level_one: DeviceSavedDiagnostics,
-        initial_diagnostics: Any,
+        initial_diagnostics: Any = None,
         schedule: RKSchedule,
         outer_dt: float,
         validation_flag: Any,
         physics_tendencies: Any | None = None,
         moist_coefficients: _CudaV841MoistDynamicsCoefficients | None = None,
+        physics_stage_callback: Any | None = None,
+        acoustic_output_callback: Any | None = None,
+        dynamics_substep: int = 1,
+        final_diagnostics: bool = True,
     ) -> _CudaDynamicsSubcycleResult:
-        """Advance one native chained v8.4.1 dynamics subcycle on device."""
+        """Advance one native chained v8.4.1 dynamics subcycle on device.
+
+        ``initial_diagnostics=None`` forms the substep-start solve here, from
+        this substep's own inputs (``state`` and ``time_level_one``), instead
+        of receiving a set the caller holds for the whole substep.
+        ``final_diagnostics=False`` skips the stage-3 solve whose only reader
+        was the next substep's start; the result then carries
+        ``diagnostics=None``.  The caller that passes both
+        (``_step_device_v841`` under ``diagnostics_lifetime_lean()``) forms
+        each set from the same arrays and kernels as before, so every value
+        a stage reads is the same word -- only when the set exists changes.
+        """
 
         if self.v841_context is None:
             raise RuntimeError("v8.4.1 device context is missing")
-        if (physics_tendencies is None) != (moist_coefficients is None) and (
-            self.regional_v841 is None or physics_tendencies is not None
-        ):
-            # The regional lane is the one configuration that carries native
-            # moist coefficients WITHOUT held physics tendencies: the pinned
-            # regional record runs config_moist_physics=true with a single
-            # passive qv (driver.py:2024-2031, 3090-3105), so the pairing law
-            # that guards the full-physics lane does not describe it.
+        if (physics_tendencies is not None or physics_stage_callback is not None) and moist_coefficients is None:
+            # Full physics without the moist coefficients would run the dry
+            # pressure-gradient/buoyancy forms under a moist state.  The other
+            # half of the old pairing law (coefficients only WITH physics) is
+            # retired: native atm_srk3 (mpas_atm_time_integration.F:2125-2139)
+            # forms them on every step whatever the physics suite, so the
+            # physics-off global path and the regional lane both carry them.
             raise ValueError(
-                "full-physics tendencies and native moist coefficients must travel together"
+                "full-physics tendencies require native moist coefficients"
             )
         if moist_coefficients is not None:
             moist_coefficients.validate(
@@ -3486,8 +4059,50 @@ class CudaDryDycoreDriver:
             )
         if schedule.full_timestep != outer_dt or schedule.dynamics_splits != 3:
             raise ValueError("v8.4.1 CUDA subcycle requires the outer split-three schedule")
-        saved_state = self._copy_state(state, share_scalars=True)
-        saved_diag = self._copy_saved(time_level_one)
+        # Memory lane (GPUWM_HEX_MEM_ACOUSTIC, default on): every working array
+        # below is released at its last reader instead of at the end of the
+        # stage or the subcycle.  No arithmetic launch moves or changes; the
+        # moment a block returns to the pool does, and one copy launch per
+        # acoustic sub-step goes (damping_reference_in_state).
+        short_lifetimes = short_lifetimes_enabled()
+        # The damping reference can be the acoustic state's own rtheta_pp_old
+        # only where acoustic_prepare_v841 is the last writer of it before the
+        # damping: the closed global sub-step on one card.  The regional,
+        # fused, LTS-rebound and multi-card sub-steps keep the captured copy.
+        damping_reference_in_state = (
+            short_lifetimes
+            and self.regional_v841 is None
+            and self.halo_exchanger_v841 is None
+            and advance_acoustic_step_cuda_v841
+            is _acoustic_v841_module.advance_acoustic_step_cuda_v841
+        )
+        witness = None
+        if self._shares_start_levels():
+            # mem/state-levels: the subcycle-start level is bound, not copied.
+            # Inside this method every read goes through saved_*/current_*
+            # (``state`` and ``time_level_one`` are not touched again), and
+            # no operation below writes through them -- each helper allocates
+            # its own output, the acoustic solver owns CudaAcousticState, and
+            # the recovery kernels read saved_* and write fresh candidates.
+            # The caller reads only rho and scalars of a subcycle input after
+            # the call (transport's old density), and nothing here writes
+            # those.  The private images were five prognostic plus seven
+            # diagnostic arrays per subcycle (3.3 KB per column; retained for
+            # the graph's life when subcycle graphs are on).
+            saved_state = self._bind_state(state)
+            saved_diag = self._bind_saved(time_level_one)
+            if (_StateLevelsWitness.enabled()
+                    and getattr(self, "subcycle_graphs", None) is None):
+                witness = _StateLevelsWitness(
+                    self.cp, "subcycle start level",
+                    rho=state.rho, rho_theta=state.rho_theta,
+                    rho_u=state.rho_u, rho_w=state.rho_w, scalars=state.scalars,
+                    **{f"saved.{f.name}": getattr(time_level_one, f.name)
+                       for f in fields(time_level_one)},
+                )
+        else:
+            saved_state = self._copy_state(state, share_scalars=True)
+            saved_diag = self._copy_saved(time_level_one)
         # RK stage 1 begins at the substep-start state, so current_* and saved_*
         # are the same field values.  Stage 1 READS both handles and writes
         # through neither -- every tendency helper below allocates its own
@@ -3498,7 +4113,22 @@ class CudaDryDycoreDriver:
         # arrays, allocated once per dynamics subcycle and never written.
         current_state = saved_state
         current_diag = saved_diag
+        if initial_diagnostics is None:
+            # The substep-start solve, with the arguments the caller's
+            # step-start solve used (outer state, time-level-one velocity,
+            # rk_step=3) on substep 1, and on later substeps the same arrays
+            # the previous substep's stage-3 solve read: its recovered state
+            # and diagnostics ARE this substep's state and time_level_one.
+            initial_diagnostics = self.horizontal.solve_diagnostics(
+                state.rho,
+                state.rho_u,
+                dt=outer_dt,
+                apvm_upwinding=self.config.config_apvm_upwinding,
+                normal_velocity=time_level_one.normal_velocity,
+                rk_step=3,
+            )
         diagnostics = initial_diagnostics
+        initial_diagnostics = None
         cached_v = diagnostics.tangential_velocity
         cp = self.cp
         final_modified_theta_dynamics_rate = None
@@ -3523,6 +4153,16 @@ class CudaDryDycoreDriver:
                 moist_coefficients.qtot,
                 validation_flag,
             )
+        if self.les_dissipation is not None:
+            if physics_stage_callback is not None:
+                physics_tendencies = physics_stage_callback(
+                    rk_step=1, dynamics_substep=dynamics_substep,
+                    state=current_state, saved=current_diag, diagnostics=diagnostics)
+            if physics_tendencies is None or moist_coefficients is None:
+                raise RuntimeError("LES requires scalar tendency and mass-loading carriers")
+            self.les_dissipation.begin(self, saved_state, saved_diag, diagnostics,
+                moist_coefficients, physics_tendencies, dynamics_substep,
+                self.les_dissipation.winds)
         saved_euler_ru = self.horizontal.pressure_gradient_euler_tendency(
             saved_diag.pressure_perturbation,
             dpdz,
@@ -3578,6 +4218,18 @@ class CudaDryDycoreDriver:
                 validation_flag,
             )
         saved_euler_theta = None
+        if self.les_dissipation is not None:
+            saved_euler_ru, mixing_w, saved_euler_theta = self.les_dissipation.tendencies(
+                saved_euler_ru, physics_tendencies)
+            # Native F:6784 subtracts the pressure/buoyancy term directly
+            # from the LES pool, retaining its rounding and signed zero.
+            saved_euler_rw = self._moist_euler_w_v841(
+                saved_diag.pressure_perturbation, dpdz, moist_coefficients.cqw,
+                validation_flag, mixing_seed=mixing_w)
+        if short_lifetimes:
+            # LES rebuilds the w tendency with its mixing seed, so dpdz must
+            # survive that final pressure-term read as well.
+            dpdz = None
         if self.mixing_config_v841 is not None:
             # Native computes the horizontal-mixing Euler tendencies once per
             # dynamics substep at rk_step==1 from the substep-start state
@@ -3594,23 +4246,38 @@ class CudaDryDycoreDriver:
                 diagnostics.vorticity,
                 dt=outer_dt,
                 config=self.mixing_config_v841,
+                cam_damping_levels=getattr(self.config,"config_number_cam_damping_levels",4),
+                n_cells_solve=None if self.regional_v841 is None else self.regional_v841.n_cells_solve,
+                initial_u_tendency=saved_euler_ru,
             )
-            # Native accumulates the filter increments directly into the same
-            # tend_*_euler pools that carry the RK1 pressure-gradient terms;
-            # the port forms the pool by one whole-array binary32 addition of
-            # the complete filter increment, the same documented
-            # association-order divergence the v8.2.3 CUDA lane carries.
-            self._add(saved_euler_ru, saved_mixing.tend_u_euler)
+            # The u filter accumulates into the pressure-gradient seed in
+            # native order: (pressure + del2) - del4.  Its return is the
+            # complete saved pool, so do not add the seed a second time.
+            saved_euler_ru = saved_mixing.tend_u_euler
             self._add(saved_euler_rw, saved_mixing.tend_w_euler)
             saved_euler_theta = cp.array(
                 saved_mixing.tend_theta_euler, copy=True
             )
+            del saved_mixing
             self.mixing_calls_v841 += 1
         final_flux_u = None
         final_flux_w = None
+        final_stage = schedule.stages[-1]
 
         for stage in schedule.stages:
-            if stage.stage == 2:
+            # mpas_atm_time_integration.F:2140-2176: assemble sources at the
+            # first callback and hold them through every RK/dynamics substep.
+            # The callback retains outer time-level-one theta/scalars and
+            # native halo/projection results. Density physics is zero.
+            if physics_stage_callback is not None:
+                physics_tendencies = physics_stage_callback(
+                    rk_step=stage.stage, dynamics_substep=dynamics_substep,
+                    state=current_state, saved=current_diag,
+                    diagnostics=diagnostics,
+                )
+                if physics_tendencies is None:
+                    raise RuntimeError("active MPAS RK callback returned no sources")
+            if stage.stage == 2 and self.config.config_time_integration_order == 3:
                 coefficients = self._vertical_coefficients(
                     current_state,
                     stage.acoustic_timestep,
@@ -3627,16 +4294,32 @@ class CudaDryDycoreDriver:
             tend_ru = self._vertical_u(
                 current_diag.normal_velocity, current_state.rho_w
             )
-            self._add(
-                tend_ru,
-                self._vector_momentum(
-                    current_diag.normal_velocity,
-                    diagnostics.h_edge,
-                    diagnostics.pv_edge,
-                    diagnostics.kinetic_energy,
-                    mass_divergence,
-                ),
+            tend_ru = self._vector_momentum(
+                current_diag.normal_velocity,
+                diagnostics.h_edge,
+                diagnostics.pv_edge,
+                diagnostics.kinetic_energy,
+                mass_divergence,
+                initial_tendency=tend_ru,
             )
+            del mass_divergence
+            if self.config.config_rayleigh_damp_u:
+                from .cuda_upper_damping_v841 import apply_rayleigh_u_cuda
+                apply_rayleigh_u_cuda(tend_ru,diagnostics.h_edge,current_diag.normal_velocity,
+                    levels=getattr(self.config,"config_number_rayleigh_damp_u_levels",6),
+                    days=getattr(self.config,"config_rayleigh_damp_u_timescale_days",5.0),
+                    solved=None if self.regional_v841 is None else self.regional_v841.n_edges_solve,
+                    cache=self.cache)
+            if short_lifetimes:
+                # The stage's solve diagnostics are last read by the momentum
+                # tendency and the Rayleigh damping just above (h_edge,
+                # pv_edge, kinetic_energy); only the tangential velocity
+                # survives, as cached_v.  In RK stages 2 and 3 this frame owns
+                # the set (formed at the end of the previous stage), so
+                # releasing it here rather than after the acoustic state is
+                # allocated takes one whole diagnostic set off the stage's
+                # acoustic high-water.  (Stage 1's set is the caller's.)
+                diagnostics = None
             self._add(tend_ru, saved_euler_ru)
             if physics_tendencies is not None:
                 self._add(tend_ru, physics_tendencies.rho_u)
@@ -3663,6 +4346,13 @@ class CudaDryDycoreDriver:
                         validation_flag,
                     ),
                 )
+            diabatic_theta = getattr(physics_tendencies, "diabatic_theta", None)
+            if diabatic_theta is not None:
+                self._launch_physics_driver(
+                    "add_lagged_diabatic_theta_v842_f32", self.ncells,
+                    (np.int32(self.nlev), np.int32(self.ncells),
+                     current_state.rho, diabatic_theta, tend_rt),
+                )
             if saved_euler_theta is not None:
                 # native mpas_atm_time_integration.F:6948: tend_theta =
                 # tend_theta + tend_theta_euler + tend_rtheta_physics -- the
@@ -3686,6 +4376,7 @@ class CudaDryDycoreDriver:
                 zb3_cell=self.atmosphere.terrain.zb3_cell,
                 kernel_cache=self.cache,
             )
+            del tend_rw
             if self.regional_v841 is not None:
                 # atm_srk3:2300-2351 -- the specified-zone tendency
                 # assignment and the relaxation-zone Rayleigh/Laplacian
@@ -3701,6 +4392,11 @@ class CudaDryDycoreDriver:
                     rho_zz=current_state.rho,
                     rk_step=stage.stage,
                 )
+                if diabatic_theta is not None:
+                    # SG2 on a limited-area run: native zeroes the carry in
+                    # the specified zone here (F:7949), so the stage-3
+                    # recovery below subtracts nothing in those cells.
+                    self._zero_speczone_lagged_heating(diabatic_theta)
             acoustic = CudaAcousticState.zeros(self.nlev, self.ncells, self.nedges)
             forcing = CudaAcousticForcing(
                 rho_zz=current_state.rho,
@@ -3718,14 +4414,26 @@ class CudaDryDycoreDriver:
                 rw=current_state.rho_w,
                 rw_save=saved_state.rho_w,
             )
+            # Only cached_v survives this stage's diagnostic solve inputs.
+            diagnostics = None
             for small_step in range(1, stage.acoustic_steps + 1):
                 # native mpas_atm_time_integration.F:3959 / :3968 -- the damping
                 # reference is zeroed on the first sub-step and otherwise holds
                 # rtheta_pp as it stood BEFORE this sub-step's advance.
-                rtheta_pp_old = self.horizontal.capture_rtheta_pp_old(
-                    acoustic.rtheta_pp,
-                    small_step=small_step,
-                )
+                if damping_reference_in_state:
+                    # acoustic_prepare_v841, inside the sub-step below, writes
+                    # acoustic.rtheta_pp_old = 0 on sub-step 1 and otherwise
+                    # = rtheta_pp as it stood before this sub-step's advance
+                    # (acoustic_ru_v841 before it only reads rtheta_pp), and
+                    # no later kernel of the sub-step writes it: the same
+                    # words capture_rtheta_pp_old copied into a fresh array
+                    # every sub-step.  The damping reads that field instead.
+                    rtheta_pp_old = None
+                else:
+                    rtheta_pp_old = self.horizontal.capture_rtheta_pp_old(
+                        acoustic.rtheta_pp,
+                        small_step=small_step,
+                    )
                 if self.regional_v841 is None:
                     acoustic = advance_acoustic_step_cuda_v841(
                         self.atmosphere.mesh,
@@ -3764,6 +4472,9 @@ class CudaDryDycoreDriver:
                         fzp=self.atmosphere.vertical.fzp,
                         rdzw=self.atmosphere.vertical.rdzw,
                     )
+                if damping_reference_in_state:
+                    rtheta_pp_old = acoustic.rtheta_pp_old
+                interior_mask = getattr(self.halo_exchanger_v841, "interior_edge_mask", None)
                 if self.halo_exchanger_v841 is not None:
                     # Round C: between the advance and the damping, because the
                     # damping at an owned cut edge reads THIS sub-step's ring-1
@@ -3771,7 +4482,24 @@ class CudaDryDycoreDriver:
                     # ring-1 column's divergence reads ring-2 edges outside the
                     # K=2 cone).  ru_p moves in the same frame so the peer
                     # damps owner-truth momentum.
-                    self.halo_exchanger_v841.round_acoustic(acoustic)
+                    interior_work = None
+                    if interior_mask is not None:
+                        def interior_work():
+                            self.horizontal.divergence_damping_3d(
+                                acoustic.ru_p, saved_diag.theta_m,
+                                acoustic.rtheta_pp, rtheta_pp_old,
+                                native_stored_inverse=True,
+                                dts=stage.acoustic_timestep,
+                                config_smdiv=self.config.config_smdiv,
+                                config_len_disp=self.config.config_len_disp,
+                                in_place=True, _partition_edges=(interior_mask, 1),
+                                **({} if self.regional_v841 is None else
+                                   {"n_cells_solve": self.regional_v841.n_cells_solve}),
+                            )
+                    if interior_work is None:
+                        self.halo_exchanger_v841.round_acoustic(acoustic)
+                    else:
+                        self.halo_exchanger_v841.round_acoustic(acoustic, interior_work=interior_work)
                 # native :2395-2406 -- "complete update of horizontal momentum by
                 # including 3d divergence damping at the end of the acoustic
                 # step".  The authority's call carries no branch and no config
@@ -3784,10 +4512,12 @@ class CudaDryDycoreDriver:
                     saved_diag.theta_m,
                     acoustic.rtheta_pp,
                     rtheta_pp_old,
+                    native_stored_inverse=True,
                     dts=stage.acoustic_timestep,
                     config_smdiv=self.config.config_smdiv,
                     config_len_disp=self.config.config_len_disp,
                     in_place=True,
+                    **({} if interior_mask is None else {"_partition_edges": (interior_mask, 0)}),
                     # atm_divergence_damping_3d F:4183 scales the update by
                     # (1 - specZoneMaskEdge), which the shared kernel already
                     # carries; the regional lane only has to name the SOLVE
@@ -3802,14 +4532,53 @@ class CudaDryDycoreDriver:
                         }
                     ),
                 )
+            # All acoustic tendency reads are queued on this rank stream.
+            # Retire their owners before allocating the recovered endpoint.
+            forcing = None
+            interior_work = None
+            del tend_ru, tend_rt, tend_omega, rtheta_pp_old
+            if short_lifetimes and stage is final_stage:
+                # After the final stage's acoustic sub-steps nothing reads the
+                # implicit coefficients, the dry cqu, dpdz or the two density
+                # tendencies again.  The saved Euler tendencies stay: they are
+                # live to the return (tests/mpasdiag_forecast_v842.py observes
+                # them in the returning frame for the PV budget).
+                coefficients = None
+                cqu = None
+                dpdz = None
+                tend_rho_saved = None
+                tend_rho_dynamics = None
+            stage_scalars = current_state.scalars
+            if short_lifetimes:
+                # The stage's input candidate was last read by the forcing of
+                # the sub-steps above (rho_zz, w, rw); the recovery reads the
+                # subcycle-start images, the acoustic state and the scalar
+                # block, which stage_scalars keeps.  In stages 2 and 3 this
+                # releases the previous stage's recovered candidate before the
+                # new one is allocated; in stage 1 it aliases saved_* and
+                # frees nothing.
+                current_state = current_diag = None
             current_state, current_diag, flux_u, flux_w = self._recover_candidate(
                 saved_state,
                 saved_diag,
                 acoustic,
                 stage.stage,
                 stage.acoustic_steps,
-                current_state.scalars,
+                stage_scalars,
+                diabatic_theta=diabatic_theta, large_timestep=stage.large_timestep,
             )
+            stage_scalars = None
+            if stage.stage == 3 and acoustic_output_callback is not None:
+                # Registry.xml:1911-1921 exposes the final acoustic words in
+                # restart output. Retain references before their owner dies;
+                # recovering them by subtraction loses native rounding.
+                acoustic_output_callback(ru_p=acoustic.ru_p, rw_p=acoustic.rw_p)
+            acoustic = None
+            if short_lifetimes and stage is final_stage:
+                # The final recovery was the last reader of the subcycle-start
+                # images; drop them before the final solve diagnostics allocate.
+                saved_state = None
+                saved_diag = None
             if self.regional_v841 is None:
                 validate_recovered_state_cuda_v841(
                     current_state,
@@ -3836,6 +4605,16 @@ class CudaDryDycoreDriver:
             if stage.stage == 3:
                 final_flux_u = flux_u
                 final_flux_w = flux_w
+            elif short_lifetimes:
+                # A non-final stage's recovered mass fluxes have no reader;
+                # release them before this stage's solve diagnostics allocate
+                # rather than after.
+                flux_u = flux_w = None
+            if stage.stage == 3 and not final_diagnostics:
+                # Nothing in this substep reads the stage-3 solve; the next
+                # substep forms its own start solve from the same arrays.
+                cached_v = None
+                continue
             diagnostics = self.horizontal.solve_diagnostics(
                 current_state.rho,
                 current_state.rho_u,
@@ -3846,9 +4625,13 @@ class CudaDryDycoreDriver:
                 rk_step=stage.stage,
             )
             cached_v = diagnostics.tangential_velocity
+            if stage.stage != 3:
+                del flux_u, flux_w
 
         if final_flux_u is None or final_flux_w is None:
-            raise RuntimeError("v8.4.1 dynamics subcycle did not reach RK3")
+            raise RuntimeError("v8.4.1 dynamics subcycle did not reach its third RK stage")
+        if witness is not None:
+            witness.check("the subcycle returned")
         return _CudaDynamicsSubcycleResult(
             state=current_state,
             saved=current_diag,
@@ -3856,10 +4639,15 @@ class CudaDryDycoreDriver:
             mass_flux_u=final_flux_u,
             mass_flux_w=final_flux_w,
             modified_theta_dynamics_rate=final_modified_theta_dynamics_rate,
+            stage_physics_tendencies=physics_tendencies,
         )
 
     def _step_device_v841(
-        self, physics_tendencies: Any | None = None
+        self, physics_tendencies: Any | None = None, *,
+        physics_stage_callback: Any | None = None,
+        physics_post_transport_callback: Any | None = None,
+        physics_mass_loading_count: int | None = None,
+        acoustic_output_callback: Any | None = None,
     ) -> CudaDeviceStepResult | CudaV841PhysicsStepCandidate:
         """Run resident v8.4.1 fields with one final four-byte safety check."""
 
@@ -3891,8 +4679,56 @@ class CudaDryDycoreDriver:
             # re-forms the boundary tendencies at the start of any step whose
             # clock reached an interval end, before any dynamics.
             self.regional_v841.begin_step(self.atmosphere.state)
-        outer_saved = self._copy_state(self.atmosphere.state)
-        time_level_one = self._copy_saved(self.atmosphere.saved)
+        step_witness = None
+        shares_start_levels = self._shares_start_levels()
+        if shares_start_levels:
+            # mem/state-levels: native MPAS keeps two time levels; the
+            # private image of time level 1 here was a third.  Nothing in the
+            # step writes the resident level in place: the subcycles read it
+            # (see _advance_dynamics_subcycle_v841), transport reads the old
+            # scalars and density and writes fresh stage blocks, the
+            # post-transport callbacks write the CANDIDATE (current/carried,
+            # recovered fresh) and read outer_state, and the step publishes a
+            # new atmosphere rather than filling the resident one.  The one
+            # in-place writer of a start-level array is the scalar clamp (and
+            # the post-transport scalar fill) when transport does NOT rebind
+            # .scalars, so the scalar block keeps its private image exactly
+            # then.
+            #
+            # With subcycle graphs attached the resident level can be the
+            # graph's own result buffers, which the first subcycle's replay
+            # overwrites.  Every read of the start level up to that replay
+            # happens first (the step-start solve, the moist coefficients,
+            # and the graph's staging copy of the subcycle inputs, all on
+            # this stream), and after it the step reads only outer_saved.rho
+            # (transport's old density) and the scalar block.  So with graphs
+            # the density alone keeps its private image; rho_theta, rho_u,
+            # rho_w and the seven time-level-1 diagnostics are bound.
+            graphs = getattr(self, "subcycle_graphs", None)
+            transport_rebinds_scalars = (
+                bool(self.config.config_scalar_advection)
+                and int(self.atmosphere.state.scalars.shape[0]) > 0
+            )
+            outer_saved = self._bind_state(
+                self.atmosphere.state,
+                copy_scalars=not transport_rebinds_scalars,
+                copy_rho=graphs is not None,
+            )
+            time_level_one = self._bind_saved(self.atmosphere.saved)
+            if graphs is None and _StateLevelsWitness.enabled():
+                resident_state = self.atmosphere.state
+                resident_saved = self.atmosphere.saved
+                step_witness = _StateLevelsWitness(
+                    cp, "resident time level 1",
+                    rho=resident_state.rho, rho_theta=resident_state.rho_theta,
+                    rho_u=resident_state.rho_u, rho_w=resident_state.rho_w,
+                    scalars=resident_state.scalars,
+                    **{f"saved.{f.name}": getattr(resident_saved, f.name)
+                       for f in fields(resident_saved)},
+                )
+        else:
+            outer_saved = self._copy_state(self.atmosphere.state)
+            time_level_one = self._copy_saved(self.atmosphere.saved)
         if self.regional_v841 is not None:
             self.regional_v841.bind_state_rho(outer_saved.rho)
         physics_contract_sha256 = None
@@ -3918,8 +4754,7 @@ class CudaDryDycoreDriver:
             # The row the RUN selected, not the frozen lane's: the scalar
             # block's own width decides which declared row this is, and the
             # dynamics, the preparation and the seam all read the same one.
-            run_row = species_row_for_selector(
-                self.config.config_microp_scheme)
+            run_row = arwen_model_row(self.config)
             if int(outer_saved.scalars.shape[0]) != run_row.n_species():
                 raise ValueError(
                     f"{run_row.scheme_name!r} declares "
@@ -3968,14 +4803,17 @@ class CudaDryDycoreDriver:
             acoustic_substeps=self.config.config_number_of_sub_steps,
             dynamics_splits=1,
         )
-        diagnostics = self.horizontal.solve_diagnostics(
-            outer_saved.rho,
-            outer_saved.rho_u,
-            dt=outer_dt,
-            apvm_upwinding=self.config.config_apvm_upwinding,
-            normal_velocity=time_level_one.normal_velocity,
-            rk_step=3,
-        )
+        lean_diagnostics = diagnostics_lifetime_lean()
+        diagnostics = None
+        if not lean_diagnostics:
+            diagnostics = self.horizontal.solve_diagnostics(
+                outer_saved.rho,
+                outer_saved.rho_u,
+                dt=outer_dt,
+                apvm_upwinding=self.config.config_apvm_upwinding,
+                normal_velocity=time_level_one.normal_velocity,
+                rk_step=3,
+            )
         if (
             self.regional_v841 is not None
             and moist_coefficients is None
@@ -3985,6 +4823,28 @@ class CudaDryDycoreDriver:
             # step-start scalars and reused by every dynamics subcycle.
             moist_coefficients = self.regional_v841.moist_coefficients(
                 outer_saved.scalars
+            )
+        if self.regional_v841 is None and moist_coefficients is None:
+            # Native atm_srk3 calls atm_compute_moist_coefficients on EVERY
+            # step (mpas_atm_time_integration.F:2125-2139), physics suite
+            # 'none' included: qtot/cqw/cqu enter dpdz, the Euler w and u
+            # pressure terms, the implicit coefficients and the acoustic
+            # pressure gradient.  Without them a physics-off run carrying
+            # water vapour integrated the dry equations against native's
+            # moist ones.  With physics off native's Registry activates only
+            # moist-group species (qc..qg need a scheme package; number
+            # concentrations need Thompson, which is the physics config), so
+            # every carried species loads the air.  On a dry state qtot=0,
+            # cqu=cqw=1 and every product/divide is exact: dry bits are kept.
+            moist_coefficients = self._compute_moist_dynamics_coefficients_v841(
+                outer_saved.scalars,
+                scalar_names=None,
+                # Registry moist group ends before Thompson number carriers;
+                # mpas_atm_time_integration.F:2125-2139, Registry.xml:1705-1747.
+                n_mass_loading=(int(outer_saved.scalars.shape[0])
+                    if physics_mass_loading_count is None
+                    else int(physics_mass_loading_count)),
+                validation_flag=validation_flag,
             )
         current = outer_saved
         carried = time_level_one
@@ -3998,6 +4858,7 @@ class CudaDryDycoreDriver:
                 # regional_v841.dynamics_time_offset); the substep index is
                 # one-based, as in driver.py's loop.
                 self.regional_v841.begin_dynamics_substep(_subcycle + 1)
+            final_modified_theta_dynamics_rate = None
             result = self._advance_dynamics_subcycle_v841(
                 current,
                 time_level_one=carried,
@@ -4007,7 +4868,18 @@ class CudaDryDycoreDriver:
                 validation_flag=validation_flag,
                 physics_tendencies=physics_tendencies,
                 moist_coefficients=moist_coefficients,
+                physics_stage_callback=physics_stage_callback,
+                dynamics_substep=_subcycle + 1,
+                **({"acoustic_output_callback": acoustic_output_callback}
+                   if acoustic_output_callback is not None and
+                   _subcycle == dynamics_splits - 1 else {}),
+                # Lean: each substep forms its start solve and skips its
+                # unread stage-3 solve, so no diagnostics set is held here
+                # across a substep, the scalar transport or the physics.
+                **({"final_diagnostics": False} if lean_diagnostics else {}),
             )
+            if physics_stage_callback is not None:
+                physics_tendencies = result.stage_physics_tendencies
             current = result.state
             carried = result.saved
             diagnostics = result.diagnostics
@@ -4024,8 +4896,30 @@ class CudaDryDycoreDriver:
                 split_flux_w_sum,
                 kernel_cache=self.cache,
             )
+            del result
         if split_flux_u_sum is None or split_flux_w_sum is None:
             raise RuntimeError("v8.4.1 dynamics subcycle loop did not execute")
+        if shares_start_levels:
+            # mem/state-levels: the dynamics-only arrays die with the last
+            # subcycle instead of riding through transport, the ordinary
+            # step's memory peak.  Nothing below reads them: transport takes
+            # outer_saved, current, the split fluxes and the physics scalar
+            # source; the post-transport callback takes current, carried and
+            # outer_saved; the receipts take times and shapes.  Dropping a
+            # reference changes no arithmetic.  The solve diagnostics are
+            # 5.5 KB per column, the moist coefficients 1.1, the time-level-1
+            # diagnostics 2.0 when they were a private image.  Same scope as
+            # the bindings: the regional lane classifies device blocks by
+            # address, so freeing earlier stays out of it until a regional
+            # deck proves it.
+            diagnostics = moist_coefficients = time_level_one = None
+            if physics_stage_callback is not None:
+                release = getattr(getattr(physics_stage_callback, "__self__", None),
+                                  "release_dynamics_sources", None)
+                if release is not None:
+                    physics_tendencies = release()
+        if step_witness is not None:
+            step_witness.check("transport")
         split_flux_u = finish_split_flux_cuda_v841(
             split_flux_u_sum, dynamics_splits, kernel_cache=self.cache
         )
@@ -4033,6 +4927,7 @@ class CudaDryDycoreDriver:
             split_flux_w_sum, dynamics_splits, kernel_cache=self.cache
         )
 
+        del split_flux_u_sum, split_flux_w_sum
         scalar_stage_timesteps = None
         if (
             self.config.config_scalar_advection
@@ -4053,6 +4948,51 @@ class CudaDryDycoreDriver:
                         advance_scalars_regional_cuda_v841,
                     )
 
+                    # Native takes the limited routine on the last stage when
+                    # EITHER switch is on (mpas_atm_time_integration.F:2953,
+                    # "rk_step < 3 .or. (.not. config_monotonic .and. .not.
+                    # config_positive_definite)" selects the unlimited one),
+                    # as the global path does (cuda_transport_v841).  Testing
+                    # config_monotonic alone left a regional run with
+                    # positive_definite=True and monotonic off unlimited
+                    # while its receipt recorded the switch as on.
+                    if (
+                        self.config.config_monotonic
+                        or self.config.config_positive_definite
+                    ) and stage.stage == 3:
+                        transported = advance_scalar_transport_cuda_v841(
+                            self.atmosphere.mesh, self.v841_context,
+                            outer_saved.scalars, scalar_stage, outer_saved.rho,
+                            current.rho, split_flux_u, split_flux_w, stage.large_timestep,
+                            rk_step=3, config_scalar_advection=True,
+                            config_monotonic=bool(self.config.config_monotonic),
+                            config_positive_definite=bool(self.config.config_positive_definite),
+                            config_split_dynamics_transport=True,
+                            config_time_integration_order=self.config.config_time_integration_order,
+                            config_scalar_adv_order=3, config_scalar_vadv_order=3,
+                            config_coef_3rd_order=self.config.config_coef_3rd_order,
+                            coefficients=self.coefficients, fzm=self.atmosphere.vertical.fzm,
+                            fzp=self.atmosphere.vertical.fzp, rdzw=self.atmosphere.vertical.rdzw,
+                            validation_flag=validation_flag, indices_prevalidated=True,
+                            rho_old_prevalidated=True, kernel_cache=self.cache,
+                            config_apply_lbcs=True,
+                            bdy_mask_cell=self.regional_v841.bdy_mask_cell,
+                            bdy_mask_edge=self.regional_v841.bdy_mask_edge,
+                            garbage_cell=int(self.regional_v841.padded.garbage_cell),
+                            bind_density_pool=self.regional_v841.bind_state_rho,
+                            # Round E on N ranks, as on the global path: the
+                            # limiter reads both endpoint cells' scale factors
+                            # at owned seam edges.  One card has no exchanger.
+                            halo_exchange=self.halo_exchanger_v841,
+                            **({} if physics_tendencies is None else
+                               {"scalar_tendency": physics_tendencies.scalars}),
+                        )
+                        scalar_stage = transported.scalars
+                        self.regional_v841.bdy_adjust_scalars(scalar_stage, stage.stage)
+                        accumulate_finite_array_cuda_v841(
+                            scalar_stage, invalid_flag=validation_flag, kernel_cache=self.cache,
+                        )
+                        continue
                     scalar_stage, _target = advance_scalars_regional_cuda_v841(
                         self.regional_v841,
                         self.atmosphere.mesh,
@@ -4069,6 +5009,7 @@ class CudaDryDycoreDriver:
                         fzp=self.atmosphere.vertical.fzp,
                         rdzw=self.atmosphere.vertical.rdzw,
                         rk_step=stage.stage,
+                        config_time_integration_order=self.config.config_time_integration_order,
                         config_coef_3rd_order=(
                             self.config.config_coef_3rd_order
                         ),
@@ -4098,7 +5039,7 @@ class CudaDryDycoreDriver:
                     config_monotonic=self.config.config_monotonic,
                     config_positive_definite=self.config.config_positive_definite,
                     config_split_dynamics_transport=True,
-                    config_time_integration_order=3,
+                    config_time_integration_order=self.config.config_time_integration_order,
                     coefficients=self.coefficients,
                     fzm=self.atmosphere.vertical.fzm,
                     fzp=self.atmosphere.vertical.fzp,
@@ -4137,6 +5078,19 @@ class CudaDryDycoreDriver:
             scalar_stage_timesteps = tuple(
                 stage.large_timestep for stage in scalar_schedule.stages
             )
+        if physics_post_transport_callback is not None:
+            # Native unclamped transport handoff, dry-theta recovery, clamp,
+            # microphysics and returned diagnostics; time_integration.F:2770-2816.
+            physics_post_transport_callback(
+                state=current, saved=carried, outer_state=outer_saved,
+                modified_theta_dynamics_rate=final_modified_theta_dynamics_rate,
+            )
+        if (self.regional_v841 is None and not full_physics
+                and physics_post_transport_callback is None):
+            # atm_srk3 F:2799-2800 (DO_PHYSICS builds, every suite): negative
+            # mixing ratios of every species are set to zero after transport.
+            # A where-assignment, not max(): -0.0 and NaN keep native's bits.
+            cp.putmask(current.scalars, current.scalars < 0, 0)
         if self.regional_v841 is not None:
             # driver.py:3259-3301, in this order: the unconditional clamp
             # (atm_srk3:2798-2800), then the specified-zone resets and the
@@ -4177,12 +5131,25 @@ class CudaDryDycoreDriver:
             )
             gf_rate_arrays = (rthdynten, rqvdynten)
 
+        if step_witness is not None:
+            step_witness.check("publish")
+            step_witness = None
         validation_started = time.perf_counter()
         validation_value = int(cp.asnumpy(validation_flag)[0])
         validation_seconds = time.perf_counter() - validation_started
         if validation_value != 0:
+            invalid_ranges = {}
+            for name in ("rho", "rho_theta", "rho_u", "scalars"):
+                values = getattr(current, name)
+                invalid_ranges[name] = {
+                    "min": float(cp.nanmin(values).item()),
+                    "max": float(cp.nanmax(values).item()),
+                    "nonfinite": int(cp.count_nonzero(~cp.isfinite(values)).item()),
+                }
             raise FloatingPointError(
-                "v8.4.1 CUDA validation flag refused the outer step before publish"
+                "v8.4.1 CUDA validation flag refused the outer step before publish: "
+                f"flag={validation_value}, time_seconds={outer_saved.time_seconds}, "
+                f"candidate_ranges={invalid_ranges}"
             )
         validation_transfer = TransferStats(
             int(validation_flag.nbytes), validation_seconds
@@ -4271,8 +5238,7 @@ class CudaDryDycoreDriver:
                 phase2_validation_d2h=None,
                 final_commit_validation_d2h=None,
                 moist_dynamics_coefficients_applied=True,
-                moist_dynamics_scalar_order=species_row_for_selector(
-                    self.config.config_microp_scheme).names(),
+                moist_dynamics_scalar_order=arwen_model_row(self.config).names(),
                 moist_dynamics_negative_qv_policy=(
                     V841_MOIST_DYNAMICS_NEGATIVE_QV_POLICY
                 ),
@@ -4371,7 +5337,8 @@ class CudaDryDycoreDriver:
             )
         if candidate is not self._pending_v841_physics_candidate:
             raise ValueError("candidate is not the driver's pending transaction")
-        self.config.validate()
+        self.config.validate(**({"les_dissipation": self.les_dissipation}
+                                if self.les_dissipation is not None else {}))
         current_configuration = cuda_configuration_payload(self.config)
         current_configuration_sha256 = canonical_sha256(current_configuration)
         if (
@@ -4461,7 +5428,13 @@ class CudaDryDycoreDriver:
             kernel_cache=self.cache,
         )
         final_validation_started = time.perf_counter()
-        final_validation_value = int(self.cp.asnumpy(final_validation_flag)[0])
+        # Forecast can read this word with its endpoint health envelope.
+        # The hook must finish before the existing numeric refusal or publish.
+        reader = getattr(self, "final_validation_reader", None)
+        final_validation_value = (
+            int(self.cp.asnumpy(final_validation_flag)[0]) if reader is None
+            else reader(committed, final_validation_flag)
+        )
         final_validation_seconds = time.perf_counter() - final_validation_started
         final_validation_transfer = TransferStats(
             int(final_validation_flag.nbytes), final_validation_seconds
@@ -4505,8 +5478,7 @@ class CudaDryDycoreDriver:
             ),
             phase_one_execution_provenance=execution_provenance,
             gwdo_validation_d2h=execution_provenance.gwdo_validation_d2h,
-            scalar_order=species_row_for_selector(
-                self.config.config_microp_scheme).names(),
+            scalar_order=arwen_model_row(self.config).names(),
             held_tendency_time_seconds=candidate.receipt.start_time_seconds,
             held_tendency_validation_d2h=(
                 candidate.receipt.held_tendency_validation_d2h
@@ -4515,8 +5487,7 @@ class CudaDryDycoreDriver:
             phase2_validation_d2h=recovery.validation_d2h,
             final_commit_validation_d2h=final_validation_transfer,
             moist_dynamics_coefficients_applied=True,
-            moist_dynamics_scalar_order=species_row_for_selector(
-                self.config.config_microp_scheme).names(),
+            moist_dynamics_scalar_order=arwen_model_row(self.config).names(),
             moist_dynamics_negative_qv_policy=(
                 V841_MOIST_DYNAMICS_NEGATIVE_QV_POLICY
             ),
@@ -4592,7 +5563,7 @@ class CudaDryDycoreDriver:
         saved_diag = self.atmosphere.saved
         schedule = RKSchedule.from_mpas(
             self.config.config_dt,
-            order=3,
+            order=self.config.config_time_integration_order,
             acoustic_substeps=self.config.config_number_of_sub_steps,
             dynamics_splits=1,
         )
@@ -4687,7 +5658,7 @@ class CudaDryDycoreDriver:
         split_flux_w = cp.array(saved_state.rho_w, copy=True)
 
         for stage in schedule.stages:
-            if stage.stage == 2:
+            if stage.stage == 2 and self.config.config_time_integration_order == 3:
                 coefficients = self._vertical_coefficients(
                     current_state,
                     stage.acoustic_timestep,
@@ -4698,15 +5669,13 @@ class CudaDryDycoreDriver:
             tend_ru = self._vertical_u(
                 current_diag.normal_velocity, current_state.rho_w
             )
-            self._add(
-                tend_ru,
-                self._vector_momentum(
-                    current_diag.normal_velocity,
-                    diagnostics.h_edge,
-                    diagnostics.pv_edge,
-                    diagnostics.kinetic_energy,
-                    mass_divergence,
-                ),
+            tend_ru = self._vector_momentum(
+                current_diag.normal_velocity,
+                diagnostics.h_edge,
+                diagnostics.pv_edge,
+                diagnostics.kinetic_energy,
+                mass_divergence,
+                initial_tendency=tend_ru,
             )
             self._add(tend_ru, saved_euler_ru)
             tend_rt = self._theta_tendency(
@@ -4811,7 +5780,7 @@ class CudaDryDycoreDriver:
                     config_monotonic=self.config.config_monotonic,
                     config_positive_definite=self.config.config_positive_definite,
                     config_split_dynamics_transport=False,
-                    config_time_integration_order=3,
+                    config_time_integration_order=self.config.config_time_integration_order,
                     coefficients=self.coefficients,
                     fzm=self.atmosphere.vertical.fzm,
                     fzp=self.atmosphere.vertical.fzp,
@@ -4854,7 +5823,7 @@ class CudaDryDycoreDriver:
                     config_monotonic=self.config.config_monotonic,
                     config_positive_definite=self.config.config_positive_definite,
                     config_split_dynamics_transport=True,
-                    config_time_integration_order=3,
+                    config_time_integration_order=self.config.config_time_integration_order,
                     coefficients=self.coefficients,
                     fzm=self.atmosphere.vertical.fzm,
                     fzp=self.atmosphere.vertical.fzp,

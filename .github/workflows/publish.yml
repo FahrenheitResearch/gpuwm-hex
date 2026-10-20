@@ -2,9 +2,10 @@ name: publish
 
 # The publish half ci.yml deliberately left unwritten, written now that a cut
 # is authorised.  It is still not a standing pre-authorisation: the only
-# automatic trigger is `release: published`, and publishing a GitHub release
-# is a human act performed deliberately on a specific tag.  Nothing here fires
-# on a push or on a tag alone.
+# trigger that uploads is `release: published`, and publishing a GitHub
+# release is a human act performed deliberately on a specific tag.  A manual
+# `workflow_dispatch` run builds and checks the artefacts exactly as a release
+# would and uploads nothing: it is the dry run before the tag.
 #
 # THE FILENAME IS PART OF THE BINDING.  A PyPI trusted publisher binds four things --
 # owner, repository, workflow FILENAME and environment name -- and the token
@@ -12,7 +13,7 @@ name: publish
 #
 #     FahrenheitResearch / gpuwm-hex / publish.yml / release
 #
-# Renaming this file, moving the job to another workflow, or changing the
+# Renaming this file, moving the upload to another workflow, or changing the
 # environment breaks the binding and the upload is rejected with a message
 # about a missing API token, which reads like a secrets problem and is not
 # one.  Change the registration on PyPI first, then this file.
@@ -20,6 +21,19 @@ name: publish
 # No API token, no password, no secret of any kind is read here.  OIDC means
 # the runner proves its identity to PyPI directly, so there is no long-lived
 # credential to leak, rotate, or accidentally print.
+#
+# WHY THE BUILD RUNS IN manylinux_2_28 (verify-final-hex QA H3, 2026-10-12).
+# setup.py tags the wheel from the newest GLIBC symbol version its bundled
+# executables name.  Built on the ubuntu-24.04 runner, that is the runner's
+# glibc, and the 0.4.0 candidate came out `manylinux_2_35_x86_64`: pip on
+# every host with glibc 2.28-2.34 (RHEL 8/9, Ubuntu 20.04/22.04, most HPC
+# login nodes) skipped the wheel and tried the sdist, which needs cargo and an
+# engine source checkout to build the helpers.  Building inside the
+# manylinux_2_28 image links the helpers against glibc 2.28, auditwheel then
+# repairs and re-tags against that policy (grafting any shared library a
+# helper needs that the policy does not allow), and
+# tools/check_wheel_platform.py refuses the upload if the result still claims
+# a newer glibc, claims an older one than a helper needs, or lost a helper.
 
 on:
   release:
@@ -29,8 +43,218 @@ on:
 permissions:
   contents: read
 
+env:
+  # The policy the wheel is built for and checked against.  Changing it means
+  # changing the image below to the same policy, or auditwheel refuses.
+  MANYLINUX_POLICY: manylinux_2_28_x86_64
+  # The toolchain the helpers are built with, pinned so a release does not
+  # move with whatever `stable` is that day.
+  RUST_TOOLCHAIN: "1.99.0"
+
 jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container:
+      # Pinned by digest (pulled 2026-10-14, image built 2026-10-09), so the
+      # glibc and toolchain the helpers link against do not move between a
+      # dry run and the release it rehearses.
+      image: quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae
+    env:
+      PY: /opt/python/cp311-cp311/bin/python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: hex
+
+      - name: the engine release the helpers are built against
+        # The observation scorer links the engine's Rust readers (netcrust,
+        # rw-obs, rustwx-io), which exist only in a gpuwm SOURCE tree.  The
+        # tree is the public engine at the tag of the declared floor, READ
+        # from the declaration so this file never restates a version.  Until
+        # that tag exists the checkout below fails naming it, which is the
+        # publish-ordering blocker stated where it bites.
+        id: engine
+        working-directory: hex/tree
+        run: |
+          FLOOR=$("$PY" -c "import tomllib,pathlib;d=tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'));s=next(s for s in d['project']['dependencies'] if s.split('>=')[0].strip()=='gpuwm');print(s.split('>=')[1].split(',')[0].strip())")
+          echo "declared engine floor: ${FLOOR}"
+          echo "tag=v${FLOOR}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: FahrenheitResearch/arwen
+          ref: ${{ steps.engine.outputs.tag }}
+          persist-credentials: false
+          path: engine-src
+          sparse-checkout: |
+            tools/rustwx
+            tools/grib1_bridge/vendor
+
+      - name: a static classic-only netCDF-C for the template copier
+        # gpuwm-hex-netcdf-copy (the init door's CDF-5 vertical template
+        # copier, verify-final-hex item 4) links libnetcdf.  Linked against
+        # the distribution's shared library it dragged 31 grafted libraries
+        # into the wheel; the pinned static build keeps it self-contained.
+        # The MPAS route's Registry pool reader (rw_mpas_physics_pool) links
+        # the same static library: the native route reads classic files only
+        # (PnetCDF), so it needs no HDF5.
+        run: bash hex/tree/tools/build_netcdf_classic_static.sh /opt/netcdf-classic
+
+      - name: the engine bridges this wheel bundles, by pinned hash
+        # rw_mpas_geometry (hex-vertical-v1), rw_mpas_stream and rw_mpas_static
+        # (generated-grid statics that hold their binary64 coordinates): no
+        # released engine carries the versions this release needs (release
+        # readiness B5; ARWEN-VS-HEX-TIMING-2026-10-15), so the wheel bundles
+        # the bytes tools/build_engine_bridges.sh
+        # built in this same image from the gpuwm commit
+        # src/hexcore/data/engine-bridges.json names.  They are attached to the
+        # release that file names; this step and setup.py both refuse a file
+        # whose SHA-256 is not the pinned one.
+        working-directory: hex/tree
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/engine-bridges"
+          "$PY" - "$GITHUB_WORKSPACE/engine-bridges" <<'EOF'
+          import hashlib, json, pathlib, sys, urllib.request
+          pins = json.loads(pathlib.Path("src/hexcore/data/engine-bridges.json").read_text(encoding="utf-8"))
+          assets, out = pins["release_assets"], pathlib.Path(sys.argv[1])
+          for name, row in sorted(pins["bridges"].items()):
+              url = f"https://github.com/{assets['repository']}/releases/download/{assets['tag']}/{name}"
+              data = urllib.request.urlopen(url, timeout=300).read()
+              if hashlib.sha256(data).hexdigest() != row["sha256"]:
+                  sys.exit(f"{url} is not the pinned sha256 {row['sha256']}")
+              (out / name).write_bytes(data)
+              (out / name).chmod(0o755)
+          # The renderer and the surface-series producer: the public floor tag cannot build them
+          # (engine-bridges.json source_prebuilts.breakage), so they ride the same release, by SHA-256,
+          # with the provenance setup.py checks against this source tree.
+          provenance = {"bridges": {}}
+          for name, row in sorted(pins.get("source_prebuilts", {}).get("files", {}).items()):
+              url = f"https://github.com/{assets['repository']}/releases/download/{assets['tag']}/{name}"
+              data = urllib.request.urlopen(url, timeout=300).read()
+              if hashlib.sha256(data).hexdigest() != row["sha256"] or len(data) != row["bytes"]:
+                  sys.exit(f"{url} is not the pinned sha256 {row['sha256']}")
+              (out / name).write_bytes(data)
+              (out / name).chmod(0o755)
+              provenance["bridges"][name] = row["provenance"]
+          (out / "provenance.json").write_text(json.dumps(provenance) + "\n")
+          EOF
+          echo "GPUWM_HEX_ENGINE_BRIDGES=$GITHUB_WORKSPACE/engine-bridges" >> "$GITHUB_ENV"
+
+      - name: Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: the surface decoder from this source tree
+        # Surface series include NetCDF-4. Build the reader with the same
+        # static NetCDF/HDF5/zlib archive as build_engine_bridges.sh.
+        working-directory: hex/tree
+        run: |
+          bash tools/build_netcdf4_static.sh /opt/netcdf4-static
+          RUSTFLAGS="-L native=/opt/netcdf4-static/lib" LIBRARY_PATH=/opt/netcdf4-static/lib \
+            cargo build --release --locked --offline --manifest-path tools/rustwx/Cargo.toml \
+              -p rw-surface --features static-netcdf
+          cp tools/rustwx/target/release/librw_surface.so "$GPUWM_HEX_ENGINE_BRIDGES/"
+          "$PY" - <<'EOF'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path(os.environ["GPUWM_HEX_ENGINE_BRIDGES"])
+          sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+          path = root / "provenance.json"
+          record = json.loads(path.read_text()) if path.is_file() else {}
+          record["surface_reader"] = {
+              "sha256": sha(root / "librw_surface.so"),
+              "source_sha256": sha(pathlib.Path("tools/rustwx/crates/rw-surface/src/lib.rs"))}
+          path.write_text(json.dumps(record) + "\n")
+          EOF
+
+      - name: build the sdist, then the wheel FROM the sdist
+        # `python -m build` with no selector builds the sdist and then the
+        # wheel from the unpacked sdist, so a file the sdist leaves out breaks
+        # the wheel here instead of in a user's `pip install --no-binary`.
+        working-directory: hex/tree
+        env:
+          GPUWM_HEX_ENGINE_SOURCE: ${{ github.workspace }}/engine-src
+          LIBRARY_PATH: /opt/netcdf-classic/lib
+        run: |
+          rustc --version
+          "$PY" -m pip install --upgrade pip build
+          "$PY" -m build --outdir "$GITHUB_WORKSPACE/raw"
+          ls -l "$GITHUB_WORKSPACE/raw"
+
+      - name: auditwheel repair against the policy
+        run: |
+          mkdir -p dist
+          auditwheel show raw/*.whl
+          auditwheel repair --plat "${MANYLINUX_POLICY}" --wheel-dir dist raw/*.whl
+          cp raw/*.tar.gz dist/
+          ls -l dist
+
+      - name: the platform tag and the helpers survive the repair
+        run: |
+          "$PY" hex/tree/tools/check_wheel_platform.py dist/*.whl \
+            --policy "${MANYLINUX_POLICY}" \
+            --require-libexec hex_contract_hostprep \
+            --require-libexec hex_obs_scorecard \
+            --require-libexec gpuwm-hex-netcdf-copy \
+            --require-libexec rw_mpas_physics_pool \
+            --require-libexec librw_surface.so \
+            --require-libexec table_decode \
+            --require-libexec rw_mpas_rrtmg_lw_tables \
+            --require-libexec rw_mpas_rrtmg_sw_tables \
+            --require-libexec rw_mpas_geometry \
+            --require-libexec rw_mpas_stream \
+            --require-libexec rw_mpas_static \
+            --require-libexec rw_mpas_rrfs_connectivity \
+            --require-libexec rw_mpas_rrfs_damping \
+            --require-libexec rw_mpas_rrfs_deformation \
+            --require-libexec rw_mpas_lbc \
+            --require-libexec rw_igra2 \
+            --require-libexec hex_gpmetis \
+            --json dist-check.json
+
+      - name: the artefacts install and answer outside the build tree
+        run: |
+          "$PY" -m venv /tmp/fresh
+          /tmp/fresh/bin/python -m pip install --upgrade pip
+          /tmp/fresh/bin/python -m pip install "numpy>=2.0" "netCDF4>=1.6" "scipy>=1.11"
+          /tmp/fresh/bin/python -m pip install --no-deps dist/*.whl
+          cd /tmp
+          /tmp/fresh/bin/gpuwm-hex version
+          for helper in hex_contract_hostprep hex_obs_scorecard gpuwm-hex-netcdf-copy \
+              rw_mpas_physics_pool table_decode rw_mpas_rrtmg_lw_tables rw_mpas_rrtmg_sw_tables \
+              rw_mpas_geometry rw_mpas_stream rw_mpas_static liblookup_decode.so librw_surface.so; do
+            path=$(/tmp/fresh/bin/python -c "import hexcore,pathlib;print(pathlib.Path(hexcore.__file__).parent/'libexec'/'${helper}')")
+            ldd "$path"
+            ! ldd "$path" | grep -q "not found" || { echo "${helper} has an unresolved library after repair"; exit 1; }
+          done
+
+      - name: distribution file sizes
+        run: '"$PY" hex/tree/tools/check_dist_sizes.py dist/*.whl dist/*.tar.gz'
+
+      - name: checksums
+        working-directory: dist
+        run: sha256sum * | tee ../SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpuwm-hex-dist
+          path: dist/*
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpuwm-hex-checks
+          path: |
+            SHA256SUMS
+            dist-check.json
+          if-no-files-found: error
+
   publish:
+    needs: build
+    # A release uploads.  A manual run stops after the checks above.
+    if: github.event_name == 'release'
     runs-on: ubuntu-24.04
 
     # Both halves are required by the trusted-publisher registration:
@@ -46,22 +270,69 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          sparse-checkout: tree/tools/check_wheel_platform.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gpuwm-hex-dist
+          path: dist
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # pyproject.toml is at `tree/`, not the repository root, so the build
-      # runs there and the artefacts land in `tree/dist/`.  Both paths are
-      # stated explicitly rather than defaulted: a publish step that guesses
-      # `dist/` finds an empty directory and uploads nothing, successfully.
-      - name: build the sdist and the wheel
-        working-directory: tree
+      - name: the exact files about to upload pass the platform check
+        # Re-run on the downloaded copies, so nothing between the build job
+        # and this one can substitute a wheel the check never saw.
         run: |
-          python -m pip install --upgrade pip build
-          python -m build
-          ls -l dist/
+          ls -l dist
+          python tree/tools/check_wheel_platform.py dist/*.whl \
+            --policy "${MANYLINUX_POLICY}" \
+            --require-libexec hex_contract_hostprep \
+            --require-libexec hex_obs_scorecard \
+            --require-libexec gpuwm-hex-netcdf-copy \
+            --require-libexec rw_mpas_physics_pool \
+            --require-libexec librw_surface.so \
+            --require-libexec table_decode \
+            --require-libexec rw_mpas_rrtmg_lw_tables \
+            --require-libexec rw_mpas_rrtmg_sw_tables \
+            --require-libexec rw_mpas_geometry \
+            --require-libexec rw_mpas_stream \
+            --require-libexec rw_mpas_static \
+            --require-libexec rw_mpas_rrfs_connectivity \
+            --require-libexec rw_mpas_rrfs_damping \
+            --require-libexec rw_mpas_rrfs_deformation \
+            --require-libexec rw_mpas_lbc \
+            --require-libexec rw_igra2 \
+            --require-libexec hex_gpmetis
 
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: tree/dist
+          packages-dir: dist
+          attestations: true
+
+  release-assets:
+    needs: [build, publish]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: gpuwm-hex-dist
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gpuwm-hex-checks
+          path: checks
+
+      - name: attach the wheel, the sdist and SHA256SUMS to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && sha256sum -c ../checks/SHA256SUMS)
+          gh release upload "${{ github.event.release.tag_name }}" dist/* checks/SHA256SUMS \
+            --repo "${{ github.repository }}"

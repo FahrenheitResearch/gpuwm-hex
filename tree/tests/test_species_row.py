@@ -16,6 +16,18 @@ from hexcore import species_row as sr
 from hexcore.errors import ConfigurationRefusal
 
 
+def test_only_morrisons_native_buckets_declare_signed_fallout():
+    for mp in (1, 6, 8, 10, 50):
+        row = sr.engine_species_row(
+            scheme_name=f"test-mp{mp}", mp_physics=mp,
+            species=("qv", "qc", "qr", "qi", "qs", "qg"),
+            mass_species=("qv", "qc", "qr", "qi", "qs", "qg"),
+            surface_accumulators=("RAINNC", "SNOWNC", "GRAUPELNC", "CUSTOM"))
+        assert [v.signed_fallout for v in row.surface_accumulators] == [mp == 10]*3 + [False]
+        extra = sr.SurfaceAccumulatorDeclaration("extra", "float32", "EXTRA", "extra")
+        assert not row.with_extras((), accumulators=(extra,)).surface_accumulators[-1].signed_fallout
+
+
 # ---------------------------------------------------------------------------
 # The declared rows.
 # ---------------------------------------------------------------------------
@@ -95,19 +107,15 @@ def test_thompson_aerosol_row_is_wrfs_eleven_in_engine_order():
     assert row.radius_names == ("effc", "effi", "effs")
 
 
-def test_the_rows_with_no_engine_counterparty_still_refuse_by_name():
-    """mp=1 and mp=8 stay declared-and-refused, and the refusal names the
-    three engine rows that DO exist so the remedy is a real one."""
+def test_the_rows_once_refused_for_want_of_an_engine_row_name_the_selector():
+    """mp=1 and mp=8 were declared-and-refused while the frozen column batch
+    was the only seam and built four schemes.  The generic column seam takes
+    the engine's selector itself, so the rows name it and nothing refuses."""
 
-    for row in (sr.KESSLER_SPECIES_ROW, sr.THOMPSON_SPECIES_ROW):
-        assert row.engine_scheme is None
-        with pytest.raises(ConfigurationRefusal) as excinfo:
-            row.require_engine_scheme()
-        message = str(excinfo.value)
-        assert "_SPECIES_BY_SCHEME" in message
-        assert "engine-side row" in message
-        assert "'thompson_aero'" in message
-        assert "'mp_thompson_aerosols'" in message
+    assert sr.KESSLER_SPECIES_ROW.require_engine_scheme() == "mp_physics=1"
+    assert sr.THOMPSON_SPECIES_ROW.require_engine_scheme() == "mp_physics=8"
+    for row in sr.registered_species_rows().values():
+        assert row.engine_scheme is not None, row.scheme_name
 
 
 def test_the_loading_prefix_is_contiguous_in_every_declared_row():
@@ -134,60 +142,38 @@ def test_every_declared_species_is_transported_and_writes_under_a_name():
 
 
 def _pinned_engine_column_batch():
-    """The engine the hex pin NAMES, or skip saying why.
+    """Grade every supported engine, while excluding unrelated checkouts."""
 
-    THE INSTRUMENT TRAP THIS AVOIDS, hit on 2026-09-01.  These gates grade
-    hex's rows against the engine's species table, and the engine they used
-    to read was whatever ``import gpuwm`` resolved.  In a tree beside a
-    gpuwm development checkout that is NOT the pinned engine -- it can be a
-    lane branch that has already gained a scheme, and its own
-    ``__version__`` need not even match what pip would install -- so the
-    gate grades a counterparty the shipped door will never call, and either
-    fails for a scheme the pin does not carry or passes on bytes nobody
-    ships.  A gate that cannot say which engine it read is not a
-    measurement.
-    """
+    from hexcore import engine_pin
 
     gpuwm = pytest.importorskip("gpuwm")
     mcb = pytest.importorskip("gpuwm.core.mpas_column_batch")
     version = getattr(gpuwm, "__version__", "unknown")
     pinned = _pinned_engine_range()
-    if version not in pinned:
+    admitted = {row.version for row in engine_pin.ADMITTED_ENGINES}
+    if version not in pinned and version not in admitted:
         pytest.skip(
             f"the importable gpuwm is {version} at {gpuwm.__file__}, which "
-            f"is not the engine this tree pins ({sorted(pinned)}).  These "
-            "gates grade hex's species rows against the PINNED engine's "
-            "table; reading another one grades a counterparty the shipped "
-            "door never calls"
+            f"is outside the supported engine range ({pinned}) and explicit "
+            f"admissions ({sorted(admitted)}); its species table is not a "
+            "supported counterparty"
         )
     return mcb
 
 
-def _pinned_engine_range() -> frozenset[str]:
-    """The exact engine versions this tree admits: the pinned published
-    engine, plus every engine ``hexcore.engine_pin.ADMITTED_ENGINES`` admits
-    by a measured row of its own.
-
-    An admitted engine IS one the shipped door calls -- the seam check, the
-    door and the adapter accept its bytes under its version string -- so
-    grading hex's rows against its table is grading the real counterparty,
-    not a development checkout that happens to be importable.  Until
-    2026-09-13 this read the published range alone and skipped on an
-    admitted engine, which left the one install that engine ships in with
-    these gates disarmed.
-    """
+def _pinned_engine_range():
+    """Read the full dependency range, including supported patch releases."""
 
     import re
     import pathlib
 
-    from hexcore import engine_pin
+    from packaging.specifiers import SpecifierSet
 
     text = (pathlib.Path(__file__).resolve().parents[1]
             / "pyproject.toml").read_text(encoding="utf-8")
-    match = re.search(r'"gpuwm>=([0-9.]+),<([0-9.]+)"', text)
+    match = re.search(r'"gpuwm(>=[0-9.]+,<[0-9.]+)"', text)
     assert match, "the packaging no longer pins gpuwm with a >=,< range"
-    # The range is always one release wide in this tree, by the 258 runbook.
-    return frozenset({match.group(1)} | {row.version for row in engine_pin.ADMITTED_ENGINES})
+    return SpecifierSet(match.group(1))
 
 
 def test_rows_match_the_pinned_engine_species_table():
@@ -212,8 +198,25 @@ def test_rows_match_the_pinned_engine_species_table():
                 "it an engine_scheme"
             )
             continue
+        if row.engine_scheme.startswith("mp_physics="):
+            # A row the generic column seam runs: the engine's own plan
+            # (column_physics_plan) is its species authority, not the frozen
+            # batch's four-scheme table.
+            continue
+        if row.engine_scheme not in table and row.engine_scheme in _ENGINE_PORT_ROWS:
+            # An engine before this scheme's port (TEMPO arrives with the
+            # RRFS composition, after gpuwm 2.8.7).  The door refuses such a
+            # backend by name before the card (forecast_door, "carries the
+            # TEMPO port"); there is no engine row here to grade it against.
+            continue
         assert row.names() == tuple(table[row.engine_scheme]), row.scheme_name
         assert engine_selectors[row.engine_scheme] == row.mp_physics
+
+
+#: Rows whose engine scheme arrived with an engine port later than some
+#: engines this tree admits.  Present in the engine, they are graded exactly
+#: like every other row; absent, the door's own refusal covers them.
+_ENGINE_PORT_ROWS = frozenset({"tempo"})
 
 
 def test_the_engine_still_carries_only_three_rows():
@@ -226,7 +229,8 @@ def test_the_engine_still_carries_only_three_rows():
     """
 
     table = getattr(_pinned_engine_column_batch(), "_SPECIES_BY_SCHEME")
-    assert sorted(table) == ["p3", "thompson_aero", "wsm6"], (
+    ported = sorted(_ENGINE_PORT_ROWS & set(table))
+    assert sorted(table) == sorted(["p3", "thompson_aero", "wsm6", *ported]), (
         "the PINNED engine has gained a microphysics row.  Re-check every "
         "declared row's species order against it, then retire that row's "
         "engine_absent_reason and give it an engine_scheme")
@@ -393,14 +397,40 @@ def test_an_accumulator_of_an_unknown_width_is_refused():
 # ---------------------------------------------------------------------------
 
 
+def _column_suite_only_schemes() -> dict[str, int]:
+    """Rows the column-suite seam carries but the MPAS-name seam never routes.
+
+    TEMPO (WOOF id 900) reaches the run only through the column-suite table
+    (``mpas-physics-suites.v1.json``, "column-suite seam only"); MPAS-A has no
+    spelling for it and ``physics_seam`` has no route.  Derived from the
+    table rather than listed, so a new column-suite scheme is classified by
+    the same data that admits it.
+    """
+
+    from hexcore import physics_seam as ps
+    from hexcore import physics_suites
+
+    routed_names = set(ps._ROUTES["config_microp_scheme"])
+    return {
+        name: sr.species_row_for_scheme(name).mp_physics
+        for name in physics_suites._microphysics_spellings()
+        if name not in routed_names
+    }
+
+
 def test_the_row_table_is_exhaustive_over_the_seams_routed_domain():
-    """Every scheme the seam can route to has a row, and vice versa.
+    """Every scheme the seams can route to has a row, and vice versa.
 
     The seam refuses a selector with no requirement row because silence
     there declares qv alone -- a state substitution.  The door has the same
     hazard one layer down: a routed scheme with no species row would reach
     the door and find nothing to size its scalar block from.  Deriving both
     from the same table is only safe while the table covers the domain.
+
+    The domain is the MPAS-name seam's routes plus the column-suite seam's
+    own schemes (TEMPO).  A declared row reachable from neither seam is an
+    orphan and still fails here; that is what the RRFS merge's unconditional
+    TEMPO row looked like to the old one-seam form of this test.
     """
 
     from hexcore import physics_seam as ps
@@ -408,9 +438,14 @@ def test_the_row_table_is_exhaustive_over_the_seams_routed_domain():
     routed = {int(value) for value in
               ps._ROUTES["config_microp_scheme"].values()}
     routed.discard(0)  # 'off' transports nothing and needs no row
+    column_only = set(_column_suite_only_schemes().values())
+    assert not routed & column_only
+    # The rows WRITTEN in species_row.py.  A row derived from the engine's
+    # plan (generic column seam) is the engine's inventory, not this
+    # table's, and is held by tests/test_arbitrary_physics.py.
     declared = {row.mp_physics
-                for row in sr.registered_species_rows().values()}
-    assert declared == routed
+                for row in sr.declared_species_rows().values()}
+    assert declared == routed | column_only
 
 
 def test_every_row_matches_the_seams_own_requirement_ladder():
@@ -420,11 +455,22 @@ def test_every_row_matches_the_seams_own_requirement_ladder():
     ladder and this table was derived independently from the engine's
     species table and WRF's mp driver arms.  They agree today; this gate is
     what keeps them agreeing.
+
+    A column-suite-only row has no ladder row by construction; the hazard
+    the ladder exists for (a selection accepted declaring qv alone) is then
+    closed by the MPAS-name seam refusing that name outright, which is
+    asserted instead, together with the row naming its engine scheme.
     """
 
     from hexcore import physics_seam as ps
 
-    for name, row in sr.registered_species_rows().items():
+    column_only = _column_suite_only_schemes()
+    for name, row in sr.declared_species_rows().items():
+        if name in column_only:
+            assert row.engine_scheme, name
+            with pytest.raises(ConfigurationRefusal, match=name):
+                ps.resolve_mpas_physics(config_microp_scheme=name)
+            continue
         selection = ps.resolve_mpas_physics(config_microp_scheme=name)
         assert ps._required_scalar_names(selection) ==             row.required_scalar_names(), name
 
@@ -465,4 +511,4 @@ def test_an_undeclared_scheme_is_refused_with_the_declared_set_named():
 
 def test_an_undeclared_selector_is_refused():
     with pytest.raises(ConfigurationRefusal):
-        sr.species_row_for_mp_physics(10)
+        sr.species_row_for_mp_physics(987654)

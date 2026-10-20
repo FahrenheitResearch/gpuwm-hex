@@ -1,0 +1,42 @@
+{
+  "rows": [
+    {
+      "admission": {
+        "scope": "closed global patch, one-card full-step LTS; forecast door checks bytes and geometry"
+      },
+      "background_km": 48.0,
+      "bdy_mask_sha256": null,
+      "boundary_zone_width": null,
+      "core_radius_km": 650.0,
+      "cull_pad_scale": null,
+      "cull_receipt": null,
+      "cull_region": null,
+      "dt_seconds": 18.75,
+      "fine_dx_m": 3000.0,
+      "generator_receipt": "hex-wofs-ensemble/evidence/mesh.json",
+      "grid": "hex-wofs-ensemble/prepared/mesh.grid.nc",
+      "grid_bytes": 608536268,
+      "grid_sha256": "52821c748c667de77a83c862467860733b7eba4914ca4a900ddf2db61e0a387b",
+      "kind": "generated-global",
+      "lbc_source": null,
+      "n_cells": 444826,
+      "n_edges": 1334472,
+      "n_interfaces": 56,
+      "n_levels": 55,
+      "n_soil_levels": 4,
+      "name": "wofs-patch",
+      "nominal_dx_m": 3000.0,
+      "parent_row": null,
+      "point_deg": [
+        42.5,
+        -87.0
+      ],
+      "spec_sha256": "5a40282e2fdccdfee4f41f5471662edba6096af2b5db88faa10f97f870e70194",
+      "static": "hex-wofs-ensemble/prepared/mesh.static.nc",
+      "static_bytes": 903896588,
+      "static_receipt": "hex-wofs-ensemble/evidence/static.json",
+      "static_sha256": "7559b9ad211d880337b3f52dcf3e454b044432471176f52da3e7b7119d5aae4b"
+    }
+  ],
+  "schema": "gpuwm-hex.mesh-rows/v1"
+}

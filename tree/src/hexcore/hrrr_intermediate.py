@@ -18,22 +18,14 @@ is the engine's own, driven, not re-implemented:
   fail-closed decoder ``gpuwm prep`` runs, over the same ``wrfnat`` + soil
   pair ``gpuwm fetch --source hrrr`` writes, into the engine's own native
   window format that ``gpuwm.ingest.hrrr`` maps;
-* REGRID -- the engine's projected-source interpolation plan
-  (``gpuwm.ingest.hrrr._ProjectedCpuPlan``: WPS's overlapping-parabolic
-  operator with FP64 donor selection, executed by the engine's CPU bridge
-  when it exports the indexed-donor entry), aimed at a regular lat-lon
-  target instead of a WRF Lambert one.  Winds are rotated to the earth
-  basis on the source grid with the engine's own rotation
-  (``_source_window_rotation``) before they are moved, because an
-  ``iproj 0`` record is earth-relative by definition;
-* SOIL -- the engine's own node-to-Noah-layer interpolation
-  (``gpuwm.ingest.soil._interp_nodes`` over ``HRRR_SOIL_NODE_DEPTHS_M`` and
-  ``NOAH_LAYER_MIDPOINTS_M``), so the four ``ST/SM`` layers the init reads
-  are the four the engine's own WRF road would have produced;
-* WRITE -- the WPS version-5 record layout, the inverse of this tree's own
-  reader (:mod:`hexcore.wps_intermediate`, itself a transcription of the
-  frozen MPAS reader), and every file written is read back through that
-  reader before the receipt is signed.
+* REGRID -- the rw_wps projected-intermediate entry builds the engine's
+  FP64 Lambert donor geometry and keeps donors separate from FP32 fractions.
+  It calls the selected engine library's exact-donor WPS overlapping-parabolic
+  operator. Rust rotates source winds to earth coordinates before movement;
+* SOIL -- Rust interpolates the source row's depth nodes to the engine's
+  declared layer midpoints in FP64, rounds once to FP32 and moves by nearest;
+* WRITE -- Rust writes WPS version-5 records and checks the complete file with
+  the engine Rust reader before publishing the per-hour completion marker.
 
 WHAT THE RESULT IS, STATED PLAINLY.  The intermediate is HRRR RESAMPLED onto
 a 0.025-degree regular lat-lon grid over the domain (2.8 km meridionally,
@@ -59,8 +51,10 @@ the one row it ships because the plan of record names the file that way.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+import ctypes
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
@@ -68,7 +62,11 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import socket
+import sys
+from threading import Condition, Event
 import time
+import warnings
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -125,6 +123,14 @@ class SourceRow:
     parabolic_halo_cells: int = 2
     #: What a refusal calls the product.
     description: str = ""
+    #: The engine's fetch transport, used for a missing hour while decode runs.
+    fetch_function: str = ""
+    source_grid_function: str = ""
+    loader_function: str = ""
+    producer_class: str = ""
+    decoder_workers_max: int = 1
+    decoded_directories: tuple[str, str] = ("", "")
+    soil_depth_metadata: tuple[str, str] = ("", "")
 
     def hour_files(self, root: Path, cycle: datetime, hour: int) -> tuple[Path, Path]:
         atmosphere, soil = self.grib_names
@@ -173,6 +179,13 @@ SOURCE_ROWS: Mapping[str, SourceRow] = {
         levels=50,
         map_source="NCEP HRRR via gpuwm-hex latlon",
         description="the 3 km Lambert CONUS HRRR (native hybrid wrfnat + wrfprs soil)",
+        fetch_function="gpuwm.fetch:fetch_hrrr",
+        source_grid_function="hrrr_source_grid",
+        loader_function="load_hrrr_pipeline_ready_window",
+        producer_class="tools.hrrr_pipeline:HrrrPipelineProducer",
+        decoder_workers_max=13,
+        decoded_directories=("atmosphere-f{hour:02d}", "soil-f{hour:02d}"),
+        soil_depth_metadata=("HRRR_SOIL_NODE_DEPTHS_M", "NOAH_LAYER_MIDPOINTS_M"),
     ),
 }
 
@@ -305,45 +318,36 @@ class SourceWindow:
         }
 
 
+def _projection_seed(grid, target, window=None):
+    seed = {name: float(getattr(grid, name)) for name in
+            ("hemi", "cone", "rebydx", "polei", "polej", "truelat1", "stand_lon")}
+    seed.update(native_nx=int(grid.e_we)-1, native_ny=int(grid.e_sn)-1, target=target.as_dict())
+    seed.update(i_start=window.i_start if window else 0, j_start=window.j_start if window else 0,
+                source_nx=window.nx if window else seed["native_nx"],
+                source_ny=window.ny if window else seed["native_ny"])
+    return seed
+
+
 def source_window_for(target: LatLonTarget, row: SourceRow, *, extra_cells: int = 2) -> SourceWindow:
-    """The decoder crop every target point's stencil needs, on the source grid."""
-
+    """Rust projects the target and bounds the source crop before decode."""
     import importlib
-
     loader = importlib.import_module(row.loader_module)
-    grid = loader.hrrr_source_grid()
-    lat, lon = target.mesh()
-    x, y = grid.latlon_to_ij(lat, lon)
-    zero_x = np.asarray(x, dtype=np.float64) - 1.0
-    zero_y = np.asarray(y, dtype=np.float64) - 1.0
-    if not (np.isfinite(zero_x).all() and np.isfinite(zero_y).all()):
-        raise IntermediateRefusal(
-            f"the target box maps to non-finite {row.name} source coordinates; "
-            f"it lies outside the projection's domain"
-        )
-    halo = int(row.parabolic_halo_cells)
-    window = SourceWindow(
-        i_start=int(np.floor(zero_x.min())) - 1 - extra_cells,
-        i_end=int(np.floor(zero_x.max())) + halo + extra_cells,
-        j_start=int(np.floor(zero_y.min())) - 1 - extra_cells,
-        j_end=int(np.floor(zero_y.max())) + halo + extra_cells,
-    )
-    limit_x = int(grid.e_we) - 1
-    limit_y = int(grid.e_sn) - 1
-    if window.i_start < 0 or window.j_start < 0 or window.i_end > limit_x - 1 or window.j_end > limit_y - 1:
-        south, west, north, east = loader_envelope(loader)
-        raise IntermediateRefusal(
-            f"the target box ({target.south:.3f}..{target.north:.3f} N, "
-            f"{target.west:.3f}..{target.east:.3f} E) plus its interpolation "
-            f"halo leaves {row.name} coverage: it needs source cells "
-            f"i={window.i_start}..{window.i_end}, j={window.j_start}..{window.j_end} "
-            f"and the native mass grid is i=0..{limit_x - 1}, j=0..{limit_y - 1} "
-            f"(envelope {south:.2f}..{north:.2f} N, {west:.2f}..{east:.2f} E).  "
-            f"Move the point inland, shrink the core, or use a source that "
-            f"covers it"
-        )
-    return window
-
+    grid = getattr(loader, row.source_grid_function)()
+    seed = _projection_seed(grid, target)
+    seed.update(halo=row.parabolic_halo_cells, extra_cells=extra_cells)
+    encoded = json.dumps(seed, separators=(",", ":")).encode("utf-8")
+    library, _ = _native_projected_entry()
+    entry = library.gpuwm_projected_window_v1
+    entry.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_int64),
+                      ctypes.c_void_p, ctypes.c_size_t]
+    entry.restype = ctypes.c_int
+    bounds = (ctypes.c_int64 * 4)()
+    error = ctypes.create_string_buffer(4096)
+    code = entry(encoded, len(encoded), bounds, error, len(error))
+    if code:
+        raise IntermediateRefusal(f"the target interpolation halo leaves {row.name} coverage: "
+                                  + error.value.decode("utf-8", errors="replace"))
+    return SourceWindow(*bounds)
 
 def loader_envelope(loader: Any) -> tuple[float, float, float, float]:
     try:
@@ -516,21 +520,20 @@ def _engine_pieces(row: SourceRow) -> dict[str, Any]:
         loader = importlib.import_module(row.loader_module)
         soil = importlib.import_module("gpuwm.ingest.soil")
         backend_module = importlib.import_module("gpuwm.ingest.preprocess_backend")
+        producer_path, producer_name = row.producer_class.split(":", 1)
+        producer_module = importlib.import_module(producer_path)
     except ImportError as error:
         raise IntermediateRefusal(
             f"the engine's ingest is not importable ({error}); this door drives "
-            f"the engine's own decoder, loader and interpolation operator and "
+            f"the engine's native decoder, projected metadata and interpolation operator and "
             f"has no road without them"
         ) from error
     needed = {
-        "load": getattr(loader, "load_hrrr_pipeline_ready_window", None),
-        "plan": getattr(loader, "_ProjectedCpuPlan", None),
-        "rotation": getattr(loader, "_source_window_rotation", None),
-        "ranges": getattr(loader, "_require_source_physical_ranges", None),
-        "interp_nodes": getattr(soil, "_interp_nodes", None),
-        "soil_nodes_m": getattr(soil, "HRRR_SOIL_NODE_DEPTHS_M", None),
-        "noah_midpoints_m": getattr(soil, "NOAH_LAYER_MIDPOINTS_M", None),
+        "source_grid": getattr(loader, row.source_grid_function, None),
+        "soil_nodes_m": getattr(soil, row.soil_depth_metadata[0], None),
+        "noah_midpoints_m": getattr(soil, row.soil_depth_metadata[1], None),
         "resolve_backend": getattr(backend_module, "resolve_preprocess_backend", None),
+        "producer": getattr(producer_module, producer_name, None),
     }
     missing = sorted(name for name, value in needed.items() if value is None)
     if missing:
@@ -542,97 +545,172 @@ def _engine_pieces(row: SourceRow) -> dict[str, Any]:
     return needed
 
 
+def _native_projected_entry():
+    from gpuwm.bridges import artifact_candidates
+
+    name = ("rw_projected_intermediate.dll" if os.name == "nt" else
+            "librw_projected_intermediate.dylib" if sys.platform == "darwin" else
+            "librw_projected_intermediate.so")
+    candidates = list(artifact_candidates("GPUWM_PROJECTED_INTERMEDIATE_BRIDGE", name))
+    # The entry is built in rw_wps, alongside its projected-source frontend.
+    import gpuwm
+    root = Path(gpuwm.__file__).resolve().parent.parent
+    candidates.extend(root / "tools" / "rw_wps" / "target" / arm / name
+                      for arm in ("release", "debug"))
+    explicit = os.environ.get("GPUWM_PROJECTED_INTERMEDIATE_BRIDGE")
+    if explicit and not Path(explicit).is_file():
+        raise IntermediateRefusal(f"GPUWM_PROJECTED_INTERMEDIATE_BRIDGE={explicit} is not a file")
+    for path in candidates:
+        if path.is_file():
+            try:
+                library = ctypes.CDLL(str(path))
+                entry = library.gpuwm_projected_intermediate_v1
+                library.gpuwm_projected_geometry_v1
+                library.gpuwm_projected_geometry_release_v1
+                library.gpuwm_projected_window_v1
+            except (OSError, AttributeError) as error:
+                raise IntermediateRefusal(
+                    f"{path} has no usable projected MET entry ({error}); "
+                    "wind rotation, soil layering and MET writing cannot run. "
+                    "Build tools/rw_wps with cargo build --release -p projected-intermediate"
+                ) from error
+            entry.argtypes = [ctypes.c_char_p, ctypes.c_size_t,
+                              ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+            entry.restype = ctypes.c_int
+            return library, entry
+    raise IntermediateRefusal(
+        f"{name} was not found; projected MET fields cannot be regridded or written. "
+        "Build tools/rw_wps with cargo build --release -p projected-intermediate; "
+        "stage the library with the bridge bundle or name GPUWM_PROJECTED_INTERMEDIATE_BRIDGE"
+    )
+
+
+def _field_spec(source: str, name: str, units: str, description: str, method: str) -> dict[str, str]:
+    transform = {"SPECHUMD": "nonnegative", "SNOW": "nonnegative",
+                 "LANDSEA": "land", "SEAICE": "fraction"}.get(name, "none")
+    return dict(source=source, field=name, units=units, description=description,
+                method=method, transform=transform)
+
+
+class ProjectedMetPlan:
+    """Retain the engine's immutable donor geometry across hourly native calls.
+
+    Only geometry and table metadata cross Python. Rust reads window fields,
+    rotates winds, interpolates soil nodes, regrids, clips, writes and verifies.
+    The engine's FP64 donor decisions are kept separate from FP32 fractions.
+    """
+    def __init__(self, pieces, snapshot, target, backend):
+        import weakref
+        self.library, self.entry = _native_projected_entry()
+        if not backend.indexed_donor_interp:
+            raise IntermediateRefusal("the CPU bridge lacks gpuwm_indexed_interp_f32; exact projected MET donors cannot be evaluated. Rebuild tools/grib1_bridge")
+        self.backend = backend
+        self.key = (snapshot.i_start, snapshot.j_start, snapshot.ny, snapshot.nx, target)
+        grid = pieces["source_grid"]()
+        seed = _projection_seed(grid, target,
+                                SourceWindow(snapshot.i_start, snapshot.i_start+snapshot.nx-1,
+                                             snapshot.j_start, snapshot.j_start+snapshot.ny-1))
+        encoded = json.dumps(seed, separators=(",", ":")).encode("utf-8")
+        error = ctypes.create_string_buffer(4096)
+        interpolate = ctypes.cast(backend._native._library.gpuwm_indexed_interp_f32, ctypes.c_void_p)
+        create = self.library.gpuwm_projected_geometry_v1
+        create.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+        create.restype = ctypes.c_void_p
+        self.geometry = create(encoded, len(encoded), interpolate, error, len(error))
+        if not self.geometry:
+            raise IntermediateRefusal(error.value.decode("utf-8", errors="replace"))
+        release = self.library.gpuwm_projected_geometry_release_v1
+        release.argtypes = [ctypes.c_void_p]
+        release.restype = None
+        self._release = weakref.finalize(self, release, self.geometry)
+        self.workers = int(backend.workers)
+
+    def close(self):
+        self._release()
+
+
+@dataclass(frozen=True)
+class WindowFile:
+    filename: Path
+
+
+@dataclass(frozen=True)
+class DecodedWindowFiles:
+    valid_time: datetime
+    forecast_hour: int
+    i_start: int
+    j_start: int
+    ny: int
+    nx: int
+    fields: Mapping[str, WindowFile]
+
+
+def decoded_window_files(row, root, cycle, hour, window):
+    """Describe producer-owned files; Rust opens and validates every field."""
+    if not all(row.decoded_directories):
+        raise IntermediateRefusal("the source row has no decoded directory metadata; MET fields cannot be located")
+    atmosphere, soil = (Path(root) / pattern.format(hour=hour) for pattern in row.decoded_directories)
+    names = set(row.atmosphere_3d) | set(row.surface) | set(row.wind_3d) | set(row.wind_10m)
+    fields = {name: WindowFile(atmosphere / f"{name}.f32le") for name in names}
+    fields.update({name: WindowFile(soil / f"{name}.f32le")
+                   for name in (row.soil_temperature, row.soil_moisture)})
+    for name in ("QNWFA", "QNIFA"):
+        path = atmosphere / f"{name}.f32le"
+        if path.is_file():
+            fields[name] = WindowFile(path)
+    return DecodedWindowFiles(cycle + timedelta(hours=hour), hour, window.i_start, window.j_start,
+                              window.j_end - window.j_start + 1, window.i_end - window.i_start + 1, fields)
+
 def regrid_hour(
-    row: SourceRow,
-    pieces: Mapping[str, Any],
-    snapshot: Any,
-    target: LatLonTarget,
-    *,
-    backend: Any,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Every WPS record for one valid time, from the engine's own operator."""
-
-    lat, lon = target.mesh()
-    plan = pieces["plan"](snapshot, lat, lon, backend)
-    source = snapshot.fields
-    pieces["ranges"](source)
-    sina, cosa = pieces["rotation"](snapshot)
-    sina = np.asarray(sina, dtype=np.float32)
-    cosa = np.asarray(cosa, dtype=np.float32)
-
-    def earth_wind(u_name: str, v_name: str) -> tuple[np.ndarray, np.ndarray]:
-        u = np.asarray(source[u_name], dtype=np.float32)
-        v = np.asarray(source[v_name], dtype=np.float32)
-        u_earth = u * cosa - v * sina
-        v_earth = v * cosa + u * sina
-        return (
-            np.asarray(plan.apply(u_earth, method="parabolic"), dtype=np.float32),
-            np.asarray(plan.apply(v_earth, method="parabolic"), dtype=np.float32),
-        )
-
-    records: list[dict[str, Any]] = []
-
-    def record(name: str, units: str, description: str, level: float, values: np.ndarray) -> None:
-        records.append({
-            "field": name, "units": units, "description": description,
-            "level": float(level), "values": np.asarray(values, dtype=np.float32),
-        })
-
-    # 3-D: level-indexed slabs with the pressure beside them.
-    three_d = {
-        window_name: np.asarray(plan.apply(source[window_name], method="parabolic"), dtype=np.float32)
-        for window_name in row.atmosphere_3d
+    row: SourceRow, pieces: Mapping[str, Any], snapshot: Any, target: LatLonTarget,
+    *, backend: Any, path: Path, plan: ProjectedMetPlan | None = None,
+) -> tuple[dict[str, Any], ProjectedMetPlan]:
+    """Drive the native projected MET entry. There is no Python field route."""
+    if plan is None:
+        plan = ProjectedMetPlan(pieces, snapshot, target, backend)
+    if plan.key != (snapshot.i_start, snapshot.j_start, snapshot.ny, snapshot.nx, target):
+        raise IntermediateRefusal("source window changed between hours; reusing its donors would misplace MET fields")
+    if not plan._release.alive:
+        raise IntermediateRefusal("projected geometry has been released; it cannot supply MET donors")
+    required = set(row.atmosphere_3d) | set(row.surface) | set(row.wind_3d) | set(row.wind_10m)
+    required.update((row.soil_temperature, row.soil_moisture))
+    aerosol = [name for name in ("QNWFA", "QNIFA") if name in snapshot.fields]
+    required.update(aerosol)
+    sources = {}
+    for name in sorted(required):
+        value = snapshot.fields[name]
+        filename = getattr(value, "filename", None)
+        if filename is None:
+            raise IntermediateRefusal(f"{name} is not a decoder window file; the native entry reads authenticated window bytes")
+        sources[name] = str(filename)
+    receipt_path = path.with_name(path.name + ".native.json")
+    spec = {
+        "output": str(path), "receipt": str(receipt_path),
+        "valid_time": snapshot.valid_time.strftime("%Y-%m-%d_%H:%M:%S"),
+        "forecast_hour": float(snapshot.forecast_hour), "map_source": row.map_source,
+        "target": target.as_dict(), "levels": row.levels, "workers": plan.workers,
+        "sources": sources,
+        "atmosphere": [_field_spec(source, *metadata, "parabolic")
+                       for source, metadata in row.atmosphere_3d.items()] +
+                      [_field_spec(name, name, "kg-1", "Analysis aerosol number", "parabolic") for name in aerosol],
+        "surface": [_field_spec(source, *metadata) for source, metadata in row.surface.items()],
+        "wind_3d": row.wind_3d, "wind_10m": row.wind_10m,
+        "soil": {"temperature": row.soil_temperature, "moisture": row.soil_moisture,
+                 "nodes": pieces["soil_nodes_m"].tolist(),
+                 "midpoints": pieces["noah_midpoints_m"].tolist(), "names": row.soil_layer_names,
+                 "preserve_nodes": True},
+        "admission": {"land": next(k for k, v in row.surface.items() if v[0] == "LANDSEA"),
+                      "ice": next(k for k, v in row.surface.items() if v[0] == "SEAICE"),
+                      "soil_temperature": row.soil_temperature, "soil_moisture": row.soil_moisture,
+                      "humidity": [k for k, v in row.atmosphere_3d.items() if v[0] == "SPECHUMD"]
+                                  + [k for k, v in row.surface.items() if v[0] == "SPECHUMD"]},
     }
-    u3, v3 = earth_wind(*row.wind_3d)
-    levels = int(three_d[next(iter(row.atmosphere_3d))].shape[0])
-    if levels != row.levels:
-        raise IntermediateRefusal(
-            f"the {row.name} window carries {levels} levels and the row declares "
-            f"{row.levels}; the level table this door writes would be wrong"
-        )
-    for k in range(levels):
-        tag = float(k + 1)
-        for window_name, (wps_name, units, description) in row.atmosphere_3d.items():
-            values = three_d[window_name][k]
-            if wps_name == "SPECHUMD":
-                values = np.maximum(values, np.float32(0.0))
-            record(wps_name, units, description, tag, values)
-        record("UU", "m s-1", "U", tag, u3[k])
-        record("VV", "m s-1", "V", tag, v3[k])
-
-    # Surface.
-    for window_name, (wps_name, units, description, method) in row.surface.items():
-        values = np.asarray(plan.apply(source[window_name], method=method), dtype=np.float32)
-        if wps_name in ("SPECHUMD", "SNOW"):
-            values = np.maximum(values, np.float32(0.0))
-        if wps_name == "LANDSEA":
-            values = np.where(values >= 0.5, np.float32(1.0), np.float32(0.0)).astype(np.float32)
-        if wps_name == "SEAICE":
-            values = np.clip(values, 0.0, 1.0).astype(np.float32)
-        record(wps_name, units, description, SURFACE_LEVEL, values)
-    u10, v10 = earth_wind(*row.wind_10m)
-    record("UU", "m s-1", "U", SURFACE_LEVEL, u10)
-    record("VV", "m s-1", "V", SURFACE_LEVEL, v10)
-
-    # Soil: the engine's own node-to-layer interpolation, moved by nearest
-    # neighbour so land values stay land values; the init masks by LANDSEA.
-    soil_t = np.asarray(source[row.soil_temperature], dtype=np.float64)
-    soil_m = np.asarray(source[row.soil_moisture], dtype=np.float64)
-    layers_t = pieces["interp_nodes"](soil_t, pieces["soil_nodes_m"], pieces["noah_midpoints_m"])
-    layers_m = pieces["interp_nodes"](soil_m, pieces["soil_nodes_m"], pieces["noah_midpoints_m"])
-    for index, (t_name, m_name) in enumerate(row.soil_layer_names):
-        t_values = plan.apply(np.asarray(layers_t[index], dtype=np.float32), method="nearest")
-        m_values = plan.apply(np.asarray(layers_m[index], dtype=np.float32), method="nearest")
-        record(t_name, "K", f"T {t_name[2:5]}-{t_name[5:8]} cm below ground layer (Upper)",
-               SURFACE_LEVEL, np.asarray(t_values, dtype=np.float32))
-        record(m_name, "m3 m-3", f"Soil moisture of {m_name[2:5]}-{m_name[5:8]} cm ground layer",
-               SURFACE_LEVEL, np.clip(np.asarray(m_values, dtype=np.float32), 0.0, 1.0))
-    return records, {
-        "operator": getattr(plan, "operator", "unknown"),
-        "levels": levels,
-        "records": len(records),
-    }
-
+    encoded = json.dumps(spec, separators=(",", ":")).encode("utf-8")
+    error = ctypes.create_string_buffer(4096)
+    code = plan.entry(encoded, len(encoded), plan.geometry, error, len(error))
+    if code:
+        raise IntermediateRefusal(error.value.decode("utf-8", errors="replace"))
+    return json.loads(receipt_path.read_text(encoding="utf-8")), plan
 
 # ---------------------------------------------------------------------------
 # the writer
@@ -752,36 +830,251 @@ class IntermediateRequest:
     target_basis: Mapping[str, Any] = field(default_factory=dict)
 
 
+_LEDGER_WARNED: set[str] = set()
+
+
+def _ledger_emit(path: Path, stage: str, phase: str, attrs: Mapping[str, Any]) -> None:
+    """C1 v1, one O_APPEND write, never a model failure on telemetry failure."""
+    try:
+        from gpuwm.timeline.ledger import emit
+    except ImportError:
+        pass  # The frozen hex bootstrap predates the separately delivered C1 package.
+    else:
+        try:
+            emit(stage, phase, path=path, product="hex", attrs=attrs)
+        except BaseException:
+            pass
+        return
+    destination = os.environ.get("GPUWM_TIME_LEDGER") or str(path)
+    try:
+        event = {"v": 1, "t_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                 "t_mono": time.monotonic(), "host": socket.gethostname(),
+                 "rental_id": os.environ.get("GPUWM_RENTAL_ID"), "run_id": os.environ.get("GPUWM_RUN_ID"),
+                 "product": "hex", "stage": stage, "phase": phase, "card": None,
+                 "pid": os.getpid(), "attrs": dict(attrs)}
+        data = (json.dumps(event, separators=(",", ":")) + "\n").encode("utf-8")
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            if os.write(fd, data) != len(data):
+                raise OSError("short append")
+        finally:
+            os.close(fd)
+    except Exception as error:
+        if destination not in _LEDGER_WARNED:
+            _LEDGER_WARNED.add(destination)
+            # A warnings filter set to 'error' must not turn telemetry into a
+            # forecast failure either.
+            try:
+                warnings.warn(f"timeline append failed for {destination}: {error}", RuntimeWarning)
+            except Exception:
+                pass
+
+
+def _ensure_hour(request: IntermediateRequest, hour: int, log: Callable[[str], None]) -> Path:
+    """Fetch I/O only. This runs in the one prefetch thread, never a process pool."""
+    row = request.source
+    root = Path(request.grib_dir).expanduser().absolute()
+    if all(path.is_file() for path in row.hour_files(root, request.cycle, hour)):
+        return root
+    if not row.fetch_function:
+        raise IntermediateRefusal(f"source row {row.name} has no fetch transport for missing hour {hour}")
+    import importlib
+    from gpuwm.fetch import select_fetch_engine
+
+    module, function = row.fetch_function.split(":", 1)
+    fetch = getattr(importlib.import_module(module), function)
+    choice = select_fetch_engine("rust", progress=log)
+    root = Path(request.out_dir).absolute() / "fetch" / f"f{hour:02d}"
+    root.mkdir(parents=True, exist_ok=True)
+    ledger = Path(request.out_dir).absolute() / "timeline.jsonl"
+    _ledger_emit(ledger, "fetch.intermediate.hour", "begin", {"hour": hour})
+    started = time.perf_counter()
+    try:
+        fetch(cycle=request.cycle, hours=(hour,), area=None, out=root, workers=request.workers,
+              file_workers=1, engine=choice.engine, engine_bin=choice.binary,
+              engine_selection=choice.selection, transport="s3", progress=log,
+              cache_dir=Path(request.out_dir).absolute() / "fetch-cache")
+    except Exception:
+        _ledger_emit(ledger, "fetch.intermediate.hour", "end",
+                     {"hour": hour, "seconds": time.perf_counter() - started, "status": "failed"})
+        raise
+    _ledger_emit(ledger, "fetch.intermediate.hour", "end",
+                 {"hour": hour, "seconds": time.perf_counter() - started, "status": "complete"})
+    if not all(path.is_file() for path in row.hour_files(root, request.cycle, hour)):
+        raise IntermediateRefusal(f"fetch completed without both source files for hour {hour}; no decode can start")
+    return root
+
+
+def _admit_hour(row, grib_root, cycle, hour, admissions):
+    """Bind the bytes admitted to the one live Rust producer before it reads them."""
+    atmosphere, soil = row.hour_files(grib_root, cycle, hour)
+    inputs = {"hour": hour, "atmosphere": str(atmosphere), "soil": str(soil),
+              "atmosphere_sha256": sha256_file(atmosphere), "soil_sha256": sha256_file(soil)}
+    path = admissions / f"f{hour:02d}.admitted"
+    temporary = path.with_suffix(".partial")
+    temporary.write_text(f"forecast_hour\t{hour}\natmosphere\t{atmosphere}\nsoil\t{soil}\n",
+                         encoding="utf-8", newline="\n")
+    os.replace(temporary, path)
+    return inputs
+
+
+def _cancel_producer(producer):
+    """Use a caller's owned-process stop helper when its host requires one."""
+    command = os.environ.get("GPUWM_CHILD_STOP_COMMAND")
+    process = getattr(producer, "process", None)
+    if command and process is not None and process.poll() is None:
+        argv = json.loads(command)
+        if not isinstance(argv, list) or not argv or not all(isinstance(item, str) for item in argv):
+            raise IntermediateRefusal("GPUWM_CHILD_STOP_COMMAND must name an argv list for the owned decoder stop helper")
+        subprocess.run([*argv, str(process.pid)], check=True, capture_output=True, text=True)
+        process.wait(timeout=30)
+    producer.cancel()
+
+
 def build_intermediates(request: IntermediateRequest, *, log: Callable[[str], None] = print) -> dict[str, Any]:
     row = request.source
     out_dir = Path(request.out_dir).expanduser().absolute()
     out_dir.mkdir(parents=True, exist_ok=True)
+    if any(out_dir.glob(f"{request.prefix}:*")):
+        raise IntermediateRefusal(f"{out_dir} holds intermediate hours; pass a fresh --out-dir so completion markers cannot describe an earlier run")
     pieces = _engine_pieces(row)
     decoder = resolve_decoder(row, request.decoder)
     window = source_window_for(request.target, row)
-    decoded = decode_window(
-        row, decoder=decoder, grib_dir=request.grib_dir, cycle=request.cycle,
-        hours=request.hours, window=window, out_dir=out_dir, workers=request.workers, log=log,
-    )
-    backend = pieces["resolve_backend"]("cpu")
+    if not request.hours or tuple(sorted(set(request.hours))) != tuple(request.hours):
+        raise IntermediateRefusal("forecast hours must be unique and ordered; per-hour completion cannot be ambiguous")
+    # Resolve the native entry before starting fetch. No fallback keeps the
+    # Python field path alive when the native artifact is absent.
+    _native_projected_entry()
+    backend = pieces["resolve_backend"]("cpu", workers=request.workers)
     files: list[dict[str, Any]] = []
+    decoded_hours: list[dict[str, Any]] = []
+    plan = None
     operator = None
+    ledger = out_dir / "timeline.jsonl"
+    if len(request.hours) < 2 or request.hours != tuple(range(request.hours[0], request.hours[-1]+1)):
+        raise IntermediateRefusal("the decoder series requires at least two contiguous hours; a missing boundary interval cannot be published")
+    admissions = out_dir / "admissions"
+    admissions.mkdir()
+    series = out_dir / "series.tsv"
+    predicted = {}
     for hour in request.hours:
-        started = time.perf_counter()
-        snapshot = pieces["load"](Path(decoded["native"]), int(hour))
-        records, measured = regrid_hour(row, pieces, snapshot, request.target, backend=backend)
-        operator = measured["operator"]
-        valid = request.cycle + timedelta(hours=int(hour))
-        path = out_dir / f"{request.prefix}:{valid:%Y-%m-%d_%H}"
-        written = write_intermediate(
-            path, records, valid_time=valid, forecast_hour=float(hour),
-            map_source=row.map_source, target=request.target,
-        )
-        written["regrid_seconds"] = round(time.perf_counter() - started, 2)
-        written["levels"] = measured["levels"]
-        files.append(written)
-        log(f"WROTE {path.name}: {written['field_records']} records, "
-            f"{written['bytes'] / 1e6:.1f} MB, {written['regrid_seconds']} s")
+        root = Path(request.grib_dir).expanduser().absolute()
+        if not all(path.is_file() for path in row.hour_files(root, request.cycle, hour)):
+            root = out_dir / "fetch" / f"f{hour:02d}"
+        predicted[hour] = root
+    series.write_text("".join(f"{hour}\t{a}\t{s}\n" for hour in request.hours
+                              for a, s in [row.hour_files(predicted[hour], request.cycle, hour)]),
+                      encoding="utf-8", newline="\n")
+    native = out_dir / "native"
+    producer = pieces["producer"](
+        decoder=decoder, series=series, output=native, signals=out_dir / "signals",
+        admissions=admissions, cycle=request.cycle.strftime("%Y-%m-%d %H:00:00"),
+        window=(window.i_start, window.i_end, window.j_start, window.j_end),
+        workers=str(max(1, min(row.decoder_workers_max, request.workers))), log=out_dir / "logs" / "decode.log")
+    # One I/O thread fetches one missing lead ahead of ordered consumption.
+    # Existing immutable input pairs are admitted immediately so inventory and
+    # decode stay parallel on warm packs. Rust owns the shared field budget.
+    condition = Condition()
+    stop = Event()
+    admitted = {}
+    consuming = [0]
+
+    def fetch_series():
+        try:
+            for index, hour in enumerate(request.hours):
+                if predicted[hour] != Path(request.grib_dir).expanduser().absolute():
+                    with condition:
+                        while index > consuming[0] + 1 and not stop.is_set():
+                            condition.wait(0.02)
+                if stop.is_set():
+                    return
+                root = _ensure_hour(request, int(hour), log)
+                if root != predicted[hour]:
+                    raise IntermediateRefusal("fetched root differs from the admitted series; refuses a different source window")
+                started = time.perf_counter()
+                attrs = {"hour": int(hour), "decode_s": 0.0, "regrid_s": 0.0}
+                _ledger_emit(ledger, "prep.intermediate.hour", "begin", attrs)
+                try:
+                    inputs = _admit_hour(row, root, request.cycle, int(hour), admissions)
+                except Exception:
+                    _ledger_emit(ledger, "prep.intermediate.hour", "end", {**attrs, "status": "failed"})
+                    raise
+                with condition:
+                    admitted[hour] = (inputs, started)
+                    condition.notify_all()
+        finally:
+            with condition:
+                condition.notify_all()
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="intermediate-fetch") as prefetch:
+            producer.start()
+            fetched = prefetch.submit(fetch_series)
+            for index, hour in enumerate(request.hours):
+                hour = int(hour)
+                with condition:
+                    consuming[0] = index
+                    condition.notify_all()
+                    while hour not in admitted and not fetched.done():
+                        condition.wait(0.02)
+                    if hour not in admitted:
+                        fetched.result()
+                        raise IntermediateRefusal(f"source hour {hour} was never admitted; no completion can be published")
+                    inputs, started = admitted[hour]
+                attrs = {"hour": hour, "decode_s": 0.0, "regrid_s": 0.0}
+                try:
+                    if index == 0:
+                        producer.wait_preflight()
+                    staging = producer.wait_hour(hour)
+                    attrs["decode_s"] = time.perf_counter() - started
+                    decoded_hours.append({"native": str(native), "native_during_consume": str(staging),
+                                          "seconds": attrs["decode_s"], "inputs": [inputs]})
+                    snapshot = decoded_window_files(row, staging, request.cycle, hour, window)
+                    valid = request.cycle + timedelta(hours=hour)
+                    path = out_dir / f"{request.prefix}:{valid:%Y-%m-%d_%H}"
+                    regrid_start = time.perf_counter()
+                    written, plan = regrid_hour(row, pieces, snapshot, request.target,
+                                               backend=backend, path=path, plan=plan)
+                    attrs["regrid_s"] = time.perf_counter() - regrid_start
+                    written["regrid_seconds"] = attrs["regrid_s"]
+                    operator = written["operator"]
+                    marker = path.with_name(path.name + ".ready.json")
+                    temporary = marker.with_name(marker.name + ".partial")
+                    completion = {"schema": "gpuwm-hex.intermediate.hour/v1", "hour": hour,
+                                  **written, **attrs}
+                    with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+                        handle.write(json.dumps(completion, sort_keys=True) + "\n")
+                    os.replace(temporary, marker)
+                    written["completion_marker"] = str(marker)
+                    files.append(written)
+                    _ledger_emit(ledger, "prep.intermediate.hour", "end", {**attrs, "status": "complete"})
+                    _ledger_emit(ledger, "prep.intermediate.hour", "mark",
+                                 {**attrs, "path": str(path), "marker": str(marker), "sha256": written["sha256"]})
+                    log(f"WROTE {path.name}: {written['field_records']} records, "
+                        f"{written['bytes'] / 1e6:.1f} MB, {attrs['regrid_s']:.3f} s")
+                    del snapshot
+                except Exception:
+                    _ledger_emit(ledger, "prep.intermediate.hour", "end", {**attrs, "status": "failed"})
+                    stop.set()
+                    raise
+            fetched.result()
+        # Record the producer's generated staging paths before its normal cleanup.
+        staging_files = [{"path": str(p), "bytes": p.stat().st_size}
+                         for p in staging.rglob("*") if p.is_file() and not p.is_symlink()]
+        (out_dir / "staging-cleanup.json").write_text(json.dumps(staging_files, indent=2)+"\n", encoding="utf-8")
+        pipeline = producer.finish()
+    except Exception as error:
+        # This is the existing producer's owned-process failure unwind. Its
+        # in-memory tail and exact PID-owned staging are captured before cleanup.
+        _cancel_producer(producer)
+        if plan is not None:
+            plan.close()
+        raise IntermediateRefusal(f"posted decoder/MET pipeline failed: {error}; log {out_dir / 'logs' / 'decode.log'}") from error
+    manifest = _write_manifest(native)
+    decoded = {"seconds": sum(item["seconds"] for item in decoded_hours), "hours": decoded_hours,
+               "native": str(native), "manifest": str(manifest), "manifest_sha256": sha256_file(manifest),
+               "pipeline": pipeline, "decoder": str(decoder), "decoder_sha256": sha256_file(decoder)}
+    if plan is not None:
+        plan.close()
     receipt = {
         "schema": INTERMEDIATE_SCHEMA,
         "source": row.name,
@@ -795,10 +1088,10 @@ def build_intermediates(request: IntermediateRequest, *, log: Callable[[str], No
         "decode": decoded,
         "regrid": {
             "operator": operator,
-            "engine": "gpuwm.ingest.hrrr._ProjectedCpuPlan (WPS overlapping-parabolic, "
-                      "FP64 donors); winds rotated to the earth basis on the source grid",
-            "soil": "gpuwm.ingest.soil._interp_nodes over HRRR depth nodes to the Noah "
-                    "layer midpoints, moved by nearest neighbour",
+            "engine": "rw_wps projected-intermediate, using gpuwm_indexed_interp_f32 "
+                      "and the engine projected plan's FP64 donors and rotation seed",
+            "soil": "Rust FP64 node interpolation to the declared layer midpoints, "
+                    "moved by nearest neighbour",
             "categorical": "nearest neighbour (LANDSEA, SEAICE)",
         },
         "levels": {
@@ -970,7 +1263,14 @@ def add_lbc_parser(commands: Any) -> None:
     parser.add_argument("--theta-adv-order", type=int, default=3)
     parser.add_argument("--coef-3rd-order", type=float, default=0.25)
     parser.add_argument("--oned-underflow", choices=("preserve", "reproduce-ifx-ftz"), default="preserve")
+    parser.add_argument("--physics-mode", choices=("correct", "exact"), default="correct",
+                        help="correct (default): boundary winds extrapolate like the initial conditions "
+                             "(IN4) and every boundary file must carry its valid time (IN5); exact: "
+                             "native init_atmosphere v8.4.2 case 9.  An rw_mpas_lbc without "
+                             "--physics-mode writes case 9 and the door receipt names IN4/IN5 as gaps")
     parser.add_argument("--lbc-exe", type=Path, default=None, metavar="FILE")
+    parser.add_argument("--stream", action="store_true",
+                        help="publish each hash-checked LBC hour as its MET marker lands")
     parser.set_defaults(handler=run_lbc)
 
 
@@ -985,6 +1285,9 @@ def run_lbc(arguments: argparse.Namespace) -> int:
     grid = Path(arguments.grid).expanduser().absolute()
     if not grid.is_file():
         raise IntermediateRefusal(f"--grid {grid} is not a file")
+    if getattr(arguments, "stream", False):
+        from .lbc_producer import run_stream
+        return run_stream(arguments, engine)
     start = datetime.strptime(arguments.start_time, "%Y-%m-%d_%H:%M:%S")
     stop = datetime.strptime(arguments.stop_time, "%Y-%m-%d_%H:%M:%S")
     if stop <= start:
@@ -1005,6 +1308,8 @@ def run_lbc(arguments: argparse.Namespace) -> int:
             f"--fg-interval-seconds is one number"
         )
     interval = gaps.pop()
+    from .lbc_producer import lbc_physics_mode
+    physics, correct_record = lbc_physics_mode(engine, getattr(arguments, "physics_mode", "exact"))
     out_dir = Path(arguments.out_dir).expanduser().absolute()
     out_dir.mkdir(parents=True, exist_ok=True)
     receipt = out_dir / "lbc-receipt.json"
@@ -1022,6 +1327,7 @@ def run_lbc(arguments: argparse.Namespace) -> int:
         "--theta-adv-order", str(int(arguments.theta_adv_order)),
         "--coef-3rd-order", repr(float(arguments.coef_3rd_order)),
         "--oned-underflow", arguments.oned_underflow,
+        *physics,
         "--receipt", str(receipt),
     ]
     started = time.perf_counter()
@@ -1049,6 +1355,8 @@ def run_lbc(arguments: argparse.Namespace) -> int:
                           for t, p in times],
         "files": [{"path": str(p), "bytes": p.stat().st_size, "sha256": sha256_file(p)} for p in files],
         "engine_receipt": str(receipt) if receipt.is_file() else None,
+        # Correct mode only (an exact door receipt is the one written before the key existed).
+        **({"correct_mode": correct_record} if correct_record else {}),
     }
     (out_dir / "lbc-door-receipt.json").write_text(
         json.dumps(door_receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n",

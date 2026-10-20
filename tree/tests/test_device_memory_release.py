@@ -1,0 +1,279 @@
+# SPDX-License-Identifier: Apache-2.0
+"""hexcore.device_memory_release on a stand-in CuPy (no card needed).
+
+The card measurements (bytes returned, bitwise output, step time) are in the
+pool lane's report; these tests pin the bracket's contract: what it returns,
+when, what each knob switches off, and that it leaves a failing or captured
+phase alone.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from hexcore.device_memory_release import (
+    LMEM_KNOB,
+    LMEM_MIN_FRAME_KNOB,
+    LMEM_WAIT_KNOB,
+    POOL_KNOB,
+    DevicePhaseRelease,
+    knob_enabled,
+)
+
+
+class _Pool:
+    def __init__(self) -> None:
+        self.used = 100
+        self.held = 100
+        self.frees = 0
+
+    def used_bytes(self) -> int:
+        return self.used
+
+    def total_bytes(self) -> int:
+        return self.held
+
+    def free_all_blocks(self) -> None:
+        self.frees += 1
+        self.held = self.used
+
+
+class _CUDARuntimeError(Exception):
+    def __init__(self, status: int) -> None:
+        super().__init__(f"status {status}")
+        self.status = status
+
+
+class _Runtime:
+    cudaLimitStackSize = 1
+    CUDARuntimeError = _CUDARuntimeError
+
+    def __init__(self) -> None:
+        self.stack = 1024
+        self.sets: list[int] = []
+        self.refuse = 0          # how many grow requests the driver refuses
+        self.refuse_status = 2   # cudaErrorMemoryAllocation
+
+    def getDevice(self) -> int:
+        return 0
+
+    def deviceGetLimit(self, limit: int) -> int:
+        assert limit == self.cudaLimitStackSize
+        return self.stack
+
+    def deviceSetLimit(self, limit: int, value: int) -> None:
+        assert limit == self.cudaLimitStackSize
+        if value > self.stack and self.refuse:
+            self.refuse -= 1
+            raise _CUDARuntimeError(self.refuse_status)
+        self.sets.append(value)
+        self.stack = value
+
+
+def _fake_cp(capturing: bool = False):
+    pool = _Pool()
+    runtime = _Runtime()
+    stream = SimpleNamespace(is_capturing=lambda: capturing)
+    cuda = SimpleNamespace(runtime=runtime, get_current_stream=lambda: stream)
+    return SimpleNamespace(cuda=cuda, get_default_memory_pool=lambda: pool), pool, runtime
+
+
+def test_knobs_default_on_and_switch_off():
+    assert knob_enabled(POOL_KNOB, {}) and knob_enabled(LMEM_KNOB, {})
+    for off in ("0", "off", "OFF", "false", "no"):
+        assert not knob_enabled(POOL_KNOB, {POOL_KNOB: off})
+    assert knob_enabled(POOL_KNOB, {POOL_KNOB: "1"})
+
+
+def test_phase_returns_cached_blocks_on_both_sides_and_shrinks_the_frame_store():
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    pool.held = 400  # 300 cached by the previous phase
+    with release.phase("slot:microphysics"):
+        assert pool.held == pool.used == 100  # returned before the phase allocates
+        pool.used, pool.held = 150, 900       # the phase's own transient blocks
+        runtime.stack = 43440                 # a kernel grew the local-memory frame
+        pool.used = 150
+    assert runtime.stack == 1024 and runtime.sets == [1024]
+    assert pool.held == pool.used == 150
+    receipt = release.receipt()
+    assert receipt["pool_release"]["bytes_returned"] == 300 + 750
+    assert receipt["lmem_release"]["resets"] == 1
+    assert receipt["lmem_release"]["widest_stack_bytes"] == 43440
+    assert receipt["by_phase"]["slot:microphysics"]["lmem_resets"] == 1
+
+
+def test_frame_growth_outside_a_phase_is_kept():
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    runtime.stack = 2048  # the dycore's own frame, grown between phases
+    with release.phase("arwen:phase1"):
+        runtime.stack = 7216
+    assert runtime.stack == 2048
+
+
+def test_knobs_off_touch_nothing():
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={POOL_KNOB: "0", LMEM_KNOB: "0"})
+    pool.held = 400
+    with release.phase("slot:radiation_sw"):
+        runtime.stack = 9000
+    assert pool.frees == 0 and runtime.sets == [] and pool.held == 400
+
+
+def test_each_knob_alone():
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={LMEM_KNOB: "off"})
+    pool.held = 400
+    with release.phase("p"):
+        runtime.stack = 9000
+    assert runtime.sets == [] and pool.held == 100
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={POOL_KNOB: "off"})
+    pool.held = 400
+    with release.phase("p"):
+        runtime.stack = 9000
+    assert runtime.sets == [1024] and pool.frees == 0
+
+
+def test_failed_phase_is_left_alone():
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    with pytest.raises(FloatingPointError):
+        with release.phase("p"):
+            pool.held, runtime.stack = 500, 9000
+            raise FloatingPointError("refused")
+    assert runtime.stack == 9000 and pool.held == 500
+
+
+def test_capture_and_nesting_do_nothing():
+    cp, pool, runtime = _fake_cp(capturing=True)
+    release = DevicePhaseRelease(cp, environ={})
+    pool.held = 400
+    with release.phase("p"):
+        runtime.stack = 9000
+    assert pool.frees == 0 and runtime.sets == []
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    with release.phase("outer"):
+        with release.phase("inner"):
+            runtime.stack = 9000
+        assert runtime.sets == []  # the outer phase owns the boundary
+    assert runtime.sets == [1024]
+
+
+def test_nesting_is_per_thread():
+    """Same-host ranks step on their own threads: one rank's open phase does
+    not make another rank's bracket a pass-through."""
+
+    import threading
+
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    inside = threading.Event()
+    done = threading.Event()
+
+    def other_rank():
+        with release.phase("arwen:phase1"):
+            inside.set()
+            done.wait(5)
+
+    worker = threading.Thread(target=other_rank)
+    worker.start()
+    assert inside.wait(5)
+    pool.held = 400
+    with release.phase("arwen:phase2"):
+        assert pool.held == pool.used  # this thread's entry still returned blocks
+        runtime.stack = 7216
+    assert runtime.stack == 1024
+    done.set()
+    worker.join(5)
+    assert release.receipt()["phases"] == 2
+
+
+def test_wide_frame_store_is_grown_back_on_entry_before_the_phase_runs():
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    with release.phase("slot:microphysics"):
+        runtime.stack = 43440
+    assert runtime.sets == [1024]
+    with release.phase("slot:microphysics"):
+        # grown at entry, where a refusal can be handled, not inside a launch
+        assert runtime.stack == 43440
+    assert runtime.sets == [1024, 43440, 1024]
+    receipt = release.receipt()["lmem_release"]
+    assert receipt["regrows"] == 1 and receipt["resets"] == 2
+    assert receipt["pinned_after_regrow_wait"] is False
+
+
+def test_min_frame_knob_keeps_narrow_frames():
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    with release.phase("slot:radiation_lw"):
+        runtime.stack = 2048  # by default every grown store is released
+    assert runtime.stack == 1024
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={LMEM_MIN_FRAME_KNOB: "4096"})
+    with release.phase("slot:radiation_lw"):
+        runtime.stack = 2048  # longwave's frame: under the knob, kept
+    assert runtime.stack == 2048 and runtime.sets == []
+    with release.phase("arwen:phase2"):
+        runtime.stack = 7216  # WSM6: released back to the narrow store
+    assert runtime.stack == 2048
+
+
+def test_refused_regrow_returns_own_blocks_waits_then_keeps_the_store(capsys):
+    cp, pool, runtime = _fake_cp()
+    now = [0.0]
+    naps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        naps.append(seconds)
+        now[0] += seconds
+
+    release = DevicePhaseRelease(cp, environ={}, sleep=sleep, clock=lambda: now[0])
+    with release.phase("slot:microphysics"):
+        runtime.stack = 43440
+    runtime.refuse = 3  # a co-tenant took the memory between steps
+    pool.held = 400
+    with release.phase("slot:microphysics"):
+        assert runtime.stack == 43440
+    assert pool.held == pool.used and naps == [2.0, 2.0]
+    assert runtime.stack == 43440  # kept from now on
+    with release.phase("slot:microphysics"):
+        pass
+    assert runtime.stack == 43440
+    receipt = release.receipt()["lmem_release"]
+    assert receipt["refused_regrows"] == 1 and receipt["pinned_after_regrow_wait"] is True
+    assert receipt["regrow_wait_seconds"] == 4.0
+    assert "refused to regrow" in capsys.readouterr().err
+
+
+def test_regrow_wait_runs_out_with_an_error_naming_the_knob():
+    cp, pool, runtime = _fake_cp()
+    now = [0.0]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    release = DevicePhaseRelease(cp, environ={LMEM_WAIT_KNOB: "5"}, sleep=sleep,
+                                 clock=lambda: now[0])
+    with release.phase("slot:microphysics"):
+        runtime.stack = 43440
+    runtime.refuse = 100
+    with pytest.raises(RuntimeError, match=LMEM_KNOB):
+        with release.phase("slot:microphysics"):
+            pass
+
+
+def test_other_driver_errors_are_not_waited_on():
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    with release.phase("slot:microphysics"):
+        runtime.stack = 43440
+    runtime.refuse, runtime.refuse_status = 1, 1  # cudaErrorInvalidValue
+    with pytest.raises(_CUDARuntimeError):
+        with release.phase("slot:microphysics"):
+            pass

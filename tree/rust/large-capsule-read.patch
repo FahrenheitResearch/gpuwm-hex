@@ -1,0 +1,111 @@
+--- a/crates/rw-mpas/src/init/capsule.rs
++++ b/crates/rw-mpas/src/init/capsule.rs
+@@ -80,10 +80,104 @@
+ }
+ 
+ fn read_f32(file: &netcrust::File, name: &str) -> MpasResult<Vec<f32>> {
+-    let array = file
+-        .read_array_f64(name)
+-        .map_err(|e| MpasError::Refusal(format!("capsule has no readable {name}: {e}")))?;
+-    Ok(array.into_values().into_iter().map(|v| v as f32).collect())
++    read_f32_bounded(file, name, netcrust::MAX_ARRAY_ELEMENTS as usize)
++}
++
++// Keep the dense reader's promotion and cast. Only the I/O slab size changes.
++fn read_f32_bounded(
++    file: &netcrust::File,
++    name: &str,
++    maximum: usize,
++) -> MpasResult<Vec<f32>> {
++    let refuse = |detail: String| MpasError::Refusal(format!("capsule has no readable {name}: {detail}"));
++    if maximum == 0 || maximum > netcrust::MAX_ARRAY_ELEMENTS as usize {
++        return Err(refuse(String::from("invalid bounded-read ceiling")));
++    }
++    let Some(variable) = file.variable(name) else {
++        // Retain the existing raw-HDF5 fallback and its error if metadata is absent.
++        let array = file.read_array_f64(name).map_err(|e| refuse(e.to_string()))?;
++        return Ok(array.into_values().into_iter().map(|v| v as f32).collect());
++    };
++    let shape = variable.shape();
++    let total = shape.iter().try_fold(1usize, |n, &size| n.checked_mul(size))
++        .ok_or_else(|| refuse(String::from("array element count overflows usize")))?;
++    if total <= maximum {
++        let array = file.read_array_f64(name).map_err(|e| refuse(e.to_string()))?;
++        return Ok(array.into_values().into_iter().map(|v| v as f32).collect());
++    }
++
++    // Choose the first axis whose complete trailing row fits. Earlier axes
++    // are fixed indices, so appending slabs retains the native row-major order.
++    let mut axis = shape.len() - 1;
++    let mut row = 1usize;
++    while axis > 0 && row.checked_mul(shape[axis]).is_some_and(|n| n <= maximum) {
++        row *= shape[axis];
++        axis -= 1;
++    }
++    let rows_per_slab = maximum / row;
++    let prefixes = total / (shape[axis] * row);
++    let mut values = Vec::new();
++    values.try_reserve_exact(total).map_err(|e| refuse(e.to_string()))?;
++    for prefix in 0..prefixes {
++        let mut indices = vec![0usize; axis];
++        let mut rest = prefix;
++        for dimension in (0..axis).rev() {
++            indices[dimension] = rest % shape[dimension];
++            rest /= shape[dimension];
++        }
++        for start in (0..shape[axis]).step_by(rows_per_slab) {
++            let end = start.saturating_add(rows_per_slab).min(shape[axis]);
++            let mut selections = indices.iter().map(|&index|
++                netcrust::NcSliceInfoElem::Index(index as u64)).collect::<Vec<_>>();
++            selections.push(netcrust::NcSliceInfoElem::Slice {
++                start: start as u64, end: end as u64, step: 1,
++            });
++            selections.extend((axis + 1..shape.len()).map(|dimension| netcrust::NcSliceInfoElem::Slice {
++                start: 0, end: shape[dimension] as u64, step: 1,
++            }));
++            let array = file.read_array_f64_slice(name, &netcrust::NcSliceInfo { selections })
++                .map_err(|e| refuse(e.to_string()))?;
++            let slab = array.into_values();
++            if slab.len() != (end - start) * row || slab.len() > maximum {
++                return Err(refuse(String::from("bounded-read slab has an unexpected extent")));
++            }
++            values.extend(slab.into_iter().map(|v| v as f32));
++        }
++    }
++    if values.len() != total {
++        return Err(refuse(String::from("bounded-read result has an unexpected extent")));
++    }
++    Ok(values)
++}
++
++#[cfg(test)]
++mod bounded_capsule_read_tests {
++    use super::*;
++    use rw_store::netcdf_classic::{NcClassicWriter, NcData, NcDim, NcFormat, NcType, NcVarDef};
++
++    #[test]
++    fn bounded_capsule_read_preserves_dense_bits_and_order() {
++        let bits = [0u32, 0x8000_0000, 0x3f80_0000, 0x7fc0_1234, 0xbf80_0000, 1];
++        let values = (0..42).map(|i| f32::from_bits(bits[i % bits.len()])).collect::<Vec<_>>();
++        for (index, format) in [NcFormat::Classic, NcFormat::Offset64, NcFormat::Data64].into_iter().enumerate() {
++            let path = std::env::temp_dir().join(format!("rw-mpas-bounded-read-{}-{index}.nc", std::process::id()));
++            let mut writer = NcClassicWriter::create(&path, format,
++                vec![NcDim::fixed("a", 3), NcDim::fixed("b", 2), NcDim::fixed("c", 7)],
++                vec![], vec![NcVarDef::new("fixture", NcType::Float, vec![0, 1, 2])], 0).unwrap();
++            writer.put("fixture", NcData::Floats(&values)).unwrap();
++            writer.finish().unwrap();
++            let file = netcrust::File::open(&path).unwrap();
++            let expected = read_f32(&file, "fixture").unwrap().into_iter().map(f32::to_bits).collect::<Vec<_>>();
++            for maximum in [1, 3, 7, 11, 14, 41, 42] {
++                let actual = read_f32_bounded(&file, "fixture", maximum).unwrap().into_iter().map(f32::to_bits).collect::<Vec<_>>();
++                assert_eq!(actual, expected, "format {index}, ceiling {maximum}");
++            }
++            assert!(read_f32_bounded(&file, "fixture", 0).is_err());
++            assert!(read_f32_bounded(&file, "fixture", netcrust::MAX_ARRAY_ELEMENTS as usize + 1).is_err());
++            drop(file);
++            std::fs::remove_file(path).unwrap();
++        }
++    }
+ }
+ 
+ fn read_i32(file: &netcrust::File, name: &str) -> MpasResult<Vec<i32>> {

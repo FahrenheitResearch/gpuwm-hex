@@ -14,6 +14,8 @@ reported as unavailable rather than filled with a plausible value.
 
 from __future__ import annotations
 
+import time
+
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 import hashlib
@@ -207,6 +209,7 @@ class NvrtcCompileCapture(AbstractContextManager["NvrtcCompileCapture"]):
 
     def __init__(self) -> None:
         self.observations: list[NvrtcObservation] = []
+        self.elapsed_seconds = 0.0
         self.unavailable_reason: str | None = None
         self._compiler: Any | None = None
         self._original: Any | None = None
@@ -230,7 +233,11 @@ class NvrtcCompileCapture(AbstractContextManager["NvrtcCompileCapture"]):
 
         def wrapper(source: Any, options: Iterable[str] = (), *args: Any,
                     **kwargs: Any) -> Any:
-            result = original(source, options, *args, **kwargs)
+            started = time.perf_counter()
+            try:
+                result = original(source, options, *args, **kwargs)
+            finally:
+                capture.elapsed_seconds += time.perf_counter() - started
             blob = result[0] if isinstance(result, tuple) else result
             source_text = (
                 source if isinstance(source, str)

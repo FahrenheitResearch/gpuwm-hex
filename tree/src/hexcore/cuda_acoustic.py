@@ -608,7 +608,13 @@ def convert_w_tendency_to_omega_cuda(
     zb3_cell: Any,
     kernel_cache: Any | None = None,
 ) -> Any:
-    """Apply the terrain w-tendency coupling on-device."""
+    """Apply the terrain w-tendency coupling on-device.
+
+    ``zb_cell``/``zb3_cell`` may be stored with a compacted slot stride
+    (``DeviceTerrainMetrics``); the kernel then reads ``edgesOnCell`` and its
+    sign through the mesh's tables cut to that stride, so every word a
+    ``slot < nEdgesOnCell`` loop reads is the same.
+    """
 
     cp = _cupy()
     out = cp.array(_float32(w_tendency, "w_tendency"), copy=True)
@@ -617,13 +623,21 @@ def convert_w_tendency_to_omega_cuda(
     if out.ndim != 2 or out.shape[0] != nlev + 1:
         raise ValueError("w_tendency must have shape (nVertLevels+1,nCells)")
     ncells = int(out.shape[1])
-    edges = _int32(_mesh_value(mesh, "edges_on_cell"), "edges_on_cell")
-    counts = _int32(_mesh_value(mesh, "n_edges_on_cell"), "n_edges_on_cell")
-    signs = _float32(_mesh_value(mesh, "edge_sign_on_cell"), "edge_sign_on_cell")
-    max_edges = int(edges.shape[1])
-    expected_metric = (nlev + 1, ncells, max_edges)
     zb = _float32(zb_cell, "zb_cell")
     zb3 = _float32(zb3_cell, "zb3_cell")
+    edges_source = _mesh_value(mesh, "edges_on_cell")
+    signs_source = _mesh_value(mesh, "edge_sign_on_cell")
+    if (
+        zb.ndim == 3
+        and int(zb.shape[2]) != int(edges_source.shape[1])
+        and hasattr(mesh, "slot_tables")
+    ):
+        edges_source, signs_source = mesh.slot_tables(int(zb.shape[2]))
+    edges = _int32(edges_source, "edges_on_cell")
+    counts = _int32(_mesh_value(mesh, "n_edges_on_cell"), "n_edges_on_cell")
+    signs = _float32(signs_source, "edge_sign_on_cell")
+    max_edges = int(edges.shape[1])
+    expected_metric = (nlev + 1, ncells, max_edges)
     if zb.shape != expected_metric or zb3.shape != expected_metric:
         raise ValueError(f"terrain metrics must have shape {expected_metric}")
     _launch_1d(

@@ -62,9 +62,13 @@ translation units rather than a change this lane makes to them.
 """
 
 from __future__ import annotations
+from hexcore import numerics as _hex_numerics
 
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
+import hashlib
+import time
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -81,11 +85,21 @@ from .regional_v841 import (
     compute_mesh_scaling_regional,
     derive_regional_masks,
     regional_bdy_checks,
+    rkind_interval_seconds,
+    scalar_index_for_field,
 )
 
 
 #: NVRTC module key for this translation unit.
 MODULE_KEY = "hexcore.cuda_regional_v841"
+
+# Direct NVRTC avoids CuPy RawModule's appended FTZ override. Native RKIND
+# arithmetic retains subnormals; the interpolation regression measures them
+# against mpas_atm_boundaries.F:631-642.
+REGIONAL_CUDA_OPTIONS = (
+    "--std=c++17", "--fmad=false", "--ftz=false",
+    "--prec-div=true", "--prec-sqrt=true",
+)
 
 
 _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
@@ -113,8 +127,8 @@ _CUDA_SOURCE = CUDA_FTZ_HELPERS + r"""
 /* mpas_atm_update_bdy_tend, mpas_atm_boundaries.F:217-262, transcribed by
    RegionalDrivingState._derive.  lbc_rho_zz = lbc_rho/zz; lbc_rho_edge is
    the half-sum of the two adjacent cells' rho_zz and is written ONLY where
-   both cells exist -- a one-cell ring-7 edge keeps the prior pool value,
-   which is 0.0 from allocation and provably stays 0.0; lbc_ru =
+   both native indices are positive. mpas_block_creator.F:1490-1496 maps
+   missing neighbors to the zero-valued garbage cell; lbc_ru =
    lbc_u*lbc_rho_edge; lbc_rtheta_m = lbc_theta*lbc_rho_zz*(1 + rvord*qv),
    left to right in float32. */
 extern "C" __global__ void regional_lbc_derive_v841(
@@ -146,8 +160,9 @@ extern "C" __global__ void regional_lbc_rho_edge_v841(
         const int i = RE2(k, edge, nedges);
         float value = rho_edge[i];
         if (present) {
-            value = mpas_mul(0.5f, mpas_add(
-                rho_zz[RC2(k, c0, ncells)], rho_zz[RC2(k, c1, ncells)]));
+            const float r0 = c0 < ncells ? rho_zz[RC2(k, c0, ncells)] : 0.0f;
+            const float r1 = c1 < ncells ? rho_zz[RC2(k, c1, ncells)] : 0.0f;
+            value = mpas_mul(0.5f, mpas_add(r0, r1));
             rho_edge[i] = value;
         }
         ru[i] = mpas_mul(lbc_u[i], value);
@@ -566,7 +581,10 @@ extern "C" __global__ void regional_clamp_negative_scalars_v841(
 {
     const int index = blockDim.x * blockIdx.x + threadIdx.x;
     if (index >= nvalues) return;
-    scalars[index] = mpas_max(scalars[index], 0.0f);
+    // mpas_atm_time_integration.F:2799-2800: WHERE preserves -0 and NaNs.
+    // Decode through the shared IEEE helper so negative subnormals also
+    // compare correctly on the certified FTZ CUDA route.
+    if (mpas_f32_to_f64_ieee(scalars[index]) < 0.0) scalars[index] = 0.0f;
 }
 
 /* ------------------------------------------------------------------ */
@@ -771,13 +789,15 @@ extern "C" __global__ void acoustic_column_solve_regional_v841(
         const int i = RC2(k, cell, ncells);
         const int im = RC2(k - 1, cell, ncells);
         const float delta_saved = mpas_sub(rw_save[i], rw[i]);
-        const float density_interface = mpas_mul(
-            mpas_add(mpas_mul(fzm[k], zz[i]), mpas_mul(fzp[k], zz[im])),
-            mpas_add(mpas_mul(fzm[k], rho_zz[i]),
-                mpas_mul(fzp[k], rho_zz[im])));
+        /* MPAS v8.4.2 mpas_atm_time_integration.F:4059-4063:
+           the damping product is evaluated from left to right. */
+        const float zz_interface = mpas_add(
+            mpas_mul(fzm[k], zz[i]), mpas_mul(fzp[k], zz[im]));
+        const float rho_interface = mpas_add(
+            mpas_mul(fzm[k], rho_zz[i]), mpas_mul(fzp[k], rho_zz[im]));
         float value = mpas_add(rw_p[i], delta_saved);
-        value = mpas_sub(value, mpas_mul(mpas_mul(mpas_mul(
-            dts, dss[i]), density_interface), w[i]));
+        value = mpas_sub(value, mpas_mul(mpas_mul(mpas_mul(mpas_mul(
+            dts, dss[i]), zz_interface), rho_interface), w[i]));
         value = mpas_div(value, mpas_add(1.0f, mpas_mul(dts, dss[i])));
         rw_p[i] = mpas_sub(value, delta_saved);
         ww_avg[i] = mpas_add(ww_avg[i], mpas_mul(ewp[k], rw_p[i]));
@@ -1126,6 +1146,29 @@ class DeviceRegionalMasks:
         return int(self.nudged_cells.size)
 
 
+@lru_cache(maxsize=None)
+def _direct_regional_module(device_id: int, platform_sha256: str) -> tuple[Any, dict[str, Any]]:
+    """Load direct NVRTC output and retain its compiler evidence per device.
+
+    The platform digest binds the shared cache's compile contract. It is part
+    of the resident-module key even though NVRTC itself does not consume it.
+    """
+    from cupy.cuda import compiler
+    from .cuda_backend.compile_contract import NvrtcCompileCapture
+
+    cp = _cp()
+    with cp.cuda.Device(device_id):
+        with NvrtcCompileCapture() as capture:
+            binary, _ = compiler.compile_using_nvrtc(
+                CUDA_REGIONAL_SOURCE, options=_hex_numerics.options(REGIONAL_CUDA_OPTIONS),
+                arch=cp.cuda.Device(device_id).compute_capability,
+            )
+        module = cp.cuda.function.Module()
+        module.load(binary)
+    evidence = capture.evidence(hashlib.sha256(CUDA_REGIONAL_SOURCE.encode()).hexdigest())
+    return module, evidence
+
+
 class CudaRegionalKernels:
     """One NVRTC translation unit of regional kernels, bound to one cache."""
 
@@ -1143,9 +1186,27 @@ class CudaRegionalKernels:
             )
         result = self._kernels.get(name)
         if result is None:
-            result = self.cache.raw_kernel(
-                name, CUDA_REGIONAL_SOURCE, module_key=MODULE_KEY
+            started = time.perf_counter()
+            manifest = self.cache._compile_manifest
+            compiled_key = "direct-nvrtc:" + self.cache._module_key(
+                CUDA_REGIONAL_SOURCE, _hex_numerics.options(REGIONAL_CUDA_OPTIONS)
             )
+            manifest.declare_module(
+                MODULE_KEY, source=CUDA_REGIONAL_SOURCE,
+                requested_options=_hex_numerics.options(REGIONAL_CUDA_OPTIONS), module_cache_key=compiled_key,
+            )
+            module, evidence = _direct_regional_module(
+                self.cache.capability.device_id, manifest.fingerprint_sha256,
+            )
+            manifest.record_effective_compile(MODULE_KEY, evidence)
+            manifest.record_kernel(MODULE_KEY, name)
+            kernel_key = f"{compiled_key}:{name}"
+            result = module.get_function(name)
+            self.cache._modules[compiled_key] = module
+            self.cache._kernels[kernel_key] = result
+            self.cache._compile_seconds[kernel_key] = time.perf_counter() - started
+            # Preserve the forecast's regional post-launch observer.
+            result = self.cache._observe(kernel_key, result, name, MODULE_KEY)
             self._kernels[name] = result
         return result
 
@@ -1198,7 +1259,7 @@ class DeviceRegionalDrivingState:
         scalar_names: Sequence[str] = ("lbc_qv",),
     ) -> None:
         cp = _cp()
-        self._pool = LbcPool(inventory)
+        self._pool = LbcPool(inventory, scalar_names=scalar_names, compute_tendencies=False)
         self._kernels = kernels
         self._masks = masks
         self._scalar_names = tuple(scalar_names)
@@ -1214,6 +1275,11 @@ class DeviceRegionalDrivingState:
         self.nlev = int(n_vert_levels)
         self.ncells = int(masks.n_cells)
         self.nedges = int(masks.n_edges)
+        # MPAS-A v8.4.2 mpas_block_creator.F:1490-1496 reindexes absent
+        # file neighbors before mpas_atm_boundaries.F:234-247 gathers them.
+        self._cells_on_edge = cp.where(
+            self._cells_on_edge < 0, np.int32(self.ncells), self._cells_on_edge
+        )
         self._cell_shape = (self.nlev, self.ncells)
         self._edge_shape = (self.nlev, self.nedges)
         self._scalar_shape = (
@@ -1225,8 +1291,7 @@ class DeviceRegionalDrivingState:
         self._tend: dict[str, Any] | None = None
         self._state_scalars: Any | None = None
         self._tend_scalars: Any | None = None
-        # The pool allocation value one-cell (ring-7) rho_edge slots keep at
-        # every admission -- 0.0, exactly as the native pool holds it.
+        # Initial pool allocation before the first boundary admission.
         self._rho_edge_zero = cp.zeros(self._edge_shape, dtype=cp.float32)
 
     @property
@@ -1236,6 +1301,18 @@ class DeviceRegionalDrivingState:
     @property
     def scalar_names(self) -> tuple[str, ...]:
         return self._scalar_names
+
+    def _missing_scalar(self, index: int) -> Any:
+        """Native allocated/recycled scalar storage, entirely on the device.
+
+        MPAS-A v8.4.2 gen_inc.c:615-620; mpas_field_routines.F:383-395,
+        3335-3347; mpas_io.F:858-878. A missing read retains its time-level
+        allocation, which holds the preceding tendency after rotation.
+        """
+        cp = _cp()
+        if self._tend_scalars is None:
+            return cp.zeros(self._cell_shape, dtype=cp.float32)
+        return cp.ascontiguousarray(self._tend_scalars[index])
 
     def _derive(self, admitted: LbcFile) -> tuple[dict[str, Any], Any]:
         cp = _cp()
@@ -1251,7 +1328,8 @@ class DeviceRegionalDrivingState:
         rho = upload("lbc_rho")
         theta = upload("lbc_theta")
         scalars = cp.stack(
-            [upload(name) for name in self._scalar_names], axis=0
+            [upload(name) if name in admitted.fields else self._missing_scalar(j)
+             for j,name in enumerate(self._scalar_names)], axis=0
         )
         qv = scalars[0]
         rho_zz = cp.empty(self._cell_shape, dtype=cp.float32)
@@ -1318,10 +1396,7 @@ class DeviceRegionalDrivingState:
         # mpas_atm_boundaries.F:265-272 -- the interval in whole days plus
         # seconds, in REAL(RKIND), then one reciprocal.
         delta = admitted.valid_time - old_end
-        dt = np.float32(
-            np.float32(86400.0) * np.float32(delta.days)
-            + np.float32(delta.seconds)
-        )
+        dt = rkind_interval_seconds(delta)
         inv_dt = np.float32(np.float32(1.0) / dt)
         tend: dict[str, Any] = {}
         for name in DRIVING_FIELD_KIND:
@@ -1368,6 +1443,9 @@ class DeviceRegionalDrivingState:
         assert self._tend is not None
         if name == "scalars":
             return self._tend_scalars
+        scalar_index = scalar_index_for_field(name, self._scalar_names)
+        if name not in DRIVING_FIELD_KIND and scalar_index is not None:
+            return self._tend_scalars[scalar_index]
         if name not in DRIVING_FIELD_KIND:
             raise ConfigurationRefusal(
                 "field",
@@ -1383,10 +1461,7 @@ class DeviceRegionalDrivingState:
         """``dt_remaining`` of ``mpas_atm_get_bdy_state`` (F:491-551)."""
 
         delta = self._pool.interval_end - step_start
-        remaining = np.float32(
-            np.float32(86400.0) * np.float32(delta.days)
-            + np.float32(delta.seconds)
-        )
+        remaining = rkind_interval_seconds(delta)
         return np.float32(remaining - np.float32(delta_t))
 
     def state_at(
@@ -1402,15 +1477,20 @@ class DeviceRegionalDrivingState:
             state = self._state_scalars
             tend = self._tend_scalars
         else:
-            if name not in DRIVING_FIELD_KIND:
-                raise ConfigurationRefusal(
-                    "field",
-                    name,
-                    "not a driving field of the regional lbc pool",
-                    f"one of {sorted(DRIVING_FIELD_KIND)} or 'scalars'",
-                )
-            state = self._state[name]
-            tend = self._tend[name]
+            scalar_index = scalar_index_for_field(name, self._scalar_names)
+            if name not in DRIVING_FIELD_KIND and scalar_index is not None:
+                state = self._state_scalars[scalar_index]
+                tend = self._tend_scalars[scalar_index]
+            else:
+                if name not in DRIVING_FIELD_KIND:
+                    raise ConfigurationRefusal(
+                        "field",
+                        name,
+                        "not a driving field of the regional lbc pool",
+                        f"one of {sorted(DRIVING_FIELD_KIND)} or 'scalars'",
+                    )
+                state = self._state[name]
+                tend = self._tend[name]
         target = cp.empty_like(state) if out is None else out
         self._kernels.launch(
             "regional_lbc_state_at_v841",

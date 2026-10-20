@@ -8,6 +8,7 @@ an old configuration from being relabelled by changing receipt text.
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+import warnings
 
 import numpy as np
 
@@ -84,6 +85,31 @@ def _refuse(knob: str, value: object, reason: str, declaration: str) -> None:
     raise ConfigurationRefusal(knob, value, reason, declaration)
 
 
+class LegacyEpssmIgnored(UserWarning):
+    """A nonzero ``config_epssm`` was read and ignored, as MPAS-A v8.4.1 does.
+
+    The text is upstream's own (mpas_atm_dynamics_checks), so a receipt that
+    records warnings says what the native model would have logged.
+    """
+
+    def __init__(self, value: float) -> None:
+        self.value = float(value)
+        # Warning transports reconstruct the instance with type(*args).
+        # Retain the numeric constructor argument, not the formatted text.
+        super().__init__(self.value)
+
+    def __str__(self) -> str:
+        return (
+            f"config_epssm={self.value!r} is ignored: the specification of the "
+            "off-centering parameter for the vertically implicit acoustic "
+            "integration using config_epssm in the &nhyd_model namelist group "
+            "is no longer supported in MPAS-A v8.4.1; the &damping options "
+            "config_epssm_minimum, config_epssm_maximum, "
+            "config_epssm_transition_bottom_z and config_epssm_transition_top_z "
+            "set level-dependent off-centering"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class V841DryDycoreConfig(DryDycoreConfig):
     """The first executable closed, dry, no-active-mixing v8.4.1 lane."""
@@ -108,11 +134,12 @@ class V841DryDycoreConfig(DryDycoreConfig):
     config_les_model: str = "none"
     config_les_surface: str = "none"
     config_mix_scalars: bool = False
+    config_mix_full: bool = True
     config_surface_heat_flux: float = 0.0
     config_surface_moisture_flux: float = 0.0
     config_surface_drag_coefficient: float = 0.0
 
-    def validate(self) -> None:
+    def validate(self, *, les_dissipation=None) -> None:
         # The v8.4.1 deformation-coefficient binary32 path IS ported
         # (hexcore.mixing_v841 CPU authority + smagorinsky_v841_f32 CUDA
         # kernel).  Its dependent coefficients validate through the v8.4.1
@@ -120,6 +147,9 @@ class V841DryDycoreConfig(DryDycoreConfig):
         # remaining knobs on a neutralized no-mixing view, because its
         # split-three Smagorinsky refusal names the v8.2.3 compiled-MPAS
         # oracle, which is not this lane's authority.
+        if not isinstance(self.config_monotonic, (bool, np.bool_)):
+            _refuse("config_monotonic", self.config_monotonic,
+                "the Registry option is logical", "config_monotonic=True or False")
         if not isinstance(self.config_apply_lbcs, (bool, np.bool_)):
             _refuse(
                 "config_apply_lbcs",
@@ -148,6 +178,40 @@ class V841DryDycoreConfig(DryDycoreConfig):
         # config_moist_physics=True without a declared index_qv.
         neutral_values["config_apply_lbcs"] = False
         neutral_values["config_moist_physics"] = False
+        if not isinstance(self.config_rayleigh_damp_u, (bool, np.bool_)):
+            _refuse("config_rayleigh_damp_u",self.config_rayleigh_damp_u,
+                "the Registry option is logical","config_rayleigh_damp_u=True or False")
+        neutral_values["config_rayleigh_damp_u"] = False
+        # config_epssm is read and IGNORED, with upstream's own warning,
+        # because that is what v8.4.1 does with it: mpas_atm_dynamics_checks
+        # (v8.4.1 mpas_atm_time_integration.F:174-197) logs "no longer
+        # supported" for ANY nonzero real and the acoustic step reads only
+        # the four &damping profile knobs.  A namelist written for an
+        # 8.3.1-era MPAS, which sets 0.1, must therefore be read as written.
+        # Measured on the native v8.4.1 CPU build on 2026-10-03: it printed
+        # this warning and ran.
+        #
+        # So the only value refused here is one native v8.4.1 cannot read
+        # at all: a non-real (the Registry type is real).  The inherited
+        # v8.2.3 range test, which guards the v8.2.3 coefficients that DO
+        # consume the knob, sees a neutral 0.0, because no v8.4.1 path reads
+        # the value: every v8.4.1 acoustic and coefficient path takes its
+        # off-centering from hexcore.offcentering_v841, and the drivers that
+        # also carry v8.2.3 dispatch on source_release before either v8.2.3
+        # read.  tests/test_epssm_v841.py holds both, by source and by a
+        # bitwise run on CPU and CUDA.
+        epssm = self.config_epssm
+        if isinstance(epssm, (bool, np.bool_)) or not isinstance(
+            epssm, (int, float, np.integer, np.floating)
+        ):
+            _refuse(
+                "config_epssm",
+                epssm,
+                "the MPAS Registry type is real, and native MPAS cannot read "
+                "a namelist that gives it another type",
+                "a real config_epssm (v8.4.1 ignores it with a warning), or 0.0",
+            )
+        neutral_values["config_epssm"] = 0.0
         if self.config_horiz_mixing == "2d_smagorinsky":
             from .mixing_v841 import V841MixingConfig
 
@@ -164,6 +228,7 @@ class V841DryDycoreConfig(DryDycoreConfig):
             neutral_values["config_len_disp"] = 0.0
             neutral_values["config_visc4_2dsmag"] = 0.0
             neutral_values["config_smagorinsky_coef"] = 0.0
+            neutral_values["config_mpas_cam_coef"] = 0.0
         # ``slots=True`` creates a replacement class object, so zero-argument
         # super() is not reliable in methods retained from the
         # pre-replacement class namespace (CPython dataclasses issue 90562).
@@ -176,13 +241,9 @@ class V841DryDycoreConfig(DryDycoreConfig):
                 "this configuration type is pinned to the v8.4.1 source semantics",
                 f"source_release={V841_SOURCE_RELEASE!r}",
             )
-        if not np.isfinite(self.config_epssm) or self.config_epssm != 0.0:
-            _refuse(
-                "config_epssm",
-                self.config_epssm,
-                "v8.4.1 no longer consumes the legacy scalar off-centering knob",
-                "config_epssm=0.0 and the four &damping profile knobs",
-            )
+        # Upstream's test is ``config_epssm /= 0.0``, so NaN warns too.
+        if not float(epssm) == 0.0:
+            warnings.warn(LegacyEpssmIgnored(float(epssm)), stacklevel=2)
 
         minimum = float(self.config_epssm_minimum)
         maximum = float(self.config_epssm_maximum)
@@ -231,47 +292,8 @@ class V841DryDycoreConfig(DryDycoreConfig):
                 "the closed serial CPU lane has no MPI halo transport",
                 "config_gpu_aware_mpi=false",
             )
-        if self.config_les_model != "none":
-            _refuse(
-                "config_les_model",
-                self.config_les_model,
-                "the v8.4.1 LES dissipation branches are not ported",
-                "config_les_model='none'",
-            )
-        if self.config_les_surface != "none":
-            _refuse(
-                "config_les_surface",
-                self.config_les_surface,
-                "surface LES fluxes require a ported LES model",
-                "config_les_surface='none'",
-            )
-        if not isinstance(self.config_mix_scalars, (bool, np.bool_)):
-            _refuse(
-                "config_mix_scalars",
-                self.config_mix_scalars,
-                "the Registry option is logical",
-                "config_mix_scalars=false",
-            )
-        if self.config_mix_scalars:
-            _refuse(
-                "config_mix_scalars",
-                self.config_mix_scalars,
-                "the new dynamics-substep scalar dissipation branch is not ported",
-                "config_mix_scalars=false",
-            )
-        for knob in (
-            "config_surface_heat_flux",
-            "config_surface_moisture_flux",
-            "config_surface_drag_coefficient",
-        ):
-            value = float(getattr(self, knob))
-            if not np.isfinite(value) or value != 0.0:
-                _refuse(
-                    knob,
-                    getattr(self, knob),
-                    "this LES-surface-only knob must not be silently ignored",
-                    f"{knob}=0.0 with config_les_surface='none'",
-                )
+        from .mixing_v842_les import validate_les_configuration
+        validate_les_configuration(self, les_dissipation=les_dissipation)
 
         # A zero-coefficient 2d_fixed selection is a no-mixing branch.  The
         # active v8.4.1 Smagorinsky association/order remains a separate lane.
@@ -279,21 +301,32 @@ class V841DryDycoreConfig(DryDycoreConfig):
 
 @dataclass(frozen=True, slots=True)
 class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
-    """Exact real-x4 v8.4.1 CUDA dynamics plus aggregate column physics.
+    """v8.4.1 CUDA dynamics plus aggregate column physics.
 
     This is deliberately a distinct type rather than a relaxed dry config.
-    Its selector and cadence fields form the boundary contract with the
-    persistent two-phase Arwen column backend; changing any one of them is a
-    different, currently unproved lane.
+    Its selector fields form the boundary contract with the persistent
+    two-phase Arwen column backend: a selector the pinned engine seam cannot
+    run is refused by name, because the run would record it and not run it.
+
+    The schedule defaults are MPAS-A v8.4.2's own Registry defaults
+    (:mod:`hexcore.mpas_defaults`): order 2, four acoustic sub-steps (two
+    through v8.4.1 and still selectable), three
+    dynamics splits, the monotonic limiter, radiation every 1800 s.  The
+    native x4 reference's schedule (order 3, six sub-steps, 600 s radiation,
+    no limiter) is ``mpas_defaults.X4_RECORDED_SCHEDULE``, passed explicitly
+    by the byte-identity tests and the x4 proof.  ``config_dt`` keeps a
+    dataclass default of 120 s only so a bare instance is self-consistent;
+    every forecast sets it from the mesh (``mpas_defaults.default_dt_seconds``)
+    or from ``--dt``.
     """
 
     config_dt: float = 120.0
-    config_time_integration_order: int = 3
-    config_number_of_sub_steps: int = 6
+    config_time_integration_order: int = 2
+    config_number_of_sub_steps: int = 4
     config_dynamics_split_steps: int = 3
     config_split_dynamics_transport: bool = True
     config_scalar_advection: bool = True
-    config_monotonic: bool = False
+    config_monotonic: bool = True
     config_positive_definite: bool = False
     config_apvm_upwinding: float = 0.5
     config_xnutr: float = 0.2
@@ -312,7 +345,12 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
     config_radt_sw_scheme: str = "rrtmg_sw"
     config_gwdo_scheme: str = "off"
 
-    config_radt_seconds: float = 600.0
+    #: MPAS-A config_radtlw_interval = config_radtsw_interval = 00:30:00
+    #: (Registry.xml:2316, 2321).
+    config_radt_seconds: float = 1800.0
+    #: MPAS-A config_pbl_interval and config_conv_interval default to
+    #: 'none', which is every step (mpas_atmphys_manager.F:522-523,
+    #: 541-542): the surface/PBL and cumulus cadences ARE config_dt.
     config_bldt_seconds: float = 120.0
     #: ``None`` when no cumulus scheme is selected.  Not "zero calls": a
     #: cadence for a scheme that is never called is a number with nothing to
@@ -326,7 +364,7 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
     phase1_source_manifest: tuple[tuple[str, str], ...] = V841_ARWEN_SOURCE_MANIFEST
     phase1_h_diabatic_applied: bool = V841_ARWEN_H_DIABATIC_APPLIED
 
-    def validate(self) -> None:
+    def validate(self, *, les_dissipation=None) -> None:
         # Reuse every numerical and registry check from the pinned dry lane
         # without weakening that lane's fail-closed physics refusal.
         dry_values = {
@@ -335,26 +373,15 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
         }
         dry_values["config_moist_physics"] = False
         dry_values["config_physics_suite"] = "none"
-        V841DryDycoreConfig(**dry_values).validate()
+        V841DryDycoreConfig(**dry_values).validate(les_dissipation=les_dissipation)
 
-        # The model timestep and the two cadences welded to it are admitted
-        # from the earned-anchor registry rather than compared against a
-        # literal here.  The refusal is unchanged in effect -- 120.0 s is the
-        # only anchored timestep and every other value is still refused
-        # before anything is allocated -- but it now names the evidence the
-        # anchor rests on and the procedure that would mint another one,
-        # instead of asserting that "the lane is exact".  See
-        # hexcore.dt_admission for what an anchor contains and why
-        # config_cudt_seconds is not an independent knob (WRF pins cudt=0 for
-        # Grell-Freitas, so the cumulus cadence IS the timestep).
-        # The cumulus selection is admitted from the ruling's own module
-        # rather than pinned as a literal beside the rest of the lane.  It
+        # The cumulus selection is admitted from the ruling's own module.  It
         # was ruled on 2026-08-26 that convection is switched off below 3 km,
-        # so "off" is a REAL configuration of this lane and not a relaxation of
-        # it: the proven Grell-Freitas configuration is unchanged, still
-        # reachable and still the only one carrying a native reference.  See
-        # hexcore.convection_admission for the threshold, the ruling and
-        # the measured breakage the gate prevents.
+        # so "off" is a real configuration of this lane, beside Grell-Freitas
+        # and New Tiedtke.  Every other cumulus option of WOOF's physics
+        # registry is registered there by the physics resolver when a run
+        # selects it (convection_admission.register_engine_scheme), so the
+        # one refusal left is a name nothing resolved.
         from . import convection_admission
 
         if self.config_convection_scheme not in (
@@ -364,13 +391,13 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
                 "config_convection_scheme",
                 self.config_convection_scheme,
                 (
-                    "the frozen v8.4.1 column-physics lane admits the proven "
-                    "Grell-Freitas closure and, under the 2026-08-26 "
-                    "ruling, no closure at all.  A third scheme is a "
-                    "different, unproven physics lane and earns its own "
-                    "evidence"
+                    "no physics selection resolved this name, so no engine "
+                    "cu_physics stands behind it and it would be recorded in "
+                    "the receipt and never called"
                 ),
-                "config_convection_scheme in "
+                "a cumulus option of WOOF's physics registry, selected with "
+                "--physics config_convection_scheme=<MPAS name, registry "
+                "option id or cu_physics number>; resolved so far: "
                 f"{list(convection_admission.ADMITTED_CONVECTION_SCHEMES)}",
             )
         cumulus_scheme = convection_admission.constructor_scheme(
@@ -406,10 +433,18 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
                 "config_convection_scheme='cu_grell_freitas'",
             )
 
+        # RETIRED 2026-10-10 (owner ruling):
+        # the timestep and the schedule are no longer admitted from the
+        # earned-anchor registry or the dycore step certificates.  What is
+        # still refused is what cannot run: a physics cadence that is not a
+        # whole number of steps, and a timestep whose multiples are not exact
+        # in binary64 (hexcore.dt_admission.require_cadences names both).
+        # Whether the configuration matches a registered anchor is recorded
+        # in the run's receipt (anchor_record / step_anchor_record).
         from . import dt_admission
 
         try:
-            dt_admission.require_dt_anchor(
+            dt_admission.require_cadences(
                 self.config_dt,
                 radiation_seconds=self.config_radt_seconds,
                 surface_pbl_seconds=self.config_bldt_seconds,
@@ -421,11 +456,8 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
                 "config_dt",
                 self.config_dt,
                 str(error),
-                (
-                    "config_dt with a registered anchor in "
-                    f"hexcore.dt_admission (anchored: "
-                    f"{dt_admission.admitted_summary()})"
-                ),
+                "physics cadences that are whole multiples of config_dt, and "
+                "a config_dt whose multiples are exact in binary64",
             )
 
         # The microphysics scheme is admitted by its species row: the row
@@ -434,86 +466,114 @@ class V841MpasColumnPhysicsConfig(V841DryDycoreConfig):
         # scheme with no row would run with an inventory nobody declared.
         # A row with no engine counterparty refuses here by name rather
         # than at the first phase-one call.
-        try:
-            _species_row_for_scheme(
-                self.config_microp_scheme).require_engine_scheme()
-        except ConfigurationRefusal:
-            raise
-        exact = {
-            "config_horiz_mixing": "off",
-            "config_coef_3rd_order": 0.25,
-            "config_epssm_minimum": 0.1,
-            "config_epssm_maximum": 0.5,
-            "config_epssm_transition_bottom_z": 30_000.0,
-            "config_epssm_transition_top_z": 50_000.0,
-            "config_time_integration_order": 3,
-            "config_number_of_sub_steps": 6,
-            "config_dynamics_split_steps": 3,
-            "config_split_dynamics_transport": True,
-            "config_scalar_advection": True,
-            "config_monotonic": False,
-            "config_positive_definite": False,
-            "config_apvm_upwinding": 0.5,
-            "config_xnutr": 0.2,
-            "config_zd": 22_000.0,
-            "config_smdiv": 0.1,
-            "config_divergence_damping": True,
-            "config_terrain_following": True,
-            "config_moist_physics": True,
-            "config_physics_suite": "arwen_mpas_column",
-            # config_microp_scheme is NOT a literal here either, and for the
-            # same shape of reason the convection knob is not: the species
-            # row makes a second microphysics a real configuration of this
-            # lane rather than a different lane.  It is admitted above from
-            # hexcore.species_row, which refuses a scheme with no row AND a
-            # declared scheme the pinned engine cannot run.
-            # config_convection_scheme is NOT a literal here.  It is admitted
-            # above from hexcore.convection_admission, because the
-            # 2026-08-26 ruling made "off" a second real configuration of
-            # this lane.  Every other selector below is still exact.
+        _species_row_for_scheme(self.config_microp_scheme).require_engine_scheme()
+
+        # RETIRED 2026-10-10: the "exact" map that pinned every dynamics knob
+        # to the native x4 reference's values ("the matched v8.4.1 real-x4
+        # column-physics lane is exact").  The CUDA path honours the
+        # schedule, the transport and limiter switches, the off-centering
+        # profile, the damping and divergence-damping coefficients and the
+        # radiation cadence, so none of them is refused for differing from
+        # x4; mpas_defaults.x4_recorded_match records whether a run IS the
+        # recorded schedule.  What stays below is what this type cannot
+        # execute.
+        if not (
+            isinstance(self.config_moist_physics, (bool, np.bool_))
+            and bool(self.config_moist_physics)
+        ):
+            _refuse(
+                "config_moist_physics",
+                self.config_moist_physics,
+                "this type runs the column-physics seam every step, which "
+                "forms moist coefficients from the scalar block; a dry run "
+                "is V841DryDycoreConfig",
+                "config_moist_physics=True",
+            )
+        # The frozen column batch (gpuwm.core.mpas_column_batch) constructs
+        # its radiation, land-surface, surface-layer and PBL schemes as
+        # literals (hexcore.forecast_preset.ENGINE_COLUMN_SUITE), so any
+        # other selector on THIS type would be recorded and not run.  Every
+        # other scheme of WOOF's registry runs through the generic column
+        # seam (hexcore.physics_suites -> hexcore.cuda_suite_physics_v841),
+        # whose configuration type records the selectors it executes.
+        engine_built = {
             "config_lsm_scheme": "sf_noahmp",
-            "config_pbl_scheme": "bl_ysu",
+            "config_pbl_scheme": ("off" if self.config_les_model != "none" and self.config_pbl_scheme == "off" else "bl_ysu"),
             "config_sfclayer_scheme": "sf_monin_obukhov_rev",
             "config_radt_cld_scheme": "cld_fraction",
             "config_radt_lw_scheme": "rrtmg_lw",
             "config_radt_sw_scheme": "rrtmg_sw",
-            "config_gwdo_scheme": "off",
-            "config_radt_seconds": 600.0,
+        }
+        for knob, built in engine_built.items():
+            if getattr(self, knob) != built:
+                _refuse(
+                    knob,
+                    getattr(self, knob),
+                    f"THIS configuration type is the frozen column lane, "
+                    f"whose batch builds {built}; on it the selector would "
+                    "be recorded in the receipt and not run.  The forecast "
+                    "door never builds this type for another scheme: it "
+                    "resolves any option of WOOF's physics registry "
+                    "(--physics, --physics-suite, --physics-namelist) to the "
+                    "generic column seam and records the selectors it runs "
+                    "(hexcore.cuda_suite_physics_v841.suite_config)",
+                    f"{knob}={built!r} on this type, or the selection through "
+                    "the forecast door",
+                )
+        if self.config_gwdo_scheme != "off" and type(self) is V841MpasColumnPhysicsConfig:
+            _refuse(
+                "config_gwdo_scheme",
+                self.config_gwdo_scheme,
+                "gravity-wave drag is composed by V841MpasColumnPhysicsGwdoConfig; "
+                "on this type the selector would be recorded and not run",
+                "config_gwdo_scheme='off', or V841MpasColumnPhysicsGwdoConfig",
+            )
+        # The phase-one identity fields name the engine build and the factory
+        # the seam executes; another value would make the receipt name code
+        # this run does not execute.
+        identity = {
             "phase1_arwen_commit": V841_ARWEN_BUILD_COMMIT,
             "phase1_aggregate_factory": V841_ARWEN_AGGREGATE_FACTORY,
             "phase1_orchestration": V841_ARWEN_PHASE1_ORCHESTRATION,
             "phase1_source_manifest": V841_ARWEN_SOURCE_MANIFEST,
             "phase1_h_diabatic_applied": V841_ARWEN_H_DIABATIC_APPLIED,
         }
-        for knob, required in exact.items():
-            actual = getattr(self, knob)
-            if isinstance(required, float):
-                try:
-                    matches = np.isfinite(float(actual)) and float(actual) == required
-                except (TypeError, ValueError):
-                    matches = False
-            elif isinstance(required, bool):
-                matches = isinstance(actual, (bool, np.bool_)) and bool(actual) is required
-            elif isinstance(required, int):
-                matches = (
-                    isinstance(actual, (int, np.integer))
-                    and not isinstance(actual, (bool, np.bool_))
-                    and int(actual) == required
-                )
-            else:
-                matches = actual == required
-            if not matches:
+        for knob, executed in identity.items():
+            if getattr(self, knob) != executed:
                 _refuse(
                     knob,
-                    actual,
-                    "the matched v8.4.1 real-x4 column-physics lane is exact",
-                    f"{knob}={required!r}",
+                    getattr(self, knob),
+                    "this field names the engine build the column seam "
+                    "executes; another value would make the receipt name an "
+                    "engine this run does not execute",
+                    f"{knob}={executed!r}",
                 )
+        # config_physics_suite records which named suite (hexcore.
+        # physics_suites) the run was resolved from.  A name no row carries
+        # would put a suite nobody declared into the receipt.
+        from .physics_suites import recordable_suite_names
+
+        if self.config_physics_suite not in recordable_suite_names():
+            _refuse(
+                "config_physics_suite",
+                self.config_physics_suite,
+                "no row of the suite table (data/profiles/"
+                "mpas-physics-suites.v1.json) carries this name, so the "
+                "receipt would name a suite nobody declared",
+                f"config_physics_suite in {list(recordable_suite_names())}",
+            )
+
+    def recorded_lane_match(self) -> dict:
+        """Whether this is the native x4 reference's own schedule (evidence)."""
+
+        from .mpas_defaults import x4_recorded_match
+
+        return x4_recorded_match(self)
 
 
 @dataclass(frozen=True, slots=True)
 class V841MpasColumnPhysicsGwdoConfig(V841MpasColumnPhysicsConfig):
-    """Exact real-x4 lane with released external YSU gravity-wave drag."""
+    """The column-physics lane with the released external YSU gravity-wave drag."""
 
     config_gwdo_scheme: str = "bl_ysu_gwdo"
     gwdo_external_composer: str = V841_GWDO_EXTERNAL_COMPOSER
@@ -524,15 +584,15 @@ class V841MpasColumnPhysicsGwdoConfig(V841MpasColumnPhysicsConfig):
     gwdo_result_class: str = V841_GWDO_RESULT_CLASS
     gwdo_arwen_execution_claim: bool = False
 
-    def validate(self) -> None:
-        # Validate every exact released off-lane value through its own concrete
-        # type, changing only the selector that distinguishes this subtype.
+    def validate(self, *, les_dissipation=None) -> None:
+        # Validate the parent through its own concrete type, changing only
+        # the selector that distinguishes this subtype.
         parent_values = {
             field.name: getattr(self, field.name)
             for field in fields(V841MpasColumnPhysicsConfig)
         }
         parent_values["config_gwdo_scheme"] = "off"
-        V841MpasColumnPhysicsConfig(**parent_values).validate()
+        V841MpasColumnPhysicsConfig(**parent_values).validate(les_dissipation=les_dissipation)
 
         exact = {
             "config_gwdo_scheme": "bl_ysu_gwdo",
@@ -551,10 +611,17 @@ class V841MpasColumnPhysicsGwdoConfig(V841MpasColumnPhysicsConfig):
             else:
                 matches = actual == required
             if not matches:
+                # These fields name the drag composer, its kernel and its
+                # result type -- the code this run executes for GWDO -- not
+                # a tunable.  Another value would make the receipt name a
+                # drag computation this run does not perform.
                 _refuse(
                     knob,
                     actual,
-                    "the released v8.4.1 external YSU-GWDO lane is exact",
+                    "this field names the gravity-wave-drag code the run "
+                    "executes (composer, kernel digest, result type); another "
+                    "value would make the receipt name a drag computation this "
+                    "run does not perform",
                     f"{knob}={required!r}",
                 )
 
@@ -563,12 +630,11 @@ class V841MpasColumnPhysicsGwdoConfig(V841MpasColumnPhysicsConfig):
 class V841MpasColumnPhysicsSmagorinskyGwdoConfig(V841MpasColumnPhysicsGwdoConfig):
     """Released v8.4.1 GWDO lane plus native 2-D Smagorinsky mixing.
 
-    The mixing block is exactly the native Registry configuration the
-    natB-24h reference integrated (namelist verbatim: 2d_smagorinsky,
-    len_disp 0.0 -> nominalMinDc, visc4_2dsmag 0.05, smagorinsky_coef 0.125,
-    del4u_div_factor 10.0, h_ScaleWithMesh true).  Runs under this type start
-    a new sub-series: mixing changes the answer, so they are not
-    bit-comparable to any mixing-off arm.
+    The mixing defaults are the native Registry configuration the natB-24h
+    reference integrated (2d_smagorinsky, len_disp 0.0 -> nominalMinDc,
+    visc4_2dsmag 0.05, smagorinsky_coef 0.125, del4u_div_factor 10.0,
+    h_ScaleWithMesh true); each is a knob, not a pin.  Runs under this type
+    are not bit-comparable to any mixing-off arm.
     """
 
     config_horiz_mixing: str = "2d_smagorinsky"
@@ -578,8 +644,8 @@ class V841MpasColumnPhysicsSmagorinskyGwdoConfig(V841MpasColumnPhysicsGwdoConfig
     config_del4u_div_factor: float = 10.0
     config_h_ScaleWithMesh: bool = True
 
-    def validate(self) -> None:
-        # Validate every exact released GWDO-lane value through its own
+    def validate(self, *, les_dissipation=None) -> None:
+        # Validate the GWDO-lane parent through its own
         # concrete type, changing only the mixing block back to that lane's
         # off values.
         parent_values = {
@@ -592,43 +658,26 @@ class V841MpasColumnPhysicsSmagorinskyGwdoConfig(V841MpasColumnPhysicsGwdoConfig
         parent_values["config_smagorinsky_coef"] = 0.0
         parent_values["config_del4u_div_factor"] = 10.0
         parent_values["config_h_ScaleWithMesh"] = True
-        V841MpasColumnPhysicsGwdoConfig(**parent_values).validate()
+        parent_values["config_mpas_cam_coef"] = 0.0
+        V841MpasColumnPhysicsGwdoConfig(**parent_values).validate(les_dissipation=les_dissipation)
 
-        exact = {
-            "config_horiz_mixing": "2d_smagorinsky",
-            "config_len_disp": 0.0,
-            "config_visc4_2dsmag": 0.05,
-            "config_smagorinsky_coef": 0.125,
-            "config_del4u_div_factor": 10.0,
-            "config_h_ScaleWithMesh": True,
-            "config_mpas_cam_coef": 0.0,
-        }
-        for knob, required in exact.items():
-            actual = getattr(self, knob)
-            if isinstance(required, bool):
-                matches = (
-                    isinstance(actual, (bool, np.bool_))
-                    and bool(actual) is required
-                )
-            elif isinstance(required, float):
-                try:
-                    matches = (
-                        np.isfinite(float(actual)) and float(actual) == required
-                    )
-                except (TypeError, ValueError):
-                    matches = False
-            else:
-                matches = actual == required
-            if not matches:
-                _refuse(
-                    knob,
-                    actual,
-                    "the v8.4.1 native-Registry Smagorinsky lane is exact",
-                    f"{knob}={required!r}",
-                )
-        # The dependent-coefficient authority runs once more on the actual
-        # values (defense in depth; the neutralized parent view above cannot
-        # have seen them).
+        # RETIRED 2026-10-10: the pins that held every coefficient at the
+        # native Registry value ("the v8.4.1 native-Registry Smagorinsky lane
+        # is exact").  The CUDA horizontal kernels read all six from the
+        # config, so another value runs as given; V841MixingConfig below
+        # still refuses a value outside the Registry's own domain.  The type
+        # selects the Smagorinsky branch, so the selector itself must say so.
+        if self.config_horiz_mixing != "2d_smagorinsky":
+            _refuse(
+                "config_horiz_mixing",
+                self.config_horiz_mixing,
+                "this type's coefficients drive the 2-D Smagorinsky branch; "
+                "with another selector they would be recorded and not used",
+                "config_horiz_mixing='2d_smagorinsky', or "
+                "V841MpasColumnPhysicsGwdoConfig for mixing off",
+            )
+        # The dependent-coefficient authority runs on the actual values (the
+        # neutralized parent view above cannot have seen them).
         from .mixing_v841 import V841MixingConfig
 
         V841MixingConfig(
@@ -642,7 +691,31 @@ class V841MpasColumnPhysicsSmagorinskyGwdoConfig(V841MpasColumnPhysicsGwdoConfig
         ).validate()
 
 
+def _upper_configuration(name, base):
+    from dataclasses import make_dataclass
+    def validate(self, *, les_dissipation=None):
+        base.validate(self, les_dissipation=les_dissipation)
+        for knob in ("config_number_cam_damping_levels","config_number_rayleigh_damp_u_levels"):
+            value=getattr(self,knob)
+            if type(value) is not int or value<1:
+                _refuse(knob,value,"the native damping loop requires a positive integer level count","a positive integer")
+        days=self.config_rayleigh_damp_u_timescale_days
+        if not np.isfinite(days) or days<=0:
+            _refuse("config_rayleigh_damp_u_timescale_days",days,"the Rayleigh coefficient divides by a positive timescale","a finite positive timescale")
+    return make_dataclass(name,[
+        ("config_number_cam_damping_levels",int,4),
+        ("config_number_rayleigh_damp_u_levels",int,6),
+        ("config_rayleigh_damp_u_timescale_days",float,5.0)],
+        bases=(base,),namespace={"__module__":__name__,"validate":validate},frozen=True,slots=True)
+
+
+V841UpperDampingDryConfig=_upper_configuration("V841UpperDampingDryConfig",V841DryDycoreConfig)
+V841UpperDampingColumnConfig=_upper_configuration("V841UpperDampingColumnConfig",V841MpasColumnPhysicsConfig)
+V841UpperDampingSmagorinskyConfig=_upper_configuration("V841UpperDampingSmagorinskyConfig",V841MpasColumnPhysicsSmagorinskyGwdoConfig)
+
+
 __all__ = [
+    "LegacyEpssmIgnored",
     "V823_SOURCE_RELEASE",
     "V841_ARWEN_AGGREGATE_FACTORY",
     "V841_ARWEN_BUILD_COMMIT",

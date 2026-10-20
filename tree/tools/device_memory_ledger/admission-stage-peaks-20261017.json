@@ -1,0 +1,326 @@
+{
+  "schema": "hex-admission-stage-envelope.v1",
+  "configuration": "global, default ArWen physics, fast, one same-host rank, graphs off, 55 levels",
+  "card": {
+    "sms": 188,
+    "max_threads_per_sm": 1536,
+    "total_bytes": 101982404608
+  },
+  "points": [
+    {
+      "km": 24,
+      "cells": 1022592,
+      "steps": 60,
+      "receipt": "receipts/global24-peaks.json",
+      "receipt_sha256": "2465235d6fe34b0b905aed307bcb837142ab4e3bc5a9f016d3ea73996c18338c"
+    },
+    {
+      "km": 22,
+      "cells": 1216922,
+      "steps": 360,
+      "receipt": "receipts/global22-peaks.json",
+      "receipt_sha256": "933941fad8866451a0142a3cd261635fee7d74ce42559c7e411f205f6e7c7188"
+    }
+  ],
+  "scope": "two measured sizes; stage trends extrapolated outside their interval; existing shaped floor retained",
+  "arena_placement": {
+    "columns": 8192,
+    "shortwave_arrays": 16,
+    "gpoints": 112,
+    "levels_extent": 57,
+    "bytes": 3347054592,
+    "evidence": "largest measured radiation allocation at 24 km; 22 km auto width is 7936"
+  },
+  "stage_fits": [
+    {
+      "stage": "construct",
+      "measured_peak_bytes": [
+        32679198720,
+        38960168960
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 0,
+          "device_used_bytes": 32679198720,
+          "incremental_device_bytes": 32094814208,
+          "pool_used_bytes": 31627154944,
+          "pool_total_bytes": 31864493568,
+          "pool_cached_bytes": 237338624,
+          "outside_pool_bytes": 814705152
+        },
+        {
+          "step": 0,
+          "device_used_bytes": 38960168960,
+          "incremental_device_bytes": 38375784448,
+          "pool_used_bytes": 37637544448,
+          "pool_total_bytes": 37915064320,
+          "pool_cached_bytes": 277519872,
+          "outside_pool_bytes": 1045104640
+        }
+      ],
+      "bytes_per_cell": 32321.155971800545,
+      "intercept_bytes": -372156807.51546097
+    },
+    {
+      "stage": "cuda_context",
+      "measured_peak_bytes": [
+        32907788288,
+        39230701568
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 0,
+          "device_used_bytes": 32907788288,
+          "incremental_device_bytes": 32323403776,
+          "pool_used_bytes": 31630222848,
+          "pool_total_bytes": 32089463808,
+          "pool_cached_bytes": 459240960,
+          "outside_pool_bytes": 818324480
+        },
+        {
+          "step": 0,
+          "device_used_bytes": 39230701568,
+          "incremental_device_bytes": 38646317056,
+          "pool_used_bytes": 37641195520,
+          "pool_total_bytes": 38182787584,
+          "pool_cached_bytes": 541592064,
+          "outside_pool_bytes": 1047913984
+        }
+      ],
+      "bytes_per_cell": 32536.990068440282,
+      "intercept_bytes": -364277460.06648254
+    },
+    {
+      "stage": "dynamics.solve_diagnostics",
+      "measured_peak_bytes": [
+        72418131968,
+        91107950592
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 11,
+          "device_used_bytes": 72418131968,
+          "incremental_device_bytes": 71833747456,
+          "pool_used_bytes": 53153205760,
+          "pool_total_bytes": 71542754304,
+          "pool_cached_bytes": 18389548544,
+          "outside_pool_bytes": 875377664
+        },
+        {
+          "step": 193,
+          "device_used_bytes": 91107950592,
+          "incremental_device_bytes": 90523566080,
+          "pool_used_bytes": 72376463360,
+          "pool_total_bytes": 90077697024,
+          "pool_cached_bytes": 17701233664,
+          "outside_pool_bytes": 1030253568
+        }
+      ],
+      "bytes_per_cell": 96175.6734626666,
+      "intercept_bytes": -25930342309.53517
+    },
+    {
+      "stage": "history.capture",
+      "measured_peak_bytes": [
+        70121750528,
+        85101707264
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 60,
+          "device_used_bytes": 70121750528,
+          "incremental_device_bytes": 69537366016,
+          "pool_used_bytes": 44583942656,
+          "pool_total_bytes": 69278243840,
+          "pool_cached_bytes": 24694301184,
+          "outside_pool_bytes": 843506688
+        },
+        {
+          "step": 180,
+          "device_used_bytes": 85101707264,
+          "incremental_device_bytes": 84517322752,
+          "pool_used_bytes": 53056593920,
+          "pool_total_bytes": 84070990848,
+          "pool_cached_bytes": 31014396928,
+          "outside_pool_bytes": 1030716416
+        }
+      ],
+      "bytes_per_cell": 77085.1476148819,
+      "intercept_bytes": -8704904741.797318
+    },
+    {
+      "stage": "physics._run_cumulus",
+      "measured_peak_bytes": [
+        73825320960,
+        96763969536
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 57,
+          "device_used_bytes": 73825320960,
+          "incremental_device_bytes": 73240936448,
+          "pool_used_bytes": 58908407296,
+          "pool_total_bytes": 72550413312,
+          "pool_cached_bytes": 13642006016,
+          "outside_pool_bytes": 1274907648
+        },
+        {
+          "step": 257,
+          "device_used_bytes": 96763969536,
+          "incremental_device_bytes": 96179585024,
+          "pool_used_bytes": 70638777344,
+          "pool_total_bytes": 95290250752,
+          "pool_cached_bytes": 24651473408,
+          "outside_pool_bytes": 1473718784
+        }
+      ],
+      "bytes_per_cell": 118039.66745227191,
+      "intercept_bytes": -46881098659.35364
+    },
+    {
+      "stage": "physics._run_noahmp",
+      "measured_peak_bytes": [
+        65426227200,
+        88067080192
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 31,
+          "device_used_bytes": 65426227200,
+          "incremental_device_bytes": 64841842688,
+          "pool_used_bytes": 51373922816,
+          "pool_total_bytes": 64154383872,
+          "pool_cached_bytes": 12780461056,
+          "outside_pool_bytes": 1271843328
+        },
+        {
+          "step": 256,
+          "device_used_bytes": 88067080192,
+          "incremental_device_bytes": 87482695680,
+          "pool_used_bytes": 61672493056,
+          "pool_total_bytes": 86593024000,
+          "pool_cached_bytes": 24920530944,
+          "outside_pool_bytes": 1474056192
+        }
+      ],
+      "bytes_per_cell": 116507.24536612978,
+      "intercept_bytes": -53713149853.441376
+    },
+    {
+      "stage": "physics._run_radiation",
+      "measured_peak_bytes": [
+        65426227200,
+        88067080192
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 31,
+          "device_used_bytes": 65426227200,
+          "incremental_device_bytes": 64841842688,
+          "pool_used_bytes": 54512951296,
+          "pool_total_bytes": 64154383872,
+          "pool_cached_bytes": 9641432576,
+          "outside_pool_bytes": 1271843328
+        },
+        {
+          "step": 256,
+          "device_used_bytes": 88067080192,
+          "incremental_device_bytes": 87482695680,
+          "pool_used_bytes": 64869149184,
+          "pool_total_bytes": 86593024000,
+          "pool_cached_bytes": 21723874816,
+          "outside_pool_bytes": 1474056192
+        }
+      ],
+      "bytes_per_cell": 116507.24536612978,
+      "intercept_bytes": -53713149853.441376
+    },
+    {
+      "stage": "physics._run_sfclay",
+      "measured_peak_bytes": [
+        65426227200,
+        88067080192
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 31,
+          "device_used_bytes": 65426227200,
+          "incremental_device_bytes": 64841842688,
+          "pool_used_bytes": 51373922816,
+          "pool_total_bytes": 64154383872,
+          "pool_cached_bytes": 12780461056,
+          "outside_pool_bytes": 1271843328
+        },
+        {
+          "step": 256,
+          "device_used_bytes": 88067080192,
+          "incremental_device_bytes": 87482695680,
+          "pool_used_bytes": 61672493056,
+          "pool_total_bytes": 86593024000,
+          "pool_cached_bytes": 24920530944,
+          "outside_pool_bytes": 1474056192
+        }
+      ],
+      "bytes_per_cell": 116507.24536612978,
+      "intercept_bytes": -53713149853.441376
+    },
+    {
+      "stage": "physics._run_ysu",
+      "measured_peak_bytes": [
+        65426227200,
+        88067080192
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 31,
+          "device_used_bytes": 65426227200,
+          "incremental_device_bytes": 64841842688,
+          "pool_used_bytes": 51373922816,
+          "pool_total_bytes": 64154383872,
+          "pool_cached_bytes": 12780461056,
+          "outside_pool_bytes": 1271843328
+        },
+        {
+          "step": 256,
+          "device_used_bytes": 88067080192,
+          "incremental_device_bytes": 87482695680,
+          "pool_used_bytes": 61672493056,
+          "pool_total_bytes": 86593024000,
+          "pool_cached_bytes": 24920530944,
+          "outside_pool_bytes": 1474056192
+        }
+      ],
+      "bytes_per_cell": 116507.24536612978,
+      "intercept_bytes": -53713149853.441376
+    },
+    {
+      "stage": "step",
+      "measured_peak_bytes": [
+        75119263744,
+        96763969536
+      ],
+      "snapshots_at_device_peaks": [
+        {
+          "step": 11,
+          "device_used_bytes": 75119263744,
+          "incremental_device_bytes": 74534879232,
+          "pool_used_bytes": 53828117504,
+          "pool_total_bytes": 74242397184,
+          "pool_cached_bytes": 20414279680,
+          "outside_pool_bytes": 876866560
+        },
+        {
+          "step": 257,
+          "device_used_bytes": 96763969536,
+          "incremental_device_bytes": 96179585024,
+          "pool_used_bytes": 61677362176,
+          "pool_total_bytes": 95290250752,
+          "pool_cached_bytes": 33612888576,
+          "outside_pool_bytes": 1473718784
+        }
+      ],
+      "bytes_per_cell": 111381.18557093604,
+      "intercept_bytes": -38778245571.35463
+    }
+  ]
+}

@@ -1,0 +1,520 @@
+{
+  "scope": "Required CAM full 24h native single-option and two-suite swaps, both absorption cadences, both dates and both G2 meshes; preparation only",
+  "source_publication_sha256": "dd3f35769a1599ce6e6c2ab24a92f014053fa1ae3e92144e8389df16d8e4c8f4",
+  "process_count": 1,
+  "forecast_proven": false,
+  "required_cases": [
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/radt_lw_scheme-cam_lw/published/abs-060000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/radt_lw_scheme-cam_lw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "e8abbffcd43defb7b87ecd3bc5e6231e036e223547302f1dc14e94984a59af77",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/radt_lw_scheme-cam_lw/published/abs-003000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/radt_lw_scheme-cam_lw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "0f6457ae13648d1b8e0d594da7b4038fb0d4f0c3f0f30207175d7a67b404924f",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/radt_sw_scheme-cam_sw/published/abs-060000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/radt_sw_scheme-cam_sw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "63a1aa45b0e936d17711807092558c487946b50482ca0b18df3eca060e61b298",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/radt_sw_scheme-cam_sw/published/abs-003000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/radt_sw_scheme-cam_sw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "e70ea28e12de526bc1c4ef98c6e32d5db1d96e357b243933710f0f5ec8d76e6c",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/suite-convection_permitting/swap-cam-lw/abs-060000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "aa4e180a6e70c24eeeabc3867acb1b9359f8c69b8eafe49dbb8dd32fd962eca7",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/suite-convection_permitting/swap-cam-lw/abs-003000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "a903aa4cce886e30e37c45972b81c05c9ddb8d4996dd356995561eeeaced481c",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/suite-convection_permitting/swap-cam-sw/abs-060000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "02159461691392842de60e59947034b268ddeff1b0dc6815647cffd8300119b4",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/suite-convection_permitting/swap-cam-sw/abs-003000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "81a5bea38ecf92f14eaea14fd7ad457d7b79fddfca9827b8622a4c20c2dfc186",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/suite-mesoscale_reference/swap-cam-lw/abs-060000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "8f60ed5d90cdcc0e9ff13a1a05dbd8a8067b0c6067184e7e106a6a4f43f4b78f",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/suite-mesoscale_reference/swap-cam-lw/abs-003000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "9a745153849e77104eece2c1e09809a6c1b90351e60c8d2c6ba3ed7cfda798ac",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/suite-mesoscale_reference/swap-cam-sw/abs-060000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "c35485f9cd4f9d7e2f460ee995dcb193c0081fcbf443b433019b59ac8093830a",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2022-12-22_12.00.00/suite-mesoscale_reference/swap-cam-sw/abs-003000",
+      "source": "G2/x1.10242/2022-12-22_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "54e464c5a4248fe58696d48f9014d19f27bf247bf4caf813d2d00af602080de3",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/radt_lw_scheme-cam_lw/published/abs-060000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/radt_lw_scheme-cam_lw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "a0d7d71f7622ad426e4ce5942716ccdc65b626c64ee1461386033e328c439fdc",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/radt_lw_scheme-cam_lw/published/abs-003000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/radt_lw_scheme-cam_lw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "3debc05c693877f4703e5ed43fa6fab8fdfeb4415a87cd525eb589eddcc0f54f",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/radt_sw_scheme-cam_sw/published/abs-060000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/radt_sw_scheme-cam_sw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "533d348a919433ebf2488662aa6c38820ed5afde8ed529b71ffcfa869a8b8caa",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/radt_sw_scheme-cam_sw/published/abs-003000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/radt_sw_scheme-cam_sw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "b3b01645d25dafa1557352128a8ab1df1e7e0b1874e1607906cda5e00532fec3",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/suite-convection_permitting/swap-cam-lw/abs-060000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "b87f5e690c1f7439b10b761ea9ab053039799d98e8e870c9ecd7f04c27b440d4",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/suite-convection_permitting/swap-cam-lw/abs-003000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "30fe813200dfb4446324f2a48639af65186b3ac277db59dd6c1ee43356a63e5c",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/suite-convection_permitting/swap-cam-sw/abs-060000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "391048febf156f60ca7a5ffb5171ac9a15e7d18e9d8925baf2588d94103ea6bf",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/suite-convection_permitting/swap-cam-sw/abs-003000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "df47d16cdae056e962e44a2dea752dbdb9ece8a0743b528f941f83849b983602",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/suite-mesoscale_reference/swap-cam-lw/abs-060000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "c38d305ebbbe5d0c7442d5f77ad66713d62c692977db7543e56520c7026d72a4",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/suite-mesoscale_reference/swap-cam-lw/abs-003000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "33c27a3795313690679beda6bf6a15317104426b2ebd428bbae1a098b0d24910",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/suite-mesoscale_reference/swap-cam-sw/abs-060000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "d1f6f07f2b32cfca5e6978a69d3d8d1241d25bc801898f1a833f989a7e5ba31b",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.10242/2023-03-31_12.00.00/suite-mesoscale_reference/swap-cam-sw/abs-003000",
+      "source": "G2/x1.10242/2023-03-31_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "3990477854638c905b852580c4b3981ae2d2aea9c4fe0282c8db6d551d91946a",
+      "streams_sha256": "aa4eba7defee5967b2615017a8e60b2b15392aa865a5cab3b5aa2468baf714c5"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/radt_lw_scheme-cam_lw/published/abs-060000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/radt_lw_scheme-cam_lw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "4092cf91d308937abb7d6470b5600107d39178d03fbdc9d36b1797193e7621e1",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/radt_lw_scheme-cam_lw/published/abs-003000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/radt_lw_scheme-cam_lw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "fa33d32229428eeec4087e06bfdd740931e224bfad636ece512ee1553098be50",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/radt_sw_scheme-cam_sw/published/abs-060000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/radt_sw_scheme-cam_sw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "59ee1baad831d0bbe6043266b8d8be216dd0e7995fc10280d928db93e6b1c9f0",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/radt_sw_scheme-cam_sw/published/abs-003000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/radt_sw_scheme-cam_sw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "84a125faa91d70628d4774449ac4743933fcdd8ca8bc4e042cea696c2e7816ea",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/suite-convection_permitting/swap-cam-lw/abs-060000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "d10ee2f357a754e2baf31c44d9d30767b464e1d238dd81a8009d7c2002400c04",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/suite-convection_permitting/swap-cam-lw/abs-003000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "62844ea32246c97b68881a0aee509854bb53f136015ed97feb3dce31072db5dd",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/suite-convection_permitting/swap-cam-sw/abs-060000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "37cd4a55b3baf49e91c8fdc1b043dcfbc4d38fa19b25c126aabfe68cee858760",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/suite-convection_permitting/swap-cam-sw/abs-003000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "6fd09e8af4e583bd4e9df9718a5e7fb19acbcfc2180447939797739b6793f038",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/suite-mesoscale_reference/swap-cam-lw/abs-060000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "59f2a09daac106664d5ba3431a703c1a59272c08febe1e0304138d5de4082e91",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/suite-mesoscale_reference/swap-cam-lw/abs-003000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "79eff8780f3722fa5a5404f107c10e7a2a2020930de0b57c937d7f8e6b2834ed",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/suite-mesoscale_reference/swap-cam-sw/abs-060000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "429cec191e71c2d858b92707203eea741e05d580f818f2ea4aa72b91f15dce30",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2022-12-22_12.00.00/suite-mesoscale_reference/swap-cam-sw/abs-003000",
+      "source": "G2/x1.2562/2022-12-22_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "99046eb13d37d0310e46a7c683ba84dc424f2da7e7cd81552fd29ecd4e8008ae",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/radt_lw_scheme-cam_lw/published/abs-060000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/radt_lw_scheme-cam_lw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "def0781b7e8d37eb28cb224a0b901b11e43bf039e1cac7940351303173709024",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/radt_lw_scheme-cam_lw/published/abs-003000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/radt_lw_scheme-cam_lw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "a5e3b7bb46d805e0a13ff539f4e0be0ea16f6af41dd5dd2e577d6f58e93ab39c",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/radt_sw_scheme-cam_sw/published/abs-060000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/radt_sw_scheme-cam_sw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "77bdae634092873387b59c1eca9424bb28955797d2e8d1838f334b586f2c5188",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/radt_sw_scheme-cam_sw/published/abs-003000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/radt_sw_scheme-cam_sw/namelist.atmosphere",
+      "variant": "published",
+      "options": {
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "6ed2093ccf0c338272082b6ef3a9964f0f04aeb2f5ec344e0e3230f67674436b",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/suite-convection_permitting/swap-cam-lw/abs-060000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "cf276792c1f710eb6c465d2b9971f9924ab24e3e4cbe0ecc46770f47042159bc",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/suite-convection_permitting/swap-cam-lw/abs-003000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "4502572f84c590c93efcae744f080cd833f0ffee7cc9d5b213b2847458cda301",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/suite-convection_permitting/swap-cam-sw/abs-060000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "418ef6de3eeb9b330de14b9b70646ef30160639e2179c247a2f1e374bb8465ad",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/suite-convection_permitting/swap-cam-sw/abs-003000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/suite-convection_permitting/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "27389fdc07fbd37f78fd2837aed4646e504a49148f5edff0ac4aacbe1f83035a",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/suite-mesoscale_reference/swap-cam-lw/abs-060000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "50bf8f4d9713d976a88998cce7f413c321f185bd7354a678222b1ae25bf393bf",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/suite-mesoscale_reference/swap-cam-lw/abs-003000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-lw",
+      "options": {
+        "config_radt_lw_scheme": "cam_lw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "0552b6b530ed6954a97fbdb7943263620a4b6adffe4b2846713165099733f28e",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/suite-mesoscale_reference/swap-cam-sw/abs-060000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "06:00:00"
+      },
+      "namelist_sha256": "60f86be46e542ba8ce0fe77cd750d333836737c9f2883bf9be0cc57ec1e4615e",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    },
+    {
+      "id": "G2/x1.2562/2023-03-31_12.00.00/suite-mesoscale_reference/swap-cam-sw/abs-003000",
+      "source": "G2/x1.2562/2023-03-31_12.00.00/suite-mesoscale_reference/namelist.atmosphere",
+      "variant": "swap-cam-sw",
+      "options": {
+        "config_radt_sw_scheme": "cam_sw",
+        "config_camrad_abs_update": "00:30:00"
+      },
+      "namelist_sha256": "e7ef5d7115179418ba3c817d088988d231725946574c3fd10c80dc0d483517b8",
+      "streams_sha256": "139cfc3c2818434ea267715e30c4414bd84612e75f2ae43e38ed3eabed92af0b"
+    }
+  ]
+}

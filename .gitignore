@@ -28,3 +28,10 @@ frames/
 /tree/src/hexcore/mod/
 /tree/tests/mod/
 /tree/.pytest_cache/
+
+# The public gate index's data/ is the reader's rebuilt references (links at home); never content.
+/tree/verification/gates/data/
+
+# Cargo build output: tree/rust/netcdf-copy/target (13 files) was committed by a
+# lane build once and had to be removed in a forward commit.
+target/

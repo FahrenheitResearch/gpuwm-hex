@@ -1,0 +1,75 @@
+{
+  "files": {
+    "core-math/atan2f.c": {
+      "licence": "MIT (notice inline; LICENSE.core-math)",
+      "origin": "CORE-MATH 284b3b0e198042c38f5c30316f696786b10816b0 src/binary32/atan2/atan2f.c",
+      "sha256": "fa6ad803b240b8b95b11ae92a43fef64a4a19796cc7e19ded2ccb9b511a02e0f"
+    },
+    "core-math/erff.c": {
+      "licence": "MIT (notice inline; LICENSE.core-math)",
+      "origin": "CORE-MATH src/binary32/erf/erff.c",
+      "sha256": "9484d4cb785230e86652597b948c0ee82a9924eca93751915738dda9239c7c5b"
+    },
+    "core-math/log10f.c": {
+      "licence": "MIT (notice inline; LICENSE.core-math)",
+      "origin": "CORE-MATH src/binary32/log10/log10f.c",
+      "sha256": "1a6c83703332c8d5516b73a2bada5553dee35ff35c9757b7e1184debee56b37d"
+    },
+    "core-math/tanhf.c": {
+      "licence": "MIT (notice inline; LICENSE.core-math)",
+      "origin": "CORE-MATH src/binary32/tanh/tanhf.c",
+      "sha256": "a60f385ebc85ce3e59d0b7a13e991a3724030c40b67e2ef68b59ce3e299aac71"
+    },
+    "cuda_host_shim.h": {
+      "licence": "Apache-2.0",
+      "origin": "gpuwm tools/thompson_real_column_parity/cuda_host_shim.h (byte copy from engine 349f1ee0)",
+      "sha256": "e25ee6fe39144bbf672fe61df7ed2f45131c37c4a16a80a6f845fa8d5f2e6a0b"
+    },
+    "geometry_host_math.cpp": {
+      "licence": "Apache-2.0",
+      "origin": "gpuwm-hex strict host geometry wrappers of the pinned GNU 2.43 float32 maths",
+      "sha256": "ddbfea7f31d83979b1c63d69f04fe4076109ae1a18f8847904a993bd02fb2b2a"
+    },
+    "glibc_flt32.cuh": {
+      "licence": "Apache-2.0; Arm optimized-routines transcriptions MIT (notice inline and in LICENSE-third-party.txt)",
+      "origin": "gpuwm engine source, gpuwm/core/kernels/glibc_flt32.cuh (byte copy)",
+      "sha256": "b647335d355aefb5d9ece1726ff23667a01f09c8b263c136bd8a94764e904d4f"
+    },
+    "glibc_flt64.cuh": {
+      "licence": "Apache-2.0; Arm optimized-routines and CORE-MATH transcriptions MIT (notices inline)",
+      "origin": "gpuwm engine source, gpuwm/core/kernels/glibc_flt64.cuh (byte copy)",
+      "sha256": "a14aff39d4acc74d9c782726d17d0bf7ef726c40235ddeb86d6a1a0bd7c4fcb8"
+    },
+    "glibc_trig_flt32.cuh": {
+      "licence": "Apache-2.0; transcribed parts carry their notices inline and in LICENSE-third-party.txt",
+      "origin": "gpuwm engine source, gpuwm/core/kernels/glibc_trig_flt32.cuh (byte copy)",
+      "sha256": "bbdb54c85d361d208ea9b1a7cb49a33132026d17694ad0f42c8b0bf5460baaf0"
+    },
+    "thompson_aerosol_libm.cuh": {
+      "licence": "Apache-2.0",
+      "origin": "gpuwm engine source, gpuwm/core/kernels/thompson_aerosol_libm.cuh (byte copy)",
+      "sha256": "c22ea2f8b096e402685df8acf31c775a6f134af26be0646d9380e93e2df10ac0"
+    },
+    "thompson_host_math.cpp": {
+      "licence": "Apache-2.0",
+      "origin": "gpuwm-hex host wrappers of its pinned Thompson device maths, build only",
+      "sha256": "2387903f5ec25a49e8e447eec024d859c82520043353fe52b9e7a944504c3204"
+    },
+    "ubm_log10f.cuh": {
+      "licence": "MIT (CORE-MATH log10f as glibc 2.43 carries it; notice inline)",
+      "origin": "gpuwm engine source, gpuwm/core/kernels/urban_bem.cuh, the text from '// log10f: CORE-MATH ' up to the line before '__device__ void bem_bem(' (source sha256 b4cb2ac2ed49d7e8aeb71193a191eefbe4a6247624772428dd9ac322a89cdb99)",
+      "sha256": "a604c98e82b95751b2651537e60332dd1121c9df55b1ca34cd6314a0a8b88b48"
+    }
+  },
+  "notices": {
+    "LICENSE-third-party.txt": "8fa6bd22e8316b68b3bc1bfe97e340407f418ba4b6be170947a7bb8c1ee9b35f",
+    "LICENSE.core-math": "81830875362f4d477637de58eecd6d458db108cc90c40904fca3694807b86de3"
+  },
+  "outputs": {
+    "bl-mynn-shared-maths.cuh": "90d9c883180c2edc7ca26f9067d06519228c55e88252edc1e857f0351c302fea",
+    "mp-tempo-rrfs-maths.cuh": "13b194710cacf584f00a794dd311dcb6bf6d351179609a5feb1c10e23bd233c4",
+    "mp-thompson-glibc243-log10-maths.cuh": "1819ce9648539d700544837ff3f81e017f045f153dc51725fbca08920258a49e"
+  },
+  "purpose": "Inputs of the shared device maths the MPAS hex-cuda bl_mynn and mp_thompson slots and the RRFS fork's mp_tempo slot bind. hexcore.mpasphys.resources_build assembles them by the recipes the scheme ports were certified with and refuses any output whose SHA-256 differs from 'outputs'.",
+  "schema": "gpuwm-hex.mpasphys-maths-sources/v1"
+}

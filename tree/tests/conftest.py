@@ -35,6 +35,13 @@ from typing import Iterable
 
 import pytest
 
+# Kernel numerics for the battery (owner ruling 2026-10-16: fast is the door default, strict is the opt-in).
+# The battery's compile-option, oracle and replay tests pin the strict route, the one that is bitwise to
+# native MPAS, so the battery names strict, and so does every subprocess it starts.  Tests of the fast
+# default select it themselves (test_numerics.py).
+os.environ["GPUWM_HEX_NUMERICS"] = "strict"
+os.environ["GPUWM_NUMERICS"] = "strict"
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -69,6 +76,39 @@ if NO_LOCAL_GPU:
     # -- and the CUDA runtime can.  An import-level ban was considered and
     # rejected: importing cupy is not the crime, opening the device is.
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+
+# The host-preparation cache (hexcore.prep_cache) is off for the battery unless
+# a test turns it on for itself.  THE BREAKAGE THIS PREVENTS: a test that
+# monkeypatches a helper inside a cached function to provoke a refusal would
+# be served the earlier test's stored result for the same mesh, and the
+# battery would also write cache entries into the runner's home directory.
+# tests/test_prep_cache.py enables it explicitly against a temporary root.
+os.environ.setdefault("GPUWM_HEX_PREP_CACHE", "off")
+
+# The MPAS route's first-use physics-resources build is off for the battery.
+# THE BREAKAGE THIS PREVENTS: a test that registers hex-cuda slots without a
+# packet would fetch upstream tables and run gfortran for minutes, writing into
+# the runner's home cache.  Tests that exercise first use replace
+# hexcore.mpasphys.resources_build.ensure_packet themselves.
+os.environ.setdefault("GPUWM_HEX_PHYSICS_RESOURCES_FIRST_USE", "off")
+
+# A copied checkout can carry another host's queue settings. Tests that
+# exercise site configuration supply their own file explicitly.
+os.environ.setdefault("HEX_SITE_FILE", os.devnull)
+
+
+@pytest.fixture
+def cpu_physics_phase_release(monkeypatch):
+    """Keep CPU transaction fakes independent of CuPy device allocation.
+
+    The phase allocator has its own stand-in-device tests. These callers
+    exercise the physics transaction with NumPy arrays and no device.
+    """
+    from contextlib import nullcontext
+    from hexcore import device_memory_release
+
+    monkeypatch.setattr(device_memory_release, "phase_release", lambda name: nullcontext())
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -361,21 +401,25 @@ def pytest_collection_modifyitems(
         pytest.mark.skip(reason=bigcard_reason) if bigcard_reason else None
     )
 
-    sources: dict[Path, str] = {}
+    # Parametrized tests share source. Parse each module once per collection,
+    # rather than once per item in every xdist worker. Keep this cache local:
+    # another pytest.main() call may collect edited sources in the same process.
+    scopes: dict[Path, tuple[bool, frozenset[str], frozenset[str]]] = {}
     for item in items:
         path = Path(str(getattr(item, "fspath", "")))
-        if path not in sources:
+        if path not in scopes:
             try:
-                sources[path] = path.read_text(encoding="utf-8")
+                source = path.read_text(encoding="utf-8")
             except OSError:  # pragma: no cover
-                sources[path] = ""
-        source = sources[path]
-
-        whole_module, cupy_functions = _cupy_scope(source)
+                source = ""
+            whole_module, cupy_functions = _cupy_scope(source)
+            scopes[path] = (whole_module, cupy_functions,
+                            _authority_touching_functions(source))
+        whole_module, cupy_functions, authority_functions = scopes[path]
         if whole_module or item.name.split("[")[0] in cupy_functions:
             item.add_marker(pytest.mark.gpu)
 
-        if item.name.split("[")[0] in _authority_touching_functions(source):
+        if item.name.split("[")[0] in authority_functions:
             item.add_marker(pytest.mark.assets)
 
         if NO_LOCAL_GPU and item.get_closest_marker("gpu") is not None:

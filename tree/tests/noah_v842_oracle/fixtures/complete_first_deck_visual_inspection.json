@@ -1,0 +1,17 @@
+{
+  "schema": "p16-noah-complete-deck-visual-inspection-v1",
+  "label": "gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5",
+  "process_count": 1,
+  "actual_render_exit": 0,
+  "model_commit": "77e9b400f9d1f214b4275ab8fa999e7933afbf2a",
+  "source_sha256": "6b4e9299215dbbac03b7e4197151d2ca435b4b6c62242a2186d2d6a3d314654f",
+  "images_opened": 24,
+  "leads": [
+    6,
+    12,
+    24
+  ],
+  "receipt": "receipts/sheets/gnu-strict-x1.2562-2023-03-31_12.00.00-mesoscale_reference-rank1-provider8149-snowpatch-headroom-attempt5/inspection.json",
+  "receipt_sha256": "41be748f09efb1a973ae281ed39b2124401579802272703c058f85ade79caab1",
+  "all_twelve_decks_visually_inspected": false
+}

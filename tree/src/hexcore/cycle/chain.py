@@ -475,6 +475,9 @@ def run_fine_forecast(
         "--start-time", _stamp(start),
         "--hours", repr(float(config.fine_hours)),
         "--history-every-minutes", str(int(config.history_every_minutes)),
+        # The cascade registered each cull at its own --dt, so the forecast
+        # runs THAT timestep rather than the door's mesh-derived default.
+        "--dt", "row",
         "--out", out, "--scratch", scratch, "--receipt", receipt,
         *(() if config.gpuwm_checkout is None
           else ("--gpuwm-checkout", config.gpuwm_checkout)),

@@ -1,5 +1,13 @@
 """A registry row's timestep, overridden for the duration of an anchor mint.
 
+SUPERSEDED 2026-10-10 by ``gpuwm-hex forecast --dt``: a run takes any
+timestep directly, so this instrument is no longer the only way to reach one.
+It is kept for the mint tools that use it, and its anchor refusals are
+retired (no candidate scope or authorization sentence is required, and a
+configuration that already holds an anchor may be overridden too).  What it
+still refuses is what would make a receipt ambiguous: an override with no
+mesh, and two overrides of one row at once.
+
 :mod:`hexcore.dt_admission` resolves half of the mint's chicken-and-egg
 problem: ``candidate_mint`` admits ONE unanchored ``config_dt`` while a mint
 run is in flight, so the sealed v8.4.1 configuration will build at a timestep
@@ -118,15 +126,7 @@ class _CandidateMeshDt:
         cumulus_scheme: str | None = "gf",
         surface_pbl_seconds: float | None = None,
     ) -> None:
-        if authorization != dt_admission.CANDIDATE_MINT_AUTHORIZATION:
-            raise DtAdmissionError(
-                "overriding a registered row's timestep requires the "
-                "candidate-mint authorization verbatim "
-                f"({dt_admission.CANDIDATE_MINT_AUTHORIZATION!r}); got "
-                f"{authorization!r}.  This path exists ONLY to let a mint run "
-                "reach a card at a timestep no mesh row declares, and every "
-                "receipt it produces says so"
-            )
+        self.authorization = authorization
         if not mesh:
             raise DtAdmissionError(
                 "a candidate row override must name the registered mesh it "
@@ -134,57 +134,10 @@ class _CandidateMeshDt:
                 "the integration, and evidence with no mesh on it is not "
                 "evidence"
             )
-        # The question is asked of the CONFIGURATION, not of the timestep
-        # alone.  RETIRED 2026-08-26 under the fix-retires-guards law: this
-        # guard read admitted_timestep(dt) with the Grell-Freitas default, so
-        # once dt_admission was keyed by (dt, cumulus selection) it refused
-        # every convection-off mint at an already-GF-anchored timestep --
-        # "20 s holds a real anchor" -- when the configuration being earned
-        # held none.  MEASURED: it killed the first convection-off arm on
-        # the proving RTX 5070 Ti in 0.1 s.
-        # WIDENED 2026-08-26 under the fix-retires-guards law, for the
-        # second time and for the identical reason: once dt_admission was
-        # keyed by the surface/PBL cadence as well, a guard reading the
-        # WELDED default would refuse every held-cadence mint at a timestep
-        # whose welded row is anchored -- "5 s with convection off holds a
-        # real anchor" -- when the configuration being earned holds none.
-        # The configuration is the whole triple or the guard asks the wrong
-        # question.
-        configuration = (
-            "convection off" if cumulus_scheme is None else str(cumulus_scheme).upper()
-        )
-        if (
-            dt_admission.surface_pbl_key(dt_seconds, surface_pbl_seconds)
-            != "dt"
-        ):
-            configuration += (
-                f" and the surface/PBL cadence held at "
-                f"{float(surface_pbl_seconds):g} s"
-            )
-        # The EXACT lookup: a held cadence admitted through a row derived
-        # from the welded anchor holds no REAL anchor of its own, and this
-        # override exists precisely so a mint can earn it one.
-        anchor = dt_admission.registered_anchor(
-            dt_seconds, cumulus_scheme, surface_pbl_seconds
-        )
-        if anchor is None:
-            raise DtAdmissionError(
-                f"dt={float(dt_seconds):g} s with {configuration} is not "
-                f"admitted at all, so a mesh "
-                f"row declaring it would be refused at bind anyway.  Open "
-                f"dt_admission.candidate_mint({float(dt_seconds):g}, ...) around "
-                f"this override: the timestep gate and the row must be opened "
-                f"together, by the same caller, or the row is the only thing "
-                f"that moved"
-            )
-        if not anchor.admitted_on.startswith("CANDIDATE"):
-            raise DtAdmissionError(
-                f"dt={float(dt_seconds):g} s with {configuration} holds a real "
-                f"anchor (admitted {anchor.admitted_on}), so it needs a "
-                f"REGISTERED row and not a temporary one.  This override "
-                f"exists only for configurations that are still trying to "
-                f"earn an anchor"
-            )
+        # RETIRED 2026-10-10: the refusals that required a live candidate
+        # mint for this configuration and refused one that already held a
+        # registered anchor.  No timestep is refused for its anchor any more,
+        # so neither guarded a breakage.
         self.mesh = str(mesh)
         self.dt_seconds = float(dt_seconds)
         self._restore: tuple[bool, float] | None = None

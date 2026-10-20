@@ -1,0 +1,10 @@
+{
+  "mp_radar.F90": "f349afc8f5068173320856f11e9b4b1f769761803ce282f2832340b96e6f90b3",
+  "mp_wsm6.F90": "83012eedbe67a94e6cc0883b29c5658432d97fc99cad9eb326a1a5fd0f8146de",
+  "mp_wsm6_effectRad.F90": "abaf69c2abbe8974d790ea1b650dbf14daf990617856c1ee49c255d534706842",
+  "module_mp_wsm6.F": "88065a388187a2380578059caac0414317cc40d6cd02e837f8b81671c8df5c25",
+  "mpas_atmphys_interface.F": "165b21ecfb4e599ce512a46ebc07a38d24abe4f76e4bf47388d15706fbc49ff2",
+  "mpas_atmphys_driver_microphysics.F": "426697f683852a6005b74b842cfb3edfafb02c11e55691c783e8b983cc054a17",
+  "module_libmassv.F90": "262630e14a9c70ba5074dac04c6f53ebe59c6f1cf27989d1b6c7c1850d7860f3",
+  "ccpp_kind_types.F": "d4a02744daaaf042a26d8225dc6c40e6d06dcdf35fe1e64f3fc057fcfc241efa"
+}

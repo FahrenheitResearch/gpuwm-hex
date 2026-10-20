@@ -14,6 +14,8 @@ safe to unit-test now but cannot accidentally promote a preliminary run.
 """
 
 from __future__ import annotations
+import os as _hex_os
+_hex_os.environ["GPUWM_HEX_NUMERICS"] = "strict"  # a bitwise proof against native MPAS runs strict numerics (owner ruling 2026-10-16: fast is the default, strict the opt-in)
 
 import argparse
 import csv

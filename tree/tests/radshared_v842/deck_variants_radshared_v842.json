@@ -1,0 +1,201 @@
+{
+  "schema": "mpas.native-deck-variants/v1",
+  "variants": [
+    {
+      "name": "radshared-o3climatology-false",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_o3climatology": false
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-o3climatology-true",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_o3climatology": true
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-microp_re-false",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_microp_re": false
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction",
+        "config_microp_scheme": "mp_thompson"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-microp_re-true",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_microp_re": true
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction",
+        "config_microp_scheme": "mp_thompson"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-radt_cld_overlap-none",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_radt_cld_overlap": "none"
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-radt_cld_overlap-random",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_radt_cld_overlap": "random"
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-radt_cld_overlap-maximum_random",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_radt_cld_overlap": "maximum_random"
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-radt_cld_overlap-maximum",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_radt_cld_overlap": "maximum"
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-radt_cld_overlap-exponential",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_radt_cld_overlap": "exponential"
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-radt_cld_overlap-exponential_random",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_radt_cld_overlap": "exponential_random"
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-radt_cld_dcorrlen-constant",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_radt_cld_dcorrlen": "constant"
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction",
+        "config_radt_cld_overlap": "exponential"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    },
+    {
+      "name": "radshared-radt_cld_dcorrlen-latitude_varying",
+      "suites": [
+        "none"
+      ],
+      "override": {
+        "config_radt_cld_dcorrlen": "latitude_varying"
+      },
+      "companions": {
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction",
+        "config_radt_cld_overlap": "exponential"
+      },
+      "native_authority": "mpas_atmphys_driver.F:214-223; mpas_atmphys_driver_radiation_lw.F:845-867; mpas_atmphys_manager.F:747-759",
+      "purpose": "Exercise the native radiation support option through active RRTMG radiation"
+    }
+  ]
+}

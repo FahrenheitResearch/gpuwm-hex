@@ -1,0 +1,59 @@
+{
+  "schema": "gpuwm-hex.physics-suites/v1",
+  "about": "Named column-physics profiles behind the hex seam. Each row names the engine selector values a backend row builds its seam with, the MPAS selector spellings its configuration records, the soil geometry and sea-ice switch it integrates, and the orographic statistics file it reads. The dycore never reads this table. A row is what WOOF's own schemes are; it is not a claim of parity with any outside model, and every known difference from the configuration it is shaped after is listed in its row.",
+  "suites": [
+    {
+      "id": "mynn-ruc-gsl",
+      "backend_row": "mynn_ruc_gsl_column",
+      "describes": "WOOF's own HRRR-family column schemes behind the hex seam: aerosol-aware Thompson, MYNN surface layer, MYNN-EDMF, RUC land surface on nine soil levels, the GSL orographic drag suite in the PBL slot, legacy RRTMG. Shaped after RRFS v2's hrrrv5 suite (source profile rrfs-v2); the physics is WOOF's, measured against observations.",
+      "engine_batch": {
+        "module": "gpuwm.core.mpas_column_suite",
+        "entrypoint": "run_mpas_column_suite",
+        "first_engine": "gpuwm 2.8.8 (not yet published; gpuwm 2.8.7 does not ship gpuwm.core.mpas_column_suite)"
+      },
+      "selection": {
+        "radiation_scheme": "rrtmg_legacy",
+        "surface_layer_scheme": "mynn",
+        "land_surface_scheme": "ruc",
+        "pbl_scheme": "mynn",
+        "drag_scheme": "gsl"
+      },
+      "microphysics": "mp_thompson_aerosols",
+      "n_soil_levels": 9,
+      "soil_level_depths_m": [0.0, 0.01, 0.04, 0.1, 0.3, 0.6, 1.0, 1.6, 3.0],
+      "fractional_seaice": 1,
+      "mpas_selectors": {
+        "config_microp_scheme": "mp_thompson_aerosols",
+        "config_pbl_scheme": "bl_mynn",
+        "config_sfclayer_scheme": "sf_mynn",
+        "config_lsm_scheme": "sf_ruc",
+        "config_gwdo_scheme": "bl_ugwp_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction_mynn"
+      },
+      "orographic_statistics": {
+        "file_suffix": ".ugwp_oro_data.nc",
+        "dimension": "nCells",
+        "variables": {
+          "VARLS": "var2dls", "CONLS": "conls",
+          "OA1LS": "oa1ls", "OA2LS": "oa2ls", "OA3LS": "oa3ls", "OA4LS": "oa4ls",
+          "OL1LS": "ol1ls", "OL2LS": "ol2ls", "OL3LS": "ol3ls", "OL4LS": "ol4ls",
+          "VARSS": "var2dss", "CONSS": "conss",
+          "OA1SS": "oa1ss", "OA2SS": "oa2ss", "OA3SS": "oa3ss", "OA4SS": "oa4ss",
+          "OL1SS": "ol1ss", "OL2SS": "ol2ss", "OL3SS": "ol3ss", "OL4SS": "ol4ss"
+        }
+      },
+      "differences_from_shaped_after": [
+        "aerosol-aware Thompson (WRF mp=28 port) instead of TEMPO v3.0.3 with hail and ML droplet number",
+        "MYNN-EDMF at the engine's wrf_461 identity instead of MYNN-EDMF c942418; scalar and aerosol mixing off (RRFS v2 mixes aerosols)",
+        "GSL orographic drag only (WRF module_bl_gwdo_gsl port, gwd_opt=3); UGWP's non-stationary part is not run",
+        "drag scale-awareness uses one nominal dx per mesh; native MPAS uses len_disp/meshDensity**0.25 per cell",
+        "drag kpblmax from a standard-atmosphere coordinate of the nominal column",
+        "RUC at the engine's wrf_45 soil properties and wrf_461 snow, monthly LAI and albedo off",
+        "legacy RRTMG; MYNN's subgrid cloud reaches it through the engine's icloud_bl=1 (part of its MYNN option identity), which is MPAS's cld_fraction_mynn and is recorded so (this row recorded cld_fraction until 2026-10-06, a label the run did not execute)",
+        "convection is the configuration's own (Grell-Freitas at 12 km here; RRFS v2 runs new Tiedtke at 12 km)"
+      ]
+    }
+  ]
+}

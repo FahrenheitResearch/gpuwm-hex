@@ -1,0 +1,52 @@
+{
+  "schema": "i4-small-active-whole-forecast-and-images/v1",
+  "sealed_at": "2026-10-14T02:21:57.070712+00:00",
+  "forecast_revision": "22a2301875930a7251df7abc9fe43a2f1245b252",
+  "generator_revision": "01cff0a7acc8e57013de56d773abe0cb9df5253e",
+  "process_count": 1,
+  "steps_completed": 72,
+  "written_words": 584996760,
+  "written_word_differences": 0,
+  "recorded_missing_samples": 2516,
+  "recorded_missing_words": 65460312,
+  "new_or_growing_omissions": 0,
+  "images_rendered_and_opened": 24,
+  "leads": [
+    6,
+    12,
+    24
+  ],
+  "actual_cpu_render_exit": 0,
+  "source_helpers_revision": "1e8e8148bf57a6c298728e9ae0b652ca32fca326",
+  "corrupt_evidence_controls_refused": [
+    "wrong-deck",
+    "wrong-renderer",
+    "missing-lead",
+    "wrong-lead",
+    "render-failure",
+    "skipped-map",
+    "wrong-hex-bytes",
+    "wrong-native-bytes",
+    "absent-map",
+    "duplicate-map",
+    "corrupt-max_abs-0.0001",
+    "corrupt-max_abs-True",
+    "corrupt-rule-percentile",
+    "corrupt-scale_half_range-999",
+    "corrupt-white_below-999",
+    "corrupt-file-../../outside.png"
+  ],
+  "files": {
+    "receipts/sheets/i4-x1.2562-2023-03-31-active-ugwp-rank1-render-resume-v4/sheets.json": "00e2b8d1f13a0d7ad59579399621e367ff59a64ab5be51b767d3a96be57325ac",
+    "receipts/sheets/i4-x1.2562-2023-03-31-active-ugwp-rank1-render-resume-v4/sheet-custody.json": "67a2fc9a0a33305cf6156a585ba0ac8cc68cb6fd7f019f126fa8db5dbb6d0cf2",
+    "receipts/sheets/i4-x1.2562-2023-03-31-active-ugwp-rank1-render-resume-v4/visual-inspection.json": "678830bc28b9895001043f93fee6df5693e7bf1345c368183d6e5aa7f3304d5a",
+    "receipts/sheets/i4-x1.2562-2023-03-31-active-ugwp-rank1-render-resume-v4/compare.json": "efd08d1508261752e8cf3b496bf75acb9f09b8f61843f284c3f8570e62e22140",
+    "receipts/sheets/i4-x1.2562-2023-03-31-active-ugwp-rank1-render-resume-v4/expected-sheets.json": "7da0fb5f5a15b4c8e0094c1691fb5de10b44591c04cc755edccaee238d396e3e",
+    "receipts/sheets/i4-x1.2562-2023-03-31-active-ugwp-rank1-render-resume-v4/completion.json": "7c07fa945143c1885aa8d55952b0780a102afe7d0bd0264d21c3305428bf1dc2",
+    "receipts/small-active-forecast/whole-forecast-closure.json": "7efcd8b2f12e712ad07ebf68674c549929497bb2270385dc8e5ff9f7c1fdc290"
+  },
+  "previous_failed_render_attempts_retained": true,
+  "no_forecast_or_comparison_repeated": true,
+  "official_forecast_acceptance_claimed": false,
+  "exclusions": []
+}

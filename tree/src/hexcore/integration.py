@@ -131,7 +131,7 @@ class RKSchedule:
                 "config_number_of_sub_steps",
                 acoustic_substeps,
                 "at least one acoustic substep is required",
-                "config_number_of_sub_steps=6",
+                "config_number_of_sub_steps=4 (MPAS-A's default) or any positive integer",
             )
         dt_dyn = dt / dynamics_splits
         if order == 3:
@@ -150,8 +150,8 @@ class RKSchedule:
             raise ConfigurationRefusal(
                 "config_time_integration_order",
                 order,
-                "frozen MPAS has only second- and third-order schedule branches",
-                "config_time_integration_order=3",
+                "MPAS-A v8.4.1 has only second- and third-order schedule branches",
+                "config_time_integration_order=2 (MPAS-A's default) or 3",
             )
         stages = tuple(
             RKStage(index + 1, large[index], acoustic_dt[index], counts[index])

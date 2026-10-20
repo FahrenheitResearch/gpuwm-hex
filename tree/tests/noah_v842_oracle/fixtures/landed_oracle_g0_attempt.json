@@ -1,0 +1,9 @@
+{
+  "schema": "p16-noah-landed-oracle-full-G0-attempt-v1",
+  "receipt": "receipts/noah-landed-oracle-full-G0-attempt.json",
+  "sha256": "c5a4c753fef4e1be620ffb9faf576034cd467c24b7c52864aea3d6c88cd74c09",
+  "actual_gate_exit": 1,
+  "passed_tests": 3838,
+  "failed_tests": 14,
+  "production_sha256": "6b4e9299215dbbac03b7e4197151d2ca435b4b6c62242a2186d2d6a3d314654f"
+}

@@ -283,13 +283,12 @@ def _declaration() -> dict:
 def test_the_gpu_alias_installs_a_cupy_the_runtime_floor_admits():
     """The durable form of the wheel-reach defect's second defect.
 
-    ``pip install "gpuwm-hex[gpu]"`` -- the obvious spelling -- used to
-    resolve to ``gpu-cu12``, and every GPU door in this port refuses a CUDA
-    runtime below 13000.  So the obvious command installed a CuPy that
-    imports, allocates, runs cuBLAS, and is then refused by name at forecast
-    launch.  This test is what stops the two drifting apart again: it reads
-    the floor off ``require_cuda`` rather than restating it, so moving the
-    floor to 12000 makes the alias wrong here and the red says which.
+    ``pip install "gpuwm-hex[gpu]"`` -- the obvious spelling -- once
+    resolved to ``gpu-cu12`` while every GPU door refused a CUDA runtime
+    below 13000, so the obvious command installed a CuPy that was refused by
+    name at forecast launch.  This test is what stops the alias and the
+    floor drifting apart: it reads the floor off ``require_cuda`` rather than
+    restating it.  The floor is now 12000 and the alias ``gpu-cu12``.
     """
 
     doctor = importlib.import_module("hexcore.doctor")
@@ -309,13 +308,26 @@ def test_the_gpu_alias_installs_a_cupy_the_runtime_floor_admits():
 def test_both_per_major_extras_stay_resolvable():
     """A published name that vanishes turns a wrong answer into a hard error.
 
-    ``gpu-cu12`` is in 0.1.0's published metadata and in written
-    instructions.  It is no longer what the alias points at and doctor now
-    reports an installed cu12 wheel as a gap, but the name resolves.
+    ``gpu-cu12`` is what the alias points at (the CUDA 12 floor), and
+    ``gpu-cu13`` installs the CUDA 13 toolchain on a CUDA 13 driver; both are
+    in published metadata and written instructions, and both resolve.
     """
 
     extras = _declaration()["project"]["optional-dependencies"]
     assert "gpu-cu12" in extras and "gpu-cu13" in extras
+
+
+def test_the_gpu_alias_is_the_wheel_a_cuda_12_driver_can_run():
+    """The CUDA 12 defect: ``[gpu]`` installed cupy-cuda13x, which a CUDA 12
+    driver cannot run (cudaErrorInsufficientDriver at the first device call;
+    measured on an RTX PRO 6000 under driver 570, CUDA 12.8).  A driver runs
+    its own CUDA major and every older one, so the CUDA 12 wheel is the one
+    alias that opens the card on both driver majors.
+    """
+
+    extras = _declaration()["project"]["optional-dependencies"]
+    assert extras["gpu"] == ["gpuwm-hex[gpu-cu12]"]
+    assert extras["gpu-cu12"][0].startswith("cupy-cuda12x")
 
 
 # ---------------------------------------------------------------------------
@@ -336,13 +348,43 @@ def test_the_floor_doctor_reports_is_the_one_require_cuda_enforces():
     assert _doctor().cuda_runtime_floor() == int(declared)
 
 
-def test_a_wrong_major_cupy_is_reported_as_a_gap_naming_the_refusal(monkeypatch):
-    """REFUSES.  The measured case: cupy-cuda12x on a box the doors want cu13.
+def test_a_cupy_below_the_floor_is_reported_as_a_gap_naming_the_refusal(monkeypatch):
+    """REFUSES.  A CuPy whose runtime is below ``require_cuda``'s floor.
 
-    Before this, doctor printed ``verified`` on exactly this CuPy, because
-    it imported.  The user then met ``CudaRefusal: cuda.runtime_version=12090
-    < required 13000`` at forecast launch, from a card that had already been
-    reserved.
+    Doctor once printed ``verified`` on such a CuPy because it imported, and
+    the user met the ``CudaRefusal`` at forecast launch.  The floor is read
+    off ``require_cuda``, so this holds whatever the floor is.
+    """
+
+    doctor = _doctor()
+    floor = doctor.cuda_runtime_floor()
+    below = floor - 80
+    monkeypatch.setattr(doctor, "_import_probe", lambda module: (True, "imported, 13.6.0"))
+    monkeypatch.setattr(
+        doctor,
+        "_cupy_runtime_probe",
+        lambda: {"cupy_version": "13.6.0", "runtime_version": below},
+    )
+    monkeypatch.setattr(doctor, "_installed_cupy_wheels", lambda: ["cupy-old"])
+    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: 13)
+
+    findings = doctor.check_gpu_runtime()
+    assert [f.status for f in findings] == [doctor.MISSING]
+    finding = findings[0]
+    assert str(below) in finding.detail
+    assert str(floor) in finding.detail
+    assert f"cuda.runtime_version={below} < required {floor}" in finding.remedy
+
+    compact = doctor.render(findings, explain=False)
+    assert "pip uninstall -y cupy-old" in compact, compact
+
+
+def test_a_cupy_newer_than_the_driver_is_a_gap_not_verified(monkeypatch):
+    """REFUSES.  The measured case: cupy-cuda13x on a CUDA 12.8 driver.
+
+    That CuPy imports and reports runtime 13020, above the floor, so doctor
+    said ``verified`` and "Every check passed" while every device call on
+    the box stopped with cudaErrorInsufficientDriver.
     """
 
     doctor = _doctor()
@@ -350,38 +392,44 @@ def test_a_wrong_major_cupy_is_reported_as_a_gap_naming_the_refusal(monkeypatch)
     monkeypatch.setattr(
         doctor,
         "_cupy_runtime_probe",
-        lambda: {"cupy_version": "14.2.0", "runtime_version": 12090},
+        lambda: {"cupy_version": "14.2.0", "runtime_version": 13020},
     )
-    monkeypatch.setattr(doctor, "_installed_cupy_wheels", lambda: ["cupy-cuda12x"])
-    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: 13)
+    monkeypatch.setattr(doctor, "_installed_cupy_wheels", lambda: ["cupy-cuda13x"])
+    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: 12)
 
     findings = doctor.check_gpu_runtime()
     assert [f.status for f in findings] == [doctor.MISSING]
     finding = findings[0]
-    assert "12090" in finding.detail
-    assert "13000" in finding.detail
-    assert "cuda.runtime_version=12090 < required 13000" in finding.remedy
+    assert "13020" in finding.detail and "serves CUDA 12" in finding.detail
+    assert "cudaErrorInsufficientDriver" in finding.detail
+    assert 'pip install "gpuwm-hex[gpu-cu12]"' in finding.remedy
 
     compact = doctor.render(findings, explain=False)
-    assert "pip uninstall -y cupy-cuda12x" in compact, compact
-    assert "gpu-cu12" not in compact, compact
+    assert "pip uninstall -y cupy-cuda13x" in compact, compact
 
 
-def test_a_right_major_cupy_is_verified_and_says_what_it_measured(monkeypatch):
-    """ADMITS.  The same instrument, the other way, or it measures nothing."""
+@pytest.mark.parametrize("runtime, driver", [(13000, 13), (12090, 12), (12090, 13)])
+def test_a_cupy_the_driver_runs_is_verified_and_says_what_it_measured(
+    monkeypatch, runtime, driver
+):
+    """ADMITS.  The same instrument, the other way, or it measures nothing.
+
+    (12090, 12) is the CUDA 12 box after the fix: the wheel ``[gpu]`` now
+    installs, on the driver it was refused on.
+    """
 
     doctor = _doctor()
-    monkeypatch.setattr(doctor, "_import_probe", lambda module: (True, "imported, 14.0.1"))
+    monkeypatch.setattr(doctor, "_import_probe", lambda module: (True, "imported, 14.2.0"))
     monkeypatch.setattr(
         doctor,
         "_cupy_runtime_probe",
-        lambda: {"cupy_version": "14.0.1", "runtime_version": 13000},
+        lambda: {"cupy_version": "14.2.0", "runtime_version": runtime},
     )
-    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: 13)
+    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: driver)
 
     findings = doctor.check_gpu_runtime()
     assert [f.status for f in findings] == [doctor.VERIFIED]
-    assert "13000" in findings[0].detail
+    assert str(runtime) in findings[0].detail
 
 
 def test_the_compact_remedy_for_a_missing_cupy_names_the_admitted_extra(monkeypatch):
@@ -397,32 +445,36 @@ def test_the_compact_remedy_for_a_missing_cupy_names_the_admitted_extra(monkeypa
     monkeypatch.setattr(
         doctor, "_import_probe", lambda module: (False, "ModuleNotFoundError: cupy")
     )
-    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: 13)
+    for driver, extra, other in ((13, "gpu-cu13", "gpu-cu12"), (12, "gpu-cu12", "gpu-cu13")):
+        monkeypatch.setattr(doctor, "_driver_cuda_major", lambda driver=driver: driver)
+        compact = doctor.render(doctor.check_gpu_runtime(), explain=False)
+        assert f'pip install "gpuwm-hex[{extra}]"' in compact, compact
+        assert other not in compact, compact
 
+    # Driver unread: the alias, whose CUDA 12 wheel runs on either major.
+    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: None)
     compact = doctor.render(doctor.check_gpu_runtime(), explain=False)
-    assert 'pip install "gpuwm-hex[gpu-cu13]"' in compact, compact
-    assert "gpu-cu12" not in compact, compact
+    assert 'pip install "gpuwm-hex[gpu]"' in compact, compact
 
 
 def test_a_driver_below_the_floor_is_told_no_pip_command_helps(monkeypatch):
     """A remedy that cannot work is worse than a remedy that is absent.
 
-    On a CUDA-12 driver neither extra opens the CUDA lane: cupy-cuda13x
-    needs a CUDA-13 driver, and cupy-cuda12x is refused by the floor.  The
-    compact view therefore offers no install command at all, and the
-    headline -- the line the compact view always prints -- carries the
-    reason.
+    On a CUDA 11 driver no extra opens the CUDA lane: both wheels need a
+    driver serving CUDA 12 or newer.  The compact view therefore offers no
+    install command at all, and the headline -- the line the compact view
+    always prints -- carries the reason.
     """
 
     doctor = _doctor()
     monkeypatch.setattr(
         doctor, "_import_probe", lambda module: (False, "ModuleNotFoundError: cupy")
     )
-    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: 12)
+    monkeypatch.setattr(doctor, "_driver_cuda_major", lambda: 11)
 
     findings = doctor.check_gpu_runtime()
     assert [f.status for f in findings] == [doctor.MISSING]
-    assert "serves CUDA 12" in findings[0].detail
+    assert "serves CUDA 11" in findings[0].detail
     compact = doctor.render(findings, explain=False)
     assert "pip install" not in compact, compact
 

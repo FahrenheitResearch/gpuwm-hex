@@ -1,0 +1,57 @@
+{
+  "deck_sha256": "9347ee9d60adb4eb7452b7a4d3961eb514a9dc6d7e5f9e9e4d914dba5a510432",
+  "renderer_sha256": "71237f45ba81c8907ee7ab4abea26d3e4720634b330ca365866da107b430319f",
+  "leads": [
+    6,
+    12,
+    24
+  ],
+  "scales": {
+    "mslp": {
+      "half_range": "0.1",
+      "step": "0.02"
+    },
+    "500hPa-height": {
+      "half_range": "0.01",
+      "step": "0.002"
+    },
+    "composite-reflectivity": {
+      "half_range": "10",
+      "step": "2"
+    },
+    "precip-total-since-start": {
+      "half_range": "0.25",
+      "step": "0.05"
+    },
+    "2m-temperature": {
+      "half_range": "5",
+      "step": "1"
+    },
+    "mslp-isobars-10m-wind": {
+      "half_range": "5",
+      "step": "1"
+    },
+    "500hPa-height-contours-wind": {
+      "half_range": "5",
+      "step": "1"
+    },
+    "10m-wind": {
+      "half_range": "5",
+      "step": "1"
+    }
+  },
+  "raw": {
+    "6": {
+      "hex": "01bd6e800058895f6dab2cb2dac330e735f70b59c13c698fb094bf09cdb3a977",
+      "native": "8705308fe68578243a10faf2e5cf4cd77bcfc5a1d774b51a7c361eb7b5baaf03"
+    },
+    "12": {
+      "hex": "0b0f9597dd686c2ef7a3614eed0358aff16cb0edb42eb3a69afae174780b7161",
+      "native": "343c599f218ffad5164f4492a8940b1511e655b546f395db141775c4a43f7e0d"
+    },
+    "24": {
+      "hex": "0b67ba1f146a89460c825f791f08efdfa6b339b939e2cbcaebb98a4a37991e7d",
+      "native": "50d3307c4158bff67535a6d0c2212dc274b9465fbbf94c5c74fca4e0ab2585ce"
+    }
+  }
+}

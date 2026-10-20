@@ -1,0 +1,77 @@
+{
+  "model_commit": "1d6e370e7b43a332074809f170532a216c2212fb",
+  "windows": {
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1127-1143": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "f216230f85dbe2587709193506a006afa6e16b2edb70ada5469bd96565b3167f"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1168-1184": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "ef84728d81095e05ce98f2d8873fe13931afd1ceaac2112875426cd5fb90f442"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1189-1209": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "59e84d27700c8c331c84180082f98acf1e5f6e6c68c918787798cb2cda6ff5ee"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1688-1699": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "6c00b9826142cb80b009acdc391b8f8b85b3359e4bd7382c020f4cf1ccd4d218"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1705-1716": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "be01e291f3ce44e77a8df4d6f8456a83b3419a364c1b1e9335fbfacc6eebba77"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1722-1738": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "77dd9cb140a0f0eceebc5e13c613e3c900d7de471a7e2ba778be39cb0dbd91b4"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1240-1682": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "9b9179d1742ce41f3d85326f35da3b4be6ef7536f5060b5b106c89c630d323dd"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:710-970": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "1d1aac70e6470c6d63c083452c7eaa7fe09ac5690d4842361feb7be94ac6df55"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:297-681": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "dbf1fc8519607140ab59510fc9f51de148c4149f42d3414f3122f418523700b4"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1146-1165": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "64c7c2d3376981ee950761e651896807522c18b9186af55f12bc302e32666527"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:1213-1233": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "21e5f0045124b8974a300a257086252371b4817d0be71c90f1a5672c4ebbfe72"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:984-1124": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "e0380f7f708a585a5501f92d233ee856e4c9a78d03e516239af0f48ffbd56ef0"
+    },
+    "src/core_atmosphere/physics/mpas_atmphys_driver_microphysics.F:1350-1381": {
+      "file_sha256": "3ac2279b1b76ebe45bb621f3a75a81b97f212cc2dbc34544c075e401ce22e462",
+      "window_sha256": "1f264eceaf3e8563c066ff3cbcf06f3357797fe23e0226e2579a87c40ee17695"
+    },
+    "src/core_atmosphere/mpas_atm_core.F:972-1003": {
+      "file_sha256": "fab39a87fa427ac3b8467d9ed2d061ebc79a07560e9db33330ac3c50c027de88",
+      "window_sha256": "280ab31dc7b7082f8c6c9197384c334d22a230fd4945dcfccad539e36b0b2576"
+    },
+    "src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:79-283": {
+      "file_sha256": "1fc114ab954e6ebc9a0073ec70c6222029fcd3de68d215958599c4f03fbaf0fa",
+      "window_sha256": "02a877391de81cf3fbfef1266aa09dfa32c280b07128fd34c2cea8ea57ef8a46"
+    },
+    "src/core_atmosphere/diagnostics/mpas_atm_diagnostics_manager.F:31-173": {
+      "file_sha256": "fe3c162f7a52b3c7dd257a1581fab6ba1aeccf086f08ca46cda58bd405d89184",
+      "window_sha256": "83a3d787d2c6fb04d3f3118cd9aef4be3a1306b802d02b38e19eb63ea5fbeb95"
+    },
+    "src/core_atmosphere/diagnostics/mpas_atm_diagnostics_manager.F:31-63": {
+      "file_sha256": "fe3c162f7a52b3c7dd257a1581fab6ba1aeccf086f08ca46cda58bd405d89184",
+      "window_sha256": "d0ed0b9efb4f927ca7cb396f46bb07d218e843c6d30091ced0254aba4413974b"
+    },
+    "src/core_atmosphere/diagnostics/mpas_atm_diagnostics_manager.F:76-92": {
+      "file_sha256": "fe3c162f7a52b3c7dd257a1581fab6ba1aeccf086f08ca46cda58bd405d89184",
+      "window_sha256": "0bd70743f693588abc37990a950c1b92e7ebe5313ebd60e6e2205caf8c5eb0e8"
+    }
+  }
+}

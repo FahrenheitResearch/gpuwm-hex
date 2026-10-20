@@ -426,7 +426,9 @@ def measure_mesh(
         )
     record["ladders"] = ladder_records
 
-    del arrays
+    # Released by rebinding, not `del`: gathered_args closes over `arrays`,
+    # and a deleted closure cell is a NameError for any later call.
+    arrays = None
     cp.get_default_memory_pool().free_all_blocks()
     return record
 

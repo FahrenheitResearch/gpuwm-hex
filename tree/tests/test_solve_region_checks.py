@@ -67,6 +67,7 @@ def _fake_cupy(monkeypatch, *, major: int, minor: int, counter: dict[str, int]):
 
     runtime = types.SimpleNamespace(
         getDeviceCount=lambda: 1,
+        getDevice=lambda: 0,
         getDeviceProperties=properties,
         runtimeGetVersion=lambda: 13_000,
         driverGetVersion=lambda: 13_030,

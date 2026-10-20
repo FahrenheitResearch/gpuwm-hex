@@ -1,0 +1,43 @@
+# The MPAS physics slots' table decoders, built into the gpuwm-hex wheel by
+# setup.py beside hex_contract_hostprep and placed in hexcore/libexec.
+#
+# THE BREAKAGE THIS PREVENTS: the MPAS hex-cuda Thompson, Noah and RRTMG
+# LW/SW slots decode their pinned tables through these Rust programs, and the
+# only builds that existed were lane scratch binaries on one host, so a clean
+# install could not reach the MPAS physics suites. `gpuwm-hex
+# physics-resources build` binds the installed copies and refuses one that
+# decodes a table to different words than the certified decoder.
+#
+# Sources, unchanged from the scheme ports that certified them:
+#   src/lookup_decode.rs            tests/thompson_v842_oracle/lookup_decode.rs
+#   src/bin/table_decode.rs         tests/noah_v842_oracle/table_decode.rs
+#   src/bin/table_schema.rs         tests/noah_v842_oracle/table_schema.rs
+#   src/bin/rw_mpas_rrtmg_lw_tables.rs   the RRTMG LW port's decoder
+#   src/rrtmg_sw_tables.rs          the RRTMG SW port's decoder module
+#   src/bin/rw_mpas_rrtmg_sw_tables.rs   its entry point, minus the engine's
+#                                   build-stamp static (this crate is not the engine's)
+# Standard library only: the build needs no registry and runs offline.
+[package]
+name = "hex-physics-tables"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+autobins = false
+
+[lib]
+name = "lookup_decode"
+path = "src/lookup_decode.rs"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "table_decode"
+path = "src/bin/table_decode.rs"
+
+[[bin]]
+name = "rw_mpas_rrtmg_lw_tables"
+path = "src/bin/rw_mpas_rrtmg_lw_tables.rs"
+
+[[bin]]
+name = "rw_mpas_rrtmg_sw_tables"
+path = "src/bin/rw_mpas_rrtmg_sw_tables.rs"

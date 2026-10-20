@@ -1,0 +1,18 @@
+{
+  "schema": "gpuwm-hex.vertical-spec/v1",
+  "n_vert_levels": 55,
+  "ztop_m": 30000.0,
+  "scheme": "tc",
+  "specified_interfaces_m": null,
+  "interface_projection": "linear_interpolation",
+  "terrain_smoothing_passes": 1,
+  "smooth_surfaces": true,
+  "surface_smoothing_passes": 30,
+  "minimum_layer_fraction": 0.3,
+  "hybrid_coordinate": true,
+  "hybrid_transition_height_m": 30000.0,
+  "rayleigh_xnutr": 0.0,
+  "rayleigh_damping_start_m": 22000.0,
+  "theta_adv_order": 3,
+  "coef_3rd_order": 0.25
+}

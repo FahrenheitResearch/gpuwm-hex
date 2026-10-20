@@ -94,7 +94,7 @@ def test_the_named_forecast_pair_is_masked_digest_identical(receipts):
 SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     "src/hexcore/cuda_driver.py": {
         "recorded": "cb6477ef2fd02ad551e9b6c8af0724c94fc4d90bdc712fff1378d218662f5d04",
-        "current": "cb914d37558d65fc20582a1257e75fec0599e05d2af41044f79a8d8166d628b4",
+        "current": "433a0e51eb948d7235fbab3aa7605c4f6135056e6c717abbbbaa0e6972fc1c0c",
         "why": (
             "convection ruling, 2026-08-26: _v841_physics_cadences reports "
             "convection: None when no cumulus scheme is selected instead of "
@@ -122,12 +122,37 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
             "mpas_port is substituted with hexcore, so nothing an archived "
             "receipt measured can differ.  Re-derived by "
             "tools/repin_source_tables.py"
+            "  Moved again 2026-10-13 by the forecast batch: the host mesh "
+            "validation's row loops became whole-table checks with the same "
+            "verdict and message (tests/test_mesh_rows_vectorized.py keeps "
+            "the loops as the reference); it runs on the host before any CUDA "
+            "interaction and no CUDA source, launch or arithmetic line moved"
+            "  Moved again 2026-10-13 by landing wave 2 (SG2): the lagged "
+            "microphysics heating carry (e7be214b) adds one kernel and three "
+            "recover_cells_f32 arguments, both inactive unless physics hands "
+            "the dycore a diabatic_theta; nothing these receipts ran supplies "
+            "one, so the arithmetic they measured is unchanged"
+            "  Moved again 2026-10-14 by the 0.4.0 release scrub: one comment "
+            "line names an owner ruling in place of a person; comment only, no "
+            "code line moved"
+            "  Moved again 2026-10-15 by rel/hex040-fix-les: the RK step calls "
+            "MPAS-A v8.4.2's LES dissipation only when a driver is handed an "
+            "LES launcher (config_les_model or config_mix_scalars on the MPAS "
+            "route); the moist w Euler kernel gains a has_mixing flag that is "
+            "0 otherwise and subtracts from 0.0f as before. These receipts ran "
+            "with LES off, so the arithmetic they measured is unchanged"
         ),
     },
     "src/hexcore/cuda_regional_forecast_v841.py": {
         "recorded": "3aa30ec3c3a11c1152a67d1fcbc8b2d470fd8ac2446ec8f7ec34906873421e88",
-        "current": "7d35d73c08464f50f6dd984d81f7479702d85f14b1d6bed67c178ede0ac2a533",
+        "current": "408b6d8f740071ca4da6e4fd801925a9f504eed47902519f22e4b10cfab8b2ec",
         "why": (
+            "Integration 2026-10-04 adds explicit rank constructor dispatch "
+            "and preserves the ordinary constructor. The twelve arithmetic "
+            "source files remain exact e6 bytes. The current source set passed "
+            "eight native point decks and all twenty-two kernels in "
+            "verification/hex-next/native-point.json. Archived source hashes "
+            "and class measurements remain unchanged. "
             "ANCHOR RE-KEYING, 2026-08-27: open_regional_forecast_v841 now "
             "measures the configuration CLASS off the run it is about to "
             "admit -- boundary-zone width, column count, min(dcEdge) and the "
@@ -158,11 +183,14 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
             "mpas_port is substituted with hexcore, so nothing an archived "
             "receipt measured can differ.  Re-derived by "
             "tools/repin_source_tables.py"
+            "  Moved again 2026-10-14 by the 0.4.0 release scrub: one docstring "
+            "line of open_regional_forecast_v841 names an owner ruling in place "
+            "of a person; docstring only, no code line moved"
         ),
     },
     "src/hexcore/regional_v841.py": {
         "recorded": "e74d345e3a2e02fe6887840e7ad3a8166ea302082e6a505d138c5293fef69a43",
-        "current": "e0bb6ffc57126fa73cb068de348d01d6390721fc1e0c93400eb8e7c889edc015",
+        "current": "18047e222e842acd4f73951d0dff2d11d1b85ce4d220a8bf3cf7ebf101555d83",
         "why": (
             "provenance scrub, 2026-08-27: ONE line of the module "
             "docstring named the machine the native v8.4.1 sources were "
@@ -185,8 +213,16 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_backend/runtime.py": {
         "recorded": "4deab4b3a37467491a531750e8618705c6884c19c0395891bc426fce2ea6ba5a",
-        "current": "fee26b81e333be8645b4d1b1ab91f4bfd7d1acae376430c8588d583f4890df32",
+        "current": "b8e390535f4b88ed2954989aa0004366f923c584a631a3aa6589ba92acff54bb",
         "why": (
+            "2026-10-15: require_cuda's default runtime floor 13000 -> 12000 "
+            "(CUDA 12 support) and one docstring paragraph; host Python "
+            "only, no CUDA source string or arithmetic moved. "
+            "Integration 2026-10-04 adds explicit current-device selection "
+            "for rank ownership. No CUDA arithmetic changes. The current "
+            "source set passed the native point contract recorded in "
+            "verification/hex-next/native-point.json; other class records "
+            "are carried and are not newly measured. "
             "limited-area physics lane, 2026-08-26: the per-launch observer "
             "now carries the MODULE KEY that launched, as well as the kernel "
             "name.  One KernelCache serves the dycore AND the ArWen physics "
@@ -206,7 +242,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "tools/run_cuda_regional_forecast.py": {
         "recorded": "0829a0d11501388c974f267d85f42adea39e762884948b36304d6d4f8ed64167",
-        "current": "042b5c57fe3fd4d36b51fce9b05c6735cadbfb57d69ca0ae9cd5d9f7f5fcc2e0",
+        "current": "a0296cc4b58f83bc3edb7b70aaaaee84852cf74262983f7969bf4f2385c5b9c6",
         "why": (
             "swath-as-lam lane, 2026-08-27: the instrument grew named "
             "--grid/--init/--lbc-dir/--start-time/--dt/--len-disp paths and a "
@@ -223,12 +259,28 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
             "mpas_port is substituted with hexcore, so nothing an archived "
             "receipt measured can differ.  Re-derived by "
             "tools/repin_source_tables.py"
+            "  Moved again 2026-10-05: the "
+            "instrument grew --invariant (the native invariant stream, read "
+            "for the vertical grid as MPAS-A does) and now loads its init as "
+            "a cold start, recomputing pressure_p/pressure_base/exner as "
+            "atm_init_coupled_diagnostics does instead of consuming the init "
+            "file's copies.  The four archived x1 receipts were minted on the "
+            "file copies; --file-coupled-diagnostics reproduces that load "
+            "exactly (no other argument changed), and each new receipt "
+            "records which load it used as coupled_diagnostics"
         ),
     },
     "src/hexcore/cuda_acoustic_v841.py": {
         "recorded": "fc5059cfc3fc894c60371caf0d8b89f309605152360a18f983b31e4d32cb6ed2",
-        "current": "7601ae667855c905d781b6287e355d5350155cf3f86943ec508bad4c3f1e211f",
+        "current": "a93b85ea39ca22f0cfaa3907ed1e77ac92fd4a20122d848fde354de06030b96d",
         "why": (
+            "2026-10-19 LTS hook repair: unspecialized lookups retain their "
+            "two-part key; the acoustic tap uses the launched shape identity. "
+            "CUDA arithmetic and archived recorded hashes are unchanged. "
+            "2026-10-19 current-source refresh after f65ab11c: immutable "
+            "kernel dimensions are specialized and cache keys include shape. "
+            "The archived recorded hash and receipt scope stay unchanged; "
+            "this is not a new forecast mint. Earlier migrations follow. "
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
             "ran once that one identifier is substituted -- measured file "
@@ -242,37 +294,39 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_backend/containers.py": {
         "recorded": "02b7b2bee1779a5072df1c3f79fa82ff0d71ccc047e9edd05c09ffc6f0967ec1",
-        "current": "e8023a1076241ee36ce51f9bad40e2c3059f98bdd522415ff7773c782505fccc",
+        "current": "b510614f408df4908fcfeb3ee1a4de3936bc57ef28a0e4869cd0feba36b0da47",
         "why": (
-            "0.2.0 package rename, 2026-08-28: the token mpas_port became "
-            "hexcore. This file is byte-identical to the copy these receipts "
-            "ran once that one identifier is substituted -- measured file "
-            "against file, not argued from a diff -- and the 1 line carrying "
-            "it is 1 import. No line of CUDA source text differs, so every "
-            "kernel these receipts launched compiles from the same bytes; a "
-            "module_key names a cache slot and an observer label, never "
-            "anything the arithmetic reads. Re-derived by "
-            "tools/repin_source_tables.py."
+            "Package rename and compact host copies were followed by the "
+            "2026-10-17 startup fix: finite checks use bounded host blocks; "
+            "edge signs are constructed on device from uploaded indices. "
+            "The old scalar loop and the new kernel have identical words "
+            "for float32/int32 and float64/int64, including inactive negative "
+            "sentinels (tests/test_mesh_signs_cuda.py). Later startup changes "
+            "pack host fields in bounded blocks, check finite words on CUDA "
+            "and overlap independent atmosphere components on private streams "
+            "(tests/test_device_field_upload.py). This source refresh "
+            "does not re-run or replace the archived regional forecast proof."
         ),
     },
     "src/hexcore/cuda_dynamics_v841.py": {
         "recorded": "d050cabd1a1d199f014de0306f2987a68fb3184bf45291c57dafdb528569e9e7",
-        "current": "fed210892a9f2553d0f6ac49866251fab2d1d6b12d8397fa2066b6507095ff98",
+        "current": "e5f63175b7eaae8bd1ab16ab3cfeeb2a2709d30f6eaf4f480ce6e00661e3162a",
         "why": (
-            "0.2.0 package rename, 2026-08-28: the token mpas_port became "
-            "hexcore. This file is byte-identical to the copy these receipts "
-            "ran once that one identifier is substituted -- measured file "
-            "against file, not argued from a diff -- and the 1 line carrying "
-            "it is 1 NVRTC module_key or module-name label. No line of CUDA "
-            "source text differs, so every kernel these receipts launched "
-            "compiles from the same bytes; a module_key names a cache slot "
-            "and an observer label, never anything the arithmetic reads. "
+            "2026-10-19 current-source refresh after f65ab11c: immutable "
+            "kernel dimensions are specialized and cache keys include shape. "
+            "The archived recorded hash and receipt scope stay unchanged; "
+            "this is not a new forecast mint. Earlier migrations follow. "
+            "The recorded digest retains the archived campaign's source. "
+            "Current tracks subsequent source edits, including the "
+            "2026-10-16 corrected-theta stencil reuse (hex/speed-1). "
+            "Its evidence is the direct old/new uint32 test and the new "
+            "G1/G2 landing replay, not the archived campaign. "
             "Re-derived by tools/repin_source_tables.py."
         ),
     },
     "src/hexcore/cuda_horizontal.py": {
         "recorded": "97faf0869a0a5ea9ebbc4c67b3c2d6c68cefdfa10dece73cd204d818962efde4",
-        "current": "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5",
+        "current": "d4e4face383eab6f19f21598613b7bd58e37eb75e067b7b9e817060a2ec015cd",
         "why": (
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
@@ -288,8 +342,12 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_horizontal_v841.py": {
         "recorded": "3fc0b860ebd67dfed453617c348810964ea1110e782fe85db10283afb406e2fe",
-        "current": "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455",
+        "current": "0f26e1e54ab4935aa4ce9c25d189d15b76b046e84dd015e15d2326c3a6bddf7d",
         "why": (
+            "2026-10-19 current-source refresh after f65ab11c: immutable "
+            "kernel dimensions are specialized and cache keys include shape. "
+            "The archived recorded hash and receipt scope stay unchanged; "
+            "this is not a new forecast mint. Earlier migrations follow. "
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
             "ran once that one identifier is substituted -- measured file "
@@ -304,7 +362,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_regional_v841.py": {
         "recorded": "b9f1dbdbbd123066f1fec2ebebbb664da7b4d5b62bce06a15f42dc96193a4ab5",
-        "current": "a9ab181e06766953eab9f85e7529f2676358f631fee522b15490eafda95f4b16",
+        "current": "c3e04cd01bef6d2deb47b8ee179c1c1c7535929c5955cbf9ad869be690e82af5",
         "why": (
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
@@ -320,7 +378,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_transport.py": {
         "recorded": "44c1147fe06fdcd2eacb6198260918c02670297108e9533e850a239180ced850",
-        "current": "0cf68d55d00a094590d23ec0c7af6bae8595b2b954c2cdc8efc3e9eff49c112a",
+        "current": "013ed46f8ef3bcc1a445b2e81135e262c23c49950e52e5b62b22e4274644b15e",
         "why": (
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
@@ -335,8 +393,15 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_transport_v841.py": {
         "recorded": "55c66759d9c81f65ed71ce77570897c102fd64661da6ad6c37b438b27771ab23",
-        "current": "6ac4eece4ed080e7f76a2239b11dc59c984501ee52db900e35e5d74762f78252",
+        "current": "32720d050fe1fa002c983f30dce85b823edf39b593c3811aa562de43e0a86255",
         "why": (
+            "2026-10-19 LTS hook repair: unspecialized lookups retain their "
+            "two-part key; the acoustic tap uses the launched shape identity. "
+            "CUDA arithmetic and archived recorded hashes are unchanged. "
+            "2026-10-19 current-source refresh after f65ab11c: immutable "
+            "kernel dimensions are specialized and cache keys include shape. "
+            "The archived recorded hash and receipt scope stay unchanged; "
+            "this is not a new forecast mint. Earlier migrations follow. "
             "0.2.0 package rename, 2026-08-28: the token mpas_port became "
             "hexcore. This file is byte-identical to the copy these receipts "
             "ran once that one identifier is substituted -- measured file "
@@ -346,6 +411,9 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
             "compiles from the same bytes; a module_key names a cache slot "
             "and an observer label, never anything the arithmetic reads. "
             "Re-derived by tools/repin_source_tables.py."
+            "  Moved again 2026-10-14 by the 0.4.0 release scrub: one comment "
+            "line names the card host by its hardware; comment only, no launch, "
+            "argument or arithmetic line moved"
         ),
     },
 }
@@ -441,7 +509,12 @@ def test_the_declared_drift_leaves_the_recorded_configuration_untouched():
     from hexcore.cuda_driver import _v841_physics_cadences
     from hexcore.config_v841 import V841MpasColumnPhysicsConfig
 
-    selected = V841MpasColumnPhysicsConfig()
+    # The archived receipts were produced at the native x4 reference's
+    # schedule, which since 2026-10-10 is passed explicitly rather than
+    # being the dataclass default (hexcore.mpas_defaults).
+    from hexcore.mpas_defaults import X4_RECORDED_SCHEDULE
+
+    selected = V841MpasColumnPhysicsConfig(**X4_RECORDED_SCHEDULE)
     assert selected.config_convection_scheme == "cu_grell_freitas"
     assert _v841_physics_cadences(selected) == {
         "radiation_lw": 600.0,

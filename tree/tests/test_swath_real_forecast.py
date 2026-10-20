@@ -45,10 +45,19 @@ for candidate in (str(ROOT / "src"), str(ROOT / "tools")):
         sys.path.insert(0, candidate)
 
 import build_swath_fixture_history as fixture  # noqa: E402
+import site_support  # noqa: E402
 from hexcore.cli import main  # noqa: E402
 from hexcore.swath import registry  # noqa: E402
 from hexcore.swath.errors import SwathRefusal  # noqa: E402
 from hexcore.swath.history import HistoryReader  # noqa: E402
+
+
+def _write_history(*args, **kwargs):
+    """fixture.build, after checking the engine carries the stream bridge the writer needs."""
+    from hexcore.restart_v842 import _STREAM_ENGINE
+
+    site_support.engine_bridge_or_skip(_STREAM_ENGINE, "writing the swath test history")
+    return fixture.build(*args, **kwargs)
 
 CELLS = 10242
 HOURS = [0.0, 3.0, 6.0, 9.0, 12.0]
@@ -196,7 +205,7 @@ def _split_like_the_forecast_door(source: Path, root: Path) -> Path:
 @pytest.fixture(scope="module")
 def whole_history(tmp_path_factory: pytest.TempPathFactory) -> Path:
     target = tmp_path_factory.mktemp("swath-real") / "coarse.nc"
-    return fixture.build(target, cells=CELLS, hours=HOURS, scenario=SCENARIO)
+    return _write_history(target, cells=CELLS, hours=HOURS, scenario=SCENARIO)
 
 
 @pytest.fixture(scope="module")
@@ -337,7 +346,7 @@ def test_the_front_door_plans_from_a_run_receipt(
 @pytest.fixture(scope="module")
 def history_with_terrain(tmp_path_factory: pytest.TempPathFactory) -> Path:
     target = tmp_path_factory.mktemp("swath-terrain") / "coarse.nc"
-    return fixture.build(
+    return _write_history(
         target, cells=CELLS, hours=HOURS, scenario=SCENARIO, terrain=PLATEAU
     )
 

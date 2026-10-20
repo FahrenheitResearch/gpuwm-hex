@@ -1,0 +1,90 @@
+{
+  "schema": "gpuwm-hex.licence-gates/v1",
+  "about": "MPAS suite selections that run upstream code under terms that do not permit an Apache-2.0 distribution that may be sold. gpuwm-hex is Apache-2.0 and its public distribution carries only permissive third-party code (BSD, MIT, Apache-2.0, public domain) and US Government code. A selection listed here runs code under restricted terms (UCAR's Noah-MP terms forbid sale). No default route selects one (owner ruling 2026-10-14: the package stays Apache-2.0 and no default routes into code that cannot be sold or is limited). The forecast door refuses a run that selects one unless the run opts in by naming the terms: --licence-opt-in ID or GPUWM_HEX_LICENCE_OPT_IN=ID. With the opt-in the run prints a LICENCE line per selection and records licence_opt_in in its physics receipt. Read by hexcore.licence_gate; the hex ports of these components are withheld from the public export by tools/licence_holds.json. not_gated records upstreams a ruling took out of the gate, and retired_terms the opt-in names that no longer gate anything: a run that still names one is told so on stderr and runs as it would without it.",
+  "terms": {
+    "ucar-noahmp": {
+      "name": "UCAR Noah-MP terms",
+      "summary": "no sale: not Apache-2.0",
+      "clause": "You shall not sell, license or transfer for a fee the Software, or any work that in any manner contains the Software.",
+      "evidence": "physics_noahmp/LICENSE.txt, sha256 bd58c64131e08711ea7eb436f7a9520187626e6dcd0550fd6947f3060697d212, byte-identical in MPAS-Model v8.4.2 (f34984b2c89353cf31c235b08d3b4acd96b37bb3) and in the RRFSx fork (1d6e370e7b43a332074809f170532a216c2212fb)",
+      "notice": "NOTICE section 4"
+    },
+    "ugwp-held": {
+      "name": "UGWP licence hold",
+      "summary": "excluded from public exports",
+      "evidence": "Release ruling 2026-10-19; tools/licence_holds.json ugwp",
+      "notice": "tools/licence_holds.json ugwp"
+    }
+  },
+  "retired_terms": {},
+  "components": {
+    "noahmp-v5-mpas": {
+      "what": "Noah-MP v5.0 (NCAR community Noah-MP) as MPAS-Model v8.4.2 carries it in src/core_atmosphere/physics/physics_noahmp",
+      "upstream": "https://github.com/NCAR/noahmp, carried in MPAS-Model v8.4.2 f34984b2c89353cf31c235b08d3b4acd96b37bb3",
+      "terms": "ucar-noahmp",
+      "hex_port_hold": "ucar-noahmp-v5",
+      "native_library_stub": "noahmp",
+      "alternative": "hex's permissive Noah-MP is the WRF-lineage v4.x (WRF 4.6.1's Noah-MP, NCAR/noahmp 848f54ad3d28c4303151fe5ad83724e232694422, which carries no licence file and ships under WRF's public-domain notice) on the ArWen suite, the default route: run without --physics-suite and without the namelist's config_physics_suite. Noah-MP v5.0 is a refactoring 'without physics changes' (its release notes), but the v4.x run is not MPAS-bitwise. On the MPAS suite, config_lsm_scheme='sf_noah' (Noah, WRF public-domain notice) is the suites' own default."
+    },
+    "noahmp-v5-rrfs": {
+      "what": "Noah-MP v5.0 as the RRFSx MPAS-Model fork carries it in src/core_atmosphere/physics/physics_noahmp",
+      "upstream": "https://github.com/RRFSx/MPAS-Model 1d6e370e7b43a332074809f170532a216c2212fb",
+      "terms": "ucar-noahmp",
+      "hex_port_hold": "ucar-noahmp-v5",
+      "alternative": "the RRFS stage's own land surface (sf_ruc) or sf_noah; the ArWen suite's Noah-MP v4.x (WRF public-domain notice) on the default route"
+    },
+    "ugwp": {
+      "what": "UGWP orographic and non-stationary gravity-wave ports",
+      "upstream": "https://github.com/NOAA-GSL/UGWP c1c893edcf171af5639af60e3a3a528816f6cc2b",
+      "terms": "ugwp-held",
+      "hex_port_hold": "ugwp",
+      "alternative": "Use the default ArWen physics route or a permissive MPAS drag selection."
+    }
+  },
+  "not_gated": {
+    "noaa-gsl-rrfs-physics": {
+      "upstream": "RRFSx/MPAS-Model 1d6e370e physics_noaa: NCAR/MYNN-EDMF c942418, NCAR/MYNN-SFC b66187f, NOAA-GSL/RUCLSM 8c9f1a8, NOAA-GSL/GFL bf6a4b0, NOAA-GSL/SMOKE 9652bbf",
+      "selections": "bl_mynnedmf, sf_mynnsfclay, sf_ruc, cu_grell_freitas_li and the smoke scheme on mpasphys_rrfs",
+      "notice": "NOTICE section 9",
+      "why": "owner ruling 2026-10-14: the non-UGWP RRFS NOAA GSL components are treated as US Government code; UGWP is separately held from public exports"
+    }
+  },
+  "selections": [
+    {
+      "row": "mpasphys_v842",
+      "slot": "land_surface",
+      "scheme": "sf_noahmp",
+      "component": "noahmp-v5-mpas"
+    },
+    {
+      "row": "mpasphys_rrfs",
+      "slot": "land_surface",
+      "scheme": "sf_noahmp",
+      "component": "noahmp-v5-rrfs"
+    },
+    {
+      "row": "mpasphys_v842",
+      "slot": "gwdo",
+      "scheme": "bl_ugwp_gwdo",
+      "component": "ugwp"
+    },
+    {
+      "row": "mpasphys_v842",
+      "slot": "ngw",
+      "scheme": "ugwp_ngw",
+      "component": "ugwp"
+    },
+    {
+      "row": "mpasphys_rrfs",
+      "slot": "gwdo",
+      "scheme": "bl_ugwp_gwdo",
+      "component": "ugwp"
+    },
+    {
+      "row": "mpasphys_rrfs",
+      "slot": "ngw",
+      "scheme": "on",
+      "component": "ugwp"
+    }
+  ]
+}

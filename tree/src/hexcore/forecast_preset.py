@@ -110,6 +110,15 @@ class ForecastPreset:
     #: Where the row's measurement and its verdict against observations are
     #: written down.
     evidence: str
+    #: ``physics.mode`` (:mod:`hexcore.correct_mode`) the row runs when the
+    #: command line names none.  Every shipped row says ``"correct"``: owner
+    #: ruling 2026-10-13, correct mode is the standard (the mode key;
+    #: fixed means default).  ``--physics-mode exact`` still selects the matched
+    #: MPAS/WRF arithmetic, byte for byte, and every parity or identity proof
+    #: names it explicitly.  Not in :meth:`receipt`: the run's own mode is
+    #: recorded by the door (and only in correct mode, so an exact receipt is
+    #: the one written before the key existed).
+    physics_mode: str = "correct"
 
     def __post_init__(self) -> None:
         if not self.name or self.name != self.name.strip().lower():
@@ -120,6 +129,11 @@ class ForecastPreset:
             raise ValueError(
                 f"preset {self.name!r} must declare exactly the suite slots "
                 f"{sorted(ENGINE_COLUMN_SUITE)}, got {sorted(self.suite)}"
+            )
+        if self.physics_mode not in ("exact", "correct"):
+            raise ValueError(
+                f"preset {self.name!r} physics_mode must be 'exact' or 'correct', "
+                f"got {self.physics_mode!r}"
             )
         hold = self.surface_pbl_hold_seconds
         if hold is not None and not (math.isfinite(float(hold)) and float(hold) > 0.0):
@@ -147,6 +161,7 @@ REFERENCE_PRESET = ForecastPreset(
     suite=ENGINE_COLUMN_SUITE,
     surface_pbl_hold_seconds=None,
     evidence="docs/hex-point-hrrr.md, the forecast presets section",
+    physics_mode="correct",
 )
 
 FAST_PRESET = ForecastPreset(
@@ -161,6 +176,7 @@ FAST_PRESET = ForecastPreset(
     suite=ENGINE_COLUMN_SUITE,
     surface_pbl_hold_seconds=30.0,
     evidence="docs/hex-point-hrrr.md, the forecast presets section",
+    physics_mode="correct",
 )
 
 #: Every row, by name.

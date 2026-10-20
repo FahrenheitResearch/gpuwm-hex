@@ -453,8 +453,10 @@ def test_an_unmeasured_finest_edge_cannot_grow_its_class(tmp_path):
 
 
 def test_cuda_host_validation_routes_a_regional_mesh_through_the_gate():
-    """A culled regional mesh must refuse at the CUDA door by name, not die
-    in an unnamed range check or an out-of-bounds device read."""
+    """A culled regional mesh that reaches the GLOBAL device path must refuse
+    by name, not die in an unnamed range check or an out-of-bounds device
+    read.  Since 2026-10-10 the refusal names that breakage, not a missing
+    regional anchor: regional runs go through the regional assembler."""
 
     import numpy as np
 
@@ -484,6 +486,7 @@ def test_cuda_host_validation_routes_a_regional_mesh_through_the_gate():
     with pytest.raises(ConfigurationRefusal) as excinfo:
         _validate_v841_host_mesh(mesh)
     message = str(excinfo.value)
-    assert "regional CUDA execution is refused" in message
-    assert "no contract deck has been run" in message
-    assert "closed/global" not in message
+    assert "limited-area cull" in message
+    assert "reached the global CUDA path" in message
+    assert "--lbc-dir" in message
+    assert "anchor" not in message

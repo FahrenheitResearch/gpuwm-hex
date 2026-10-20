@@ -17,6 +17,10 @@ generator's own receipt:
 
 * a ``generated-global`` row names the spec by SHA-256, the generator
   receipt, the static receipt, and the pair's bytes;
+* a ``generated-parent-grid`` row is a global parent described by its grid
+  alone: the door built geography only around the cull it cut from it (see
+  :mod:`hexcore.mesh_point`, the halo route), so the parent has no static,
+  is not a runnable mesh, and is registered as LINEAGE for its culls only;
 * a ``generated-cull`` row names the ``generated-global`` row it was cut
   from (which must be in the same file, or already registered), the cull
   receipt, the region, the boundary-mask digest and the boundary source.
@@ -39,6 +43,8 @@ WHAT THIS MODULE REFUSES, by name:
 * a name that collides with a shipped registry row (a runtime row may never
   shadow one);
 * a cull row whose parent is neither in the same file nor registered;
+* a row of any kind but ``generated-parent-grid`` that names no static, and a
+  ``generated-parent-grid`` row that names one;
 * a row whose declared bytes do not match the files on disk now;
 * a cull row carrying a boundary zone and no ``lbc_source``;
 * a file that is not a ``gpuwm-hex.mesh-rows/v1`` document.
@@ -79,7 +85,13 @@ MESH_ROWS_FILENAME = "mesh-rows.json"
 GENERATED_ROW_MARKER = "GENERATED-AT-POINT"
 CULL_ROW_MARKER = "GENERATED-CULL"
 
-ROW_KINDS = ("generated-global", "generated-cull")
+#: A global parent described by its grid alone.  Its static was built only
+#: for the neighbourhood of its cull, so nothing can run it; it is the
+#: lineage a ``generated-cull`` row names, verified by its grid's bytes.
+PARENT_GRID_KIND = "generated-parent-grid"
+
+ARCHIVED_GLOBAL_KIND = "archived-global"
+ROW_KINDS = ("generated-global", "generated-cull", PARENT_GRID_KIND, ARCHIVED_GLOBAL_KIND)
 
 
 class MeshRowRefusal(MpasPortError):
@@ -102,14 +114,15 @@ class MeshRow:
     grid: str
     grid_bytes: int
     grid_sha256: str
-    static: str
-    static_bytes: int
-    static_sha256: str
+    #: ``None`` on a ``generated-parent-grid`` row, and only there.
+    static: str | None
+    static_bytes: int | None
+    static_sha256: str | None
     #: The resolution spec the generator was handed, by digest, and the
     #: receipts it and the static builder wrote.  Lineage stops here.
     spec_sha256: str
     generator_receipt: str
-    static_receipt: str
+    static_receipt: str | None
     #: The point, fine spacing and core radius the spec was built from.
     point_deg: tuple[float, float]
     fine_dx_m: float
@@ -165,6 +178,16 @@ class MeshRow:
 
     def notes(self) -> str:
         lat, lon = self.point_deg
+        if self.kind == ARCHIVED_GLOBAL_KIND:
+            return (
+                f"ARCHIVED-GLOBAL: external mesh archive and preprocessing provenance "
+                f"at {self.generator_receipt}, source specification digest "
+                f"{self.spec_sha256}; static provenance at {self.static_receipt}. "
+                f"Grid and static bytes are pinned independently. Geometry and "
+                f"Courant admissions are measured at bind for declared dt "
+                f"{self.dt_seconds:g} s. Archive registration earns no native "
+                f"endpoint or observation-skill qualification."
+            )
         if self.kind == "generated-cull":
             return (
                 f"{CULL_ROW_MARKER}: a limited-area cull of the runtime row "
@@ -180,6 +203,19 @@ class MeshRow:
                 f"regional opener requires a contract deck on these rings "
                 f"and re-measures the class key.  Boundary series: "
                 f"{self.lbc_source}."
+            )
+        if self.kind == PARENT_GRID_KIND:
+            return (
+                f"{GENERATED_ROW_MARKER}: the global parent of a {self.fine_dx_m:g} m "
+                f"core of {self.core_radius_km:g} km radius at {lat:.4f} N "
+                f"{lon:.4f} E on a {self.background_km:g} km background, generated "
+                f"by rw_mpas_mesh from the spec digest {self.spec_sha256[:16]}... "
+                f"(receipt {self.generator_receipt}).  Described by its grid "
+                f"alone: its geography was built only around the cull cut from "
+                f"it, so this row is that cull's lineage and not a runnable "
+                f"mesh.  Dual edges, cell coordination and Courant at dt "
+                f"{self.dt_seconds:g} s were measured on its grid before it was "
+                f"written."
             )
         return (
             f"{GENERATED_ROW_MARKER}: a {self.fine_dx_m:g} m core of "
@@ -204,11 +240,10 @@ _REQUIRED_KEYS = {
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    # The real SHA-256, computed once per file version (hexcore.file_digest):
+    # every forecast re-verified the same grid and static bytes.
+    from hexcore.file_digest import sha256_file as file_version_sha256
+    return file_version_sha256(path)
 
 
 # ---------------------------------------------------------------------------
@@ -307,10 +342,10 @@ def describe_generated(
     *,
     name: str,
     grid: Path,
-    static: Path,
+    static: Path | None,
     spec_path: Path,
     generator_receipt: Path,
-    static_receipt: Path,
+    static_receipt: Path | None,
     point_deg: tuple[float, float],
     fine_dx_m: float,
     core_radius_km: float,
@@ -320,10 +355,14 @@ def describe_generated(
     admission: Mapping[str, Any],
     n_soil_levels: int = 4,
 ) -> MeshRow:
-    """Measure a freshly-generated pair and write the row that describes it."""
+    """Measure a freshly-generated pair and write the row that describes it.
+
+    ``static=None`` describes the parent by its grid alone: a
+    ``generated-parent-grid`` row, the lineage of a cull whose geography was
+    built around the cull only.
+    """
 
     grid = Path(grid)
-    static = Path(static)
     dims = _dimensions(grid)
     for key in ("nCells", "nEdges"):
         if key not in dims:
@@ -331,6 +370,33 @@ def describe_generated(
                 f"{grid} declares no {key}; it is not an MPAS grid and cannot "
                 f"be registered"
             )
+    if static is None:
+        return MeshRow(
+            kind=PARENT_GRID_KIND,
+            name=name,
+            n_cells=int(dims["nCells"]),
+            n_edges=int(dims["nEdges"]),
+            n_levels=int(n_levels),
+            n_interfaces=int(n_levels) + 1,
+            n_soil_levels=int(n_soil_levels),
+            nominal_dx_m=float(fine_dx_m),
+            dt_seconds=float(dt_seconds),
+            grid=str(grid),
+            grid_bytes=grid.stat().st_size,
+            grid_sha256=sha256_file(grid),
+            static=None,
+            static_bytes=None,
+            static_sha256=None,
+            spec_sha256=sha256_file(Path(spec_path)),
+            generator_receipt=str(generator_receipt),
+            static_receipt=None,
+            point_deg=(float(point_deg[0]), float(point_deg[1])),
+            fine_dx_m=float(fine_dx_m),
+            core_radius_km=float(core_radius_km),
+            background_km=float(background_km),
+            admission=MappingProxyType(dict(admission)),
+        )
+    static = Path(static)
     static_dims = _dimensions(static)
     if static_dims.get("nCells") != dims["nCells"]:
         raise MeshRowRefusal(
@@ -378,8 +444,14 @@ def describe_cull(
     lbc_source: str,
     admission: Mapping[str, Any],
     dt_seconds: float | None = None,
+    static_receipt: Path | None = None,
 ) -> MeshRow:
-    """Measure a freshly-cut pair and write the cull row that describes it."""
+    """Measure a freshly-cut pair and write the cull row that describes it.
+
+    ``static_receipt`` names the receipt of the static this cull's static was
+    cut from when that is not the parent's own (the halo route builds it on a
+    wider cut of the parent, which has none).
+    """
 
     from netCDF4 import Dataset
     import numpy as np
@@ -433,7 +505,9 @@ def describe_cull(
         static_sha256=sha256_file(static),
         spec_sha256=parent.spec_sha256,
         generator_receipt=parent.generator_receipt,
-        static_receipt=parent.static_receipt,
+        static_receipt=(
+            str(static_receipt) if static_receipt is not None else parent.static_receipt
+        ),
         point_deg=parent.point_deg,
         fine_dx_m=parent.fine_dx_m,
         core_radius_km=parent.core_radius_km,
@@ -453,10 +527,24 @@ def describe_cull(
 # applying rows to the registry
 # ---------------------------------------------------------------------------
 def _verify_bytes(row: MeshRow) -> None:
-    for role, file_path, want_bytes, want_sha in (
-        ("grid", Path(row.grid), row.grid_bytes, row.grid_sha256),
-        ("static", Path(row.static), row.static_bytes, row.static_sha256),
-    ):
+    grid_only = row.kind == PARENT_GRID_KIND
+    if grid_only and row.static is not None:
+        raise MeshRowRefusal(
+            f"the {PARENT_GRID_KIND} row {row.name!r} names a static at "
+            f"{row.static}; that kind describes a parent with no static, so a "
+            f"row carrying one is not what it says it is"
+        )
+    if not grid_only and (row.static is None or row.static_sha256 is None
+                          or row.static_bytes is None):
+        raise MeshRowRefusal(
+            f"the {row.kind} row {row.name!r} names no static; a runnable row "
+            f"pins its static by bytes and digest, and only a "
+            f"{PARENT_GRID_KIND} row may go without one"
+        )
+    checks = [("grid", Path(row.grid), row.grid_bytes, row.grid_sha256)]
+    if not grid_only:
+        checks.append(("static", Path(row.static), row.static_bytes, row.static_sha256))
+    for role, file_path, want_bytes, want_sha in checks:
         if not file_path.is_file():
             raise MeshRowRefusal(
                 f"the mesh row {row.name!r} names a {role} at {file_path} "
@@ -492,6 +580,8 @@ def apply_rows(
     if not rows:
         return registry
     patched = dict(registry)
+    #: Parents described by their grid alone: verified, never bound.
+    lineage: dict[str, MeshRow] = {}
     for row in rows:
         if row.kind not in ROW_KINDS:
             raise MeshRowRefusal(
@@ -505,15 +595,20 @@ def apply_rows(
                 f"shipped row pins bytes a person reviewed and this one "
                 f"would replace them silently"
             )
-        if row.name in patched:
+        if row.name in patched or row.name in lineage:
             raise MeshRowRefusal(
                 f"two runtime row files both register {row.name!r}; a name "
                 f"must resolve to exactly one pair of files"
             )
         _verify_bytes(row)
+        if row.kind == PARENT_GRID_KIND:
+            lineage[row.name] = row
+            continue
         regional: dict[str, Any] = {}
         if row.kind == "generated-cull":
-            if not row.parent_row or row.parent_row not in patched:
+            if not row.parent_row or (
+                row.parent_row not in patched and row.parent_row not in lineage
+            ):
                 raise MeshRowRefusal(
                     f"the cull row {row.name!r} names parent "
                     f"{row.parent_row!r}, which is neither in its own row "
@@ -532,6 +627,14 @@ def apply_rows(
                 "bdy_mask_sha256": row.bdy_mask_sha256,
                 "lbc_source": row.lbc_source,
             }
+        # A generated global row's background is its coarsest cell, which
+        # the convection decision needs from the row alone at preflight (a
+        # variable mesh is decided per cell; hexcore.convection_admission).
+        # A cull keeps only part of its parent, so it carries no claim.
+        if row.kind != "generated-cull" and "coarsest_dx_m" in getattr(
+            binding_type, "__dataclass_fields__", {}
+        ):
+            regional["coarsest_dx_m"] = float(row.background_km) * 1000.0
         patched[row.name] = binding_type(
             name=row.name,
             n_cells=row.n_cells,
@@ -561,6 +664,7 @@ __all__ = [
     "ROW_KINDS",
     "MeshRow",
     "MeshRowRefusal",
+    "PARENT_GRID_KIND",
     "append_row",
     "apply_rows",
     "describe_cull",

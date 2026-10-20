@@ -19,10 +19,45 @@
 
 # --- pytest members ---------------------------------------------------------
 
+# Device-side edge signs preserve the scalar loop's active and padded words.
+tests/test_mesh_signs_cuda.py
+
+# The moving-region jolt check (gpuwm-hex moving check --lts): a 522-cell moving refinement family
+# built by rw_mpas_mesh, three moves through the production remap and LTS executor, balanced vs
+# baseline vs fixed.  Breakage it prevents: a move whose remap leaves the new mesh out of discrete
+# pressure/buoyancy balance (worst jolt 16.2 before the fix, limit 1.5), or leaks mass (1e-9).
+tests/test_moving_check_gpu.py
+
 # The capacity preflight.  Runs first and cheaply: on an undersized card it
 # skips with the measured free bytes instead of letting a forty-minute run
 # discover the same fact inside an allocation.
 tests/test_device_capacity.py
+
+# The New Tiedtke row (RRFS v2 at 12 km, 2026-10-05): the frozen column batch
+# driven at cu_physics=16 on 64 synthetic columns; New Tiedtke runs every
+# step and its raw momentum reaches du/dv.  Any CUDA device and the pinned
+# gpuwm 2.8.0 engine.
+tests/test_ntiedtke_column_row.py
+# The armed rollback snapshot's real-device alias and restore checks. Tier 1
+# takes the same file's fake-engine schema and allocation-fallback members.
+tests/test_cuda_seam_device_snapshot.py
+tests/test_late_health_pipeline.py
+tests/test_step_gate_batch.py
+
+# Real same-host transport copies require explicitly assigned cards via
+# HEX_SAMEHOST_GPU_TEST=1. Tier 1 keeps the fake packet and completion checks.
+tests/test_partition_samehost_transport_v841.py
+
+# Graph capture/replay (default on for single-card route A since 0.3.4) and actual
+# v8.4.1 dycore replay. Descriptor tables has CPU allocator checks in tier 1 and
+# retained CUDA tables in this tier. The physics member (F1, 2026-10-15) replays the
+# real subcycle with held physics tendencies and SG2 lagged heating that appears
+# after capture, four steps, against eager bitwise. Breakage it prevents: a default
+# single-card forecast silently diverging from the proven eager path.
+tests/test_cuda_graph_tables.py
+tests/test_cuda_subcycle_graphs.py
+tests/test_cuda_subcycle_graphs_dycore.py
+tests/test_cuda_subcycle_graphs_physics.py
 
 # The P3 seam A/B (2026-08-31): the hex plumbing versus the engine's real
 # column batch on the same P3 columns, byte-compared.  Needs any CUDA
@@ -68,3 +103,111 @@ tests/test_species_row.py
 tests/test_moist_coefficients_species_row.py
 tests/test_prep_species_row.py
 tests/test_physics_carrier_kernels.py
+tests/test_hex_aot_gpu.py
+# MYNN's mixed nwfa/nifa rates join the raw carrier against the run's own
+# species row (suite backend _with_scalar_rates); a rate outside the row, a
+# mass named twice or a wrong shape refuses instead of coupling into nothing.
+tests/test_suite_scalar_rates_gpu.py
+# A legacy config_epssm is read and ignored on the v8.4.1 lanes; this holds
+# the CUDA v8.4.1 step bitwise identical for 0.0, 0.1, 0.5 and NaN on the
+# numeric ruler's x1.2562 deck (any CUDA device; skips without the mesh pair).
+tests/test_epssm_v841_cuda.py
+tests/test_rk2_v841.py
+tests/test_fct_v841.py
+tests/test_upper_damping_v841.py
+
+# MPAS v8.4.2 foundation: NVRTC compile checks (need a CUDA device)
+tests/test_mpasphys_compile_v842.py
+
+# r4-rrfs-physics-driver: pinned fork native witnesses and CUDA replay.
+tests/test_mpasphys_numeric_rrfs.py
+# d2-les: LES whole-module, coupled RK and signed-subnormal native/CUDA replays.
+tests/test_mixing_v842_les_cuda.py
+# o4-diag-cloud-pv-soundings: complete strict-native CUDA diagnostic replay
+ tests/test_mpasdiag_v842.py
+# p23-rrtmg-sw: MPAS v8.4.2 complete shortwave module.
+tests/test_mpas_rrtmg_sw_v842.py
+tests/test_mpas_rrtmg_sw_boundaries.py
+# p16-noah: whole CUDA module replay against strict native artifacts.
+
+# r3-rrfs-dycore: complete strict native acoustic, scalar and tendency replays.
+tests/test_acoustic_rrfs_cuda.py
+tests/test_transport_rrfs_cuda.py
+tests/test_dynamics_rrfs_native.py
+# d1-dycore-options: owned complete module and proof metadata tests.
+tests/test_dycore_subnormal_v842.py
+
+# d1-dycore-options: complete synthetic and real-column device replay entries.
+tests/test_dycore_options_cuda_v842.py
+tests/test_dycore_real_columns_cuda_v842.py
+# p19-oml: complete strict OML replay and native binding require a queued CUDA device
+tests/test_mpas_oml_v842.py
+tests/test_mpas_oml_real_v842.py
+tests/test_mpas_oml_native_binding.py
+
+# r4-rrfs-physics-driver: complete real native preparation boundary
+tests/test_mpasphys_interface_rrfs.py
+
+# r4-rrfs-physics-driver complete real microphysics handoffs
+tests/test_mpasphys_micro_interface_rrfs.py
+
+# p22-rrtmg-lw: complete strict native LW CUDA replay.
+tests/test_mpas_rrtmg_lw_v842.py
+
+# SG2 lagged microphysics heating (release 0.4.0, lane H1): the producer, consumer, recovery and
+# specified-zone zero kernels on a card (any CUDA device).
+tests/test_lagged_heating_sg2_kernels.py
+
+# Correct mode RP6 (mpas-rad-pbl-lsm-seaice): the surface precipitation window kernel is word for word
+# precip_window_add/precip_window_reset of the native correct-mode build and closes the water budget.
+tests/test_mpasphys_precip_window_v842.py
+
+# Correct mode RP1 (p12 hex-cuda MYNN, 1f3d5730): conversion words equal the native pristine and native
+# correct-mode builds' harness words; zero tendencies keep condensate only in correct mode.
+tests/mpas_mynn_v842/test_mynn_rp1_correct_mode.py
+
+# Correct mode WB3 (mpas-water-budget): the WSM6, Thompson and Kessler precipitation writebacks equal the
+# native correct-mode build's precipitable-water loop word for word in both modes.
+tests/mpas_wb3_v842/test_mpasphys_wb3_kernels_gpu_v842.py
+
+# Correct mode WB5 (mpas-water-budget): whole WSM6 columns equal the native correct-mode build's mp_wsm6.F90
+# (wsm6_plm_surface off and on) word for word.
+tests/mpas_wb5_v842/test_mpasphys_wb5_columns_gpu_v842.py
+# (p9-sfclay-mm5's RP3 real-capture native referee is on home_files.txt with its held harness)
+
+# p10-sf-mynn: RP3 correct-mode component recovery and subnormal device regression.
+tests/test_mpas_sf_mynn_rp3_gpu.py
+
+# rel-hex040-dasurface: hexcore.init_gpu's two kernel files compile from the installed package (strict IEEE, with
+# the engine's binary32 libm headers) and the horizontal batch runs.  Breakage it prevents: a wheel without the .cu
+# files, or an engine whose maths headers moved, failing only at the first member init of a cycle.
+tests/test_init_gpu_device.py
+
+# hex-speed: corrected theta launch remapping must preserve every FP32 word,
+# including odd level tails, subnormals and polygons beyond the cached slots.
+tests/test_theta_corrected_hoist.py
+
+# hex-showcase landing (x-showcase): copy-back omissions (GF, GWDO, MYNN, surface), packed session/commit
+# words, variable reuse, ordered CUDA moving remaps, SW chunk memory; each needs an owned card.
+tests/test_gf_input_commit.py
+tests/test_moving_vertical_cuda.py
+tests/test_mpas_gwdo_input_commit.py
+tests/test_mpas_mynn_input_commit.py
+tests/test_mpasphys_commit_word_pack.py
+tests/test_mpasphys_session_word_pack.py
+tests/test_mpasphys_variable_reuse.py
+tests/test_mpas_surface_input_commit.py
+tests/test_mpas_sw_chunk_memory.py
+
+# Device field upload keeps host precision authority and exact packed words;
+# finite checks and C/F layout conversion run on the GPU, including lazy hx.
+tests/test_device_field_upload.py
+# S2S mesh harmonics, variance/decorrelation, exact seed/restart words,
+# SPPT/SKEB carriers and paired area-weighted reductions. On an owned card:
+# HEX_STOCHASTIC_GPU_TESTS=1 PYTHONPATH=src python -m pytest -m gpu \
+#   tests/test_stochastic.py tests/test_stochastic_verification.py
+tests/test_stochastic.py
+tests/test_stochastic_verification.py
+
+# FCT fused device equality; CPU hook and admission checks stay in tier 1.
+tests/test_fct_horizontal_scale_fusion.py

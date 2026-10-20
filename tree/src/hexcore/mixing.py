@@ -399,6 +399,8 @@ def momentum_horizontal_filter_tendency(
     config_del4u_div_factor: float = 10.0,
     mesh_scaling_del2: object | None = None,
     mesh_scaling_del4: object | None = None,
+    initial_tendency: object | None = None,
+    native_stored_inverse: bool = False,
 ) -> MomentumFilterResult:
     """Return the Euler momentum-filter increment from frozen lines 4828-4923."""
 
@@ -459,7 +461,11 @@ def momentum_horizontal_filter_tendency(
         )
 
     delsq_u = np.zeros_like(rho)
-    tendency = np.zeros_like(rho)
+    tendency = np.zeros_like(rho) if initial_tendency is None else _same_dtype(
+        rho, "initial_tendency", initial_tendency, ndim=2
+    ).copy()
+    if tendency.shape != rho.shape:
+        raise ValueError("initial_tendency must match rho_edge")
     half = dtype.type(0.5)
     for edge, (cell0, cell1) in enumerate(cells):
         vertex0, vertex1 = vertices[edge]
@@ -494,12 +500,14 @@ def momentum_horizontal_filter_tendency(
                 edge = int(edges_on_vertex[vertex, slot])
                 if edge < 0:
                     continue
-                factor = signs_vertex[vertex, slot] * dc[edge] / area_vertex[vertex]
+                factor = ((dtype.type(1.0) / area_vertex[vertex]) * dc[edge] * signs_vertex[vertex, slot]
+                          if native_stored_inverse else signs_vertex[vertex, slot] * dc[edge] / area_vertex[vertex])
                 delsq_vorticity[:, vertex] += factor * delsq_u[:, edge]
         for cell in range(ncells):
             for slot in range(int(counts[cell])):
                 edge = int(edges_on_cell[cell, slot])
-                factor = signs_cell[cell, slot] * dv[edge] / area_cell[cell]
+                factor = ((dtype.type(1.0) / area_cell[cell]) * dv[edge] * signs_cell[cell, slot]
+                          if native_stored_inverse else signs_cell[cell, slot] * dv[edge] / area_cell[cell])
                 delsq_divergence[:, cell] += factor * delsq_u[:, edge]
 
         factor4 = dtype.type(div_factor)
@@ -531,6 +539,7 @@ def vertical_momentum_horizontal_filter_tendency(
     h_mom_eddy_visc4: float,
     mesh_scaling_del2: object | None = None,
     mesh_scaling_del4: object | None = None,
+    native_stored_inverse: bool = False,
 ) -> CellFilterResult:
     """Return horizontal ``w`` filtering from frozen lines 5076-5133."""
 
@@ -584,7 +593,8 @@ def vertical_momentum_horizontal_filter_tendency(
             edge = int(edges[cell, slot])
             cell0, cell1 = cells[edge]
             edge_sign = (
-                half * inv_area * signs[cell, slot] * dv[edge] / dc[edge]
+                half * inv_area * signs[cell, slot] * dv[edge] * (dtype.type(1.0) / dc[edge])
+                if native_stored_inverse else half * inv_area * signs[cell, slot] * dv[edge] / dc[edge]
             )
             for level in range(1, nlev):
                 flux = (
@@ -593,18 +603,20 @@ def vertical_momentum_horizontal_filter_tendency(
                     * (w[level, cell1] - w[level, cell0])
                 )
                 delsq_w[level, cell] += flux
-                k_edge = quarter * (
+                sum_k = (
                     diffusivity[level, cell0]
                     + diffusivity[level, cell1]
                     + diffusivity[level - 1, cell0]
                     + diffusivity[level - 1, cell1]
                 )
-                tendency[level, cell] += flux * del2[edge] * k_edge
+                increment = (flux * del2[edge] * quarter * sum_k
+                             if native_stored_inverse else flux * del2[edge] * (quarter * sum_k))
+                tendency[level, cell] += increment
 
     h4 = dtype.type(h4_value)
     if h4 > dtype.type(0.0):
         for cell in range(ncells):
-            scale = h4 / area[cell]
+            scale = h4 * (dtype.type(1.0) / area[cell]) if native_stored_inverse else h4 / area[cell]
             for slot in range(int(counts[cell])):
                 edge = int(edges[cell, slot])
                 cell0, cell1 = cells[edge]
@@ -613,7 +625,8 @@ def vertical_momentum_horizontal_filter_tendency(
                     * scale
                     * dv[edge]
                     * signs[cell, slot]
-                    / dc[edge]
+                    * (dtype.type(1.0) / dc[edge])
+                    if native_stored_inverse else del4[edge] * scale * dv[edge] * signs[cell, slot] / dc[edge]
                 )
                 for level in range(1, nlev):
                     tendency[level, cell] -= edge_sign * (
@@ -631,6 +644,7 @@ def theta_horizontal_filter_tendency(
     h_theta_eddy_visc4: float,
     mesh_scaling_del2: object | None = None,
     mesh_scaling_del4: object | None = None,
+    native_stored_inverse: bool = False,
 ) -> CellFilterResult:
     """Return horizontal theta filtering from frozen lines 5255-5304."""
 
@@ -681,7 +695,8 @@ def theta_horizontal_filter_tendency(
         for slot in range(int(counts[cell])):
             edge = int(edges[cell, slot])
             cell0, cell1 = cells[edge]
-            edge_sign = inv_area * signs[cell, slot] * dv[edge] / dc[edge]
+            edge_sign = (inv_area * signs[cell, slot] * dv[edge] * (dtype.type(1.0) / dc[edge])
+                         if native_stored_inverse else inv_area * signs[cell, slot] * dv[edge] / dc[edge])
             for level in range(nlev):
                 flux = (
                     edge_sign
@@ -699,7 +714,7 @@ def theta_horizontal_filter_tendency(
     h4 = dtype.type(h4_value)
     if h4 > dtype.type(0.0):
         for cell in range(ncells):
-            scale = h4 / area[cell]
+            scale = h4 * (dtype.type(1.0) / area[cell]) if native_stored_inverse else h4 / area[cell]
             for slot in range(int(counts[cell])):
                 edge = int(edges[cell, slot])
                 cell0, cell1 = cells[edge]
@@ -708,7 +723,8 @@ def theta_horizontal_filter_tendency(
                     * scale
                     * dv[edge]
                     * signs[cell, slot]
-                    / dc[edge]
+                    * (dtype.type(1.0) / dc[edge])
+                    if native_stored_inverse else del4[edge] * scale * dv[edge] * signs[cell, slot] / dc[edge]
                 )
                 for level in range(nlev):
                     tendency[level, cell] -= edge_sign * (
@@ -844,6 +860,7 @@ def divergence_damping_3d(
     config_len_disp: float = 0.0,
     spec_zone_mask_edge: object | None = None,
     n_cells_solve: int | None = None,
+    native_stored_inverse: bool = False,
 ) -> FloatArray:
     """Apply the scaled 3-D divergence damping update (lines 2532-2601).
 
@@ -896,11 +913,11 @@ def divergence_damping_3d(
 
     dtype = ru_p.dtype
     length = resolve_config_len_disp(mesh, config_len_disp, dtype=dtype)
+    base_coefficient = dtype.type(2.0) * dtype.type(smdiv) * length
+    # Native time_integration.F:4153-4154 stores rdts before multiplying.
     coefficient = (
-        dtype.type(2.0)
-        * dtype.type(smdiv)
-        * length
-        / dtype.type(timestep)
+        base_coefficient * (dtype.type(1.0) / dtype.type(timestep))
+        if native_stored_inverse else base_coefficient / dtype.type(timestep)
     )
     one = dtype.type(1.0)
     out = ru_p.copy()

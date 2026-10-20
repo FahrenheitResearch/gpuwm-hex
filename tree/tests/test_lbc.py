@@ -20,6 +20,7 @@ import pytest
 
 from hexcore.lbc import (
     LBC_REQUIRED_VARIABLES,
+    LBC_OPTIONAL_SCALAR_VARIABLES,
     LbcAdmissionError,
     LbcFileError,
     LbcInventory,
@@ -48,7 +49,8 @@ def write_lbc(path: Path, xtime: str, fill: float, **overrides) -> Path:
         d.createDimension("nEdges", N_EDGES)
         d.createDimension("nVertLevelsP1", NZ + 1)
         d.createDimension("StrLen", 64)
-        for name, dims in LBC_REQUIRED_VARIABLES.items():
+        schema = {**LBC_REQUIRED_VARIABLES, **{n:LBC_OPTIONAL_SCALAR_VARIABLES[n] for n in ("lbc_qc","lbc_qr")}}
+        for name, dims in schema.items():
             if overrides.get("drop") == name:
                 continue
             if overrides.get("transpose") == name:
@@ -68,6 +70,69 @@ def series(tmp_path: Path) -> list[Path]:
         write_lbc(tmp_path / "lbc.b.nc", "2026-08-12_09:00:00", 4.0),
         write_lbc(tmp_path / "lbc.c.nc", "2026-08-12_12:00:00", 2.0),
     ]
+
+
+def add_ice(path: Path, fill: float, names=("lbc_qi", "lbc_qs", "lbc_qg")) -> None:
+    with netCDF4.Dataset(path, "a") as dataset:
+        for name in names:
+            variable = dataset.createVariable(name, "f4", ("Time", "nCells", "nVertLevels"))
+            variable[0] = np.full((N_CELLS, NZ), fill, dtype=np.float32)
+
+
+@pytest.mark.parametrize("names", [("lbc_qi", "lbc_qs", "lbc_qg"),
+    ("lbc_qi", "lbc_qs", "lbc_qg", "lbc_ni", "lbc_nr", "lbc_nc",
+     "lbc_nifa", "lbc_nwfa", "lbc_tke")])
+def test_optional_ice_preserves_required_bytes_and_known_linear_state(tmp_path, names):
+    paths = series(tmp_path)
+    legacy = read_lbc_file(paths[0])
+    for path, fill in zip(paths, (1.0, 4.0, 2.0)):
+        add_ice(path, fill, names=names)
+    extended = read_lbc_file(paths[0])
+    for name in LBC_REQUIRED_VARIABLES:
+        assert legacy.fields[name].tobytes() == extended.fields[name].tobytes()
+    assert set(extended.fields) == set(legacy.fields) | set(names)
+    pool = LbcPool(LbcInventory(paths))
+    pool.start(at("2026-08-12_06:00:00"))
+    pool.advance()
+    midpoint = pool.state_at("lbc_qi", at("2026-08-12_07:30:00"))
+    assert midpoint.tobytes() == np.full((N_CELLS, NZ), 2.5, dtype=np.float32).tobytes()
+    assert not extended.fields["lbc_qi"].flags.writeable
+
+
+def test_missing_optional_species_recycles_native_time_level_storage(tmp_path):
+    paths = series(tmp_path)
+    add_ice(paths[0], 1.0)
+    pool = LbcPool(LbcInventory(paths))
+    pool.start(at("2026-08-12_06:00:00"))
+    pool.advance()
+    # Native rotates the initially zero allocation into level 2.
+    first_tendency = pool.tendency("lbc_qi").copy()
+    assert np.all(pool._state.fields["lbc_qi"] == np.float32(0))
+    pool.advance()
+    # On the next admission the recycled buffer holds the preceding tendency.
+    assert pool._state.fields["lbc_qi"].tobytes() == first_tendency.tobytes()
+
+
+def test_boundary_species_selection_keeps_legacy_and_complete_rows(tmp_path):
+    from hexcore.drivers.run_cuda_v841_forecast import select_lbc_scalar_names
+    model = ("qv", "qc", "qr", "qi", "qs", "qg")
+    paths = series(tmp_path)
+    assert select_lbc_scalar_names(paths, model) == ("lbc_qv", "lbc_qc", "lbc_qr")
+    for path in paths:
+        add_ice(path, 1.0)
+    assert select_lbc_scalar_names(paths, model) == tuple(f"lbc_{name}" for name in model)
+
+
+def test_boundary_selection_refuses_a_gap_or_changing_presence(tmp_path):
+    from hexcore.drivers.run_cuda_v841_forecast import select_lbc_scalar_names
+    model = ("qv", "qc", "qr", "qi", "qs", "qg")
+    paths = series(tmp_path)
+    add_ice(paths[0], 1.0)
+    with pytest.raises(ValueError, match="both hourly endpoints"):
+        select_lbc_scalar_names(paths, model)
+    add_ice(paths[1], 1.0, names=("lbc_qs",))
+    with pytest.raises(ValueError, match="wrong tracer"):
+        select_lbc_scalar_names([paths[1]], model)
 
 
 def at(stamp: str) -> datetime:
@@ -317,3 +382,64 @@ def test_oracle_pool_reproduces_the_reference_tendency_arithmetic():
     pool.advance()
     assert pool.interval_start == at("2026-08-12_09:00:00")
     assert pool.interval_end == at("2026-08-12_12:00:00")
+
+
+# ---------------------------------------------------------------------------
+# the Rust reader (rrfs stage-1, 2026-10-05)
+# ---------------------------------------------------------------------------
+
+
+def test_rust_reader_returns_the_files_float32_bytes(tmp_path):
+    """Every payload bit the netCDF4 oracle reads, the Rust reader returns."""
+
+    path = write_lbc(tmp_path / "lbc.bits.nc", "2026-08-12_06:00:00", 0.0)
+    rng = np.random.default_rng(11)
+    written = {}
+    with netCDF4.Dataset(path, "a") as dataset:
+        for name in LBC_REQUIRED_VARIABLES:
+            variable = dataset.variables[name]
+            values = rng.standard_normal(variable.shape[1:]).astype(np.float32)
+            values.reshape(-1)[0] = np.float32(-0.0)
+            values.reshape(-1)[-1] = np.float32(1.0e-40)  # a float32 subnormal
+            variable[0] = values
+            written[name] = values
+    admitted = read_lbc_file(path)
+    for name, values in written.items():
+        assert admitted.fields[name].dtype == np.float32
+        assert admitted.fields[name].tobytes() == values.tobytes(), name
+        assert not admitted.fields[name].flags.writeable
+
+
+def test_a_rank_worker_reads_boundary_files_under_the_serial_io_guard(tmp_path):
+    """The door's regional N-rank path reads LBC files on rank workers.
+
+    Under the free-threaded serial-I/O guard a netCDF4 object on a worker is
+    refused (SerialExtensionIoError), which stopped every regional N>1 run at
+    step 1.  The Rust reader holds no native library object, so a worker
+    read is admitted and returns the coordinator's bytes.
+    """
+
+    import threading
+
+    from hexcore.drivers.samehost_serial_io_v841 import coordinator_only_extension_io
+
+    paths = series(tmp_path)
+    coordinator = read_lbc_file(paths[1])
+    result: dict[str, object] = {}
+    with coordinator_only_extension_io() as guard:
+        def work():
+            try:
+                result["file"] = read_lbc_file(paths[1])
+                result["inventory"] = LbcInventory(paths).valid_times
+            except BaseException as error:  # reported below
+                result["error"] = error
+
+        worker = threading.Thread(target=work)
+        worker.start()
+        worker.join()
+        receipt = guard.receipt()
+    assert "error" not in result, result.get("error")
+    assert receipt["worker_refusals"] == 0
+    for name in LBC_REQUIRED_VARIABLES:
+        assert result["file"].fields[name].tobytes() == coordinator.fields[name].tobytes()
+    assert result["inventory"][1] == at("2026-08-12_09:00:00")

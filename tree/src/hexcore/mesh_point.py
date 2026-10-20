@@ -15,14 +15,18 @@ that person did, in order and with receipts:
    area CULL will cost, and prices THAT against the named card on the one
    admission surface (:mod:`hexcore.device_admission`, the limited-area
    row), with the margin that surface names;
-3. with ``--generate``: builds the pair (``rw_mpas_mesh``, then
-   ``rw_mpas_static``), measures the pair's own admissions (dual edge, cell
-   coordination, Courant at the declared timestep), registers it as a
-   RUNTIME ROW (:mod:`hexcore.mesh_rows`, a file beside the mesh, never a
-   checkout edit), cuts the limited-area cull at the shipped pad and
-   registers that too; and, with ``--vertical-spec``, mints the parent's
-   native-free vertical artifact and culls it so the child can be
-   initialised from a regional meteorological source.
+3. with ``--generate``: builds the parent grid (``rw_mpas_mesh``), cuts
+   the limited-area cull at the shipped pad, builds the geography
+   (``rw_mpas_static``) on a HALO -- a wider cut of the parent -- and cuts
+   it down to the cull, measures the admissions (dual edge, cell
+   coordination, Courant at the declared timestep), registers the pair as
+   RUNTIME ROWS (:mod:`hexcore.mesh_rows`, a file beside the mesh, never a
+   checkout edit); and, with ``--vertical-spec``, mints the native-free
+   vertical artifact on the halo and culls it so the child can be
+   initialised from a regional meteorological source.  ``--parent-static``
+   builds the geography and the vertical on the whole parent instead, the
+   way this door always did; the cull's files are the same bytes either
+   way (:func:`generate_point` says which and how it is held).
 
 WHY THE LADDER IS DATA.  The spec is a pure function of six numbers
 (:func:`ladder_spec`); nothing here branches on a place.  Moving the core
@@ -52,6 +56,7 @@ cell for cell.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import math
@@ -76,6 +81,35 @@ DEFAULT_RING_FACTOR = 3.0
 DEFAULT_CULL_PAD_SCALE = 1.35
 #: Column count every measured row and every anchor in this tree runs at.
 DEFAULT_LEVELS = 55
+#: How far beyond the cut the halo route builds geography and the vertical
+#: grid (:func:`generate_point`).  The static usually needs a few cells of it
+#: (its neighbour stencils, and the albedo carried across cells with no pixel
+#: of their own): on a 937.5 m, 100 km cut a 10 km halo already gave every
+#: static variable bit for bit.  Where land has no valid pixel of a field
+#: for hundreds of kilometres, the value is carried that far, and
+#: :func:`check_halo_static` holds the static to its rim on every build.
+#: The vertical grid needs far more, because
+#: its coordinate surfaces are smoothed about 3,000 times.  MEASURED on 937.5
+#: m, 100 km cuts at six places from 19.7 N to 64.8 N, the antimeridian
+#: included (``evidence/halo-route-20261001``): the narrowest halo past which
+#: the cut's vertical grid matched the whole sphere bit for bit at every
+#: wider halo tried was 600 to 1,000 km, and a narrower one that happened to
+#: match was followed by a wider one that did not.  1,600 km is that worst
+#: case with 60 % to spare. :func:`check_halo_vertical` compares with the
+#: whole parent's authority on every build; the width measurements alone
+#: do not prove identity for another terrain or vertical specification.
+DEFAULT_HALO_KM = 1600.0
+#: Neighbour rings a cell's static values reach besides a value carried to
+#: it (rw-mpas ``static_builder``): a pixel goes to its nearest cell, so a
+#: cell beside the halo's rim collects pixels that belong to a cell beyond
+#: it, and that cell's values reach its neighbours through the GWD
+#: isolated-point smooth and the reconstruction and ``deriv_two`` stencils,
+#: which read a cell's own ring and the next.  Three rings bound all of it;
+#: :func:`check_halo_static` adds the rings the static builder says it
+#: carried values across.
+STATIC_STENCIL_RINGS = 3
+#: The earth radius rw_mpas_static scales a unit-sphere grid by.
+MPAS_EARTH_RADIUS_M = 6_371_229.0
 #: The generator's own hexagon area factor (rw-mpas density.rs).
 HEXAGON_AREA_FACTOR = math.sqrt(3.0) / 2.0
 EARTH_RADIUS_KM = 6371.229
@@ -428,50 +462,57 @@ def max_radius_for_cells(
 
 
 def choose_timestep(minimum_dc_edge_m: float, *, fine_dx_m: float) -> dict[str, Any]:
-    """The largest ANCHORED timestep the mesh's own Courant limit admits.
+    """The timestep a generated row declares: MPAS-A's rule, made stable.
 
-    Sub-3-km meshes run convection off by the 2026-08-26 ruling
-    (:mod:`hexcore.convection_admission`), so the anchors consulted are the
-    convection-off rows; a coarser mesh consults the Grell-Freitas rows.
-    The registry row declares what this returns and the bind re-admits it
-    against the static's own ``dcEdge``.
+    RETIRED 2026-10-10: this chose the largest ANCHORED timestep under the
+    old 0.90 x 125 m/s Courant policy and refused a mesh no anchor fitted
+    ("no anchored timestep fits this mesh").  It now takes MPAS-A's 6 s per
+    km of the fine spacing, rounded down to divide the 1800 s radiation
+    interval (hexcore.mpas_defaults.default_dt_seconds), and steps down
+    through the whole-second divisors of that interval until the physical
+    stability check (hexcore.timestep_admission) admits it on this mesh's
+    real min(dcEdge).  Whether the result matches a registered anchor is
+    recorded, not required.
     """
 
-    from . import convection_admission, dt_admission
-    from .timestep_admission import CourantPolicy
+    import numpy as np
 
-    policy = CourantPolicy()
-    limit = policy.safety_factor * float(minimum_dc_edge_m) / policy.max_characteristic_speed_m_s
-    sub_3km = float(fine_dx_m) < convection_admission.CONVECTION_OFF_BELOW_M
-    # The anchor table spells Grell-Freitas "gf" (hexcore.dt_admission.dt_key).
-    scheme = None if sub_3km else "gf"
-    candidates = sorted(
-        {
-            anchor.dt_seconds
-            for anchor in dt_admission.ADMITTED_TIMESTEPS.values()
-            if anchor.cumulus_scheme == scheme
-            and float(anchor.surface_pbl_seconds) == float(anchor.dt_seconds)
-        },
-        reverse=True,
+    from . import convection_admission, dt_admission, mpas_defaults
+    from .timestep_admission import (
+        TimestepAdmissionError, admit_timestep, edge_length_authority,
     )
+
+    authority = edge_length_authority(np.asarray([float(minimum_dc_edge_m)]))
+    cadence = mpas_defaults.DEFAULT_RADIATION_SECONDS
+    first = mpas_defaults.default_dt_seconds(float(fine_dx_m), radiation_seconds=cadence)
+    sub_3km = float(fine_dx_m) < convection_admission.CONVECTION_OFF_BELOW_M
+    scheme = None if sub_3km else "gf"
+    candidates = [first["dt_seconds"]] + [
+        float(seconds) for seconds in range(int(first["dt_seconds"]) - 1, 0, -1)
+        if cadence % seconds == 0.0
+    ]
     for dt in candidates:
-        if dt <= limit:
-            return {
-                "dt_seconds": float(dt),
-                "courant_limit_seconds": limit,
-                "margin": limit / float(dt),
-                "cumulus_scheme": scheme,
-                "anchors_consulted": candidates,
-            }
+        try:
+            admitted = admit_timestep(dt, authority)
+        except TimestepAdmissionError:
+            continue
+        return {
+            "dt_seconds": float(dt),
+            "rule": first["rule"],
+            "courant_limit_seconds": admitted.maximum_admitted_dt_seconds,
+            "margin": admitted.maximum_admitted_dt_seconds / float(dt),
+            "cumulus_scheme": scheme,
+            "anchor": dt_admission.anchor_record(
+                dt, radiation_seconds=cadence, surface_pbl_seconds=None,
+                cumulus_seconds=None if scheme is None else dt, cumulus_scheme=scheme,
+            ),
+        }
     raise PointPlanRefusal(
-        f"no anchored timestep fits this mesh: its Courant limit is "
-        f"{limit:.3f} s (min dcEdge {minimum_dc_edge_m:.1f} m at "
-        f"{policy.max_characteristic_speed_m_s:g} m/s x "
-        f"{policy.safety_factor:g}) and the anchored "
-        f"{'convection-off' if scheme is None else scheme.upper()} timesteps "
-        f"are {candidates}.  A row declaring a smaller timestep would be "
-        f"refused at bind for holding no anchor; earn one with "
-        f"tools/mint_dt_anchor.py or coarsen --fine-dx-m"
+        f"no whole-second timestep that divides the {cadence:g} s radiation "
+        f"interval is stable on this mesh (min dcEdge {minimum_dc_edge_m:.1f} "
+        f"m): even 1 s exceeds the advective or acoustic Courant limit "
+        f"(hexcore.timestep_admission).  The mesh's smallest edge is "
+        f"degenerate; regenerate it or coarsen --fine-dx-m"
     )
 
 
@@ -654,9 +695,39 @@ def _report(plan: Mapping[str, Any]) -> list[str]:
 # ---------------------------------------------------------------------------
 # generation
 # ---------------------------------------------------------------------------
+@contextmanager
+def _place_stage(stage: str, *, attrs: Mapping[str, Any] | None = None):
+    """Emit C1 boundaries without changing preparation or its failure path."""
+    def emit(phase: str) -> None:
+        try:
+            from gpuwm.timeline.ledger import emit as append
+
+            append(stage, phase, product="hex", attrs=dict(attrs or {}))
+        except BaseException:
+            # Timing must never prevent a mesh build or replace its error.
+            pass
+
+    emit("begin")
+    try:
+        yield
+    finally:
+        emit("end")
+
+
 def _run(argv: Sequence[str], *, what: str, log: Path | None = None) -> subprocess.CompletedProcess:
     started = time.perf_counter()
-    completed = subprocess.run([str(item) for item in argv], capture_output=True, text=True)
+    stage = {"rw_mpas_mesh": "prep.place.mesh", "rw_mpas_static": "prep.place.static"}[what]
+    from .prep_store import run_or_fetch
+
+    with _place_stage(stage, attrs={"engine": what, "terrain_only": "--terrain-only" in argv}):
+        # Same bytes from the per-mesh store when it holds this exact request
+        # (hexcore.prep_store); otherwise the engine runs exactly as before.
+        outcome = run_or_fetch(
+            argv, runner=lambda a: subprocess.run(a, capture_output=True, text=True))
+        completed = outcome.get("completed") or subprocess.CompletedProcess(
+            [str(item) for item in argv], 0,
+            stdout=f"prep-store: {outcome['kind']} {outcome['key']} from {outcome['store']} "
+                   f"(SHA-256 verified) in {outcome['seconds']:.1f} s\n", stderr="")
     elapsed = time.perf_counter() - started
     if log is not None:
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -667,11 +738,12 @@ def _run(argv: Sequence[str], *, what: str, log: Path | None = None) -> subproce
             encoding="utf-8",
         )
     if completed.returncode != 0:
-        tail = (completed.stderr or completed.stdout or "").strip().splitlines()
+        from .engines import refusal_text
+
         raise PointPlanRefusal(
             f"{what} exited {completed.returncode}"
             + (f"; its log is {log}" if log is not None else "")
-            + (f".  Last line: {tail[-1]}" if tail else "")
+            + f".  It said:\n{refusal_text(completed.stderr, completed.stdout)}"
         )
     completed.elapsed = elapsed  # type: ignore[attr-defined]
     return completed
@@ -707,8 +779,36 @@ def resolve_geog(explicit: Path | None) -> Path:
     )
 
 
-def admit_pair(grid: Path, static: Path, *, fine_dx_m: float, log=print) -> dict[str, Any]:
-    """The door's own admission pass over a pair it just built."""
+def static_equivalent_lengths(grid: Path) -> tuple[Any, Any]:
+    """``dvEdge`` and ``dcEdge`` exactly as ``rw_mpas_static`` stores them.
+
+    The static builder reads a generated grid's unit-sphere lengths, scales
+    them by MPAS's earth radius in float64 and stores them as float32
+    (rw-mpas ``static_builder``: a grid whose first 64 centres average under
+    ten units is a unit-sphere grid).  The same two operations here give the
+    same float32 bits, so a parent with no static is admitted on the numbers
+    its static would have carried.
+    """
+
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(str(grid)) as dataset:
+        dataset.set_auto_maskandscale(False)
+        xyz = [np.asarray(dataset.variables[name][:64], dtype=np.float64)
+               for name in ("xCell", "yCell", "zCell")]
+        dv = np.asarray(dataset.variables["dvEdge"][:], dtype=np.float64)
+        dc = np.asarray(dataset.variables["dcEdge"][:], dtype=np.float64)
+    sample = float(np.mean(np.sqrt(xyz[0] ** 2 + xyz[1] ** 2 + xyz[2] ** 2)))
+    if sample < 10.0:
+        dv = dv * MPAS_EARTH_RADIUS_M
+        dc = dc * MPAS_EARTH_RADIUS_M
+    return dv.astype(np.float32), dc.astype(np.float32)
+
+
+def _admission(label: str, mesh: Any, dv_edge: Any, dc_edge: Any, *, fine_dx_m: float,
+               log=print) -> dict[str, Any]:
+    """Dual edges, cell coordination and Courant, on one mesh's lengths."""
 
     import numpy as np
 
@@ -716,16 +816,14 @@ def admit_pair(grid: Path, static: Path, *, fine_dx_m: float, log=print) -> dict
         CellCoordinationAdmissionError, admit_cell_coordination,
     )
     from .dual_edge_admission import DualEdgeAdmissionError, admit_dual_edges
-    from .mesh import Mesh
     from .timestep_admission import (
         CourantPolicy, TimestepAdmissionError, admit_timestep, edge_length_authority,
     )
 
-    mesh = Mesh.from_netcdf(grid, static)
     try:
         dual = admit_dual_edges(
-            mesh.dvEdge, mesh.dcEdge, cells_on_edge=mesh.cellsOnEdge,
-            cells_on_edge_base=0, mesh_name=grid.name,
+            dv_edge, dc_edge, cells_on_edge=mesh.cellsOnEdge,
+            cells_on_edge_base=0, mesh_name=label,
         )
     except DualEdgeAdmissionError as error:
         raise PointPlanRefusal(
@@ -734,26 +832,21 @@ def admit_pair(grid: Path, static: Path, *, fine_dx_m: float, log=print) -> dict
         ) from error
     try:
         coordination = admit_cell_coordination(
-            np.asarray(mesh.arrays["nEdgesOnCell"]), mesh_name=grid.name,
+            np.asarray(mesh.arrays["nEdgesOnCell"]), mesh_name=label,
         )
     except CellCoordinationAdmissionError as error:
         raise PointPlanRefusal(
             f"the generated pair is refused on its cell coordination and is NOT "
             f"registered: {error}"
         ) from error
-    from netCDF4 import Dataset
-
-    with Dataset(str(static)) as dataset:
-        dataset.set_auto_maskandscale(False)
-        dc_edge = np.asarray(dataset.variables["dcEdge"][:], dtype=np.float64)
-    authority = edge_length_authority(dc_edge)
+    authority = edge_length_authority(np.asarray(dc_edge, dtype=np.float64))
     chosen = choose_timestep(authority.minimum_m, fine_dx_m=fine_dx_m)
     try:
         timestep = admit_timestep(chosen["dt_seconds"], authority, policy=CourantPolicy())
     except TimestepAdmissionError as error:
         raise PointPlanRefusal(str(error)) from error
     log(
-        f"ADMIT {grid.name}: dual edges {dual.as_dict().get('minimum_ratio', '?')}, "
+        f"ADMIT {label}: dual edges {dual.as_dict().get('minimum_ratio', '?')}, "
         f"coordination {coordination.as_dict().get('histogram', '?')}, "
         f"min dcEdge {authority.minimum_m:.3f} m, dt {chosen['dt_seconds']:g} s "
         f"(Courant limit {chosen['courant_limit_seconds']:.3f} s, "
@@ -770,6 +863,489 @@ def admit_pair(grid: Path, static: Path, *, fine_dx_m: float, log=print) -> dict
     }
 
 
+def admit_pair(grid: Path, static: Path, *, fine_dx_m: float, log=print) -> dict[str, Any]:
+    """The door's own admission pass over a pair it just built."""
+
+    from .mesh import Mesh
+
+    mesh = Mesh.from_netcdf(grid, static)
+    return _admission(grid.name, mesh, mesh.dvEdge, mesh.dcEdge, fine_dx_m=fine_dx_m, log=log)
+
+
+def admit_parent_grid(grid: Path, *, fine_dx_m: float, log=print) -> dict[str, Any]:
+    """The same admission pass over a parent that has no static.
+
+    The lengths are the ones its static would have stored
+    (:func:`static_equivalent_lengths`), so every number, the timestep
+    included, is the one :func:`admit_pair` measures on the parent pair.
+    """
+
+    from .mesh import Mesh
+
+    mesh = Mesh.from_netcdf(grid)
+    dv_edge, dc_edge = static_equivalent_lengths(grid)
+    return _admission(grid.name, mesh, dv_edge, dc_edge, fine_dx_m=fine_dx_m, log=log)
+
+
+def halo_region(point: tuple[float, float], radius_km: float, pad_scale: float,
+                halo_km: float) -> dict[str, Any]:
+    """The working halo the halo route builds geography and the vertical on."""
+
+    if not halo_km > 0.0:
+        raise PointPlanRefusal(
+            f"--halo-km {halo_km} is not positive; the halo route needs room "
+            f"outside the cut for the cut's own stencils to read real cells"
+        )
+    region = cull_region(point, radius_km, pad_scale)
+    region["radius_km"] = float(region["radius_km"]) + float(halo_km)
+    return region
+
+
+def _write_region(path: Path, region: Mapping[str, Any]) -> Path:
+    path.write_text(json.dumps(dict(region), indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8", newline="\n")
+    return path
+
+
+def _supports_flag(engine: Path, flag: str) -> bool:
+    """Ask the executable before selecting a route that requires its API."""
+    completed = subprocess.run([str(engine), "--help"], capture_output=True, text=True)
+    return flag in (completed.stdout + completed.stderr)
+
+
+def _element_index(sub: Path, sup: Path, kind: str) -> Any:
+    """Where each ``kind`` element of ``sub`` sits in ``sup``, by its centre.
+
+    Both are cuts of one parent, and a cut copies coordinates byte for byte,
+    so an element is the element with the same three coordinates.
+    """
+
+    import numpy as np
+    from netCDF4 import Dataset
+
+    def keys(path: Path) -> Any:
+        with Dataset(str(path)) as dataset:
+            dataset.set_auto_maskandscale(False)
+            return np.ascontiguousarray(np.stack(
+                [np.asarray(dataset.variables[f"{axis}{kind}"][:], dtype=np.float64)
+                 for axis in "xyz"], axis=1))
+
+    small, large = keys(sub), keys(sup)
+    where = {row.tobytes(): index for index, row in enumerate(large)}
+    found = np.array([where.get(row.tobytes(), -1) for row in small], dtype=np.int64)
+    if np.any(found < 0):
+        raise PointPlanRefusal(
+            f"{int(np.sum(found < 0))} {kind.lower()}s of {sub.name} are not in "
+            f"{sup.name}; the cut does not lie inside its halo"
+        )
+    return found
+
+
+def prove_regional_cut(
+    *,
+    mesh_exe: Path,
+    work_grid: Path,
+    region: Path,
+    direct_cut: Path,
+    direct_graph: Path,
+    scratch_stem: Path,
+) -> str | None:
+    """Cut the region out of the halo grid and demand the direct cut's bytes.
+
+    The halo route cuts its static and vertical grid out of the HALO, not out
+    of the parent; that cut is only right if it writes exactly what cutting
+    the parent writes.  The grid is cut both ways here, in about a second,
+    before anything is built on the halo.  ``None`` when the bytes agree; else
+    why the halo route is not taken -- an engine that refuses a culled parent
+    (one built before it learned to cut one), or a cut that differs.
+    """
+
+    probe = Path(f"{scratch_stem}.grid.nc")
+    probe_graph = Path(f"{scratch_stem}.graph.info")
+    receipt = Path(f"{probe}.cull-receipt.json")
+    for path in (probe, probe_graph, receipt):
+        path.unlink(missing_ok=True)
+    completed = subprocess.run(
+        [str(mesh_exe), "--cull-parent", str(work_grid), "--region", str(region),
+         "--out", str(probe), "--receipt", str(receipt), "--graph", str(probe_graph)],
+        capture_output=True, text=True,
+    )
+    try:
+        if completed.returncode != 0:
+            tail = (completed.stderr or completed.stdout or "").strip().splitlines()
+            return (f"the mesh engine cannot cut a region out of a culled file "
+                    f"({tail[-1] if tail else 'exit ' + str(completed.returncode)})")
+        same = (probe.read_bytes() == direct_cut.read_bytes()
+                and probe_graph.read_bytes() == direct_graph.read_bytes())
+        if not same:
+            return ("cutting the region out of the halo wrote different bytes than "
+                    "cutting it out of the parent")
+        return None
+    finally:
+        for path in (probe, probe_graph, receipt):
+            path.unlink(missing_ok=True)
+
+
+#: Vertical fields the halo check compares, and the element each indexes
+#: on its last axis.
+_HALO_CHECKED = (
+    ("hx", "Cell"), ("zgrid", "Cell"), ("zz", "Cell"), ("dss", "Cell"),
+    ("zxu", "Edge"), ("zb", "Edge"), ("zb3", "Edge"),
+)
+
+
+def _vertical_fields(vertical: Any, edge: Any) -> dict[str, Any]:
+    return {
+        "hx": vertical.hx, "zgrid": vertical.zgrid, "zz": vertical.zz,
+        "dss": vertical.dss, "zxu": vertical.zxu, "zb": edge.zb, "zb3": edge.zb3,
+    }
+
+
+def check_halo_vertical(
+    *,
+    work_grid: Path,
+    work_static: Path,
+    parent_grid: Path,
+    parent_static: Path,
+    vertical_spec: Path,
+    cut_grid: Path,
+    parent_built: Any = None,
+    log=print,
+) -> dict[str, Any]:
+    """Compare every terrain-dependent cut value with the whole parent.
+
+    THE BREAKAGE THIS PREVENTS.  The vertical grid smooths its coordinate
+    surfaces thousands of times, so a cut cell's value depends on terrain far
+    outside the cut, and a halo too narrow for a place's terrain moves the
+    cut's vertical coordinate without any refusal.  Measured on a 937.5 m,
+    100 km cut of 41,802 cells: a 400 km halo moved ``hx`` in 11,298 of
+    2,340,912 values (up to 1.1 mm) and a 700 km halo in 5 (up to 0.03 mm),
+    while 600 and 800 km matched the whole sphere bit for bit. Two halos can
+    agree and still share an error caused by terrain outside both. The
+    reference therefore uses the parent's exact terrain and operator metrics,
+    emitted by the Rust static builder without reading the other geography.
+    A disagreement widens the halo, then takes the whole-parent route.
+    """
+
+    import numpy as np
+
+    from .mesh import Mesh
+    from .vertical_spec import VerticalSpec, build_vertical_from_spec
+
+    spec = VerticalSpec.from_file(vertical_spec)
+    started = time.perf_counter()
+    with _place_stage("prep.place.vertical", attrs={"operation": "whole-parent-check"}):
+        built = build_vertical_from_spec(Mesh.from_netcdf(work_grid, work_static), spec,
+                                         regional_halo=True)
+        if parent_built is None:
+            parent_built = build_vertical_from_spec(Mesh.from_netcdf(parent_grid, parent_static), spec)
+    wide_fields, parent_fields = _vertical_fields(*built), _vertical_fields(*parent_built)
+    index = {}
+    for kind in ("Cell", "Edge"):
+        index[kind] = (_element_index(cut_grid, work_grid, kind),
+                       _element_index(cut_grid, parent_grid, kind))
+    differing: dict[str, int] = {}
+    compared = 0
+    for name, kind in _HALO_CHECKED:
+        wide_index, parent_index = index[kind]
+        a = np.ascontiguousarray(np.take(wide_fields[name], wide_index, axis=-1))
+        b = np.ascontiguousarray(np.take(parent_fields[name], parent_index, axis=-1))
+        compared += int(a.size)
+        # A VALUE moved when any of its bytes did; counting bytes overstated it
+        # up to eightfold in the receipt.
+        moved = int(np.count_nonzero(np.any(
+            a.view(np.uint8).reshape(a.size, -1) != b.view(np.uint8).reshape(b.size, -1),
+            axis=1)))
+        if moved:
+            differing[name] = moved
+    seconds = time.perf_counter() - started
+    agreed = not differing
+    log(f"HALO CHECK {'AGREED' if agreed else 'DIFFERED'}: {compared:,} cut values of "
+        f"the vertical grid against the whole parent"
+        + ("" if agreed else f", differing in {differing}") + f" ({seconds:.1f} s)")
+    return {"agreed": agreed, "values_compared": compared, "differing": differing,
+            "seconds": round(seconds, 2), "authority": "whole-parent",
+            "built": built, "parent_built": parent_built}
+
+
+def cut_to_rim_hops(halo_grid: Path, cut_grid: Path) -> int:
+    """Fewest neighbour steps from a cell of the cut to the halo's rim.
+
+    The rim is every halo cell with a neighbour the halo cut away (a
+    ``cellsOnCell`` slot in use that names no cell of the file).  A cut cell
+    on the rim is 0 steps from it.
+    """
+
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(str(halo_grid)) as dataset:
+        dataset.set_auto_maskandscale(False)
+        neighbours = np.asarray(dataset.variables["cellsOnCell"][:], dtype=np.int64) - 1
+        counts = np.asarray(dataset.variables["nEdgesOnCell"][:], dtype=np.int64)
+    n_cells = int(counts.size)
+    used = np.arange(neighbours.shape[1])[None, :] < counts[:, None]
+    real = used & (neighbours >= 0) & (neighbours < n_cells)
+    distance = np.full(n_cells, -1, dtype=np.int64)
+    frontier = np.flatnonzero(np.any(used & ~real, axis=1))
+    if frontier.size == 0:
+        raise PointPlanRefusal(
+            f"{halo_grid.name} has no rim: no cell of it lost a neighbour, so it "
+            f"is not a cut of the parent"
+        )
+    in_cut = np.zeros(n_cells, dtype=bool)
+    in_cut[_element_index(cut_grid, halo_grid, "Cell")] = True
+    distance[frontier] = 0
+    steps = 0
+    while not np.any(in_cut[frontier]):
+        steps += 1
+        reached = np.unique(neighbours[frontier][real[frontier]])
+        frontier = reached[distance[reached] < 0]
+        if frontier.size == 0:
+            raise PointPlanRefusal(
+                f"no cell of {cut_grid.name} is connected to the rim of "
+                f"{halo_grid.name}; the cut does not lie inside its halo"
+            )
+        distance[frontier] = steps
+    return steps
+
+
+#: One 30-arc-second geography pixel along a meridian, in metres, on MPAS's sphere.
+THIRTY_SECOND_PIXEL_M = MPAS_EARTH_RADIUS_M * math.pi / (180.0 * 120.0)
+
+
+def thirty_second_supersample(grid: Path) -> int:
+    """The 30-arc-second sampling factor that gives every cell of ``grid`` a pixel.
+
+    THE BREAKAGE THIS PREVENTS.  ``rw_mpas_static`` averages the 30" pixels
+    (terrain, soil, vegetation, texture) whose sample point lands in each cell,
+    at one sample per pixel unless ``--supersample-30s N`` asks for N x N.  A
+    cell narrower than a pixel (about 927 m) can own no sample at all, and its
+    terrain is then 0/0: a 750 m core mesh came out with 4,258 non-finite
+    ``ter`` cells and the door stopped at "terrain contains non-finite values".
+    Native MPAS has the same knob (``config_30s_supersample_factor``) and the
+    same failure when it is left at 1 on a sub-kilometre mesh.
+
+    Every Voronoi cell holds the disc of radius dcEdge/2 about its centre, and a
+    regular grid of spacing s puts a point within s/sqrt(2) of anywhere, so
+    N > pixel * sqrt(2) / min(dcEdge) is enough.  Meshes whose shortest dcEdge
+    is 1,310 m or more get N = 1, the builder's default, so their statics (and
+    every native comparison made on them) are unchanged.
+    """
+
+    _dv, dc = static_equivalent_lengths(grid)
+    positive = dc[dc > 0]
+    if positive.size == 0:
+        return 1
+    ratio = THIRTY_SECOND_PIXEL_M * math.sqrt(2.0) / float(positive.min())
+    return 1 if ratio < 1.0 else int(math.floor(ratio)) + 1
+
+
+def _shortest_dc_edge(grid: Path) -> float:
+    """The shortest positive ``dcEdge`` a grid file stores, as stored."""
+
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(str(grid)) as dataset:
+        dataset.set_auto_maskandscale(False)
+        dc = np.asarray(dataset.variables["dcEdge"][:], dtype=np.float64)
+    dc = dc[np.isfinite(dc) & (dc > 0.0)]
+    return float(dc.min()) if dc.size else math.nan
+
+
+def check_halo_static(
+    *,
+    halo_grid: Path,
+    parent_grid: Path,
+    static_receipt: Path,
+    cut_grid: Path,
+    log=print,
+) -> dict[str, Any]:
+    """Hold the static built on the halo to the cut, before anything is cut.
+
+    THE BREAKAGE THIS PREVENTS.  Almost every static value is the cell's own
+    pixels and its first rings, but a cell of a land field with no valid
+    pixel of its own takes its neighbours' value, carried ring by ring until
+    one has some (rw-mpas ``spread_to_unsampled``).  Where land holds no valid
+    pixel for hundreds of kilometres -- the Antarctic sea-ice margin's albedo
+    is fill from 55 S to 65 S -- a cut cell's value comes from that far, and
+    a halo whose rim is nearer gives it a different value with nothing in
+    the file to say so.  The static builder's receipt says, per dataset, how
+    many rings it carried values across (``spread_rounds``); the static is
+    the parent's inside the cut when the cut is more rings inside the halo's
+    rim than that plus :data:`STATIC_STENCIL_RINGS`.  The categorical
+    sampling rate is set by the mesh's shortest spacing, so the halo must
+    carry the parent's shortest ``dcEdge`` too.  A receipt that does not say
+    (an ``rw_mpas_static`` from before it counted) proves nothing, and the
+    door does not use the halo.
+    """
+
+    started = time.perf_counter()
+    result: dict[str, Any] = {"agreed": False}
+    try:
+        receipt = json.loads(Path(static_receipt).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        result["why"] = f"the halo static's receipt {Path(static_receipt).name} is unreadable ({error})"
+        return result
+    datasets = receipt.get("datasets") if isinstance(receipt, dict) else None
+    if not isinstance(datasets, list) or not datasets:
+        result["why"] = "the halo static's receipt names no datasets"
+        return result
+    rounds: dict[str, int] = {}
+    for row in datasets:
+        if (not isinstance(row, dict) or type(row.get("spread_rounds")) is not int
+                or row["spread_rounds"] < 0):
+            result["why"] = (
+                "the static builder does not say how far it carried values to "
+                "cells with no pixel of their own (an rw_mpas_static older than "
+                "its spread_rounds receipt), so the halo cannot be shown to hold"
+            )
+            return result
+        field = str(row.get("field"))
+        rounds[field] = max(rounds.get(field, 0), int(row["spread_rounds"]))
+    required_fields = {"ter", "landuse", "soilcat_top", "greenfrac", "albedo12m",
+                       "snoalb", "soiltemp", "soilcomp", "soilcl1", "soilcl2", "soilcl3", "soilcl4"}
+    missing = required_fields - rounds.keys()
+    if missing:
+        result["why"] = f"the halo static's receipt omits dataset fields {sorted(missing)}"
+        return result
+    from .mesh_rows import sha256_file
+    stamped = receipt.get("stamped_provenance")
+    if not isinstance(stamped, dict) or stamped.get("grid_sha256") != sha256_file(halo_grid):
+        result["why"] = "the halo static's receipt does not identify the halo grid's bytes"
+        return result
+    result["spread_rounds"] = rounds
+    halo_dc, parent_dc = _shortest_dc_edge(halo_grid), _shortest_dc_edge(parent_grid)
+    result["shortest_dc_edge"] = {"halo": halo_dc, "parent": parent_dc}
+    if halo_dc != parent_dc:
+        result["why"] = (
+            f"the halo's shortest dcEdge {halo_dc!r} is not the parent's "
+            f"{parent_dc!r}, and the static builder samples land use at a rate "
+            f"set by the mesh's shortest spacing"
+        )
+        return result
+    try:
+        hops = cut_to_rim_hops(halo_grid, cut_grid)
+    except PointPlanRefusal as error:
+        result["why"] = str(error)
+        return result
+    reach = max(rounds.values(), default=0) + STATIC_STENCIL_RINGS
+    result.update({
+        "cut_to_rim_rings": hops,
+        "reach_rings": reach,
+        "agreed": hops > reach,
+        "seconds": round(time.perf_counter() - started, 2),
+    })
+    if not result["agreed"]:
+        carried = max(rounds, key=rounds.get) if rounds else "?"
+        result["why"] = (
+            f"{carried} was carried {rounds.get(carried, 0)} rings to a cell with "
+            f"no pixel of its own, and the cut is only {hops} rings inside the "
+            f"halo's rim"
+        )
+    log(f"HALO STATIC {'HOLDS' if result['agreed'] else 'NOT SHOWN'}: values carried at most "
+        f"{max(rounds.values(), default=0)} rings (+{STATIC_STENCIL_RINGS} stencil), the cut "
+        f"{hops} rings inside the halo's rim")
+    return result
+
+
+class StaticBuilderRefusal(MpasPortError):
+    """The static builder wrote a static that does not hold what it declares.
+
+    Deliberately NOT a :class:`PointPlanRefusal`: the halo route reads those
+    as a reason to widen the halo or to take the parent's geography, and a
+    builder that mislabels one static mislabels every one, so falling back
+    would rebuild the same defect at greater cost and then refuse anyway.
+    """
+
+
+#: The coordinate arrays a static carries beside its grid's, and whether
+#: each is a Cartesian component (scaled by the sphere radius) or an angle.
+_STATIC_COORDINATES = tuple(
+    (f"{axis}{kind}", axis in "xyz") for kind in ("Cell", "Edge", "Vertex")
+    for axis in ("x", "y", "z", "lat", "lon"))
+
+#: The representation whose promise this door can check bit for bit.
+_BINARY64 = "binary64_earth_centred"
+
+
+def static_coordinate_errors(grid: Path, static: Path) -> list[str]:
+    """Does a static built on ``grid`` hold the coordinates it declares?
+
+    THE BREAKAGE THIS PREVENTS (ARWEN-VS-HEX-TIMING-2026-10-15).  gpuwm
+    2.9.0's ``rw_mpas_static``, and every build of gpuwm integrate/hex-mpas
+    before 46c8a71513e, reads every grid through binary32.  The static of a
+    GENERATED grid then declares ``binary64_earth_centred`` and holds binary32
+    positions up to 0.44 m off its grid, and this door refused it twice, both
+    times blaming the mesh: the vertical check ("dcEdge disagrees with
+    spherical cell-center arc length") and ``rw_mpas_mesh --cull-parent``
+    ("provenance grid latCell differs").  This names the builder instead,
+    right after it wrote the file.
+
+    The comparison is the one ``rw_mpas_mesh --cull-parent
+    --cull-provenance-grid`` makes when it binds a static's cut to its grid:
+    a binary64 static holds the grid's Cartesian coordinates times the ratio
+    of the two files' ``sphere_radius``, in binary64, and the grid's own
+    latitudes and longitudes, bit for bit.  A static that declares nothing
+    or binary32 -- every native one -- is not judged: native init_atmosphere
+    rounds its coordinates by design and the i2 replay proves that rounding.
+    """
+
+    import numpy as np
+    from netCDF4 import Dataset
+
+    from .mesh import COORDINATE_REPRESENTATION_ATTR
+
+    with Dataset(str(static)) as stat, Dataset(str(grid)) as mesh:
+        declared = stat.__dict__.get(COORDINATE_REPRESENTATION_ATTR)
+        if declared is None or str(declared).strip() != _BINARY64:
+            return []
+        stat.set_auto_maskandscale(False)
+        mesh.set_auto_maskandscale(False)
+        static_radius = float(np.asarray(stat.__dict__["sphere_radius"]).ravel()[0])
+        scale = static_radius / float(np.asarray(mesh.__dict__["sphere_radius"]).ravel()[0])
+        moved = compared = 0
+        worst_m = 0.0
+        problems: list[str] = []
+        for kind in ("Cell", "Edge", "Vertex"):
+            squared = None
+            for name, cartesian in _STATIC_COORDINATES:
+                if not name.endswith(kind):
+                    continue
+                stored = stat.variables[name]
+                if stored.dtype != np.float64:
+                    problems.append(f"{name} is stored as {stored.dtype}")
+                    continue
+                held = np.asarray(stored[:], dtype=np.float64)
+                want = np.asarray(mesh.variables[name][:], dtype=np.float64)
+                if held.shape != want.shape:
+                    problems.append(f"{name} has shape {held.shape}, its grid's {want.shape}")
+                    continue
+                if cartesian:
+                    want = want * scale
+                    error = (held - want) ** 2
+                    squared = error if squared is None else squared + error
+                compared += int(held.size)
+                moved += int(np.count_nonzero(held.view(np.uint64) != want.view(np.uint64)))
+            if squared is not None and squared.size:
+                worst_m = max(worst_m, float(np.sqrt(np.max(squared))))
+    if not moved and not problems:
+        return []
+    found = "; ".join(problems) if problems else (
+        f"{moved:,} of {compared:,} coordinate values are not {grid.name}'s own "
+        f"(its binary64 positions times sphere_radius {scale:.17g}, and its angles, bit "
+        f"for bit): positions are up to {worst_m:.3g} m off the grid")
+    return [
+        f"{static.name} declares {_BINARY64}, but {found}.  A static builder that reads "
+        f"its grid through binary32 wrote it -- gpuwm 2.9.0's rw_mpas_static does, and so "
+        f"does every build of gpuwm integrate/hex-mpas before 46c8a71513e -- and every "
+        f"later step here refuses the pair: the vertical check (\"dcEdge disagrees with "
+        f"spherical cell-center arc length\") and rw_mpas_mesh --cull-parent (\"provenance "
+        f"grid latCell differs\")"
+    ]
+
+
 def generate_point(
     request: PointRequest,
     plan: Mapping[str, Any],
@@ -781,12 +1357,38 @@ def generate_point(
     static_exe: Path | None = None,
     n_levels: int = DEFAULT_LEVELS,
     log=print,
+    parent_static: bool = False,
+    halo_km: float = DEFAULT_HALO_KM,
 ) -> dict[str, Any]:
-    """Build, admit, register and cull the pair the plan priced."""
+    """Build, admit, register and cull the pair the plan priced.
+
+    TWO ROUTES, ONE RESULT.  ``parent_static=True`` is the route this door
+    always took: the static (global geography) and the vertical grid are
+    built on the whole parent and cut down.  The default HALO route builds
+    them on a halo, a wider cut of the parent ``halo_km`` beyond the cut,
+    and cuts that down: the cut's grid, static and vertical grid carry the
+    same values bit for bit. :func:`check_halo_static` bounds the static's
+    dependency reach and :func:`check_halo_vertical` compares with the
+    whole parent's exact terrain-based authority on every build, before
+    anything is registered or cut; a halo that fails either is doubled once,
+    and then the parent route is taken whole.
+
+    What the halo route does NOT build is the parent's static, so the parent
+    row is its cull's lineage, described by its grid alone
+    (``generated-parent-grid``), and the parent cannot be run.  A caller that
+    needs a runnable parent asks for ``parent_static``.
+    """
 
     from . import mesh_rows
     from .cull_door import carry_lineage, cull_one
     from .engines import MESH, STATIC, EngineRefusal, resolve
+
+    # The vertical builder consumes this declaration, so its layer count
+    # must also own the parent and inherited cull registrations. A fallback
+    # count here made valid non-default vertical artifacts fail at startup.
+    if vertical_spec is not None:
+        from .vertical_spec import VerticalSpec
+        n_levels = VerticalSpec.from_file(vertical_spec).n_vert_levels
 
     try:
         mesh_exe = resolve(MESH, request.mesh_exe)
@@ -832,16 +1434,197 @@ def generate_point(
     legs.append({"leg": "mesh", "seconds": round(done.elapsed, 2)})
     log(f"GENERATE {grid.name} written in {done.elapsed:.1f} s")
 
-    argv = [static_bin, "--grid", grid, "--out", static, "--geog", geog_root,
-            "--nominal-dx-m", repr(float(request.fine_dx_m)), "--receipt", static_receipt]
-    if clobber:
-        argv.append("--clobber")
-    log(f"STATIC {static.name} ...")
-    done = _run(argv, what="rw_mpas_static", log=logs / "static.log")
-    legs.append({"leg": "static", "seconds": round(done.elapsed, 2)})
-    log(f"STATIC {static.name} written in {done.elapsed:.1f} s")
+    def build_static(on_grid: Path, out: Path, receipt: Path, leg: str,
+                     *, terrain_only: bool = False) -> None:
+        # One content-keyed static per host (hexcore.static_cache) when a hex
+        # cache is configured, shared with every other consumer of the same
+        # mesh, builder, geography and options; the build itself still goes
+        # through _run, so the per-mesh store (hexcore.prep_store) and the
+        # prep.place.static timeline stage work exactly as before.  With no
+        # cache configured the static is built in place, as it always was.
+        from .static_cache import build_static as cached_static, door_cache_dir
 
-    admission = admit_pair(grid, static, fine_dx_m=request.fine_dx_m, log=log)
+        options = ["--nominal-dx-m", repr(float(request.fine_dx_m))]
+        if terrain_only:
+            options.append("--terrain-only")
+        supersample = thirty_second_supersample(on_grid)
+        if supersample > 1:
+            options += ["--supersample-30s", str(supersample)]
+            log(f"STATIC {out.name}: 30-second geography sampled {supersample}x{supersample} "
+                f"per pixel (the shortest cell is narrower than one pixel)")
+        log(f"STATIC {out.name} ...")
+        cache = door_cache_dir()
+        if cache is None:
+            argv = [static_bin, "--grid", on_grid, "--out", out, "--geog", geog_root,
+                    "--nominal-dx-m", repr(float(request.fine_dx_m)), "--receipt", receipt]
+            if clobber:
+                argv.append("--clobber")
+            if terrain_only:
+                argv.append("--terrain-only")
+            if supersample > 1:
+                argv += ["--supersample-30s", str(supersample)]
+            done = _run(argv, what="rw_mpas_static", log=logs / f"{leg}.log")
+            legs.append({"leg": leg, "seconds": round(done.elapsed, 2)})
+            log(f"STATIC {out.name} written in {done.elapsed:.1f} s")
+        else:
+            result = cached_static(
+                engine=static_bin, grid=on_grid, geog=geog_root, out=out, receipt=receipt,
+                cache=cache, options=options, clobber=clobber,
+                runner=lambda command, _log: _run(command, what="rw_mpas_static", log=logs / f"{leg}.log"))
+            legs.append({"leg": leg, "seconds": round(result["seconds"], 2),
+                         "static_cache": {"hit": result["hit"], "key": result["key"], "cache": result["cache"]}})
+            log(f"STATIC {out.name} written in {result['seconds']:.1f} s "
+                f"(static cache {'hit' if result['hit'] else 'built'}, key {result['key'][:12]})")
+        # The static is checked against its grid before anything reads it
+        # (static_coordinate_errors says what this prevents).
+        mislabelled = static_coordinate_errors(on_grid, out)
+        if mislabelled:
+            raise StaticBuilderRefusal(
+                f"{mislabelled[0]}.  The builder was {static_bin}.  Use the rw_mpas_static "
+                f"this wheel bundles (read first unless --static-exe or "
+                f"$GPUWM_HEX_RW_MPAS_STATIC names another), or one built from gpuwm "
+                f"46c8a71513e or newer")
+
+    def cut(parent_file: Path, region: Path, out: Path, *, graph: Path | None = None,
+            provenance_grid: Path | None = None) -> dict[str, Any]:
+        row = cull_one(mesh_exe, parent_file, region, out, graph=graph, clobber=clobber,
+                       provenance_grid=provenance_grid)
+        row["lineage"] = carry_lineage(parent_file, out, drives_boundaries=False)
+        return row
+
+    region_path = _write_region(out_dir / f"{stem}.cull-region.json", plan["cull_region"])
+    cull_grid = out_dir / f"{stem}-cull.grid.nc"
+    cull_static = out_dir / f"{stem}-cull.static.nc"
+    work_grid = out_dir / f"{stem}-halo.grid.nc"
+    work_static = out_dir / f"{stem}-halo.static.nc"
+    work_static_receipt = out_dir / f"{stem}-halo.static.receipt.json"
+    halo: dict[str, Any] | None = None
+    working: list[Path] = []
+
+    def build_halo(width_km: float) -> dict[str, Any]:
+        region = halo_region(request.point, request.radius_km, request.cull_pad_scale, width_km)
+        path = _write_region(out_dir / f"{stem}.halo-region.json", region)
+        started = time.perf_counter()
+        for stale in (work_grid, work_static, work_static_receipt):
+            stale.unlink(missing_ok=True)
+        row = cut(grid, path, work_grid)
+        legs.append({"leg": "halo", "seconds": round(time.perf_counter() - started, 2)})
+        for path_ in (work_grid, work_static):
+            if path_ not in working:
+                working.append(path_)
+        cells = (row.get("receipt") or {}).get("region_cells")
+        log(f"HALO {work_grid.name}: {width_km:g} km beyond the cut, {cells} cells")
+        return {"halo_km": float(width_km), "region": region, "region_file": str(path),
+                "cells": cells, "grid": str(work_grid), "static": str(work_static),
+                "static_receipt": str(work_static_receipt)}
+
+    # The cull of the grid comes first: the halo route proves the engine on it.
+    started = time.perf_counter()
+    cuts: dict[str, Any] = {}
+    graph = out_dir / f"{stem}-cull.graph.info"
+    cuts["grid"] = cull_one(mesh_exe, grid, region_path, cull_grid, graph=graph, clobber=clobber)
+    cull_seconds = time.perf_counter() - started
+
+    # THE ROUTE IS DECIDED BEFORE ANYTHING IS REGISTERED OR CUT.  Every check
+    # the halo route makes runs first, so the cut's static, the receipt its
+    # row names and the vertical grid all come from the one static that held:
+    # the halo's that passed every check, or the parent's.  Until 2026-10-01
+    # the cut's static was cut from the first halo and its row written before
+    # the vertical check ran, so a doubled halo replaced the static receipt
+    # that row named, and the fall back to the parent's geography built the
+    # vertical grid on the parent but kept the static cut from the halo.
+    admission: dict[str, Any] | None = None
+    prebuilt = None
+    parent_built = None
+    terrain_reference = out_dir / f"{stem}-parent-terrain.static.nc"
+    terrain_reference_receipt = out_dir / f"{stem}-parent-terrain.static.receipt.json"
+    route_note: str | None = None
+    if not parent_static:
+        missing = [(engine.name, flag) for engine, flag in (
+            (mesh_exe, "--cull-provenance-grid"), (static_bin, "--terrain-only"))
+            if not _supports_flag(engine, flag)]
+        if missing:
+            route_note = (f"engine APIs {missing} are unavailable; the halo route cannot "
+                          "prove the parent's vertical authority and emit canonical cut provenance")
+            log(f"HALO not used: {route_note}; building the parent's own geography")
+            parent_static = True
+    if not parent_static:
+        # The parent's admission needs no geography (admit_parent_grid), so a
+        # refused parent stops before any is built.
+        admission = admit_parent_grid(grid, fine_dx_m=request.fine_dx_m, log=log)
+        if admission["regional"]:
+            raise PointPlanRefusal(
+                f"{grid} carries a boundary zone; the generator was asked for a "
+                f"global mesh and this is not one"
+            )
+        static_checks: list[dict[str, Any]] = []
+        vertical_checks: list[dict[str, Any]] = []
+        for attempt, width in enumerate((halo_km, 2.0 * halo_km)):
+            halo = build_halo(width)
+            halo["static_checks"], halo["checks"] = static_checks, vertical_checks
+            route_note = prove_regional_cut(
+                mesh_exe=mesh_exe, work_grid=work_grid, region=region_path, direct_cut=cull_grid,
+                direct_graph=graph, scratch_stem=out_dir / f"{stem}-halo-probe",
+            )
+            if route_note is not None:
+                break
+            try:
+                build_static(work_grid, work_static, work_static_receipt,
+                             "static" if attempt == 0 else "static-wider")
+            except PointPlanRefusal as error:
+                route_note = f"the static builder refused the {width:g} km halo ({error})"
+                log(f"HALO {route_note}")
+                continue
+            static_check = check_halo_static(
+                halo_grid=work_grid, parent_grid=grid, static_receipt=work_static_receipt,
+                cut_grid=cull_grid, log=log,
+            )
+            static_check["halo_km"] = float(width)
+            static_checks.append(static_check)
+            if not static_check["agreed"]:
+                route_note = static_check["why"]
+                continue
+            if vertical_spec is None:
+                route_note = None
+                break
+            if parent_built is None:
+                try:
+                    build_static(grid, terrain_reference, terrain_reference_receipt,
+                                 "parent-terrain", terrain_only=True)
+                except PointPlanRefusal as error:
+                    route_note = f"the static builder cannot emit the parent's terrain authority ({error})"
+                    break
+                working.append(terrain_reference)
+            check = check_halo_vertical(
+                work_grid=work_grid, work_static=work_static,
+                parent_grid=grid, parent_static=terrain_reference,
+                vertical_spec=Path(vertical_spec), cut_grid=cull_grid,
+                parent_built=parent_built, log=log,
+            )
+            built = check.pop("built")
+            parent_built = check.pop("parent_built")
+            check["halo_km"] = float(width)
+            check["parent_terrain_receipt"] = str(terrain_reference_receipt)
+            vertical_checks.append(check)
+            if check["agreed"]:
+                prebuilt, route_note = built, None
+                break
+            route_note = "the cut's vertical grid differs from the whole parent's authority"
+        if route_note is not None:
+            log(f"HALO not used: {route_note}; building the parent's own geography")
+            parent_static = True
+            assert halo is not None
+            halo["not_used"] = route_note
+            if static_checks or vertical_checks:
+                halo["fell_back_to_parent_static"] = True
+            prebuilt = None
+    # Only now: carry_lineage stamps the cut's file, and prove_regional_cut
+    # compares every halo's cut against the cut's bytes as the engine wrote them.
+    cuts["grid"]["lineage"] = carry_lineage(grid, cull_grid, drives_boundaries=False)
+    if parent_static:
+        build_static(grid, static, static_receipt, "static")
+        admission = admit_pair(grid, static, fine_dx_m=request.fine_dx_m, log=log)
+    assert admission is not None
     if admission["regional"]:
         raise PointPlanRefusal(
             f"{grid} carries a boundary zone; the generator was asked for a "
@@ -850,8 +1633,9 @@ def generate_point(
     parent = mesh_rows.describe_generated(
         name=parent_row_name(request.point, request.fine_dx_m, request.background_km,
                              admission["n_cells"]),
-        grid=grid, static=static, spec_path=spec_path,
-        generator_receipt=grid_receipt, static_receipt=static_receipt,
+        grid=grid, static=static if parent_static else None, spec_path=spec_path,
+        generator_receipt=grid_receipt,
+        static_receipt=static_receipt if parent_static else None,
         point_deg=request.point, fine_dx_m=request.fine_dx_m,
         core_radius_km=request.radius_km, background_km=request.background_km,
         dt_seconds=admission["timestep_choice"]["dt_seconds"],
@@ -860,22 +1644,12 @@ def generate_point(
     mesh_rows.write_rows(rows_path, [parent])
     log(f"ROW {parent.name} -> {rows_path}")
 
-    # The cull: grid and static, the same region, the parent's own bytes.
-    region_path = out_dir / f"{stem}.cull-region.json"
-    region_path.write_text(
-        json.dumps(plan["cull_region"], indent=2, sort_keys=True) + "\n",
-        encoding="utf-8", newline="\n",
-    )
-    cull_grid = out_dir / f"{stem}-cull.grid.nc"
-    cull_static = out_dir / f"{stem}-cull.static.nc"
+    # The cull's static: cut from the static the route decided on (the
+    # parent's, or the halo's that held), by the same region row as the grid.
     started = time.perf_counter()
-    cut: dict[str, Any] = {}
-    cut["grid"] = cull_one(mesh_exe, grid, region_path, cull_grid,
-                           graph=out_dir / f"{stem}-cull.graph.info", clobber=clobber)
-    cut["grid"]["lineage"] = carry_lineage(grid, cull_grid, drives_boundaries=False)
-    cut["static"] = cull_one(mesh_exe, static, region_path, cull_static, clobber=clobber)
-    cut["static"]["lineage"] = carry_lineage(static, cull_static, drives_boundaries=False)
-    legs.append({"leg": "cull", "seconds": round(time.perf_counter() - started, 2)})
+    cuts["static"] = cut(static if parent_static else work_static, region_path, cull_static,
+                         provenance_grid=cull_grid)
+    legs.append({"leg": "cull", "seconds": round(cull_seconds + time.perf_counter() - started, 2)})
     cull_admission = admit_pair(cull_grid, cull_static, fine_dx_m=request.fine_dx_m, log=log)
     if not cull_admission["regional"]:
         raise PointPlanRefusal(
@@ -896,6 +1670,7 @@ def generate_point(
         ),
         admission=cull_admission,
         dt_seconds=parent.dt_seconds,
+        static_receipt=None if parent_static else work_static_receipt,
     )
     mesh_rows.append_row(rows_path, cull_row)
     log(f"ROW {cull_row.name} -> {rows_path} ({cull_row.n_cells:,} cells, "
@@ -905,21 +1680,30 @@ def generate_point(
     if vertical_spec is not None:
         from .vertical_spec import materialize_vertical_artifact
 
-        artifact = out_dir / f"{stem}.vertical.nc"
         started = time.perf_counter()
-        log(f"VERTICAL {artifact.name} from {Path(vertical_spec).name} on the parent ...")
-        payload = materialize_vertical_artifact(
-            grid=grid, static=static, spec_path=vertical_spec, output=artifact,
-            receipt_path=artifact.with_name(artifact.name + ".receipt.json"),
-        )
+        regional_halo = not parent_static
+        source_grid, source_static = (work_grid, work_static) if regional_halo else (grid, static)
+        artifact_name = (f"{stem}-halo.vertical.nc" if regional_halo else f"{stem}.vertical.nc")
+        artifact = out_dir / artifact_name
+        log(f"VERTICAL {artifact.name} from {Path(vertical_spec).name} on the "
+            f"{'halo' if regional_halo else 'parent'} ...")
+        with _place_stage("prep.place.vertical", attrs={"operation": "artifact", "regional_halo": regional_halo}):
+            payload = materialize_vertical_artifact(
+                grid=source_grid, static=source_static, spec_path=vertical_spec, output=artifact,
+                receipt_path=artifact.with_name(artifact.name + ".receipt.json"),
+                regional_halo=regional_halo, prebuilt=prebuilt,
+            )
         mint_seconds = time.perf_counter() - started
         cull_artifact = out_dir / f"{stem}-cull.vertical.nc"
-        cut["vertical"] = cull_one(mesh_exe, artifact, region_path, cull_artifact, clobber=clobber)
-        cut["vertical"]["lineage"] = carry_lineage(artifact, cull_artifact, drives_boundaries=False)
+        cuts["vertical"] = cut(artifact, region_path, cull_artifact, provenance_grid=cull_grid)
+        if regional_halo:
+            working.append(artifact)
+            working.extend(out_dir.glob("derived-geometry-*.npz"))
         legs.append({"leg": "vertical", "seconds": round(time.perf_counter() - started, 2)})
         vertical = {
             "spec": str(vertical_spec),
-            "parent_artifact": str(artifact),
+            "parent_artifact": None if regional_halo else str(artifact),
+            "halo_artifact": str(artifact) if regional_halo else None,
             "parent_receipt": payload.get("receipt") if isinstance(payload, dict) else None,
             "cull_artifact": str(cull_artifact),
             "mint_seconds": round(mint_seconds, 2),
@@ -930,25 +1714,37 @@ def generate_point(
         log(f"VERTICAL {cull_artifact.name} culled; init the cull with "
             f"--capsule/--reference {cull_artifact.name}")
 
+    # The halo's files are working files: the cut carries everything the run
+    # reads, and their receipts stay beside it.
+    for path in working:
+        Path(path).unlink(missing_ok=True)
+    if halo is not None:
+        halo["kept"] = "receipts only; the halo grid, static and vertical grid are deleted after the cut"
+
     receipt = {
         "schema": "gpuwm-hex.point-generate/v1",
+        "route": "parent-static" if parent_static else "halo",
+        "route_note": route_note,
         "plan": dict(plan),
         "engines": {"rw_mpas_mesh": str(mesh_exe), "rw_mpas_static": str(static_bin)},
         "geog": str(geog_root),
         "spec": str(spec_path),
         "parent": {
-            "row": parent.name, "grid": str(grid), "static": str(static),
+            "row": parent.name, "grid": str(grid),
+            "static": str(static) if parent_static else None,
             "n_cells": parent.n_cells, "n_edges": parent.n_edges,
             "dt_seconds": parent.dt_seconds,
-            "generator_receipt": str(grid_receipt), "static_receipt": str(static_receipt),
+            "generator_receipt": str(grid_receipt),
+            "static_receipt": str(static_receipt) if parent_static else None,
             "admission": admission,
         },
+        "halo": halo,
         "cull": {
             "row": cull_row.name, "grid": str(cull_grid), "static": str(cull_static),
             "n_cells": cull_row.n_cells, "n_edges": cull_row.n_edges,
             "boundary_zone_width": cull_row.boundary_zone_width,
             "bdy_mask_sha256": cull_row.bdy_mask_sha256,
-            "region": str(region_path), "files": cut, "admission": cull_admission,
+            "region": str(region_path), "files": cuts, "admission": cull_admission,
             "predicted_cells": plan["cull"]["predicted_cells"],
             "lbc_dir": str(lbc_dir),
         },
@@ -1030,6 +1826,15 @@ def add_point_arguments(parser: argparse.ArgumentParser) -> None:
              "from this gpuwm-hex.vertical-spec/v1 declaration and cull it, so "
              "the cull can be initialised from a regional source")
     group.add_argument("--static-exe", type=Path, default=None, metavar="FILE")
+    group.add_argument(
+        "--parent-static", action="store_true",
+        help="with --generate: build the geography and the vertical grid on the "
+             "whole parent, so the parent row is runnable too (minutes of global "
+             "geography); by default they are built on a halo around the cut and "
+             "the cut's files are the same bytes")
+    group.add_argument(
+        "--halo-km", type=float, default=DEFAULT_HALO_KM, metavar="KM",
+        help=f"how far beyond the cut the halo reaches (default {DEFAULT_HALO_KM:g})")
     group.add_argument("--clobber", action="store_true")
 
 
@@ -1070,6 +1875,8 @@ def run_point(arguments: argparse.Namespace) -> int:
         out_dir=arguments.out_dir, geog=arguments.geog,
         vertical_spec=arguments.vertical_spec, clobber=bool(arguments.clobber),
         static_exe=arguments.static_exe,
+        parent_static=bool(getattr(arguments, "parent_static", False)),
+        halo_km=float(getattr(arguments, "halo_km", DEFAULT_HALO_KM)),
     )
     return 0
 
@@ -1078,17 +1885,25 @@ __all__ = [
     "CARD_ALIASES",
     "DEFAULT_BACKGROUND_KM",
     "DEFAULT_CULL_PAD_SCALE",
+    "DEFAULT_HALO_KM",
+    "STATIC_STENCIL_RINGS",
     "DEFAULT_RING_FACTOR",
     "DEFAULT_TRANSITION_FACTOR",
     "PointPlanRefusal",
+    "StaticBuilderRefusal",
     "PointRequest",
     "add_point_arguments",
     "admit_pair",
+    "admit_parent_grid",
+    "check_halo_static",
+    "check_halo_vertical",
     "choose_timestep",
     "cull_region",
     "cull_row_name",
+    "cut_to_rim_hops",
     "device_verdict",
     "generate_point",
+    "halo_region",
     "ladder_rungs",
     "ladder_spec",
     "max_radius_for_cells",
@@ -1096,9 +1911,12 @@ __all__ = [
     "parse_point",
     "plan_point",
     "predicted_cull_cells",
+    "prove_regional_cut",
     "spacing_at",
     "spacing_profile",
     "resolve_card",
     "resolve_geog",
     "run_point",
+    "static_coordinate_errors",
+    "static_equivalent_lengths",
 ]

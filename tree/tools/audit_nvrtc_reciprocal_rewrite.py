@@ -187,9 +187,11 @@ def translation_units() -> Iterator[tuple[str, str, str]]:
         return getattr(module, attribute_name)
 
     simple = (
+        ("hexcore.cuda_acoustic_fusion_v841", "cuda_acoustic_fusion_v841", "CUDA_FUSED_SOURCE"),
         ("hexcore.cuda_acoustic", "cuda_acoustic", "_CUDA_SOURCE"),
         ("hexcore.cuda_acoustic_v841", "cuda_acoustic_v841", "_CUDA_SOURCE"),
         ("hexcore.cuda_horizontal", "cuda_horizontal", "_CUDA_SOURCE"),
+        ("hexcore.partition_overlap_v841", "partition_overlap_v841", "_CUDA_SOURCE"),
         (
             "hexcore.cuda_horizontal_v841",
             "cuda_horizontal_v841",
@@ -217,6 +219,15 @@ def translation_units() -> Iterator[tuple[str, str, str]]:
             "cuda_solve_region_v841",
             "SOLVE_REGION_CUDA_SOURCE",
         ),
+        # Arrived with 0.3.4 and left out of the census until the GPU tier's
+        # coverage control named them: the native upper damping (CAM and
+        # Rayleigh) and the same-host halo byte copy.
+        ("hexcore.cuda_upper_damping_v841", "cuda_upper_damping_v841", "_CUDA_SOURCE"),
+        (
+            "hexcore.partition_samehost_transport_v841",
+            "partition_samehost_transport_v841",
+            "_BYTE_COPY",
+        ),
     )
     for module_key, module_name, attribute_name in simple:
         yield (
@@ -232,6 +243,17 @@ def translation_units() -> Iterator[tuple[str, str, str]]:
         "hexcore.cuda_acoustic_lts",
         "src/hexcore/cuda_acoustic_lts.py::_build_source()",
         cuda_acoustic_lts._build_source(),
+    )
+
+    from hexcore.cuda_backend import arch_admission
+    from hexcore.cuda_fp32 import CUDA_FTZ_HELPERS
+
+    # The numeric-route probe 0.3.4 compiles on the card in hand before it
+    # admits an architecture, composed exactly as the probe composes it.
+    yield (
+        "hexcore.cuda_backend.arch_admission",
+        "src/hexcore/cuda_backend/arch_admission.py::CUDA_FTZ_HELPERS + _PROBE_KERNEL",
+        CUDA_FTZ_HELPERS + arch_admission._PROBE_KERNEL,
     )
 
     from hexcore.cuda_backend import recovery

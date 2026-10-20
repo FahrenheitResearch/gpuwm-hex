@@ -27,7 +27,9 @@ this driver decides the eventual GPU memory layout.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from contextlib import ExitStack
+
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -67,6 +69,7 @@ from .integration import RKSchedule
 from .integration import accumulate_split_flux, finish_split_flux
 from .integration_v841 import enforce_recovered_rw_endpoints_v841
 from .mixing import (
+    AppliedMixingTendencies,
     MixingConfig,
     apply_saved_euler_mixing,
     capture_rtheta_pp_old,
@@ -78,6 +81,8 @@ from .offcentering_v841 import (
     build_v841_acoustic_offcentering,
 )
 from . import rkind_libm
+from .host_parallel import run_blocks, transposed_copy
+from .prep_cache import cached
 from .regional_v841 import (
     RegionalRuntime,
     adjust_dynamics_relaxzone_tend,
@@ -120,9 +125,9 @@ V841_IMPLEMENTATION_EVIDENCE = (
     "implemented-v841-closed-dry-nomix-no-compiled-authority-claim"
 )
 V841_SOURCE = (
-    "MPAS-A v8.4.1 tag-object=2a934b5008a7446df96d550bf2e21466feaec686; "
-    "commit=91c5eac175eebeaf4206bacd5cb50c39dff3c152; "
-    "archive-sha256=772f565c2bd66999492085eff8ffa0b9aa9a2edd1e7f2c0e5d1a8bedc1160861; "
+    "MPAS-A v8.4.2 tag-object=2eee75b147d83d67835cecfb30c6fb3793e3042b; "
+    "commit=f34984b2c89353cf31c235b08d3b4acd96b37bb3; "
+    "archive-sha256=03e2d518c2f32eccbfa84a48d2c7efa223967819f4f72856f36b87c3b1a796f5; "
     "closed-dry CPU implementation pending compiled authority"
 )
 NATIVE_SPLIT3_SOURCE = (
@@ -225,19 +230,23 @@ class DryDycoreConfig:
     def validate(self) -> None:
         if not np.isfinite(self.config_dt) or self.config_dt <= 0.0:
             _refuse("config_dt", self.config_dt, "the timestep must be finite and positive", "config_dt>0")
-        if self.config_time_integration_order != 3:
+        if isinstance(self.config_time_integration_order, (bool, np.bool_)) or not isinstance(
+            self.config_time_integration_order, (int, np.integer)
+        ) or self.config_time_integration_order not in (2, 3):
             _refuse(
                 "config_time_integration_order",
                 self.config_time_integration_order,
-                "this whole-step driver has admitted the frozen RK3 branch first",
-                "config_time_integration_order=3",
+                "the MPAS split-explicit loop has only order-2 and order-3 schedules",
+                "config_time_integration_order=2 or 3",
             )
-        if self.config_number_of_sub_steps < 1:
+        if isinstance(self.config_number_of_sub_steps, (bool, np.bool_)) or not isinstance(
+            self.config_number_of_sub_steps, (int, np.integer)
+        ) or self.config_number_of_sub_steps < 1:
             _refuse(
                 "config_number_of_sub_steps",
                 self.config_number_of_sub_steps,
                 "the split-explicit acoustic loop requires a positive count",
-                "config_number_of_sub_steps=6",
+                "config_number_of_sub_steps=4 (MPAS-A's default) or any positive integer",
             )
         if not isinstance(
             self.config_split_dynamics_transport, (bool, np.bool_)
@@ -256,7 +265,9 @@ class DryDycoreConfig:
             _refuse(
                 "config_dynamics_split_steps",
                 self.config_dynamics_split_steps,
-                "the CPU whole-step driver has admitted native one- and three-subcycle schedules",
+                "the whole-step drivers implement one and three dynamics "
+                "subcycles only (the v8.4.1 CUDA subcycle three; MPAS-A's "
+                "default is three, Registry.xml:109)",
                 "config_dynamics_split_steps=1 or 3",
             )
         if (
@@ -465,6 +476,20 @@ class DryDycoreConfig:
                 "the frozen APVM branch requires a finite non-negative coefficient",
                 "config_apvm_upwinding>=0.0 (the JW authority uses 0.5)",
             )
+        # A non-real value is refused by name before the range test: the
+        # Registry type is real, native MPAS's namelist reader stops on any
+        # other type, and np.isfinite on a string raised a bare TypeError
+        # here instead of a refusal that names the knob.
+        if isinstance(self.config_epssm, (bool, np.bool_)) or not isinstance(
+            self.config_epssm, (int, float, np.integer, np.floating)
+        ):
+            _refuse(
+                "config_epssm",
+                self.config_epssm,
+                "the MPAS Registry type is real, and native MPAS cannot read "
+                "a namelist that gives it another type",
+                "a real config_epssm",
+            )
         if not np.isfinite(self.config_epssm) or not 0.0 <= self.config_epssm < 1.0:
             _refuse(
                 "config_epssm",
@@ -489,6 +514,7 @@ def _mixing_config(config: DryDycoreConfig) -> MixingConfig:
     )
 
 
+@cached("frozen-vertical-damping")
 def _frozen_vertical_damping(
     mesh: object,
     vertical_grid: VerticalGrid,
@@ -531,6 +557,12 @@ def _frozen_vertical_damping(
     zd = dtype.type(config.config_zd)
     one_quarter = dtype.type(0.25)
     half_pi = dtype.type(0.5) * np.arccos(dtype.type(-1.0))
+    # v8.4.2 core F:1310 calls the working-precision host SIN intrinsic.
+    # NumPy's single-precision approximation differs from GNU sinf.
+    profile_sin = np.sin
+    native_profile = getattr(config, "source_release", V823_SOURCE_RELEASE) == V841_SOURCE_RELEASE
+    if native_profile:
+        from .native_geometry_math import sin as profile_sin
     active_count = 0
     for cell in range(zgrid.shape[1]):
         top = zgrid[-1, cell]
@@ -548,7 +580,10 @@ def _frozen_vertical_damping(
                         "config_zd below every active column top",
                     )
                 phase = half_pi * (height - zd) / (top - zd)
-                out[level, cell] = xnutr * np.sin(phase) ** dtype.type(2.0)
+                sine = profile_sin(phase)
+                # GNU folds the literal SIN(...)**2.0 to one RKIND product.
+                square = sine * sine if native_profile else sine ** dtype.type(2.0)
+                out[level, cell] = xnutr * square
                 out[level, cell] /= density_scale
                 active_count += 1
     if active_count == 0:
@@ -755,6 +790,7 @@ def _pressure_exner(
     rgas: float,
     cp: float,
     reference_pressure: float,
+    native_gnu_powf: bool = False,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
     dtype = state.rho.dtype
     theta = state.rho_theta / state.rho
@@ -767,7 +803,11 @@ def _pressure_exner(
     # RKIND pow under the pinned correctly-rounded convention; see
     # hexcore.rkind_libm for the measured reference-implementation slop
     # this replaces.
-    exner = rkind_libm.powf_rkind(argument, dtype.type(rgas / (cp - rgas)))
+    power_function = rkind_libm.powf_rkind
+    if native_gnu_powf:
+        from .native_powf import powf_native_gnu
+        power_function = powf_native_gnu
+    exner = power_function(argument, dtype.type(rgas / (cp - rgas)))
     pressure = zz * dtype.type(rgas) * state.rho_theta * exner
     return pressure, exner, theta
 
@@ -782,6 +822,7 @@ def _pressure_perturbation(
     reference_pressure: float,
     exner: FloatArray | None = None,
     rho_theta_perturbation: FloatArray | None = None,
+    native_gnu_powf: bool = False,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
     """Frozen perturbation-pressure evaluation at F:2833-2836/5953-5963."""
 
@@ -791,6 +832,7 @@ def _pressure_perturbation(
         rgas=rgas,
         cp=cp,
         reference_pressure=reference_pressure,
+        native_gnu_powf=native_gnu_powf,
     )
     dtype = state.rho.dtype
     exact_exner = computed_exner if exner is None else np.asarray(exner)
@@ -1242,7 +1284,23 @@ def _logical_netcdf_field(
         )
     level_axis = dimensions.index(level_dimension)
     entity_axis = dimensions.index(entity_dimension)
-    return np.transpose(value, (level_axis, entity_axis)).copy()
+    # The same bytes as np.transpose(...).copy(), copied in column blocks on
+    # threads (20.2 s of one core on the 20 km init; hexcore.host_parallel).
+    return transposed_copy(value, (level_axis, entity_axis))
+
+
+class _InvariantOverlay:
+    """``variables`` of an init file with the native invariant stream on top.
+
+    A name the invariant file carries resolves there; any other name resolves
+    in the init file.  With no invariant file this is the init file itself.
+    """
+
+    def __init__(self, init_dataset: Any, invariant_dataset: Any | None) -> None:
+        merged = dict(init_dataset.variables)
+        if invariant_dataset is not None:
+            merged.update(invariant_dataset.variables)
+        self.variables = merged
 
 
 def load_mpas_vertical_grid(
@@ -1251,11 +1309,22 @@ def load_mpas_vertical_grid(
     *,
     config_coef_3rd_order: float = 0.25,
     allow_regional_sentinels: bool = False,
+    invariant_path: str | Path | None = None,
 ) -> NativeVerticalData:
     """Load the exact native MPAS ``zgrid/fzm/fzp/zz/zb`` metric set.
 
     This is the authority path for an initialized file; rebuilding these
     fields from ``ter`` would discard initialization-time surface smoothing.
+
+    ``invariant_path`` is the native ``invariant`` stream.  When a run
+    configures it, MPAS-A reads the vertical grid from that file and the
+    ``input`` stream omits those fields (Registry.xml: the input stream lists
+    ``<stream name="invariant" packages="no_invariant_stream"/>``), so every
+    metric field the invariant file carries is taken from it, not from the
+    init file.  RRFS v2 runs this way: its L60 invariant file and an init
+    built from a different static set disagree by up to 2.7 mm in ``zgrid``
+    and 8e-5 relative in ``zz``, which moved a physics-off conus12km hour
+    from 2.8e-5 K to 2.0e-4 K RMS theta against native.
     """
 
     if not np.isfinite(config_coef_3rd_order) or config_coef_3rd_order < 0.0:
@@ -1266,11 +1335,21 @@ def load_mpas_vertical_grid(
             "config_coef_3rd_order=0.25",
         )
     source = Path(path).expanduser().resolve(strict=True)
+    invariant_source = (
+        None if invariant_path is None
+        else Path(invariant_path).expanduser().resolve(strict=True)
+    )
     required = (
         "zgrid", "rdzw", "dzu", "rdzu", "fzm", "fzp", "zz", "zxu",
         "dss", "zb", "zb3", "cf1", "cf2", "cf3",
     )
-    with Dataset(source, mode="r") as dataset:
+    with ExitStack() as stack:
+        init_dataset = stack.enter_context(Dataset(source, mode="r"))
+        invariant_dataset = (
+            None if invariant_source is None
+            else stack.enter_context(Dataset(invariant_source, mode="r"))
+        )
+        dataset = _InvariantOverlay(init_dataset, invariant_dataset)
         missing = [name for name in required if name not in dataset.variables]
         if missing:
             knob = missing[0]
@@ -1392,11 +1471,25 @@ def load_mpas_initial_state(
     water_vapor_rgas: float = 461.6,
     reference_pressure: float = 100_000.0,
     return_saved_diagnostics: bool = False,
+    cold_start: bool = False,
+    normal_velocity_name: str = "u",
 ) -> (
     tuple[PrognosticState, DryReferenceState]
     | tuple[PrognosticState, DryReferenceState, DrySavedDiagnostics]
 ):
     """Load native MPAS prognostics/reference fields for a whole-step gate.
+
+    ``cold_start=True`` is a forecast that starts from an initial-conditions
+    file, which native MPAS-A does through atm_init_coupled_diagnostics
+    (v8.4.1 mpas_atm_time_integration.F:7590-7650).  That routine always
+    recomputes rho_p, rtheta_base, rtheta_p, exner, exner_base, pressure_p
+    and pressure_base from rho_zz, theta_m, rho_base, theta_base and the
+    model's own zz, overwriting any copy the file carries.  An init_atmosphere
+    file carries pressure_p and pressure_base built on its own zz, so reading
+    them puts the init program's numbers, not the model's, into the first
+    step's pressure gradient and into every history ``pressure``.  The default
+    (False) keeps the oracle-stream behaviour the whole-step gates pin: a
+    native model dump's saved diagnostics ARE the model's, and are consumed.
 
     Native ``rho_zz``/``theta_m`` are consumed when present.  Public init files
     instead carry physical ``rho``/``theta``; those aliases are converted
@@ -1495,9 +1588,9 @@ def load_mpas_initial_state(
                 time_index=time_index,
             ).astype(rho.dtype, copy=False)
         native_normal_velocity = None
-        if "u" in dataset.variables:
+        if normal_velocity_name in dataset.variables:
             native_normal_velocity = _logical_netcdf_field(
-                dataset.variables["u"],
+                dataset.variables[normal_velocity_name],
                 level_dimension="nVertLevels",
                 entity_dimension="nEdges",
                 time_index=time_index,
@@ -1510,6 +1603,12 @@ def load_mpas_initial_state(
                 entity_dimension="nCells",
                 time_index=time_index,
             ).astype(rho.dtype, copy=False)
+        if cold_start:
+            # F:7590-7650 overwrites every one of these on a cold start.
+            native_exner = None
+            native_rtheta_perturbation = None
+            native_density_perturbation = None
+            native_pressure_perturbation = None
         # Replaced below by the exact frozen perturbation-state ordering once
         # the base fields have been read.  Keep an initial value so all public
         # input aliases have a complete local representation.
@@ -1538,17 +1637,30 @@ def load_mpas_initial_state(
                 entity_dimension="nEdges",
                 time_index=time_index,
             ).astype(rho.dtype, copy=False)
-        elif "u" in dataset.variables:
+        elif normal_velocity_name in dataset.variables:
             assert native_normal_velocity is not None
             u = native_normal_velocity
             # atm_init_coupled_diagnostics F:7561 exactly:
             # ru = 0.5 * u * (rho_zz(cell1) + rho_zz(cell2)), the half
             # binding to u BEFORE the density sum multiplies in.
-            rho_u = (
-                rho.dtype.type(0.5) * u
-            ) * (gather_rho[:, cells[:, 0]] + gather_rho[:, cells[:, 1]])
+            half = rho.dtype.type(0.5)
+
+            def coupled_ru(block: slice) -> Any:
+                return (half * u[:, block]) * (
+                    gather_rho[:, cells[block, 0]] + gather_rho[:, cells[block, 1]]
+                )
+
+            # The same elementwise expression per edge, edge blocks on threads
+            # (8.9 s of one core over 4.4 M edges at 20 km; host_parallel).
+            probe = coupled_ru(slice(0, 1))
+            rho_u = np.empty((probe.shape[0], cells.shape[0]), dtype=probe.dtype)
+
+            def fill_ru(block: slice) -> None:
+                rho_u[:, block] = coupled_ru(block)
+
+            run_blocks(fill_ru, cells.shape[0], elements=rho_u.size)
         else:
-            _refuse("u", None, "neither native u nor diagnostic ru is present", "an input stream containing u or ru")
+            _refuse(normal_velocity_name, None, "neither named normal velocity nor diagnostic ru is present", f"an input stream containing {normal_velocity_name} or ru")
 
         if "rw" in dataset.variables:
             rho_w = _logical_netcdf_field(
@@ -1589,24 +1701,14 @@ def load_mpas_initial_state(
                 terrain_metrics.validate(
                     nlev=rho.shape[0], ncells=rho.shape[1], max_edges=edges.shape[1]
                 )
-                for cell in range(rho.shape[1]):
-                    for slot in range(int(counts[cell])):
-                        edge = int(edges[cell, slot])
-                        for level in range(1, rho.shape[0]):
-                            flux = (
-                                vertical_grid.fzm[level] * rho_u[level, edge]
-                                + vertical_grid.fzp[level] * rho_u[level - 1, edge]
-                            )
-                            rho_w[level, cell] -= (
-                                signs[cell, slot]
-                                * (
-                                    terrain_metrics.zb_cell[level, cell, slot]
-                                    + np.copysign(rho.dtype.type(1.0), flux)
-                                    * terrain_metrics.zb3_cell[level, cell, slot]
-                                )
-                                * flux
-                                * interface_zz[level, cell]
-                            )
+                from .rust_hostprep import correct_vertical_momentum
+
+                rho_w = correct_vertical_momentum(
+                    counts=counts, edges=edges, fzm=vertical_grid.fzm,
+                    fzp=vertical_grid.fzp, ru=rho_u, interface_zz=interface_zz,
+                    signs=signs, zb_cell=terrain_metrics.zb_cell,
+                    zb3_cell=terrain_metrics.zb3_cell, rw=rho_w,
+                )
         else:
             _refuse("w", None, "neither native w nor diagnostic rw is present", "an input stream containing w or rw")
 
@@ -1655,7 +1757,7 @@ def load_mpas_initial_state(
                 entity_dimension="nCells",
                 time_index=time_index,
             ).astype(rho.dtype, copy=False)
-        if "rtheta_base" in reference_dataset.variables:
+        if "rtheta_base" in reference_dataset.variables and not cold_start:
             rho_theta_base = _logical_netcdf_field(
                 reference_dataset.variables["rtheta_base"],
                 level_dimension="nVertLevels",
@@ -1686,7 +1788,7 @@ def load_mpas_initial_state(
         rho_theta = rho_theta_perturbation + rho_theta_base
 
         zz = np.asarray(vertical_grid.zz, dtype=rho.dtype)
-        if "exner_base" in reference_dataset.variables:
+        if "exner_base" in reference_dataset.variables and not cold_start:
             exner_base = _logical_netcdf_field(
                 reference_dataset.variables["exner_base"],
                 level_dimension="nVertLevels",
@@ -1700,7 +1802,7 @@ def load_mpas_initial_state(
                 * rho_theta_base,
                 rho.dtype.type(rgas / (cp - rgas)),
             )
-        if "pressure_base" in reference_dataset.variables:
+        if "pressure_base" in reference_dataset.variables and not cold_start:
             pressure_base = _logical_netcdf_field(
                 reference_dataset.variables["pressure_base"],
                 level_dimension="nVertLevels",
@@ -2117,7 +2219,8 @@ class DryDycoreDriver:
             )
         self.advection_coefficients = advection_coefficients
         self.mixing_config = (
-            _mixing_config(self.config)
+            _mixing_config(replace(self.config,config_mpas_cam_coef=0.0)
+                if self.source_release == V841_SOURCE_RELEASE else self.config)
             if self.config.config_horiz_mixing == "2d_smagorinsky"
             else None
         )
@@ -2291,6 +2394,7 @@ class DryDycoreDriver:
             rgas=self.rgas,
             cp=self.cp,
             reference_pressure=self.reference_pressure,
+            native_gnu_powf=self.source_release == V841_SOURCE_RELEASE,
         )
         coefficient_exner = computed_exner if exner is None else np.asarray(
             exner, dtype=state.rho.dtype
@@ -2427,6 +2531,7 @@ class DryDycoreDriver:
             rgas=self.rgas,
             cp=self.cp,
             reference_pressure=self.reference_pressure,
+            native_gnu_powf=self.source_release == V841_SOURCE_RELEASE,
         )
         density_perturbation = state.rho - self.reference.rho_base
         rtheta_perturbation = state.rho_theta - self.reference.rho_theta_base
@@ -2437,6 +2542,7 @@ class DryDycoreDriver:
             rgas=self.rgas,
             cp=self.cp,
             reference_pressure=self.reference_pressure,
+            native_gnu_powf=self.source_release == V841_SOURCE_RELEASE,
             exner=exner,
             rho_theta_perturbation=rtheta_perturbation,
         )
@@ -2595,6 +2701,8 @@ class DryDycoreDriver:
                     # see the shorter dynamics timestep.
                     dt=outer_dt,
                     config=self._v841_mixing_config,
+                    cam_damping_levels=getattr(self.config,"config_number_cam_damping_levels",4),
+                    initial_u_tendency=euler_ru,
                 )
             else:
                 saved_mixing = compute_dry_mixing_tendencies(
@@ -2613,12 +2721,19 @@ class DryDycoreDriver:
                     dt=outer_dt,
                     config=self.mixing_config,
                 )
-            saved_mixing_euler = apply_saved_euler_mixing(
-                euler_ru,
-                euler_rw,
-                np.zeros_like(saved.rho_theta),
-                saved_mixing,
-            )
+            if self.source_release == V841_SOURCE_RELEASE:
+                saved_mixing_euler = AppliedMixingTendencies(
+                    u=saved_mixing.tend_u_euler,
+                    w=euler_rw + saved_mixing.tend_w_euler,
+                    theta=saved_mixing.tend_theta_euler,
+                )
+            else:
+                saved_mixing_euler = apply_saved_euler_mixing(
+                    euler_ru,
+                    euler_rw,
+                    np.zeros_like(saved.rho_theta),
+                    saved_mixing,
+                )
 
         # atm_compute_dyn_tend_work F:6455-6466 writes tend_rho ONLY under
         # rk_step == 1, so the pool array carries the stage-1 values (and any
@@ -2633,7 +2748,7 @@ class DryDycoreDriver:
         if self.regional is not None:
             stage_tend_rho = tend_rho_saved.copy()
         for stage in schedule.stages:
-            if stage.stage == 2:
+            if stage.stage == 2 and self.config.config_time_integration_order == 3:
                 coefficients = self._vertical_coefficients(
                     current,
                     stage.acoustic_timestep,
@@ -2661,7 +2776,7 @@ class DryDycoreDriver:
             if self.source_release == V841_SOURCE_RELEASE:
                 if self.reference_wind_profiles is None:
                     raise RuntimeError("v8.4.1 reference winds were not initialized")
-                tend_ru += vector_invariant_momentum_tendency_v841(
+                tend_ru = vector_invariant_momentum_tendency_v841(
                     self.mesh,
                     normal_velocity=normal_velocity,
                     rho_edge=rho_edge,
@@ -2669,6 +2784,7 @@ class DryDycoreDriver:
                     kinetic_energy=diagnostics.kinetic_energy,
                     horizontal_divergence=horizontal_mass_divergence,
                     reference_wind=self.reference_wind_profiles,
+                    initial_tendency=tend_ru,
                 )
             else:
                 tend_ru += vector_invariant_momentum_tendency(
@@ -2679,6 +2795,11 @@ class DryDycoreDriver:
                     kinetic_energy=diagnostics.kinetic_energy,
                     horizontal_divergence=horizontal_mass_divergence,
                 )
+            if self.source_release == V841_SOURCE_RELEASE and self.config.config_rayleigh_damp_u:
+                from .upper_damping_v841 import apply_rayleigh_u
+                apply_rayleigh_u(tend_ru,rho_edge,normal_velocity,
+                    levels=getattr(self.config,"config_number_rayleigh_damp_u_levels",6),
+                    days=getattr(self.config,"config_rayleigh_damp_u_timescale_days",5.0))
             if saved_mixing_euler is None:
                 tend_ru += euler_ru
             else:
@@ -2753,6 +2874,7 @@ class DryDycoreDriver:
                         outer_dt=outer_dt,
                         dynamics_split=self.config.config_dynamics_split_steps,
                         rk_step=stage.stage,
+                        order=self.config.config_time_integration_order,
                     ),
                 )
                 adjust_dynamics_relaxzone_tend(
@@ -2868,6 +2990,7 @@ class DryDycoreDriver:
                             theta_saved,
                             acoustic.rtheta_pp,
                             acoustic.rtheta_pp_old,
+                            native_stored_inverse=(self.source_release == V841_SOURCE_RELEASE),
                             dts=stage.acoustic_timestep,
                             config_smdiv=self.config.config_smdiv,
                             config_len_disp=self.config.config_len_disp,
@@ -2888,6 +3011,7 @@ class DryDycoreDriver:
                             pad_cells_column(theta_saved, 0.0),
                             pad_cells_column(acoustic.rtheta_pp, 0.0),
                             pad_cells_column(acoustic.rtheta_pp_old, 0.0),
+                            native_stored_inverse=(self.source_release == V841_SOURCE_RELEASE),
                             dts=stage.acoustic_timestep,
                             config_smdiv=self.config.config_smdiv,
                             config_len_disp=self.config.config_len_disp,
@@ -2943,8 +3067,10 @@ class DryDycoreDriver:
                 raise FloatingPointError(
                     f"rho_theta became non-positive in RK stage {stage.stage}; reduce config_dt"
                 )
-            flux_u = saved.rho_u + acoustic.ru_avg / stage.acoustic_steps
-            flux_w = saved.rho_w + acoustic.ww_avg / stage.acoustic_steps
+            flux_dtype = candidate.rho.dtype
+            inverse_steps = flux_dtype.type(1.0) / flux_dtype.type(stage.acoustic_steps)
+            flux_u = saved.rho_u + acoustic.ru_avg * inverse_steps
+            flux_w = saved.rho_w + acoustic.ww_avg * inverse_steps
             if stage.stage == 3:
                 final_flux_u = flux_u.copy()
                 final_flux_w = flux_w.copy()
@@ -2967,7 +3093,7 @@ class DryDycoreDriver:
                     config_monotonic=self.config.config_monotonic,
                     config_positive_definite=self.config.config_positive_definite,
                     config_split_dynamics_transport=False,
-                    config_time_integration_order=3,
+                    config_time_integration_order=self.config.config_time_integration_order,
                     coefficients=self.advection_coefficients,
                     fzm=self.vertical_grid.fzm,
                     fzp=self.vertical_grid.fzp,
@@ -3000,6 +3126,7 @@ class DryDycoreDriver:
                     rgas=self.rgas,
                     cp=self.cp,
                     reference_pressure=self.reference_pressure,
+                    native_gnu_powf=self.source_release == V841_SOURCE_RELEASE,
                     rho_theta_perturbation=current_rtheta_perturbation,
                 )
             current_normal_velocity = self._recover_normal_velocity(current)
@@ -3208,7 +3335,7 @@ class DryDycoreDriver:
                     config_monotonic=self.config.config_monotonic,
                     config_positive_definite=self.config.config_positive_definite,
                     config_split_dynamics_transport=True,
-                    config_time_integration_order=3,
+                    config_time_integration_order=self.config.config_time_integration_order,
                     coefficients=self.advection_coefficients,
                     fzm=self.vertical_grid.fzm,
                     fzp=self.vertical_grid.fzp,
@@ -3236,7 +3363,8 @@ class DryDycoreDriver:
                     # the specified zone set to -- the driving scalars at
                     # this stage's transport time.
                     dt_rk = transport_rk_timestep_f32(
-                        outer_dt=outer_dt, rk_step=stage.stage
+                        outer_dt=outer_dt, rk_step=stage.stage,
+                        order=self.config.config_time_integration_order,
                     )
                     bdy_adjust_scalars(
                         self.mesh,

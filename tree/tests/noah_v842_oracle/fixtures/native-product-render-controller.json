@@ -1,0 +1,14 @@
+{
+  "schema": "p16-noah-actual-native-product-render-controller-v1",
+  "time_utc": "2026-10-14T01:27:04.777049+00:00",
+  "actual_host_a_exit": 0,
+  "job": "p16-noah-1791937840-3253912",
+  "exit_receipt": "receipts/noah-native-product-render-controller.actual-host-a.exit",
+  "exit_receipt_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "log_receipt": "receipts/noah-native-product-render-controller.actual-host-a.log",
+  "log_sha256": "e6be224afd7a084b7f3a28d00eb7392a554f2a01e2ec921a879cc283f223b98f",
+  "render_matrix_sha256": "e092029a4d7d5f5288859708e33bc5946a9fa750e3f80485c2cb5cec6b9713a4",
+  "controller_sha256": "1889b84204946d6c201773a0e2fedcba45f5f55dcd544a4570bb319d676579c8",
+  "product_contract_sha256": "05255b13aed133567488bbca1a3348d7a64cc045dd803019b0a7f2bc6e48d513",
+  "client_tool_exit143_is_not_worker_exit": true
+}

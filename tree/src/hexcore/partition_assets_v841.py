@@ -12,14 +12,18 @@ ordering laws".  Nothing in this module performs floating point arithmetic.
 Ownership laws
 --------------
 1. cell owner   = the part file, verbatim.
-2. edge owner   = ``part[min(cellsOnEdge[e, 0], cellsOnEdge[e, 1])]``.
-3. vertex owner = ``part[min(cellsOnVertex[v])]``.
+2. edge owner   = the owner of its smallest present incident cell.
+3. vertex owner = the owner of its smallest present incident cell.
+Missing-cell ``-1`` slots on regional boundaries are not incident cells.
 
 Local ordering law
 ------------------
-``[owned ascending global id] ++ [ring 1 ascending] ++ ... ++ [ring K ascending]``
+``[owned ascending global id] ++ [non-owned seeds ascending] ++
+[ring 1 ascending] ++ ... ++ [ring K ascending]``
 for cells; for edges and vertices ``[owned ascending] ++ [non-owned ascending
-by (ring, global id)]``.
+by (ring, global id)]``.  Optional replicated seeds expand the same K-ring
+cone as owned cells.  Ring metadata records the minimum cone distance;
+ownership is always the owned prefix, including when a non-owner seed has ring 0.
 
 Row-completeness law
 --------------------
@@ -57,7 +61,12 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 
-BUILDER_VERSION = "partition-assets-v841/1"
+# /4: a regional edge whose edgesOnEdge names an edge of a culled neighbour is
+# complete only when that referent is local too (rrfs-h-h3-speed, 2026-10-05:
+# the public conus12km N2 census refused edge 81697, which /3 called complete).
+# /5: the ordinary asset builder supplies the actual edge stencil too.
+# /4 assets made through that door could claim a clamped halo row complete.
+BUILDER_VERSION = "partition-assets-v841/5"
 
 # Ring sentinel for "not in the local set".  Larger than any legal ring depth.
 _UNREACHED = np.int32(1 << 30)
@@ -74,7 +83,7 @@ class PartitionLayout:
     cell_l2g: np.ndarray  # int32 (n_local_cells,)
     edge_l2g: np.ndarray  # int32 (n_local_edges,)
     vertex_l2g: np.ndarray  # int32 (n_local_vertices,)
-    cell_ring: np.ndarray  # int16 (n_local_cells,), 0 == owned
+    cell_ring: np.ndarray  # int16 (n_local_cells,), minimum owned/seed distance
     cell_row_complete: np.ndarray  # bool (n_local_cells,)
     edge_row_complete: np.ndarray  # bool (n_local_edges,)
     vertex_row_complete: np.ndarray  # bool (n_local_vertices,)
@@ -108,6 +117,7 @@ class PartitionLayout:
     _global_cells: int = 0
     _global_edges: int = 0
     _global_vertices: int = 0
+    _replicated_cells: tuple[int, ...] = ()
 
     def receipt(self) -> dict[str, Any]:
         return {
@@ -118,6 +128,7 @@ class PartitionLayout:
             "n_local_edges": self.n_local_edges,
             "n_owned_vertices": int(self.n_owned_vertices),
             "n_local_vertices": self.n_local_vertices,
+            "replicated_cells": list(self._replicated_cells),
             "max_ring": int(self.cell_ring.max()) if self.cell_ring.size else 0,
             "ring_sizes": [
                 int(np.count_nonzero(self.cell_ring == ring))
@@ -235,6 +246,7 @@ def _cell_rings(
     *,
     n_cells: int,
     halo_rings: int,
+    replicated_cells: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return ``(cell_l2g, cell_ring)`` for one partition.
 
@@ -243,10 +255,15 @@ def _cell_rings(
     """
 
     visited = np.zeros(n_cells, dtype=bool)
-    visited[owned] = True
+    seeds = owned if replicated_cells is None else np.union1d(owned, replicated_cells).astype(np.int32, copy=False)
+    visited[seeds] = True
     order: list[np.ndarray] = [owned.astype(np.int32, copy=False)]
     rings: list[np.ndarray] = [np.zeros(owned.size, dtype=np.int16)]
-    frontier = owned.astype(np.int32, copy=False)
+    other_seeds = seeds[~np.isin(seeds, owned)]
+    if other_seeds.size:
+        order.append(other_seeds)
+        rings.append(np.zeros(other_seeds.size, dtype=np.int16))
+    frontier = seeds
     for ring in range(1, int(halo_rings) + 1):
         candidates = _expand_frontier(frontier, offsets, flat)
         if candidates.size == 0:
@@ -294,15 +311,103 @@ def build_partition_layouts(
     cells_on_vertex: np.ndarray,
     cells_on_edge: np.ndarray,
     partitions: Iterable[int] | None = None,
+    replicated_cells: Iterable[int] | None = None,
+    edges_on_edge: np.ndarray | None = None,
+    n_edges_on_edge: np.ndarray | None = None,
 ) -> list[PartitionLayout]:
-    """Build every partition's layout from an official part file."""
+    """Build every partition's layout from an official part file.
+
+    ``edges_on_edge`` (zero-based, -1 padding) with ``n_edges_on_edge`` adds
+    the edge-stencil referents to the edge completeness verdict. On a closed
+    mesh this changes nothing: an edge whose two cells are complete already
+    has every stencil edge local. On a limited-area mesh a boundary edge's
+    stencil can name an edge of the culled neighbour, whose only remaining
+    cell need not be a neighbour of the edge's own cell (public conus12km,
+    edge 81697). Without the stencil the verdict claims such a halo row
+    complete and the census refuses the partition.
+    """
 
     if int(halo_rings) < 0:
         raise ValueError("halo_rings must be non-negative")
     offsets, flat, _ = read_graph_info(graph_info)
+    part = read_part_file(part_file, n_cells=int(offsets.size - 1))
+    return build_partition_layouts_from_csr(
+        offsets, flat, part, halo_rings=halo_rings,
+        cells_on_vertex=cells_on_vertex, cells_on_edge=cells_on_edge,
+        partitions=partitions, replicated_cells=replicated_cells,
+        edges_on_edge=edges_on_edge, n_edges_on_edge=n_edges_on_edge)
+
+
+def _single_partition_layout(
+    offsets: np.ndarray, flat: np.ndarray, part: np.ndarray, *,
+    n_cells: int, n_edges: int, n_vertices: int, seed_ids: tuple[int, ...],
+) -> PartitionLayout | None:
+    """All entities are owned locally, so no halo or incidence gather is needed.
+
+    Incidence and stencil admission still runs in the caller. Restrict this
+    shortcut to ordinary valid CSR; unusual direct callers retain the general
+    path and its existing errors. Ownership, ordering and completeness are
+    independent of connectivity when every cell belongs to partition zero.
+    """
+    if (part.shape != (n_cells,) or not np.all(part == 0)
+            or offsets.ndim != 1 or flat.ndim != 1
+            or offsets.dtype.kind not in "iu" or flat.dtype.kind not in "iu"
+            or offsets[0] != 0 or offsets[-1] != flat.size
+            or np.any(offsets[1:] < offsets[:-1])
+            or (flat.size and (flat.min() < 0 or flat.max() >= n_cells))):
+        return None
+
+    counts = (n_cells, n_edges, n_vertices)
+    indexes = [np.empty(count, dtype=np.int32) for count in counts]
+    complete = [np.empty(count, dtype=bool) for count in counts]
+    rings = np.empty(n_cells, dtype=np.int16)
+
+    def initialize(block: slice) -> None:
+        for count, index, mask in zip(counts, indexes, complete):
+            stop = min(block.stop, count)
+            if block.start < stop:
+                index[block.start:stop] = np.arange(block.start, stop, dtype=np.int32)
+                mask[block.start:stop] = True
+        rings[block] = 0
+
+    from hexcore.host_parallel import run_blocks
+
+    run_blocks(initialize, max(counts), elements=2 * sum(counts) + n_cells)
+    return PartitionLayout(
+        partition=0, n_owned_cells=n_cells, n_owned_edges=n_edges,
+        n_owned_vertices=n_vertices, cell_l2g=indexes[0], edge_l2g=indexes[1],
+        vertex_l2g=indexes[2], cell_ring=rings, cell_row_complete=complete[0],
+        edge_row_complete=complete[1], vertex_row_complete=complete[2],
+        _global_cells=n_cells, _global_edges=n_edges, _global_vertices=n_vertices,
+        _replicated_cells=seed_ids,
+    )
+
+
+def build_partition_layouts_from_csr(
+    offsets: np.ndarray, flat: np.ndarray, part: np.ndarray, *,
+    halo_rings: int, cells_on_vertex: np.ndarray, cells_on_edge: np.ndarray,
+    partitions: Iterable[int] | None = None,
+    replicated_cells: Iterable[int] | None = None,
+    edges_on_edge: np.ndarray | None = None,
+    n_edges_on_edge: np.ndarray | None = None,
+) -> list[PartitionLayout]:
+    """Internal construction from already validated zero-based CSR and part IDs.
+
+    The file entry point validates text as before; the mesh builder supplies
+    its checked arrays directly instead of serializing and parsing them again.
+    """
+    if int(halo_rings) < 0:
+        raise ValueError("halo_rings must be non-negative")
     n_cells = int(offsets.size - 1)
-    part = read_part_file(part_file, n_cells=n_cells)
     n_parts = int(part.max()) + 1
+    seed_values = tuple(() if replicated_cells is None else replicated_cells)
+    seed_array = np.asarray(seed_values)
+    if seed_array.ndim != 1 or (seed_array.size and seed_array.dtype.kind not in "iu"):
+        raise ValueError("replicated_cells must be integer global cell indexes")
+    if seed_array.size and (seed_array.min() < 0 or seed_array.max() >= n_cells):
+        raise ValueError("replicated_cells contains an index outside the global cells")
+    seed_array = np.unique(seed_array.astype(np.int32))
+    seed_ids = tuple(int(value) for value in seed_array)
 
     coe = np.asarray(cells_on_edge)
     cov = np.asarray(cells_on_vertex)
@@ -310,17 +415,51 @@ def build_partition_layouts(
         raise ValueError("cells_on_edge must have shape (nEdges,2)")
     if cov.ndim != 2:
         raise ValueError("cells_on_vertex must have shape (nVertices,vertexDegree)")
-    if coe.min() < 0 or coe.max() >= n_cells:
-        raise ValueError("cells_on_edge references a cell outside the graph")
-    if cov.min() < 0 or cov.max() >= n_cells:
-        raise ValueError("cells_on_vertex references a cell outside the graph")
+    for name, incidence in (("cells_on_edge", coe), ("cells_on_vertex", cov)):
+        if incidence.dtype.kind not in "iu":
+            raise ValueError(f"{name} must contain integer cell indexes")
+        if incidence.size and (incidence.min() < -1 or incidence.max() >= n_cells):
+            raise ValueError(f"{name} references a cell outside the graph or -1 sentinel")
+        if incidence.shape[1] == 0 or np.any(np.all(incidence < 0, axis=1)):
+            raise ValueError(f"{name} has an entity with no present incident cell; ownership is undefined")
     n_edges = int(coe.shape[0])
     n_vertices = int(cov.shape[0])
+    eoe = eoe_safe = eoe_active = None
+    if (edges_on_edge is None) != (n_edges_on_edge is None):
+        raise ValueError("edges_on_edge and n_edges_on_edge are supplied together or not at all")
+    if edges_on_edge is not None:
+        eoe = np.asarray(edges_on_edge)
+        counts = np.asarray(n_edges_on_edge)
+        if eoe.ndim != 2 or eoe.shape[0] != n_edges or counts.shape != (n_edges,):
+            raise ValueError("edges_on_edge must have shape (nEdges,width) and n_edges_on_edge (nEdges,)")
+        if eoe.dtype.kind not in "iu" or counts.dtype.kind not in "iu":
+            raise ValueError("edges_on_edge and n_edges_on_edge must be integer")
+        if eoe.size and (eoe.min() < -1 or eoe.max() >= n_edges):
+            raise ValueError("edges_on_edge references an edge outside the mesh or -1 sentinel")
 
-    # Law 2 / law 3: owner of the smallest-global-index incident cell.
-    edge_min_cell = np.minimum(coe[:, 0], coe[:, 1]).astype(np.int64, copy=False)
+    wanted = sorted(set(range(n_parts) if partitions is None else partitions))
+    if n_parts == 1 and wanted == [0]:
+        layout = _single_partition_layout(
+            offsets, flat, part, n_cells=n_cells, n_edges=n_edges,
+            n_vertices=n_vertices, seed_ids=seed_ids,
+        )
+        if layout is not None:
+            layouts = [layout]
+            if partitions is None:
+                assert_exact_cover(layouts, n_cells=n_cells, n_edges=n_edges,
+                                   n_vertices=n_vertices)
+            return layouts
+
+    if eoe is not None:
+        eoe_active = (np.arange(eoe.shape[1])[None, :] < counts[:, None]) & (eoe >= 0)
+        eoe_safe = np.where(eoe >= 0, eoe, 0).astype(np.int64, copy=False)
+
+    # The one-past index sorts after real cells and denotes absence only.
+    coe_present = np.where(coe < 0, n_cells, coe).astype(np.int64, copy=False)
+    cov_present = np.where(cov < 0, n_cells, cov).astype(np.int64, copy=False)
+    edge_min_cell = coe_present.min(axis=1)
     edge_owner = part[edge_min_cell]
-    vertex_min_cell = cov.min(axis=1).astype(np.int64, copy=False)
+    vertex_min_cell = cov_present.min(axis=1)
     vertex_owner = part[vertex_min_cell]
 
     # Row-completeness needs, per global cell, "are all my graph neighbours
@@ -329,14 +468,13 @@ def build_partition_layouts(
         np.arange(n_cells, dtype=np.int64), np.diff(offsets)
     )  # owner cell of every CSR slot
 
-    wanted = sorted(set(range(n_parts) if partitions is None else partitions))
-    layouts: list[PartitionLayout] = []
-    for partition in wanted:
+    def build_one(partition: int) -> PartitionLayout:
         owned_cells = np.flatnonzero(part == partition).astype(np.int32, copy=False)
         if owned_cells.size == 0:
             raise ValueError(f"partition {partition} owns no cells")
         cell_l2g, cell_ring = _cell_rings(
-            owned_cells, offsets, flat, n_cells=n_cells, halo_rings=halo_rings
+            owned_cells, offsets, flat, n_cells=n_cells, halo_rings=halo_rings,
+            replicated_cells=seed_array,
         )
 
         cell_ring_global = np.full(n_cells, _UNREACHED, dtype=np.int32)
@@ -355,25 +493,25 @@ def build_partition_layouts(
             cell_l2g.astype(np.int64, copy=False)
         ]
 
-        edge_ring = np.minimum(
-            cell_ring_global[coe[:, 0].astype(np.int64, copy=False)],
-            cell_ring_global[coe[:, 1].astype(np.int64, copy=False)],
-        )
+        ring_with_absence = np.concatenate((cell_ring_global, [_UNREACHED]))
+        local_with_absence = np.concatenate((cell_local, [True]))
+        complete_with_absence = np.concatenate((cell_complete_global, [True]))
+        edge_ring = ring_with_absence[coe_present].min(axis=1)
         edge_l2g, n_owned_edges = _order_secondary(edge_owner, edge_ring, partition)
-        both_cells_local = cell_local[coe[:, 0].astype(np.int64, copy=False)] & cell_local[
-            coe[:, 1].astype(np.int64, copy=False)
-        ]
-        both_cells_complete = cell_complete_global[
-            coe[:, 0].astype(np.int64, copy=False)
-        ] & cell_complete_global[coe[:, 1].astype(np.int64, copy=False)]
+        both_cells_local = local_with_absence[coe_present].all(axis=1)
+        both_cells_complete = complete_with_absence[coe_present].all(axis=1)
         edge_complete_global = both_cells_local & both_cells_complete
+        if eoe is not None:
+            edge_local = np.zeros(n_edges, dtype=bool)
+            edge_local[edge_l2g.astype(np.int64, copy=False)] = True
+            edge_complete_global &= np.where(eoe_active, edge_local[eoe_safe], True).all(axis=1)
         edge_row_complete = edge_complete_global[edge_l2g.astype(np.int64, copy=False)]
 
-        vertex_ring = cell_ring_global[cov.astype(np.int64, copy=False)].min(axis=1)
+        vertex_ring = ring_with_absence[cov_present].min(axis=1)
         vertex_l2g, n_owned_vertices = _order_secondary(
             vertex_owner, vertex_ring, partition
         )
-        vertex_complete_global = cell_local[cov.astype(np.int64, copy=False)].all(axis=1)
+        vertex_complete_global = local_with_absence[cov_present].all(axis=1)
         vertex_row_complete = vertex_complete_global[
             vertex_l2g.astype(np.int64, copy=False)
         ]
@@ -394,7 +532,22 @@ def build_partition_layouts(
         object.__setattr__(layout, "_global_cells", n_cells)
         object.__setattr__(layout, "_global_edges", n_edges)
         object.__setattr__(layout, "_global_vertices", n_vertices)
-        layouts.append(layout)
+        object.__setattr__(layout, "_replicated_cells", seed_ids)
+        return layout
+
+    # Every rank reads the same immutable global connectivity and writes
+    # private ring/membership buffers. The old outer loop serialized these
+    # full-mesh NumPy passes while all forecast devices waited for layouts.
+    # Ordered map preserves rank order and the first rank's failure.
+    from concurrent.futures import ThreadPoolExecutor
+    from hexcore.host_parallel import threads
+
+    workers = min(threads(), len(wanted))
+    if workers <= 1:
+        layouts = [build_one(partition) for partition in wanted]
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hex-layout") as pool:
+            layouts = list(pool.map(build_one, wanted))
 
     if partitions is None:
         assert_exact_cover(layouts, n_cells=n_cells, n_edges=n_edges, n_vertices=n_vertices)
@@ -470,7 +623,10 @@ def save_layouts_npz(
         "global_cells": np.array(layouts[0]._global_cells, dtype=np.int64),
         "global_edges": np.array(layouts[0]._global_edges, dtype=np.int64),
         "global_vertices": np.array(layouts[0]._global_vertices, dtype=np.int64),
+        "replicated_cells": np.asarray(layouts[0]._replicated_cells, dtype=np.int32),
     }
+    if any(layout._replicated_cells != layouts[0]._replicated_cells for layout in layouts):
+        raise ValueError("layouts disagree on their replicated cell seeds")
     for index, layout in enumerate(layouts):
         payload[f"p{index}.partition"] = np.array(layout.partition, dtype=np.int64)
         for name in _PER_LAYOUT_SCALARS:
@@ -489,6 +645,7 @@ def load_layouts_npz(
     expect_mesh_sha256: str,
     expect_part_sha256: str,
     expect_halo_rings: int,
+    expect_replicated_cells: Iterable[int] | None = None,
 ) -> list[PartitionLayout]:
     path = Path(path)
     with np.load(path, allow_pickle=False) as data:
@@ -506,8 +663,12 @@ def load_layouts_npz(
         ):
             if header[key] != expected:
                 raise ValueError(
-                    f"{path}: cached {key}={header[key]!r} != expected {expected!r}"
+                    f"{path}: cached {key}={header[key]!r} != expected {expected!r}; "
+                    "rebuild layouts to prevent stale ownership or stencil masks from admitting clamped rows"
                 )
+        seed_ids = tuple(int(value) for value in data["replicated_cells"])
+        if expect_replicated_cells is not None and seed_ids != tuple(sorted(set(expect_replicated_cells))):
+            raise ValueError(f"{path}: cached replicated_cells={seed_ids} != expected seeds")
         n_partitions = int(data["n_partitions"])
         globals_ = (
             int(data["global_cells"]),
@@ -527,6 +688,7 @@ def load_layouts_npz(
             object.__setattr__(layout, "_global_cells", globals_[0])
             object.__setattr__(layout, "_global_edges", globals_[1])
             object.__setattr__(layout, "_global_vertices", globals_[2])
+            object.__setattr__(layout, "_replicated_cells", seed_ids)
             layouts.append(layout)
     return layouts
 
@@ -540,17 +702,20 @@ def build_or_load_layouts(
     cells_on_vertex: np.ndarray,
     cells_on_edge: np.ndarray,
     mesh_sha256: str,
+    replicated_cells: Iterable[int] | None = None,
 ) -> list[PartitionLayout]:
     """Cache-first entry point; refuses on any header mismatch."""
 
     cache_path = Path(cache_path)
     part_sha = sha256_file(part_file)
+    seed_ids = tuple(() if replicated_cells is None else replicated_cells)
     if cache_path.exists():
         return load_layouts_npz(
             cache_path,
             expect_mesh_sha256=mesh_sha256,
             expect_part_sha256=part_sha,
             expect_halo_rings=halo_rings,
+            expect_replicated_cells=seed_ids,
         )
     layouts = build_partition_layouts(
         Path(graph_info),
@@ -558,6 +723,7 @@ def build_or_load_layouts(
         halo_rings=halo_rings,
         cells_on_vertex=cells_on_vertex,
         cells_on_edge=cells_on_edge,
+        replicated_cells=seed_ids,
     )
     save_layouts_npz(
         cache_path,

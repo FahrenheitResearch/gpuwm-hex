@@ -35,19 +35,50 @@ from numpy.typing import NDArray
 FloatArray = NDArray[np.floating[Any]]
 
 
+#: Arrays at least this large are evaluated in contiguous chunks on threads.
+#: The functions are elementwise, so every element is computed exactly as in
+#: one call; only the wall time changes.  MEASURED (8-card RTX PRO 6000 host, 2026-10-10, 15 km
+#: global host preparation): the float64 pow over 2.6 million columns x 55
+#: levels took 50 s of a 363 s host preparation on one core.
+_PARALLEL_ELEMENTS = 1 << 20
+_POOL = None
+
+
+def _chunked(function: Callable[[np.ndarray], np.ndarray], array: np.ndarray, dtype: Any) -> np.ndarray:
+    global _POOL
+    flat = np.ascontiguousarray(array).reshape(-1)
+    if flat.size < _PARALLEL_ELEMENTS:
+        return function(flat).astype(dtype, copy=False).reshape(array.shape)
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+    workers = max(1, min(32, os.cpu_count() or 1))
+    if _POOL is None:
+        _POOL = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rkind-libm")
+    out = np.empty(flat.size, dtype=dtype)
+    bounds = np.linspace(0, flat.size, workers + 1, dtype=np.int64)
+
+    def run(index: int) -> None:
+        lo, hi = int(bounds[index]), int(bounds[index + 1])
+        out[lo:hi] = function(flat[lo:hi])
+
+    list(_POOL.map(run, range(workers)))
+    return out.reshape(array.shape)
+
+
 def _powf_correctly_rounded(base: FloatArray, exponent: float) -> FloatArray:
     array = np.asarray(base)
     if array.dtype == np.float64:
-        return array ** np.float64(exponent)
-    result = array.astype(np.float64) ** np.float64(np.float32(exponent))
-    return result.astype(array.dtype)
+        power = np.float64(exponent)
+        return _chunked(lambda part: part ** power, array, np.float64)
+    power = np.float64(np.float32(exponent))
+    return _chunked(lambda part: part.astype(np.float64) ** power, array, array.dtype)
 
 
 def _sinf_correctly_rounded(phase: FloatArray) -> FloatArray:
     array = np.asarray(phase)
     if array.dtype == np.float64:
-        return np.sin(array)
-    return np.sin(array.astype(np.float64)).astype(array.dtype)
+        return _chunked(np.sin, array, np.float64)
+    return _chunked(lambda part: np.sin(part.astype(np.float64)), array, array.dtype)
 
 
 #: Rebindable hooks.  Default: correctly rounded via float64 (the pinned

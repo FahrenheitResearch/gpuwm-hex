@@ -77,8 +77,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "numpy>=2.0" "netCDF4>=1.6" "scipy>=1.11" "pytest>=8.0" "setuptools>=77"
 
+      - name: install the declared engine
+        # 0.3.4's CPU battery drives the engine's own host-preparation binary
+        # (rw_mpas_hostprep, staged in the gpuwm wheel's bridge bundle) for
+        # mesh validation, LBC and Rust host-prep checks.  Without the engine
+        # those tests fail on its absence rather than on the port.  The range
+        # is READ from the declaration, as the floor gate below does, so a
+        # declared engine that is not on PyPI fails here by name.
+        run: |
+          ENGINE=$(python -c "import tomllib,pathlib;d=tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'));print(next(s for s in d['project']['dependencies'] if s.split('>=')[0].strip()=='gpuwm'))")
+          echo "declared engine: ${ENGINE}"
+          python -m pip install "${ENGINE}"
+
       - name: install gpuwm-hex from the tree, without resolving the engine
         run: python -m pip install --no-deps -e .
+
+      - name: build the regional contract's host-preparation helper
+        # The default regional contract computes its exact float32 host
+        # references in this Rust executable (hexcore.drivers.contract_hostprep
+        # finds it under rust/host-prep/target).  An editable install does not
+        # run the wheel's build step, so without this the contract tests in the
+        # battery below find no helper and fail.
+        run: cargo build --release --locked --manifest-path rust/host-prep/Cargo.toml
 
       - name: tier 1 -- the CPU battery
         env:
@@ -222,7 +242,7 @@ jobs:
         # place to forget.
         run: |
           python -m pip install --upgrade pip
-          FLOOR=$(python -c "import tomllib,pathlib;d=tomllib.loads(pathlib.Path('tree/pyproject.toml').read_text(encoding='utf-8'));print(next(s for s in d['project']['dependencies'] if s.split('>=')[0].strip()=='gpuwm'))")
+          FLOOR=$(python -c "import tomllib,pathlib;d=tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'));print(next(s for s in d['project']['dependencies'] if s.split('>=')[0].strip()=='gpuwm'))")
           echo "declared engine floor: ${FLOOR}"
           python -m pip install --dry-run --ignore-installed "${FLOOR}" \
             || { echo "BLOCKER: ${FLOOR} is not installable from PyPI. gpuwm-hex cannot be published before the engine version carrying the pinned seam bytes and the bridge binaries is published."; exit 1; }

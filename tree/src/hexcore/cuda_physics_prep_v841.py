@@ -19,6 +19,7 @@ preparation performs exactly one final four-byte device-to-host validation.
 """
 
 from __future__ import annotations
+from hexcore import numerics as _hex_numerics
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -202,6 +203,13 @@ def _mesh_value(mesh: object, name: str, default: Any = None) -> Any:
     return default
 
 
+def _regional_donor_for_extent(mesh: object, garbage_cell: int | None) -> Any:
+    """Ordering provenance describes a donor only on a padded regional view."""
+    if garbage_cell is None:
+        return None
+    return _mesh_value(mesh, "regional_garbage_donor_cell")
+
+
 def _array_sha256(value: Any) -> str:
     array = np.ascontiguousarray(np.asarray(value))
     digest = sha256()
@@ -294,6 +302,13 @@ class CudaMpasToPhysGeometryV841:
     #: nothing else has to know, which is what keeps the preparation one
     #: routine instead of two.
     regional_garbage_cell: int | None = None
+    # Partition-local index of the same real column the one-card view lends.
+    # Only byte selection changes; every preparation kernel is unchanged.
+    regional_garbage_donor_cell: int | None = None
+    #: maxEdges of the host geometry.  ``max_edges`` is the slot stride of the
+    #: device copies, which keep only the slots ``slot < nEdgesOnCell`` loops
+    #: reach (``cuda_backend/compaction.py``).  0 means "not compacted".
+    source_max_edges: int = 0
     edges_on_cell: Any = field(init=False, repr=False, compare=False)
     n_edges_on_cell: Any = field(init=False, repr=False, compare=False)
     coeffs_reconstruct: Any = field(init=False, repr=False, compare=False)
@@ -390,6 +405,21 @@ class CudaMpasToPhysGeometryV841:
         hashes = MappingProxyType(
             {name: _array_sha256(value) for name, value in canonical.items()}
         )
+        # The hashes above identify the host canonical layout.  The device
+        # copies keep the slots the reconstruction loops can reach: padding
+        # was just proved canonical (-1 and +0), so nothing read changes.
+        source_max_edges = 0
+        from .cuda_backend.compaction import compaction_enabled, used_width
+
+        if compaction_enabled("PREP_GEOMETRY"):
+            keep = used_width(counts, max_edges)
+            if keep < max_edges:
+                canonical["edges_on_cell"] = np.ascontiguousarray(edges[:, :keep])
+                canonical["coeffs_reconstruct"] = np.ascontiguousarray(
+                    coeffs[:, :keep, :]
+                )
+                source_max_edges = max_edges
+                max_edges = keep
         garbage_value = _mesh_value(mesh, "garbage_cell")
         garbage_cell = None if garbage_value is None else int(garbage_value)
         if garbage_cell is not None and garbage_cell != n_cells - 1:
@@ -424,6 +454,8 @@ class CudaMpasToPhysGeometryV841:
             array_sha256=hashes,
             _seal=_GEOMETRY_SEAL,
             regional_garbage_cell=garbage_cell,
+            regional_garbage_donor_cell=_regional_donor_for_extent(mesh, garbage_cell),
+            source_max_edges=source_max_edges,
         )
         result.validate()
         return result
@@ -439,6 +471,11 @@ class CudaMpasToPhysGeometryV841:
             raise ValueError(
                 "the regional garbage column must be the last of the extent"
             )
+        if self.regional_garbage_donor_cell is not None and (
+            self.regional_garbage_cell is None
+            or not 0 <= int(self.regional_garbage_donor_cell) < self.regional_garbage_cell
+        ):
+            raise ValueError("the regional garbage donor must be a real local column")
         shapes = {
             "edges_on_cell": (self.n_cells, self.max_edges),
             "n_edges_on_cell": (self.n_cells,),
@@ -487,12 +524,16 @@ class CudaMpasToPhysGeometryV841:
         return {
             "schema": CUDA_PHYSICS_PREP_V841_SCHEMA,
             "contract_sha256": self.contract_sha256,
+            "regional_garbage_donor_cell": self.regional_garbage_donor_cell,
             "shape": {
                 "nCells": self.n_cells,
                 "nEdges": self.n_edges,
-                "maxEdges": self.max_edges,
-                "coeffs_reconstruct": [self.n_cells, self.max_edges, 3],
+                "maxEdges": self.source_max_edges or self.max_edges,
+                "coeffs_reconstruct": [
+                    self.n_cells, self.source_max_edges or self.max_edges, 3
+                ],
             },
+            "device_slot_stride": self.max_edges,
             "layout": "zero-based edgesOnCell with canonical -1 padding",
             "edge_slot_order": "sequential source order",
             "array_sha256": dict(self.array_sha256),
@@ -685,7 +726,7 @@ class CudaMpasToPhysColumnsV841:
     psfc_hyd_p: Any
     psfc_hydd_p: Any
     plrad: Any
-    noahmp_sounding: CudaNoahmpSoundingV841
+    noahmp_sounding: CudaNoahmpSoundingV841 | None
     wsm6_ready: bool
     _source_scalars: Any = field(repr=False, compare=False)
     time_seconds: float
@@ -802,7 +843,15 @@ class CudaMpasToPhysColumnsV841:
         nlev, ncells = tuple(self.rho_p.shape)
         if nlev < 2 or ncells <= 0:
             raise ValueError("prepared physics columns need at least two levels")
+        if (self.u_p is None) != (self.v_p is None):
+            raise ValueError("prepared horizontal winds must be present together")
+        if not self.wsm6_ready and (self.u_p is None or self.noahmp_sounding is None):
+            raise ValueError("phase-one preparation requires winds and NoahMP sounding")
+        if self.noahmp_sounding is not None and self.u_p is None:
+            raise ValueError("NoahMP sounding requires horizontal winds")
         for name in _mass_fields(self.species_p):
+            if name in ("u_p", "v_p") and getattr(self, name) is None:
+                continue
             require_resident_array(
                 f"physics_prep.{name}",
                 getattr(self, name),
@@ -829,7 +878,8 @@ class CudaMpasToPhysColumnsV841:
             dtype=np.float32,
             shape=(len(self.species_p), nlev, ncells),
         )
-        self.noahmp_sounding.validate(n_vert_levels=nlev, n_cells=ncells)
+        if self.noahmp_sounding is not None:
+            self.noahmp_sounding.validate(n_vert_levels=nlev, n_cells=ncells)
         if not isinstance(self.wsm6_ready, bool):
             raise TypeError("wsm6_ready must be bool")
         if self.wsm6_ready:
@@ -855,7 +905,9 @@ class CudaMpasToPhysColumnsV841:
                 _AUTHORITY_DOCUMENT["pressure_families"]
             ),
             "validation_d2h": self.validation_d2h.as_dict(),
-            "noahmp_sounding": self.noahmp_sounding.receipt(),
+            "noahmp_sounding": (
+                None if self.noahmp_sounding is None else self.noahmp_sounding.receipt()),
+            "horizontal_winds_prepared": self.u_p is not None,
             "post_rk_wsm6": (
                 self.wsm6_input_view().receipt() if self.wsm6_ready else None
             ),
@@ -1998,7 +2050,8 @@ extern "C" __global__ void prep_interfaces_v841_f32(
 
 extern "C" __global__ void validate_prep_v841_f32(
     const int nlev, const int ncells, const int nedges, const int maxedges,
-    const int wsm6_ready, const float gravity, const float rvord,
+    const int wsm6_ready, const int prepare_winds, const int prepare_noahmp,
+    const float gravity, const float rvord,
     const int *edges_on_cell, const int *n_edges_on_cell,
     const float *coeffs_reconstruct, const float *lat_cell,
     const float *lon_cell, const float *source_scalars,
@@ -2047,7 +2100,9 @@ extern "C" __global__ void validate_prep_v841_f32(
         pres_hyd_p, pres_hydd_p, znu_p, znu_hyd_p};
     for (int k = 0; k < nlev; ++k) {
         const int i = k * ncells + cell;
-        for (int f = 0; f < 15; ++f)
+        if (prepare_winds && (!isfinite(u_p[i]) || !isfinite(v_p[i])))
+            atomicExch(invalid, 1);
+        for (int f = 2; f < 15; ++f)
             if (!isfinite(mass[f][i])) atomicExch(invalid, 1);
         for (int q = 0; q < nspecies; ++q) {
             if (!isfinite(qspecies[q][i])) atomicExch(invalid, 1);
@@ -2068,11 +2123,6 @@ extern "C" __global__ void validate_prep_v841_f32(
             source_theta_m[i],
             mpas_add(1.0f, mpas_mul(rvord, qspecies[0][i])));
         const float expected_temp = mpas_mul(expected_theta, source_exner[i]);
-        const float expected_noah_temp = mpas_mul(
-            mpas_div(
-                source_theta_m[i],
-                mpas_add(1.0f, mpas_mul(rvord, source_scalars[i]))),
-            source_exner[i]);
         const float expected_dz = mpas_sub(z_p[i + ncells], z_p[i]);
         const float expected_zmid = mpas_mul(
             0.5f, mpas_add(z_p[i + ncells], z_p[i]));
@@ -2085,25 +2135,32 @@ extern "C" __global__ void validate_prep_v841_f32(
                 || __float_as_uint(zmid_p[i])
                     != __float_as_uint(expected_zmid))
             atomicExch(invalid, 1);
-        if (__float_as_uint(noah_qv_curr[i])
-                    != __float_as_uint(source_scalars[i])
-                || __float_as_uint(noah_t_phy[i])
-                    != __float_as_uint(expected_noah_temp)
-                || __float_as_uint(noah_dz8w[i])
-                    != __float_as_uint(dz_p[i])
-                || __float_as_uint(noah_u_phy[i]) != __float_as_uint(u_p[i])
-                || __float_as_uint(noah_v_phy[i]) != __float_as_uint(v_p[i])
-                || __float_as_uint(noah_p8w[i])
-                    != __float_as_uint(pres2_p[i]))
-            atomicExch(invalid, 1);
+        if (prepare_noahmp) {
+            const float expected_noah_temp = mpas_mul(
+                mpas_div(
+                    source_theta_m[i],
+                    mpas_add(1.0f, mpas_mul(rvord, source_scalars[i]))),
+                source_exner[i]);
+            if (__float_as_uint(noah_qv_curr[i])
+                        != __float_as_uint(source_scalars[i])
+                    || __float_as_uint(noah_t_phy[i])
+                        != __float_as_uint(expected_noah_temp)
+                    || __float_as_uint(noah_dz8w[i])
+                        != __float_as_uint(dz_p[i])
+                    || __float_as_uint(noah_u_phy[i]) != __float_as_uint(u_p[i])
+                    || __float_as_uint(noah_v_phy[i]) != __float_as_uint(v_p[i])
+                    || __float_as_uint(noah_p8w[i])
+                        != __float_as_uint(pres2_p[i]))
+                atomicExch(invalid, 1);
+        }
         if (rho_dry[i] <= 0.0f || rho_p[i] <= 0.0f
                 || th_p[i] <= 0.0f || t_p[i] <= 0.0f
                 || pi_p[i] <= 0.0f || pres_p[i] <= 0.0f
                 || pres_hyd_p[i] <= 0.0f || pres_hydd_p[i] <= 0.0f
                 || dz_p[i] <= 0.0f || znu_p[i] <= 0.0f
                 || znu_hyd_p[i] <= 0.0f) atomicExch(invalid, 1);
-        if (!isfinite(noah_t_phy[i]) || noah_t_phy[i] <= 0.0f
-                || !isfinite(noah_p8w[i]) || noah_p8w[i] <= 0.0f)
+        if (prepare_noahmp && (!isfinite(noah_t_phy[i]) || noah_t_phy[i] <= 0.0f
+                || !isfinite(noah_p8w[i]) || noah_p8w[i] <= 0.0f))
             atomicExch(invalid, 1);
         // MPAS detects exactly this pressure inversion in MPAS_to_physics and
         // does NOT refuse.  mpas_atmphys_interface.F:458-474 tests only pres_p,
@@ -2259,7 +2316,7 @@ def _validate_kernel_cache(cache: KernelCache) -> None:
     if not isinstance(cache, KernelCache):
         raise TypeError("kernel_cache must be a KernelCache")
     options = tuple(cache.base_options)
-    if options != _REQUIRED_KERNEL_BASE_OPTIONS:
+    if options != _hex_numerics.kernel_base():
         raise TypeError(
             "physics prep KernelCache base_options must be exactly "
             f"{_REQUIRED_KERNEL_BASE_OPTIONS}; got {options}"
@@ -2285,7 +2342,8 @@ def _launch(cache: KernelCache, name: str, count: int, args: tuple[Any, ...]) ->
     _kernel(cache, name)(((count + threads - 1) // threads,), (threads,), args)
 
 
-def _validate_scalar_names(names: Sequence[str], count: int) -> tuple[str, ...]:
+def _validate_scalar_names(names: Sequence[str], count: int, *,
+                           registry_scalar_names: Sequence[str] | None = None) -> tuple[str, ...]:
     """The block's names must be a DECLARED row, in that row's order.
 
     This replaced a refusal that admitted exactly WSM6's six.  It still
@@ -2301,7 +2359,15 @@ def _validate_scalar_names(names: Sequence[str], count: int) -> tuple[str, ...]:
             f"resident physics preparation was given {count} scalar slots "
             f"and {len(result)} names {result}"
         )
-    species_row_for_names(result)
+    if registry_scalar_names is None:
+        species_row_for_names(result)
+    else:
+        # MPAS Registry.xml:1701-1754; mpas_atmphys_interface.F:284-305.
+        # Common preparation copies every selected Registry scalar and uses
+        # index_qv for thermodynamics; it does not sum moisture-loading mass.
+        declared = tuple(registry_scalar_names)
+        if result != declared or not declared or declared[0] != 'qv' or len(set(declared)) != len(declared):
+            raise ValueError('resident scalar block differs from the active MPAS Registry declaration')
     return result
 
 
@@ -2326,6 +2392,8 @@ def _diagnose_prep_failure(
     findings: list[str] = []
     for carrier in (output, noahmp_output):
         for name, array in carrier.items():
+            if array is None:
+                continue
             host = cp.asnumpy(array)
             bad = ~np.isfinite(host)
             if name in _PREP_STRICTLY_POSITIVE:
@@ -2363,9 +2431,17 @@ def prepare_mpas_to_phys_cuda_v841(
     geometry: CudaMpasToPhysGeometryV841,
     kernel_cache: KernelCache,
     post_rk_wsm6: bool = False,
+    phase2_only: bool = False,
+    phase2_winds: bool = False,
+    registry_scalar_names: Sequence[str] | None = None,
     regional_garbage_cell: int | None = None,
 ) -> CudaMpasToPhysColumnsV841:
     """Prepare one resident MPAS state for the aggregate column backend.
+
+    ``phase2_only`` omits the NoahMP sounding and horizontal wind reconstruction
+    after RK. Microphysics that consumes winds sets ``phase2_winds``. History
+    capture uses the full default preparation. No omitted field is used by
+    thermodynamic preparation or the post-RK scalar aliases.
 
     ``regional_garbage_cell`` names native's garbage element on a
     limited-area mesh -- the extra column an MPAS allocation always carries
@@ -2376,6 +2452,12 @@ def prepare_mpas_to_phys_cuda_v841(
 
     if type(post_rk_wsm6) is not bool:
         raise TypeError("post_rk_wsm6 must be bool")
+    if type(phase2_only) is not bool or type(phase2_winds) is not bool:
+        raise TypeError("phase2_only and phase2_winds must be bool")
+    if phase2_only and not post_rk_wsm6:
+        raise ValueError("phase2_only requires post_rk_wsm6=True")
+    prepare_winds = not phase2_only or phase2_winds
+    prepare_noahmp = not phase2_only
     if geometry is None or not isinstance(geometry, CudaMpasToPhysGeometryV841):
         raise TypeError("a validated CudaMpasToPhysGeometryV841 is required")
     geometry.validate()
@@ -2399,7 +2481,7 @@ def prepare_mpas_to_phys_cuda_v841(
             f"state={(ncells, nedges)}, geometry={(geometry.n_cells, geometry.n_edges)}"
         )
     species_names = _validate_scalar_names(
-        scalar_names, int(state.scalars.shape[0]))
+        scalar_names, int(state.scalars.shape[0]), registry_scalar_names=registry_scalar_names)
 
     mass_shape = (nlev, ncells)
     interface_shape = (nlev + 1, ncells)
@@ -2435,7 +2517,8 @@ def prepare_mpas_to_phys_cuda_v841(
     )
 
     output: dict[str, Any] = {
-        name: cp.empty(mass_shape, dtype=cp.float32)
+        name: (None if name in ("u_p", "v_p") and not prepare_winds
+               else cp.empty(mass_shape, dtype=cp.float32))
         for name in _mass_fields(species_names)
     }
     output.update(
@@ -2445,12 +2528,12 @@ def prepare_mpas_to_phys_cuda_v841(
         {name: cp.empty((ncells,), dtype=cp.float32) for name in _SURFACE_FIELDS}
     )
     noahmp_output = {
-        name: cp.empty(mass_shape, dtype=cp.float32)
+        name: cp.empty(mass_shape, dtype=cp.float32) if prepare_noahmp else None
         for name in ("dz8w", "qv_curr", "t_phy", "u_phy", "v_phy", "p8w")
     }
-    reconstructed_x = cp.empty(mass_shape, dtype=cp.float32)
-    reconstructed_y = cp.empty(mass_shape, dtype=cp.float32)
-    reconstructed_z = cp.empty(mass_shape, dtype=cp.float32)
+    reconstructed_x = cp.empty(mass_shape, dtype=cp.float32) if prepare_winds else None
+    reconstructed_y = cp.empty(mass_shape, dtype=cp.float32) if prepare_winds else None
+    reconstructed_z = cp.empty(mass_shape, dtype=cp.float32) if prepare_winds else None
     invalid = cp.zeros((1,), dtype=cp.int32)
 
     # THE LIMITED-AREA GARBAGE COLUMN, LENT AND GIVEN BACK.
@@ -2505,7 +2588,8 @@ def prepare_mpas_to_phys_cuda_v841(
             vertical.zgrid,
         ):
             lent.append((source, source[..., garbage].copy()))
-            source[..., garbage] = source[..., garbage - 1]
+            donor = garbage - 1 if geometry.regional_garbage_donor_cell is None else int(geometry.regional_garbage_donor_cell)
+            source[..., garbage] = source[..., donor]
     try:
         return _prepare_mpas_to_phys_body_v841(
             cp=cp,
@@ -2518,6 +2602,8 @@ def prepare_mpas_to_phys_cuda_v841(
             kernel_cache=kernel_cache,
             scalar_names=scalar_names,
             post_rk_wsm6=post_rk_wsm6,
+            prepare_winds=prepare_winds,
+            prepare_noahmp=prepare_noahmp,
             regional_garbage_cell=regional_garbage_cell,
             nlev=nlev,
             ncells=ncells,
@@ -2546,6 +2632,8 @@ def _prepare_mpas_to_phys_body_v841(
     kernel_cache: KernelCache,
     scalar_names: Sequence[str],
     post_rk_wsm6: bool,
+    prepare_winds: bool,
+    prepare_noahmp: bool,
     regional_garbage_cell: int | None,
     nlev: int,
     ncells: int,
@@ -2594,85 +2682,88 @@ def _prepare_mpas_to_phys_body_v841(
             invalid,
         ),
     )
-    _launch(
-        kernel_cache,
-        "reconstruct_winds_v841_f32",
-        ncells,
-        (
-            np.int32(nlev),
-            np.int32(ncells),
-            np.int32(nedges),
-            np.int32(geometry.max_edges),
-            saved.normal_velocity,
-            geometry._edges_on_cell,
-            geometry._n_edges_on_cell,
-            geometry._coeffs_reconstruct,
-            geometry._lat_cell,
-            geometry._lon_cell,
-            geometry._sealed_edges_on_cell,
-            geometry._sealed_n_edges_on_cell,
-            geometry._sealed_coeffs_reconstruct,
-            geometry._sealed_lat_cell,
-            geometry._sealed_lon_cell,
-            reconstructed_x,
-            reconstructed_y,
-            reconstructed_z,
-            output["u_p"],
-            output["v_p"],
-            invalid,
-        ),
-    )
-    if regional_garbage_cell is not None:
-        # The garbage column's WIND cannot be reconstructed, and lending it a
-        # thermodynamic column does not fix that.  ``reconstruct_winds`` sums
-        # over ``edgesOnCell[cell, :nEdgesOnCell[cell]]``, and the garbage
-        # cell has nEdgesOnCell = 0 by construction -- it is not on the mesh,
-        # so it has no edges to gather a velocity from.  It therefore comes
-        # out of that kernel at exactly u = v = 0 while carrying a real
-        # column's temperature, moisture and pressure.
-        #
-        # THE BREAKAGE THAT NAMED THIS, MEASURED on r4.75.11020 (2026-08-26):
-        # a column with a realistic sounding and identically zero wind at
-        # every level has zero shear everywhere, and YSU forms a bulk
-        # Richardson number over it.  The limited-area full-physics forecast
-        # committed steps 1 and 2 and refused step 3 with "YSU returned
-        # non-finite du tendency on domain 1; every producer input was finite
-        # and in range, so the scheme's own arithmetic produced it" -- which
-        # was true, and the input that produced it was a wind field no cell
-        # has.  The wind is lent from the same real column as the rest of the
-        # sounding, so the garbage column is coherent rather than half real,
-        # and the NoahMP sounding below derives u_phy/v_phy from it, which
-        # keeps the validation's derived-vs-derived equalities exact.
-        garbage_column = int(regional_garbage_cell)
-        for name in ("u_p", "v_p"):
-            output[name][..., garbage_column] = output[name][
-                ..., garbage_column - 1
-            ]
-    _launch(
-        kernel_cache,
-        "prep_noahmp_sounding_v841_f32",
-        ncells,
-        (
-            np.int32(nlev),
-            np.int32(ncells),
-            RV_OVER_RD_F32,
-            state.scalars,
-            saved.theta_m,
-            saved.exner,
-            reference.pressure_base,
-            saved.pressure_perturbation,
-            vertical.zgrid,
-            output["u_p"],
-            output["v_p"],
-            noahmp_output["dz8w"],
-            noahmp_output["qv_curr"],
-            noahmp_output["t_phy"],
-            noahmp_output["u_phy"],
-            noahmp_output["v_phy"],
-            noahmp_output["p8w"],
-            invalid,
-        ),
-    )
+    if prepare_winds:
+        _launch(
+            kernel_cache,
+            "reconstruct_winds_v841_f32",
+            ncells,
+            (
+                np.int32(nlev),
+                np.int32(ncells),
+                np.int32(nedges),
+                np.int32(geometry.max_edges),
+                saved.normal_velocity,
+                geometry._edges_on_cell,
+                geometry._n_edges_on_cell,
+                geometry._coeffs_reconstruct,
+                geometry._lat_cell,
+                geometry._lon_cell,
+                geometry._sealed_edges_on_cell,
+                geometry._sealed_n_edges_on_cell,
+                geometry._sealed_coeffs_reconstruct,
+                geometry._sealed_lat_cell,
+                geometry._sealed_lon_cell,
+                reconstructed_x,
+                reconstructed_y,
+                reconstructed_z,
+                output["u_p"],
+                output["v_p"],
+                invalid,
+            ),
+        )
+        if regional_garbage_cell is not None:
+            # The garbage column's WIND cannot be reconstructed, and lending it a
+            # thermodynamic column does not fix that.  ``reconstruct_winds`` sums
+            # over ``edgesOnCell[cell, :nEdgesOnCell[cell]]``, and the garbage
+            # cell has nEdgesOnCell = 0 by construction -- it is not on the mesh,
+            # so it has no edges to gather a velocity from.  It therefore comes
+            # out of that kernel at exactly u = v = 0 while carrying a real
+            # column's temperature, moisture and pressure.
+            #
+            # THE BREAKAGE THAT NAMED THIS, MEASURED on r4.75.11020 (2026-08-26):
+            # a column with a realistic sounding and identically zero wind at
+            # every level has zero shear everywhere, and YSU forms a bulk
+            # Richardson number over it.  The limited-area full-physics forecast
+            # committed steps 1 and 2 and refused step 3 with "YSU returned
+            # non-finite du tendency on domain 1; every producer input was finite
+            # and in range, so the scheme's own arithmetic produced it" -- which
+            # was true, and the input that produced it was a wind field no cell
+            # has.  The wind is lent from the same real column as the rest of the
+            # sounding, so the garbage column is coherent rather than half real,
+            # and the NoahMP sounding below derives u_phy/v_phy from it, which
+            # keeps the validation's derived-vs-derived equalities exact.
+            garbage_column = int(regional_garbage_cell)
+            donor = garbage_column - 1 if geometry.regional_garbage_donor_cell is None else int(geometry.regional_garbage_donor_cell)
+            for name in ("u_p", "v_p"):
+                output[name][..., garbage_column] = output[name][
+                    ..., donor
+                ]
+    if prepare_noahmp:
+        _launch(
+            kernel_cache,
+            "prep_noahmp_sounding_v841_f32",
+            ncells,
+            (
+                np.int32(nlev),
+                np.int32(ncells),
+                RV_OVER_RD_F32,
+                state.scalars,
+                saved.theta_m,
+                saved.exner,
+                reference.pressure_base,
+                saved.pressure_perturbation,
+                vertical.zgrid,
+                output["u_p"],
+                output["v_p"],
+                noahmp_output["dz8w"],
+                noahmp_output["qv_curr"],
+                noahmp_output["t_phy"],
+                noahmp_output["u_phy"],
+                noahmp_output["v_phy"],
+                noahmp_output["p8w"],
+                invalid,
+            ),
+        )
     _launch(
         kernel_cache,
         "prep_interfaces_v841_f32",
@@ -2717,6 +2808,8 @@ def _prepare_mpas_to_phys_body_v841(
             np.int32(nedges),
             np.int32(geometry.max_edges),
             np.int32(1 if post_rk_wsm6 else 0),
+            np.int32(prepare_winds),
+            np.int32(prepare_noahmp),
             GRAVITY_F32,
             RV_OVER_RD_F32,
             geometry._edges_on_cell,
@@ -2729,10 +2822,11 @@ def _prepare_mpas_to_phys_body_v841(
             saved.exner,
             np.int32(len(species_names)),
             species_table,
-            *(output[name] for name in _MASS_NONSPECIES_FIELDS),
+            *(output[name] if output[name] is not None else np.uint64(0)
+              for name in _MASS_NONSPECIES_FIELDS),
             *(output[name] for name in _INTERFACE_FIELDS),
             *(output[name] for name in _SURFACE_FIELDS),
-            *(noahmp_output[name] for name in (
+            *(noahmp_output[name] if prepare_noahmp else np.uint64(0) for name in (
                 "dz8w", "qv_curr", "t_phy", "u_phy", "v_phy", "p8w"
             )),
             invalid,
@@ -2767,7 +2861,8 @@ def _prepare_mpas_to_phys_body_v841(
             name: value for name, value in output.items()
             if name not in species_outputs
         },
-        noahmp_sounding=CudaNoahmpSoundingV841(**noahmp_output),
+        noahmp_sounding=(CudaNoahmpSoundingV841(**noahmp_output)
+                         if prepare_noahmp else None),
         wsm6_ready=post_rk_wsm6,
         _source_scalars=state.scalars,
         time_seconds=float(state.time_seconds),
@@ -2804,3 +2899,89 @@ __all__ = [
     "prepare_mpas_to_phys_cuda_v841",
     "reconstruct_winds_cpu_oracle_v841",
 ]
+
+
+_MPAS_NUMBER_CARRIERS_V842_SOURCE = r'''
+extern "C" {
+// mpas_atmphys_interface.F:357-425. Input words are the existing max(+0,q)
+// preparation outputs; select-case order and MYNN's zeroing are preserved.
+__global__ void prep_numbers_v842_u32(
+    int nlev, int ncells, int solved, int aerosol, int mynn, int ice, int trio,
+    const unsigned int *nc, const unsigned int *ni,
+    const unsigned int *nifa, const unsigned int *nwfa,
+    unsigned int *out_nc, unsigned int *out_ni,
+    unsigned int *out_nifa, unsigned int *out_nwfa)
+{
+    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
+    if (cell >= solved) return;
+    for (int k=0; k<nlev; ++k) {
+        const int i=k*ncells+cell;
+        if (aerosol) { out_nifa[i]=nifa[i]; out_nwfa[i]=nwfa[i]; }
+        if (mynn) {
+            out_nc[i]=0u; out_ni[i]=0u; out_nifa[i]=0u; out_nwfa[i]=0u;
+            if (ice) out_ni[i]=ni[i];
+            if (trio) { out_nc[i]=nc[i]; out_nifa[i]=nifa[i]; out_nwfa[i]=nwfa[i]; }
+        }
+    }
+}
+}
+'''
+MPAS_NUMBER_CARRIERS_V842_KERNEL_SHA256 = sha256(
+    _MPAS_NUMBER_CARRIERS_V842_SOURCE.encode('ascii')).hexdigest()
+
+
+def prepare_mpas_number_carriers_v842(
+    prepared: CudaMpasToPhysColumnsV841, *, microphysics: str, pbl: str,
+    scalar_flags: Mapping[str, bool], n_cells_solve: int,
+    kernel_cache: KernelCache,
+) -> Mapping[str, Any]:
+    """Native number scratch selection; mpas_atmphys_interface.F:357-425.
+
+    The generalized preparation already supplies max(+0,q) for every species
+    in its row. Reuse those words and apply only the native allocation/flag
+    selection. Returned arrays are distinct scratch, never prognostic state.
+    MYNN resets aerosol scratch before its grouped flag test. Unallocated
+    native number fields are absent from the returned mapping.
+    """
+    if microphysics not in ('off','mp_kessler','mp_wsm6','mp_thompson','mp_thompson_aerosols'):
+        raise ValueError(f'unknown MPAS microphysics selector {microphysics!r}')
+    if pbl not in ('off','bl_ysu','bl_mynn'):
+        raise ValueError(f'unknown MPAS PBL selector {pbl!r}')
+    _validate_kernel_cache(kernel_cache)
+    cp = _cp()
+    template = prepared.species_p['qv']
+    nlev, ncells = map(int, template.shape)
+    if type(n_cells_solve) is not int or not 0 < n_cells_solve <= ncells:
+        raise ValueError('number scratch requires a nonempty native solve extent')
+    aerosol, mynn = microphysics == 'mp_thompson_aerosols', pbl == 'bl_mynn'
+    names = ('nc','ni','nifa','nwfa')
+    for name in names:
+        if type(scalar_flags.get(name,False)) is not bool:
+            raise TypeError(f'native f_{name} requires bool')
+    ice = scalar_flags.get('ni',False)
+    trio = all(scalar_flags.get(name,False) for name in ('nc','nifa','nwfa'))
+    required = set(('nifa','nwfa')) if aerosol else set()
+    if mynn:
+        if ice: required.add('ni')
+        if trio: required.update(('nc','nifa','nwfa'))
+    missing = required.difference(prepared.species_p)
+    if missing:
+        raise ValueError(f'native number scratch would read absent species: {sorted(missing)}')
+    allocated = names if mynn else ('nifa','nwfa') if aerosol else ()
+    if not allocated:
+        return MappingProxyType({})
+    output = {name:cp.zeros_like(template) for name in allocated}
+    # Unused pointers are never dereferenced by the selected native branches.
+    inputs = [prepared.species_p.get(name,template) for name in names]
+    for name,array in zip(names,inputs):
+        require_resident_array(f'{name}_p', array, ndim=2, dtype=np.float32,
+                               shape=(nlev,ncells))
+    targets = [output.get(name,template) for name in names]
+    kernel = kernel_cache.raw_kernel(
+        'prep_numbers_v842_u32', _MPAS_NUMBER_CARRIERS_V842_SOURCE,
+        module_key='hexcore.mpasphys.number_carriers_v842')
+    kernel(
+        ((n_cells_solve+127)//128,),(128,),
+        (np.int32(nlev),np.int32(ncells),np.int32(n_cells_solve),np.int32(aerosol),
+         np.int32(mynn),np.int32(ice),np.int32(trio),*inputs,*targets))
+    return MappingProxyType(output)

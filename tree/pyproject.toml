@@ -31,6 +31,11 @@ name = "gpuwm-hex"
 #        -- plus what decides where the fine grid goes and keeps it there:
 #        variable-resolution mesh generation, storm-following placement, and
 #        a coarse-then-corridor cycling loop.
+#   0.3  a fine core at any point from HRRR and the paired control/treatment
+#        door; from 0.3.2 the forecast runs from the installed wheel alone.
+#   0.4  the dycore byte-identical to native MPAS-A v8.4.2 (strict GNU
+#        build), and the products, restart, init-source, country, score and
+#        ensemble doors.  0.3.4 was cut and never published; it folds in.
 #
 # The previous comment reserved 0.2 for multi-GPU and put the regional lane
 # at 0.3 "which the CUDA lane refuses today".  The regional lane arrived
@@ -38,14 +43,14 @@ name = "gpuwm-hex"
 # partition-invariant, but it has no door, no demo, and no re-proof at the
 # current engine pin, so it is not what a version number should be sold on.
 # Numbers are not reserved here any more.  A minor bump names what shipped.
-version = "0.3.3"
-description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.1 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
+version = "0.4.1"
+description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.2 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
 readme = "README.md"
 requires-python = ">=3.11"
 # Apache-2.0, the same licence gpuwm ships under: this is one project and one
 # family, and a user who has cleared gpuwm has cleared this too.
 #
-# The upstream this derives from -- MPAS-Atmosphere v8.4.1 (LANL/UCAR), with
+# The upstream this derives from -- MPAS-Atmosphere v8.4.2 (LANL/UCAR), with
 # source-line citations pinned by tools/check_mpas_citations.py -- is
 # BSD-3-Clause.  BSD-3-Clause is permissive: it does NOT force the derivative
 # to carry the same expression, it requires that the original notice,
@@ -60,7 +65,14 @@ requires-python = ">=3.11"
 #
 # Both files ship in the sdist and the wheel.  Neither is decoration.
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+# NOTICE names the upstream terms that govern the ported portions (MPAS and
+# MMM-physics BSD-3-Clause, the WRF notice, AER RRTMG, Noah-MP's UCAR terms,
+# MT19937, Arm and CORE-MATH MIT, FDLIBM); THIRD-PARTY-NOTICES.txt lists the
+# derived files; licenses/ and LICENSE.arm-powf hold the texts, including
+# licenses/THIRD-PARTY-LICENSES-helper-binaries.txt for the Rust crates the
+# compiled helpers in hexcore/libexec link.  All of them ship, because each of
+# those terms asks that its text travel with the copy.
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.txt", "LICENSE.arm-powf", "licenses/*"]
 #
 # The port's numerics run on NumPy and CuPy; the DATA PATH beside them is
 # Rust.  Both front doors drive Rust binaries (rw_mpas_init, rw_mpas_convert,
@@ -75,9 +87,10 @@ license-files = ["LICENSE", "NOTICE"]
 #               "netCDF-less" subset of this package that does useful work.
 #   scipy    -- regrid.py imports scipy.spatial.cKDTree at module scope.
 #
-# WHY gpuwm IS HARD: the port owns no physics.  Every physics column runs
-# through gpuwm's `run_mpas_column_batch` seam (the "column-batch seam"), and
-# the forecast lane refuses to start without it.  The port pins that seam by
+# WHY gpuwm IS HARD: the default physics route runs through gpuwm's
+# column-batch seam.  Every ArWen physics column runs through gpuwm's
+# `run_mpas_column_batch` seam, and the forecast lane refuses to start
+# without it.  The port pins that seam by
 # the SHA-256 of 16 individual gpuwm source files, so "a new enough gpuwm" is
 # not the question -- the question is whether a given published engine's
 # BYTES are the ones this port was proven against.  A `>=` with no ceiling
@@ -104,7 +117,18 @@ license-files = ["LICENSE", "NOTICE"]
 # 16" survived here even in the edit that called it out.  Read the counts off
 # `engine_pin.PUBLISHED_ENGINES`, which is machine-written.
 #
-# THE FLOOR IS 2.8.0 AND THE RANGE ADMITS NOTHING ELSE (re-measured
+# THE RANGE IS THE FLOOR'S WHOLE MINOR (plan call 14, 2026-10-14; open
+# defect B2).  A one-patch range made `pip install gpuwm-hex` quietly
+# downgrade the engine a user already had: 0.3.3's `<2.8.1` replaced 2.8.7
+# with 2.8.0.  The ceiling is now the next minor (`engine_pin.gpuwm_ceiling`),
+# and an engine inside the minor whose helper set no row admits is refused
+# at the forecast door BY NAME (installed version, measured version, both
+# remedies). Historical seam measurements start at 2.9.0 (public tag v2.9.0,
+# engine commit 0db04746, verification/engine-verdicts/repin-290-20261014.json).
+# Release policy raises the installation floor to 2.9.2. This is not a claim
+# that a new engine seam measurement has been made.
+#
+# HISTORY: THE FLOOR WAS 2.8.0 AND THE RANGE ADMITTED NOTHING ELSE (re-measured
 # 2026-09-29, verification/engine-verdicts/repin-280-20260929.json).  The
 # engine published 2.7.5, 2.7.6, 2.7.7 and 2.8.0 while this port pinned
 # 2.7.4; measured against that manifest (premeasure-280-20260929.json) all
@@ -156,9 +180,11 @@ license-files = ["LICENSE", "NOTICE"]
 # that makes receipts name a commit.
 dependencies = [
     "numpy>=2.0",
+    # Threaded public ERA5 climatology chunk decoding (MIT).
+    "numcodecs>=0.12,<0.17",
     "netCDF4>=1.6",
     "scipy>=1.11",
-    "gpuwm>=2.8.0,<2.8.1",
+    "gpuwm>=2.9.2,<2.10",
 ]
 # Search terms, which is what a keyword is: the words somebody types into
 # PyPI when they are looking for this kind of thing.  `MPAS` is here as a
@@ -209,6 +235,8 @@ Homepage = "https://github.com/FahrenheitResearch/gpuwm-hex"
 Repository = "https://github.com/FahrenheitResearch/gpuwm-hex"
 
 [project.optional-dependencies]
+# Install against the same MPI ABI as the selected native physics library.
+mpi = ["mpi4py>=4.1"]
 # One extra per CUDA major, mirroring gpuwm exactly.  A pip extra cannot
 # detect a CUDA major -- there is no environment marker for it -- so this
 # table does not pretend to choose; it names both and the docs tell the user
@@ -216,24 +244,22 @@ Repository = "https://github.com/FahrenheitResearch/gpuwm-hex"
 gpu-cu12 = ["cupy-cuda12x[ctk]>=14.0"]
 gpu-cu13 = ["cupy-cuda13x[ctk]>=14.0"]
 #
-# THE ALIAS FOLLOWS THE RUNTIME FLOOR, and did not before.  The wheel-reach defect.
-# `hexcore.cuda_backend.runtime.require_cuda` refuses any CUDA runtime
-# below 13000 and EVERY GPU door in this port goes through it, so the CUDA-13
-# wheel is the only one this distribution can execute on.  While this alias
-# read `gpu-cu12`, the obvious spelling -- `pip install "gpuwm-hex[gpu]"` --
-# installed a CuPy that imports, allocates, runs cuBLAS, compiles an NVRTC
-# kernel, and is then refused by name at forecast launch with
-# `CudaRefusal: cuda.runtime_version=12090 < required 13000`.  Measured on
-# the proving RTX 5090 in evidence/xmachine-20260827 section 5.
+# THE ALIAS FOLLOWS THE RUNTIME FLOOR (tests/test_wheel_reach.py reads the
+# floor off `hexcore.cuda_backend.runtime.require_cuda` and holds the alias
+# to it).  The floor is CUDA 12 (12000), so the alias is `gpu-cu12`, the
+# same as gpuwm's own `gpu` alias.  A driver runs its own CUDA major and
+# every older one, so cupy-cuda12x is the one wheel that opens the card on
+# both a CUDA 12 driver and a CUDA 13 driver; cupy-cuda13x on a CUDA 12
+# driver stops at the first device call with cudaErrorInsufficientDriver.
 #
-# `gpu-cu12` is kept resolvable rather than deleted: it is in published
-# 0.1.0 metadata and in written instructions, and a name that vanishes turns
-# a wrong answer into a resolver error.  `gpuwm-hex doctor` now reads the
-# floor off require_cuda itself and reports an installed cu12 wheel as a GAP
-# naming that exact refusal, so the trap is visible before a card is opened
-# rather than after.  Retiring the extra outright is a published-metadata
-# decision and is handed up, not taken here.
-gpu = ["gpuwm-hex[gpu-cu13]"]
+# Until 0.4.0 the floor was 13000, named no breakage, and this alias read
+# `gpu-cu13`, so `pip install "gpuwm-hex[gpu]"` could not run on any CUDA 12
+# driver (measured: an RTX PRO 6000 on driver 570, CUDA 12.8).  Lowering the
+# floor retired the reason for the cu13 alias.  `gpu-cu13` stays: on a
+# CUDA 13 driver it installs the toolchain (NVRTC 13.x) the byte-identity
+# receipts in this release were measured with, and `gpuwm-hex doctor` names
+# the extra for the driver it reads.
+gpu = ["gpuwm-hex[gpu-cu12]"]
 # `setuptools` is here because `tests/test_packaging_declaration.py` drives
 # the REAL sdist template engine (`setuptools._distutils.filelist.FileList`)
 # over the real tree -- the only way to read a MANIFEST.in without guessing
@@ -262,10 +288,15 @@ dev = ["pytest>=8.0", "setuptools>=77"]
 #
 # The IMPORT namespace is `hexcore` and 0.2.0 is the cut that made it so; it
 # was `mpas_port` through 0.1.1.  The old name OVERCLAIMED.  What this port
-# keeps byte-identical is MPAS-A v8.4.1's DYCORE and MESH -- a specification,
-# and it is pinned -- while it deliberately does NOT match that model's
-# physics, which is WRF physics run through MPAS's own plumbing; ArWen's
-# column-batch seam runs here instead.  So `mpas_port` put another project's
+# implements line for line is MPAS-A v8.4.2's dynamical numerics, with pinned
+# source citations and mesh formats. The standard dry step agrees within
+# six ULP in thermodynamic fields and stated absolute bounds near zero;
+# the recorded default GNU/CUDA thermodynamic and horizontal-wind maxima
+# match that native pair's maxima. `gpuwm-hex verify-dycore` reproduces and
+# reports the comparison.
+# Whole-step output against native is not byte-identical. Hex uses the WOOF
+# physics suite through ArWen's column-batch seam; native MPAS runs its
+# selected physics through MPAS plumbing. So `mpas_port` put another project's
 # name in every user's import line for a relationship that held over half the
 # model.  `hexcore` names the two things that ARE pinned, the hexagonal
 # Voronoi mesh and the dycore, and it matches the distribution name.
@@ -318,18 +349,22 @@ include = ["hexcore", "hexcore.*"]
 exclude = ["hexcore.mod", "hexcore.mod.*"]
 
 [tool.setuptools.package-data]
+# release-assets/ is outside src/ and is explicitly pruned in MANIFEST.in.
 # Recursive globs, never an enumeration -- gpuwm's per-file enumeration had
 # drifted 52 files behind its tree before it was rewritten this way.
 #
-# There is nothing to ship today: every non-.py file under src/hexcore is
-# compiled bytecode, which .gitignore already excludes and which is a build
-# product of the sources beside it.  Every CUDA kernel this port launches is
-# generated as a Python string and handed to NVRTC at runtime, so there are
-# no .cu files to carry.  The declaration is kept anyway so that adding a
-# table or a kernel file is a drop-in rather than a packaging discovery, and
-# tests/test_packaging_declaration.py fails if a data file ever lands under
-# the package without matching one of these.
-hexcore = ["*.json", "data/**/*", "*.cu", "*.cuh"]
+# Most CUDA kernels this port launches are generated as Python strings and
+# handed to NVRTC at runtime.  The batched member init (hexcore.init_gpu)
+# keeps its kernels as .cu files beside the module that compiles them, so
+# the CUDA globs are recursive: without "**/*.cu" a wheel would install
+# hexcore/init_gpu without horizontal.cu and physics.cu and the first
+# Kernels() would fail on a missing file.  tests/test_packaging_declaration.py
+# fails if a data file ever lands under the package without matching one of
+# these.
+hexcore = ["*.json", "data/**/*", "libexec/*", "native/*.rs", "native/*.c", "*.cu", "*.cuh", "**/*.cu", "**/*.cuh"]
+
+[tool.setuptools.exclude-package-data]
+hexcore = ["data/kernel-pack*.json", "release-assets/**/*"]
 
 [tool.pytest.ini_options]
 markers = [

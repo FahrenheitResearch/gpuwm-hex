@@ -1,0 +1,18 @@
+{
+  "schema": "mpas.iau-source-seek-proposal/v1",
+  "applied": false,
+  "acceptance": false,
+  "scope": "copied diagnostic proposal; production owners must reconcile",
+  "source_sha256": {
+    "tree/src/hexcore/mpasphys/pool_v842.py": "8272120e5738fc850a2b063f8e0b5746e66a2801ed6756b3d077c9b214f8439b",
+    "tree/src/hexcore/mpasphys/forecast_v842.py": "99c1df40fbf0736cb4be8120cdf219e359bc34ad5cf2bed93141f6417c9fdecf",
+    "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_physics_pool.rs": "7996fe3402fdb0b1517bf6edae7e7c1b0ac1f551efdcee6e67ff765980b63611"
+  },
+  "proposed_sha256": {
+    "tree/src/hexcore/mpasphys/pool_v842.py": "5f5060b1dcf174bde107d83f4a2db21f2c9127756e91eb0a70b3f4b5305dc1a8",
+    "tree/src/hexcore/mpasphys/forecast_v842.py": "b0002ee856488d9d9b5e9d1d99a89df0cc2e65ebb8fe36d6812f57d363d4b7cd",
+    "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_physics_pool.rs": "e1c30a02d08901b420884b34ecc844ad6538615f38222cd265985e5f3fcfb6a5"
+  },
+  "patch_sha256": "bed4e5f7a78031b4aa466d121c444dc27cdda1eabf376131550378755194421d",
+  "requires": "o1 restart_v842.seek_stream and its compiled Rust stream artifact"
+}

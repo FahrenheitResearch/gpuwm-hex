@@ -1,0 +1,32 @@
+FDLIBM -- Sun Microsystems, Inc.
+
+Applies to the FDLIBM log10 reductions (e_log10f.c, e_log10.c) that the
+shared device maths of the MPAS physics ports follow (NOTICE section 7).
+The notice below is the whole of the licence: its single condition is that
+the notice itself be preserved, and this file is that preservation.
+
+The single-precision files carry it in this form:
+
+/*
+ * ====================================================
+ * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Developed at SunPro, a Sun Microsystems, Inc. business.
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ */
+
+The double-precision files carry it in this form:
+
+/*
+ * ====================================================
+ * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Developed at SunSoft, a Sun Microsystems, Inc. business.
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ */

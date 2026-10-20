@@ -1,0 +1,36 @@
+{
+  "dt_seconds": 60.0,
+  "order": 2,
+  "acoustic_substeps": 2,
+  "dynamics_splits": 3,
+  "vertical_coefficient_calls": 3,
+  "cpu": {
+    "rho": "cf83d154c2829f7aedaec4d2027a8c5f8d3fe8643d3eed5b66607751842395f1",
+    "rho_theta": "84cc8f7ca1800a136793b04e216a95bc57b5f71a733bc440052a0097f0e192d2",
+    "rho_u": "fd9c935223a1f0b1b36460948fa05ebdfe29505df5eeb43fca4300b14983f990",
+    "rho_w": "0a70ebfd0625b898cf87ccdd789840147607dd07cae26bcfbc3be8f694737c3b",
+    "scalars": "e974463f7da08c516a0c3f45f04fea4f43ca71b05575dcd5a3e75a892962255f"
+  },
+  "cuda_repeat_a": {
+    "rho": "83b72d736e36e825aead862363e33b46e209eb12353e6a2d3611c21fa8044e2d",
+    "rho_theta": "44e5d6a2407540b2d3942d9aefb2f2fc30b4a605870e8e83ef241465266a79a8",
+    "rho_u": "98d1e268b18bc29c89c6f570b694af2c656959eada4202db55ba883d49ad89af",
+    "rho_w": "a1454123b9a3a140f7128ceb1a2f7b7e6dd6cd8416e6e92e4f118a37d738a23f",
+    "scalars": "769e868bc40cdc29917acc46169881a0e1cded5d81a11afccbc782077ce701d4"
+  },
+  "cuda_repeat_b": {
+    "rho": "83b72d736e36e825aead862363e33b46e209eb12353e6a2d3611c21fa8044e2d",
+    "rho_theta": "44e5d6a2407540b2d3942d9aefb2f2fc30b4a605870e8e83ef241465266a79a8",
+    "rho_u": "98d1e268b18bc29c89c6f570b694af2c656959eada4202db55ba883d49ad89af",
+    "rho_w": "a1454123b9a3a140f7128ceb1a2f7b7e6dd6cd8416e6e92e4f118a37d738a23f",
+    "scalars": "769e868bc40cdc29917acc46169881a0e1cded5d81a11afccbc782077ce701d4"
+  },
+  "cpu_cuda_max_absolute_difference": {
+    "rho": 5.960464477539063e-08,
+    "rho_theta": 3.0517578125e-05,
+    "rho_u": 0.00024193525314331055,
+    "rho_w": 1.1533498764038086e-05,
+    "scalars": 2.3283064365386963e-10
+  },
+  "whole_step_comparison": "differences measured; no native endpoint qualification"
+}

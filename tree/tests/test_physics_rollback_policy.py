@@ -125,6 +125,10 @@ def test_an_armed_begin_still_exports_the_boundary(monkeypatch):
 
     class _Seam:
         elapsed_seconds = 0.0
+        _cp = SimpleNamespace(ndarray=np.ndarray)
+
+        def _restart_manifest(self):
+            return {}
 
         def export_state(self):
             exports.append("export")
@@ -268,7 +272,7 @@ def _step(runner, driver, backend, callables):
     )
 
 
-def test_an_unarmed_refusal_after_phase_two_aborts_both_owners_and_says_why():
+def test_an_unarmed_refusal_after_phase_two_aborts_both_owners_and_says_why(cpu_physics_phase_release):
     runner = _load_runner()
     log: list[str] = []
     with pytest.raises(runner.CompositeTransactionError, match="armed no physics rollback") as caught:
@@ -279,7 +283,7 @@ def test_an_unarmed_refusal_after_phase_two_aborts_both_owners_and_says_why():
     assert "rollback was incomplete" not in str(caught.value)
 
 
-def test_an_unarmed_refusal_inside_phase_two_is_reported_not_verified():
+def test_an_unarmed_refusal_inside_phase_two_is_reported_not_verified(cpu_physics_phase_release):
     runner = _load_runner()
     log: list[str] = []
     with pytest.raises(runner.CompositeTransactionError, match="armed no physics rollback") as caught:

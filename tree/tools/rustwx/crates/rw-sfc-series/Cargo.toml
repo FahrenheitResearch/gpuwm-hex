@@ -1,0 +1,24 @@
+[package]
+name = "rw-sfc-series"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 AND BSD-3-Clause"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "rw_sfc_series"
+path = "src/main.rs"
+
+[dependencies]
+rw-mpas = { path = "../rw-mpas" }
+rw-store = { path = "../rw-store" }
+netcrust = { path = "../../vendor/netcrust" }
+rayon = "1"
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+sha2 = "0.10"
+grib-core = { path = "../../../grib1_bridge/vendor/grib-core", default-features = false, features = ["jpeg2000"] }

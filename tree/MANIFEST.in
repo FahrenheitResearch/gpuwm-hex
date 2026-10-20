@@ -11,6 +11,46 @@
 graft tests
 graft docs
 graft tools
+prune tools/rustwx/target
+
+# Compiler-bound kernel packs ship as release assets, outside both distributions.
+prune release-assets
+exclude src/hexcore/data/kernel-pack*.json
+
+# The default regional contract requires this source-built native reference engine.
+graft rust/host-prep
+prune rust/host-prep/target
+
+# The MPAS physics suites' table decoders, which setup.py builds into the wheel
+# (gpuwm-hex physics-resources).
+graft rust/physics-tables
+prune rust/physics-tables/target
+
+# The MPAS route's Registry pool reader (gpuwm 0ec69a6's rw_mpas_physics_pool,
+# unchanged), which setup.py builds into the wheel.
+graft rust/physics-pool
+prune rust/physics-pool/target
+
+# The observation scorer (box-doors) is built from this source by setup.py when
+# src/hexcore/libexec carries no prebuilt scorer; without it here a wheel built
+# from the sdist failed: "can't find bin hex_obs_scorecard" (0.4.0 trial build).
+graft rust/obs-scorecard
+prune rust/obs-scorecard/build
+
+# The vertical door's CDF-5 template copier, built into hexcore/libexec by
+# setup.py (verify-final-hex item 4: without this graft a wheel built from the
+# sdist had no copier and the door fell back to an hour-long template copy).
+graft rust/netcdf-copy
+prune rust/netcdf-copy/target
+
+# The history writer's parallel deflate library, built into hexcore/libexec by setup.py.
+graft rust/history-deflate
+prune rust/history-deflate/target
+
+# METIS 5.1.0 (Apache-2.0), which setup.py builds into hexcore/libexec/hex_gpmetis
+# for automatic multi-card partitions (tools/build_gpmetis.py).
+graft third_party/metis-5.1.0
+prune third_party/metis-5.1.0/build
 
 # `verification` joins them for the same reason and it is the same defect
 # caught one directory later: docs/obs-referee.md tells a reader to run
@@ -22,6 +62,13 @@ graft tools
 # as though they should.  Ten files, 66 KB; the schemas and the vertical
 # specs are contracts, not receipts.
 graft verification
+# The ops-into-next recovery archives (an engine source tarball, native tool
+# tarballs and per-run 4 MB receipts, 93 MB together) are recovery material
+# for that lane, read by no test or tool, and alone took the 0.4.0 sdist to
+# 96 MB against PyPI's 100 MB file limit.  They stay in the repository.
+prune verification/ops-into-next-20261012/release
+prune verification/ops-into-next-20261012/evidence
+exclude verification/ops-into-next-20261012/engine-runtime.bundle
 
 # One file out of `evidence`, and only one.  The receipt files themselves are
 # deliberately not distributed, but README.md and docs/source-matrix.md both
@@ -45,3 +92,12 @@ exclude docs/release-checklist-*.md
 # input; the same rule the working tree follows.
 global-exclude *.pyc
 prune **/__pycache__
+
+# Local rebuild outputs are not source inputs.
+prune rust/sfc-series-build
+prune rust/s2s-renderer-build
+prune rust/surface-reader-build
+prune tools/rustwx/target
+
+# Strict geometry also builds at first use from a checkout or an unpacked sdist.
+graft src/hexcore/data/mpasphys-maths

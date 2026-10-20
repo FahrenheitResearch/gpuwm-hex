@@ -127,6 +127,7 @@ def vector_invariant_momentum_tendency_v841(
     kinetic_energy: FloatArray,
     horizontal_divergence: FloatArray,
     reference_wind: V841ReferenceWindProfiles,
+    initial_tendency: FloatArray | None = None,
 ) -> FloatArray:
     """Add the released unconditional perturbation-Coriolis subtraction.
 
@@ -151,6 +152,8 @@ def vector_invariant_momentum_tendency_v841(
     v_init = np.asarray(reference_wind.v_init)
     half = u.dtype.type(0.5)
     result = np.zeros_like(u)
+    if initial_tendency is not None and (np.shape(initial_tendency) != u.shape or np.asarray(initial_tendency).dtype != u.dtype):
+        raise ValueError("initial_tendency must match velocity shape and dtype")
     for edge, (cell0, cell1) in enumerate(cells):
         q = np.zeros(u.shape[0], dtype=u.dtype)
         for slot in range(int(counts[edge])):
@@ -167,11 +170,15 @@ def vector_invariant_momentum_tendency_v841(
                 q[level] = q[level] - (
                     weights[edge, slot] * reference_u * f_edge[edge]
                 )
-        result[:, edge] = rho_edge[:, edge] * (
+        horizontal = rho_edge[:, edge] * (
             q
             - (kinetic_energy[:, cell1] - kinetic_energy[:, cell0])
             * inv_dc[edge]
-        ) - u[:, edge] * half * (
+        )
+        # MPAS adds the vertical transport before subtracting divergence.
+        if initial_tendency is not None:
+            horizontal = initial_tendency[:, edge] + horizontal
+        result[:, edge] = horizontal - u[:, edge] * half * (
             horizontal_divergence[:, cell0] + horizontal_divergence[:, cell1]
         )
     return result

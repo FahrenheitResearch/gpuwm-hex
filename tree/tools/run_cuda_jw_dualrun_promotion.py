@@ -13,6 +13,8 @@ and revalidated by the admitted payload for the completion receipt.
 """
 
 from __future__ import annotations
+import os as _hex_os
+_hex_os.environ["GPUWM_HEX_NUMERICS"] = "strict"  # a bitwise proof against native MPAS runs strict numerics (owner ruling 2026-10-16: fast is the default, strict the opt-in)
 
 import hashlib
 from pathlib import Path

@@ -1,0 +1,109 @@
+"""Orchestrate the unchanged Rust writer as each MET endpoint is published."""
+from datetime import datetime, timedelta
+import json
+from pathlib import Path
+import time
+import subprocess
+
+from .lbc_stream import atomic_json, checked_marker, file_name, FORMAT, READY, SERIES, sha256
+
+#: ``--physics-mode`` of the boundary door (physics.mode, the shared key of hexcore.correct_mode).
+#: ``correct`` is this door's default: boundary edge winds are extrapolated below and above the
+#: first-guess column the way the initial conditions are (IN4), and every boundary file must carry its
+#: own valid time (IN5).  ``exact`` reproduces native init_atmosphere v8.4.2 case 9.
+LBC_PHYSICS_MODES = ("correct", "exact")
+
+
+def lbc_physics_mode(engine, mode):
+    """``(argv, record)``: the rw_mpas_lbc arguments for one physics mode and the correct-mode record
+    for the door receipt (``None`` in exact mode).
+
+    ``exact`` adds nothing, so an exact run passes the argument vector this door always passed and
+    the engine writes the same bytes.  ``correct`` asks the engine first: an rw_mpas_lbc built before
+    ``--physics-mode`` existed reads unknown flags without complaint, so it would silently write the
+    native case-9 boundary winds.  Such an engine is not handed the flag; the run writes the native
+    case-9 series and its record names IN4 and IN5 as gaps, printed loudly (hexcore.correct_mode: a
+    correction the run cannot apply is a named gap, never a refusal).  The record never says a
+    correction was applied when the engine could not apply it.
+    """
+    from .hrrr_intermediate import IntermediateRefusal
+    from . import correct_mode
+    if mode == "exact":
+        return [], None
+    if mode != "correct":
+        raise IntermediateRefusal(f"--physics-mode {mode!r} is not one of {LBC_PHYSICS_MODES}")
+    probe = subprocess.run([str(engine), "--abi"], capture_output=True, text=True, timeout=60)
+    if probe.returncode != 0 or "--physics-mode" not in probe.stdout:
+        gaps = [correct_mode.CorrectionGap(
+            finding, "engine rw_mpas_lbc",
+            f"{engine} does not speak --physics-mode (its --abi does not name it); the boundary series "
+            "is native init_atmosphere v8.4.2 case 9") for finding in correct_mode.LBC_FINDINGS]
+        return [], correct_mode.receipt_block(
+            "correct", gaps=correct_mode.report_gaps(gaps, context="boundary door"))
+    return ["--physics-mode", "correct"], correct_mode.receipt_block(
+        "correct", applied=correct_mode.LBC_FINDINGS)
+
+
+def lbc_physics_mode_args(engine, mode):
+    """The rw_mpas_lbc arguments for one physics mode (see :func:`lbc_physics_mode`)."""
+    return lbc_physics_mode(engine, mode)[0]
+
+
+def run_stream(arguments, engine):
+    from .hrrr_intermediate import IntermediateRefusal
+    from . import time_ledger
+    start, stop = (datetime.strptime(value, FORMAT) for value in (arguments.start_time, arguments.stop_time))
+    span = (stop - start).total_seconds()
+    if span < 3600 or span % 3600:
+        raise IntermediateRefusal("streamed LBC window must cover complete hours; refuses missing interpolation endpoints")
+    output = Path(arguments.out_dir).absolute()
+    output.mkdir(parents=True, exist_ok=True)
+    times = [start + timedelta(hours=hour) for hour in range(int(span / 3600) + 1)]
+    physics, correct_record = lbc_physics_mode(engine, getattr(arguments, "physics_mode", "exact"))
+    atomic_json(output / "lbc-series.json", {"schema": SERIES, "valid_times": [t.strftime(FORMAT) for t in times]})
+    files = []
+    try:
+        for hour, moment in enumerate(times):
+            met = Path(arguments.met_dir).absolute() / f"MET:{moment:%Y-%m-%d_%H}"
+            marker = met.with_name(met.name + ".ready.json")
+            started = time.monotonic()
+            while not marker.exists():
+                if time.monotonic() - started > 1800:
+                    raise IntermediateRefusal(f"missing_intermediate_hour {hour}: {marker}; refuses incomplete boundary input")
+                time.sleep(0.05)
+            admitted = checked_marker(marker, schema="gpuwm-hex.intermediate.hour/v1")
+            if admitted != met:
+                raise IntermediateRefusal(f"{marker}: unexpected MET path; refuses the wrong boundary hour")
+            staging = output / f".hour-{hour:04d}"
+            staging.mkdir()
+            argv = [str(engine), "--grid", str(Path(arguments.grid).absolute()), "--out-dir", str(staging),
+                    "--start-time", arguments.start_time, "--stop-time", arguments.stop_time,
+                    "--interval", f"{moment:{FORMAT}}={met}", "--nfglevels", str(arguments.nfglevels),
+                    "--fg-interval-seconds", "3600", "--extrap-airtemp", arguments.extrap_airtemp,
+                    "--use-spechumd", arguments.use_spechumd, "--theta-adv-order", str(arguments.theta_adv_order),
+                    "--coef-3rd-order", repr(float(arguments.coef_3rd_order)), "--oned-underflow", arguments.oned_underflow,
+                    *physics, "--receipt", str(staging / "receipt.json")]
+            attrs = {"hour": hour, "valid_time": moment.strftime(FORMAT)}
+            time_ledger.emit("prep.lbc.hour", "begin", attrs=attrs)
+            completed = subprocess.run(argv, capture_output=True, text=True)
+            (output / f"lbc-hour-{hour:04d}.log").write_text(
+                "$ " + " ".join(argv) + f"\nexit {completed.returncode}\n" + completed.stdout + completed.stderr)
+            if completed.returncode:
+                raise IntermediateRefusal(f"rw_mpas_lbc exited {completed.returncode}; log {output / f'lbc-hour-{hour:04d}.log'}")
+            produced = staging / file_name(moment.strftime(FORMAT))
+            destination = output / produced.name
+            produced.replace(destination)
+            document = {"schema": READY, **attrs, "path": str(destination),
+                        "bytes": destination.stat().st_size, "sha256": sha256(destination)}
+            atomic_json(destination.with_name(destination.name + ".ready.json"), document)
+            files.append(document)
+            time_ledger.emit("prep.lbc.hour", "end", attrs={**attrs, "status": "complete"})
+            time_ledger.emit("prep.lbc.hour", attrs=document)
+            print(f"READY {destination}", flush=True)
+        atomic_json(output / "lbc-door-receipt.json", {"schema": "gpuwm-hex.lbc-door/v1", "streamed": True, "files": files,
+                                                        **({"correct_mode": correct_record} if correct_record else {})})
+    except BaseException as error:
+        time_ledger.emit("prep.lbc.hour", "end", attrs={"status": "failed", "error": str(error)})
+        atomic_json(output / "lbc-failed.json", {"error": str(error)})
+        raise
+    return 0

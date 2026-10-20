@@ -1,0 +1,1124 @@
+{
+ "schema": "mpas-port.cuda-regional-contract/v1",
+ "instrument": "run_cuda_regional_contract",
+ "date_utc": "2026-10-04T13:50:58Z",
+ "card": "NVIDIA GeForce RTX 5090",
+ "class_id": null,
+ "mesh_row": "q0.9375.120.43884.n41.95w94.79",
+ "bdy_mask_sha256": "115e5d9fbeb6cbbd8f121ff8466fb8a4a4f90ef3421c2e2eb41e1879f04ffd46",
+ "n_cells": 43884,
+ "start_time": "2026-09-13_15:00:00",
+ "boundary_zone_width": 7,
+ "kernel_set_sha256": "6e92b86e418fb748931f0469eb0e0a7007cc72c381b5e1128ec2f95a7e3b3394",
+ "all_decks_bitwise": true,
+ "all_kernels_covered": true,
+ "all_controls_have_teeth": true,
+ "dual_run_identical": true,
+ "decks_selected": false,
+ "generated": "2026-10-04T13:50:58",
+ "host": {
+  "sha256": "819353bdc2f9fe47",
+  "scope": "user"
+ },
+ "device": {
+  "name": "NVIDIA GeForce RTX 5090",
+  "sm": "sm_120",
+  "compute_capability": "12.0",
+  "multiprocessor_count": 170,
+  "cupy_version": "14.2.0"
+ },
+ "translation_unit": {
+  "module_key": "hexcore.cuda_regional_v841",
+  "source_sha256": "cf4414103e05f35f92412de5db1dcc4756c6a2957b91582d9721f8ad0f6e28c7",
+  "declared_kernels": [
+   "regional_lbc_derive_v841",
+   "regional_lbc_rho_edge_v841",
+   "regional_lbc_tendency_v841",
+   "regional_lbc_state_at_v841",
+   "regional_speczone_tend_cell_v841",
+   "regional_speczone_tend_edge_v841",
+   "regional_relaxzone_rayleigh_cell_v841",
+   "regional_relaxzone_rayleigh_edge_v841",
+   "regional_relaxzone_filter_cell_v841",
+   "regional_relaxzone_filter_edge_v841",
+   "regional_speczone_u_ru_v841",
+   "regional_zero_speczone_w_v841",
+   "regional_reset_speczone_values_v841",
+   "regional_bdy_adjust_scalars_compute_v841",
+   "regional_bdy_adjust_scalars_copyback_v841",
+   "regional_bdy_set_scalars_v841",
+   "regional_clamp_negative_scalars_v841",
+   "acoustic_ru_regional_v841",
+   "acoustic_rs_ts_regional_v841",
+   "acoustic_column_solve_regional_v841",
+   "transport_edge_values_regional_v841",
+   "transport_standard_finish_regional_v841"
+  ],
+  "kernels_without_a_deck": []
+ },
+ "mesh": {
+  "grid": "<mesh-root>/hexpt-cull.grid.nc",
+  "n_cells": 43884,
+  "n_edges": 131956,
+  "n_vertices": 88073,
+  "n_vert_levels": 55,
+  "spec_cells": 601,
+  "relax_cells": 1199,
+  "spec_edges": 1812,
+  "relax_edges": 3581
+ },
+ "decks": [
+  {
+   "deck": "lbc-pool",
+   "kernels": [
+    "regional_lbc_derive_v841",
+    "regional_lbc_rho_edge_v841",
+    "regional_lbc_tendency_v841",
+    "regional_lbc_state_at_v841"
+   ],
+   "native_anchor": "mpas_atm_boundaries.F:217-309,491-551",
+   "host_oracle": "regional_v841.RegionalDrivingState",
+   "wall_seconds": 6.052,
+   "pass_1": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "tend[u]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "fc633b117368bff105f93ed5aa8c3722b36286430bf523d088182af8c0a8fcb6",
+      "device_sha256": "fc633b117368bff105f93ed5aa8c3722b36286430bf523d088182af8c0a8fcb6"
+     },
+     {
+      "payload": "tend[ru]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "81f31c26b68769a543abbb08a83a896caff40c9fb29a3953bc9f60f6f026451e",
+      "device_sha256": "81f31c26b68769a543abbb08a83a896caff40c9fb29a3953bc9f60f6f026451e"
+     },
+     {
+      "payload": "tend[rho_edge]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "ac89707f4abf66a4d63c2f4f3b2fb62b60fb2cb1cc0356eef1a160733132b7d7",
+      "device_sha256": "ac89707f4abf66a4d63c2f4f3b2fb62b60fb2cb1cc0356eef1a160733132b7d7"
+     },
+     {
+      "payload": "tend[w]",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "997b591d2648bfa5e6322388fdae54895a2f791a916e49f743c84b8d63f03612",
+      "device_sha256": "997b591d2648bfa5e6322388fdae54895a2f791a916e49f743c84b8d63f03612"
+     },
+     {
+      "payload": "tend[rho]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "dd4b820b55bb78d0e0c18f9f8fd70ee46def460451ba5feda65916bd9ea64181",
+      "device_sha256": "dd4b820b55bb78d0e0c18f9f8fd70ee46def460451ba5feda65916bd9ea64181"
+     },
+     {
+      "payload": "tend[rho_zz]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "099939531e42b5873b3bd5b0606d0ff0c2167a9bae197032f42c0daa535fae37",
+      "device_sha256": "099939531e42b5873b3bd5b0606d0ff0c2167a9bae197032f42c0daa535fae37"
+     },
+     {
+      "payload": "tend[theta]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "2124d13d73cf638a49c3b41fc6879162563f710bf6c80301ab5fbd92073a68ba",
+      "device_sha256": "2124d13d73cf638a49c3b41fc6879162563f710bf6c80301ab5fbd92073a68ba"
+     },
+     {
+      "payload": "tend[rtheta_m]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "ef284426e48f914a5db594ec13475ac778fdb622baae6eba936b9c5306d92bc6",
+      "device_sha256": "ef284426e48f914a5db594ec13475ac778fdb622baae6eba936b9c5306d92bc6"
+     },
+     {
+      "payload": "tend[scalars]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "b9e057032072b48374ded5a392a8ae9fc134178f03e08cca9204467106da1e94",
+      "device_sha256": "b9e057032072b48374ded5a392a8ae9fc134178f03e08cca9204467106da1e94"
+     },
+     {
+      "payload": "state_at[ru]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "0bf0f1840c9a6bf81f7c32dbfb9c25563779b9d83bb45deb5b13d7baaac3683b",
+      "device_sha256": "0bf0f1840c9a6bf81f7c32dbfb9c25563779b9d83bb45deb5b13d7baaac3683b"
+     },
+     {
+      "payload": "state_at[rtheta_m]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "198871a3bef1c33ac4169ee6b1c45ef4e81f4ca3a390ba5a52884f0fdc633855",
+      "device_sha256": "198871a3bef1c33ac4169ee6b1c45ef4e81f4ca3a390ba5a52884f0fdc633855"
+     },
+     {
+      "payload": "state_at[rho_zz]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "192b8e1012ec07972ffba4889398826299b93e8093442169d7247e233e8bd50b",
+      "device_sha256": "192b8e1012ec07972ffba4889398826299b93e8093442169d7247e233e8bd50b"
+     },
+     {
+      "payload": "state_at[u]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "8209c00e6889e1cf8682fecc64a927be7f92565df717d98bd9c03f410e412786",
+      "device_sha256": "8209c00e6889e1cf8682fecc64a927be7f92565df717d98bd9c03f410e412786"
+     },
+     {
+      "payload": "state_at[scalars]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "9bf28d6e70b5bbe0665f2b0db2607cc864d3acdf127b85118e7d950623d86a19",
+      "device_sha256": "9bf28d6e70b5bbe0665f2b0db2607cc864d3acdf127b85118e7d950623d86a19"
+     }
+    ]
+   },
+   "pass_2": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "tend[u]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "fc633b117368bff105f93ed5aa8c3722b36286430bf523d088182af8c0a8fcb6",
+      "device_sha256": "fc633b117368bff105f93ed5aa8c3722b36286430bf523d088182af8c0a8fcb6"
+     },
+     {
+      "payload": "tend[ru]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "81f31c26b68769a543abbb08a83a896caff40c9fb29a3953bc9f60f6f026451e",
+      "device_sha256": "81f31c26b68769a543abbb08a83a896caff40c9fb29a3953bc9f60f6f026451e"
+     },
+     {
+      "payload": "tend[rho_edge]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "ac89707f4abf66a4d63c2f4f3b2fb62b60fb2cb1cc0356eef1a160733132b7d7",
+      "device_sha256": "ac89707f4abf66a4d63c2f4f3b2fb62b60fb2cb1cc0356eef1a160733132b7d7"
+     },
+     {
+      "payload": "tend[w]",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "997b591d2648bfa5e6322388fdae54895a2f791a916e49f743c84b8d63f03612",
+      "device_sha256": "997b591d2648bfa5e6322388fdae54895a2f791a916e49f743c84b8d63f03612"
+     },
+     {
+      "payload": "tend[rho]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "dd4b820b55bb78d0e0c18f9f8fd70ee46def460451ba5feda65916bd9ea64181",
+      "device_sha256": "dd4b820b55bb78d0e0c18f9f8fd70ee46def460451ba5feda65916bd9ea64181"
+     },
+     {
+      "payload": "tend[rho_zz]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "099939531e42b5873b3bd5b0606d0ff0c2167a9bae197032f42c0daa535fae37",
+      "device_sha256": "099939531e42b5873b3bd5b0606d0ff0c2167a9bae197032f42c0daa535fae37"
+     },
+     {
+      "payload": "tend[theta]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "2124d13d73cf638a49c3b41fc6879162563f710bf6c80301ab5fbd92073a68ba",
+      "device_sha256": "2124d13d73cf638a49c3b41fc6879162563f710bf6c80301ab5fbd92073a68ba"
+     },
+     {
+      "payload": "tend[rtheta_m]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "ef284426e48f914a5db594ec13475ac778fdb622baae6eba936b9c5306d92bc6",
+      "device_sha256": "ef284426e48f914a5db594ec13475ac778fdb622baae6eba936b9c5306d92bc6"
+     },
+     {
+      "payload": "tend[scalars]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "b9e057032072b48374ded5a392a8ae9fc134178f03e08cca9204467106da1e94",
+      "device_sha256": "b9e057032072b48374ded5a392a8ae9fc134178f03e08cca9204467106da1e94"
+     },
+     {
+      "payload": "state_at[ru]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "0bf0f1840c9a6bf81f7c32dbfb9c25563779b9d83bb45deb5b13d7baaac3683b",
+      "device_sha256": "0bf0f1840c9a6bf81f7c32dbfb9c25563779b9d83bb45deb5b13d7baaac3683b"
+     },
+     {
+      "payload": "state_at[rtheta_m]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "198871a3bef1c33ac4169ee6b1c45ef4e81f4ca3a390ba5a52884f0fdc633855",
+      "device_sha256": "198871a3bef1c33ac4169ee6b1c45ef4e81f4ca3a390ba5a52884f0fdc633855"
+     },
+     {
+      "payload": "state_at[rho_zz]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "192b8e1012ec07972ffba4889398826299b93e8093442169d7247e233e8bd50b",
+      "device_sha256": "192b8e1012ec07972ffba4889398826299b93e8093442169d7247e233e8bd50b"
+     },
+     {
+      "payload": "state_at[u]",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "8209c00e6889e1cf8682fecc64a927be7f92565df717d98bd9c03f410e412786",
+      "device_sha256": "8209c00e6889e1cf8682fecc64a927be7f92565df717d98bd9c03f410e412786"
+     },
+     {
+      "payload": "state_at[scalars]",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "9bf28d6e70b5bbe0665f2b0db2607cc864d3acdf127b85118e7d950623d86a19",
+      "device_sha256": "9bf28d6e70b5bbe0665f2b0db2607cc864d3acdf127b85118e7d950623d86a19"
+     }
+    ]
+   },
+   "dual_run_identical": true,
+   "mutation": {
+    "declared": "one ring-7 one-cell edge is given the second cell it does not have",
+    "applied": "cellsOnEdge[94,0] sentinel -> 5145 (an absent neighbour invented)",
+    "deck_still_matches_host": false,
+    "control_has_teeth": true,
+    "payloads": [
+     {
+      "payload": "tend[u]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "tend[ru]",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "tend[rho_edge]",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "tend[w]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "tend[rho]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "tend[rho_zz]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "tend[theta]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "tend[rtheta_m]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "tend[scalars]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "state_at[ru]",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "state_at[rtheta_m]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "state_at[rho_zz]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "state_at[u]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "state_at[scalars]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     }
+    ]
+   },
+   "verdict": true
+  },
+  {
+   "deck": "speczone-tendencies",
+   "kernels": [
+    "regional_speczone_tend_cell_v841",
+    "regional_speczone_tend_edge_v841"
+   ],
+   "native_anchor": "mpas_atm_time_integration.F:7906-7967",
+   "host_oracle": "regional_v841.adjust_dynamics_speczone_tend",
+   "wall_seconds": 0.196,
+   "pass_1": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "tend_rho",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "ca0bf3f62c7c6f24fc8963060fb1f83b67174d123a728e240dad93ffe5c12f44",
+      "device_sha256": "ca0bf3f62c7c6f24fc8963060fb1f83b67174d123a728e240dad93ffe5c12f44"
+     },
+     {
+      "payload": "tend_rt",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "b0f81c9b1352dbd7774b935dad64ff90d7dcb246245da35d462eb74416ea93ab",
+      "device_sha256": "b0f81c9b1352dbd7774b935dad64ff90d7dcb246245da35d462eb74416ea93ab"
+     },
+     {
+      "payload": "tend_ru",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "b26fd093387781ccef8a105ac1a3d4558954bd02dbf852c648d311813293cd5c",
+      "device_sha256": "b26fd093387781ccef8a105ac1a3d4558954bd02dbf852c648d311813293cd5c"
+     },
+     {
+      "payload": "tend_rw",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "d9a97d8b6db8ff3e230ce0937c88e0f8d056a1faaf8fdd43daad68607bf75367",
+      "device_sha256": "d9a97d8b6db8ff3e230ce0937c88e0f8d056a1faaf8fdd43daad68607bf75367"
+     }
+    ]
+   },
+   "pass_2": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "tend_rho",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "ca0bf3f62c7c6f24fc8963060fb1f83b67174d123a728e240dad93ffe5c12f44",
+      "device_sha256": "ca0bf3f62c7c6f24fc8963060fb1f83b67174d123a728e240dad93ffe5c12f44"
+     },
+     {
+      "payload": "tend_rt",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "b0f81c9b1352dbd7774b935dad64ff90d7dcb246245da35d462eb74416ea93ab",
+      "device_sha256": "b0f81c9b1352dbd7774b935dad64ff90d7dcb246245da35d462eb74416ea93ab"
+     },
+     {
+      "payload": "tend_ru",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "b26fd093387781ccef8a105ac1a3d4558954bd02dbf852c648d311813293cd5c",
+      "device_sha256": "b26fd093387781ccef8a105ac1a3d4558954bd02dbf852c648d311813293cd5c"
+     },
+     {
+      "payload": "tend_rw",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "d9a97d8b6db8ff3e230ce0937c88e0f8d056a1faaf8fdd43daad68607bf75367",
+      "device_sha256": "d9a97d8b6db8ff3e230ce0937c88e0f8d056a1faaf8fdd43daad68607bf75367"
+     }
+    ]
+   },
+   "dual_run_identical": true,
+   "mutation": {
+    "declared": "one specified cell is dropped from the element list",
+    "applied": "bdy_mask_cell[43865] 2->1; bdy_mask_edge[34400] 4->3; spec_zone_mask_edge[65] 1.0->0.0 (the first specified edge with both cells present); spec_zone_mask_cell[11] 1.0->0.0 and spec_cells[0] aliased to its neighbour (the first specified cell whose every edge has both cells)",
+    "deck_still_matches_host": false,
+    "control_has_teeth": true,
+    "payloads": [
+     {
+      "payload": "tend_rho",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "tend_rt",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "tend_ru",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "tend_rw",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     }
+    ]
+   },
+   "verdict": true
+  },
+  {
+   "deck": "relaxzone-tendencies",
+   "kernels": [
+    "regional_relaxzone_rayleigh_cell_v841",
+    "regional_relaxzone_rayleigh_edge_v841",
+    "regional_relaxzone_filter_cell_v841",
+    "regional_relaxzone_filter_edge_v841"
+   ],
+   "native_anchor": "mpas_atm_time_integration.F:7971-8198",
+   "host_oracle": "regional_v841.adjust_dynamics_relaxzone_tend",
+   "wall_seconds": 0.79,
+   "pass_1": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "tend_rho",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "6c85ea09e2de21726e00a81b92fde87dcb0be80c80bf1b746ef2284518a3db80",
+      "device_sha256": "6c85ea09e2de21726e00a81b92fde87dcb0be80c80bf1b746ef2284518a3db80"
+     },
+     {
+      "payload": "tend_rt",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "aeb6b3bcefdd3bff1e875e6139def05bd0a5f17e6864d0b6391482c145efb463",
+      "device_sha256": "aeb6b3bcefdd3bff1e875e6139def05bd0a5f17e6864d0b6391482c145efb463"
+     },
+     {
+      "payload": "tend_ru",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "c6d9004b0bf11a45698fd5eaa6a69a106ac9535e79652876a8cb31a46555284d",
+      "device_sha256": "c6d9004b0bf11a45698fd5eaa6a69a106ac9535e79652876a8cb31a46555284d"
+     }
+    ]
+   },
+   "pass_2": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "tend_rho",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "6c85ea09e2de21726e00a81b92fde87dcb0be80c80bf1b746ef2284518a3db80",
+      "device_sha256": "6c85ea09e2de21726e00a81b92fde87dcb0be80c80bf1b746ef2284518a3db80"
+     },
+     {
+      "payload": "tend_rt",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "aeb6b3bcefdd3bff1e875e6139def05bd0a5f17e6864d0b6391482c145efb463",
+      "device_sha256": "aeb6b3bcefdd3bff1e875e6139def05bd0a5f17e6864d0b6391482c145efb463"
+     },
+     {
+      "payload": "tend_ru",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "c6d9004b0bf11a45698fd5eaa6a69a106ac9535e79652876a8cb31a46555284d",
+      "device_sha256": "c6d9004b0bf11a45698fd5eaa6a69a106ac9535e79652876a8cb31a46555284d"
+     }
+    ]
+   },
+   "dual_run_identical": true,
+   "mutation": {
+    "declared": "the outermost relaxation ring is relabelled one ring inward",
+    "applied": "bdy_mask_cell[43865] 2->1; bdy_mask_edge[34400] 4->3; spec_zone_mask_edge[65] 1.0->0.0 (the first specified edge with both cells present); spec_zone_mask_cell[11] 1.0->0.0 and spec_cells[0] aliased to its neighbour (the first specified cell whose every edge has both cells)",
+    "deck_still_matches_host": false,
+    "control_has_teeth": true,
+    "payloads": [
+     {
+      "payload": "tend_rho",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "tend_rt",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "tend_ru",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     }
+    ]
+   },
+   "verdict": true
+  },
+  {
+   "deck": "speczone-overwrites",
+   "kernels": [
+    "regional_speczone_u_ru_v841",
+    "regional_zero_speczone_w_v841"
+   ],
+   "native_anchor": "mpas_atm_time_integration.F:2442-2485,7868-7902",
+   "host_oracle": "regional_v841.overwrite_speczone_u_ru / zero_speczone_w",
+   "wall_seconds": 0.22,
+   "pass_1": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "normal_velocity",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "260307d540e4031b0349ec63a85cbbc7852dd17b82988ccbab82eb18a89bb79c",
+      "device_sha256": "260307d540e4031b0349ec63a85cbbc7852dd17b82988ccbab82eb18a89bb79c"
+     },
+     {
+      "payload": "rho_u",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "11415556f7d9bc376ac74a69f97e7825a616f9ec9e1a5ca380f1804b89a0fe9f",
+      "device_sha256": "11415556f7d9bc376ac74a69f97e7825a616f9ec9e1a5ca380f1804b89a0fe9f"
+     },
+     {
+      "payload": "w",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "9b443a421029b1d20a9cb1a4d792363ecba93169d6fa9452c4579b1da77001d5",
+      "device_sha256": "9b443a421029b1d20a9cb1a4d792363ecba93169d6fa9452c4579b1da77001d5"
+     }
+    ]
+   },
+   "pass_2": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "normal_velocity",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "260307d540e4031b0349ec63a85cbbc7852dd17b82988ccbab82eb18a89bb79c",
+      "device_sha256": "260307d540e4031b0349ec63a85cbbc7852dd17b82988ccbab82eb18a89bb79c"
+     },
+     {
+      "payload": "rho_u",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "11415556f7d9bc376ac74a69f97e7825a616f9ec9e1a5ca380f1804b89a0fe9f",
+      "device_sha256": "11415556f7d9bc376ac74a69f97e7825a616f9ec9e1a5ca380f1804b89a0fe9f"
+     },
+     {
+      "payload": "w",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "9b443a421029b1d20a9cb1a4d792363ecba93169d6fa9452c4579b1da77001d5",
+      "device_sha256": "9b443a421029b1d20a9cb1a4d792363ecba93169d6fa9452c4579b1da77001d5"
+     }
+    ]
+   },
+   "dual_run_identical": true,
+   "mutation": {
+    "declared": "one specified cell is dropped from the element list",
+    "applied": "bdy_mask_cell[43865] 2->1; bdy_mask_edge[34400] 4->3; spec_zone_mask_edge[65] 1.0->0.0 (the first specified edge with both cells present); spec_zone_mask_cell[11] 1.0->0.0 and spec_cells[0] aliased to its neighbour (the first specified cell whose every edge has both cells)",
+    "deck_still_matches_host": false,
+    "control_has_teeth": true,
+    "payloads": [
+     {
+      "payload": "normal_velocity",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "rho_u",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "w",
+      "bitwise_equal": false,
+      "mismatch_count": 54
+     }
+    ]
+   },
+   "verdict": true
+  },
+  {
+   "deck": "reset-speczone-values",
+   "kernels": [
+    "regional_reset_speczone_values_v841"
+   ],
+   "native_anchor": "mpas_atm_time_integration.F:8201-8244",
+   "host_oracle": "regional_v841.reset_speczone_values",
+   "wall_seconds": 0.098,
+   "pass_1": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "theta_m",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "920154bf3002ef119c4e388996a15f94f2720fad520504ff656c6856c7af8f00",
+      "device_sha256": "920154bf3002ef119c4e388996a15f94f2720fad520504ff656c6856c7af8f00"
+     },
+     {
+      "payload": "rho_theta",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "0c6dcf7b7f6504fd38b86b85cd717170b6f9dd704c2fec573538f451ea0854a6",
+      "device_sha256": "0c6dcf7b7f6504fd38b86b85cd717170b6f9dd704c2fec573538f451ea0854a6"
+     },
+     {
+      "payload": "rho_theta_perturbation",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "69791154d54ed324f77e90d3c27a26d763fef8509248e274ca07ae6f564e9000",
+      "device_sha256": "69791154d54ed324f77e90d3c27a26d763fef8509248e274ca07ae6f564e9000"
+     }
+    ]
+   },
+   "pass_2": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "theta_m",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "920154bf3002ef119c4e388996a15f94f2720fad520504ff656c6856c7af8f00",
+      "device_sha256": "920154bf3002ef119c4e388996a15f94f2720fad520504ff656c6856c7af8f00"
+     },
+     {
+      "payload": "rho_theta",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "0c6dcf7b7f6504fd38b86b85cd717170b6f9dd704c2fec573538f451ea0854a6",
+      "device_sha256": "0c6dcf7b7f6504fd38b86b85cd717170b6f9dd704c2fec573538f451ea0854a6"
+     },
+     {
+      "payload": "rho_theta_perturbation",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "69791154d54ed324f77e90d3c27a26d763fef8509248e274ca07ae6f564e9000",
+      "device_sha256": "69791154d54ed324f77e90d3c27a26d763fef8509248e274ca07ae6f564e9000"
+     }
+    ]
+   },
+   "dual_run_identical": true,
+   "mutation": {
+    "declared": "one specified cell is dropped from the element list",
+    "applied": "bdy_mask_cell[43865] 2->1; bdy_mask_edge[34400] 4->3; spec_zone_mask_edge[65] 1.0->0.0 (the first specified edge with both cells present); spec_zone_mask_cell[11] 1.0->0.0 and spec_cells[0] aliased to its neighbour (the first specified cell whose every edge has both cells)",
+    "deck_still_matches_host": false,
+    "control_has_teeth": true,
+    "payloads": [
+     {
+      "payload": "theta_m",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "rho_theta",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "rho_theta_perturbation",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     }
+    ]
+   },
+   "verdict": true
+  },
+  {
+   "deck": "scalar-boundary",
+   "kernels": [
+    "regional_bdy_adjust_scalars_compute_v841",
+    "regional_bdy_adjust_scalars_copyback_v841",
+    "regional_bdy_set_scalars_v841",
+    "regional_clamp_negative_scalars_v841"
+   ],
+   "native_anchor": "mpas_atm_time_integration.F:8305-8416,8462-8505,2798-2800",
+   "host_oracle": "regional_v841.bdy_adjust_scalars / bdy_set_scalars",
+   "wall_seconds": 0.248,
+   "pass_1": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "bdy_adjust_scalars",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "941d660ab881c74d7099486e2c2217d59c47f3a15bb7f71eb0c33ad30eb002e1",
+      "device_sha256": "941d660ab881c74d7099486e2c2217d59c47f3a15bb7f71eb0c33ad30eb002e1"
+     },
+     {
+      "payload": "bdy_set_scalars",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "0b7f97c415e7aee90df2d933d437cc0e2dd3a4109cd4bd5e34bd9dba305ae7fc",
+      "device_sha256": "0b7f97c415e7aee90df2d933d437cc0e2dd3a4109cd4bd5e34bd9dba305ae7fc"
+     },
+     {
+      "payload": "clamp_negative_scalars",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "23fb299eee1811e5444e8cb6d74bbcb68f826b2abe14cc09e944570cefd8164a",
+      "device_sha256": "23fb299eee1811e5444e8cb6d74bbcb68f826b2abe14cc09e944570cefd8164a"
+     }
+    ]
+   },
+   "pass_2": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "bdy_adjust_scalars",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "941d660ab881c74d7099486e2c2217d59c47f3a15bb7f71eb0c33ad30eb002e1",
+      "device_sha256": "941d660ab881c74d7099486e2c2217d59c47f3a15bb7f71eb0c33ad30eb002e1"
+     },
+     {
+      "payload": "bdy_set_scalars",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "0b7f97c415e7aee90df2d933d437cc0e2dd3a4109cd4bd5e34bd9dba305ae7fc",
+      "device_sha256": "0b7f97c415e7aee90df2d933d437cc0e2dd3a4109cd4bd5e34bd9dba305ae7fc"
+     },
+     {
+      "payload": "clamp_negative_scalars",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "23fb299eee1811e5444e8cb6d74bbcb68f826b2abe14cc09e944570cefd8164a",
+      "device_sha256": "23fb299eee1811e5444e8cb6d74bbcb68f826b2abe14cc09e944570cefd8164a"
+     }
+    ]
+   },
+   "dual_run_identical": true,
+   "mutation": {
+    "declared": "the outermost relaxation ring is relabelled one ring inward",
+    "applied": "bdy_mask_cell[43865] 2->1; bdy_mask_edge[34400] 4->3; spec_zone_mask_edge[65] 1.0->0.0 (the first specified edge with both cells present); spec_zone_mask_cell[11] 1.0->0.0 and spec_cells[0] aliased to its neighbour (the first specified cell whose every edge has both cells)",
+    "deck_still_matches_host": false,
+    "control_has_teeth": true,
+    "payloads": [
+     {
+      "payload": "bdy_adjust_scalars",
+      "bitwise_equal": false,
+      "mismatch_count": 110
+     },
+     {
+      "payload": "bdy_set_scalars",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "clamp_negative_scalars",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     }
+    ]
+   },
+   "verdict": true
+  },
+  {
+   "deck": "acoustic-regional",
+   "kernels": [
+    "acoustic_ru_regional_v841",
+    "acoustic_rs_ts_regional_v841",
+    "acoustic_column_solve_regional_v841"
+   ],
+   "native_anchor": "mpas_atm_time_integration.F:3909,3992-4103",
+   "host_oracle": "acoustic_v841.advance_acoustic_step_v841 (masked)",
+   "wall_seconds": 25.393,
+   "pass_1": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "ru_p",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "d3cbb2eb748626e528f293947874cab51266561d49814f16df8719c7ed551620",
+      "device_sha256": "d3cbb2eb748626e528f293947874cab51266561d49814f16df8719c7ed551620"
+     },
+     {
+      "payload": "ru_avg",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "dd9803f5de60e265d9e90c7e17e826eacd9d4405641776ee54db35a8346b8eb8",
+      "device_sha256": "dd9803f5de60e265d9e90c7e17e826eacd9d4405641776ee54db35a8346b8eb8"
+     },
+     {
+      "payload": "rw_p",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "694bda36c0bb8cf875b60ffe82d6c6186f13b30d9197d2bc1e6b7d9c8273967a",
+      "device_sha256": "694bda36c0bb8cf875b60ffe82d6c6186f13b30d9197d2bc1e6b7d9c8273967a"
+     },
+     {
+      "payload": "ww_avg",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "8a6032d9d604cc7e4e2aefdff2fd21d0d7043f37baaefbeb731325617eb9fde9",
+      "device_sha256": "8a6032d9d604cc7e4e2aefdff2fd21d0d7043f37baaefbeb731325617eb9fde9"
+     },
+     {
+      "payload": "rho_pp",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "dc47dd2b9ec4c93e691271f8546c7e9599877bcdde5bc0ed07c4e2ce123b4c86",
+      "device_sha256": "dc47dd2b9ec4c93e691271f8546c7e9599877bcdde5bc0ed07c4e2ce123b4c86"
+     },
+     {
+      "payload": "rtheta_pp",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "ddbb01b3309a5563ac7f34e43931ce22e6ba0a542b6d34d44692ba0372e53e01",
+      "device_sha256": "ddbb01b3309a5563ac7f34e43931ce22e6ba0a542b6d34d44692ba0372e53e01"
+     },
+     {
+      "payload": "_one_cell_edge_flag",
+      "values": 1,
+      "bitwise_equal": true,
+      "host_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "device_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+     }
+    ]
+   },
+   "pass_2": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "ru_p",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "d3cbb2eb748626e528f293947874cab51266561d49814f16df8719c7ed551620",
+      "device_sha256": "d3cbb2eb748626e528f293947874cab51266561d49814f16df8719c7ed551620"
+     },
+     {
+      "payload": "ru_avg",
+      "values": 7257580,
+      "bitwise_equal": true,
+      "host_sha256": "dd9803f5de60e265d9e90c7e17e826eacd9d4405641776ee54db35a8346b8eb8",
+      "device_sha256": "dd9803f5de60e265d9e90c7e17e826eacd9d4405641776ee54db35a8346b8eb8"
+     },
+     {
+      "payload": "rw_p",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "694bda36c0bb8cf875b60ffe82d6c6186f13b30d9197d2bc1e6b7d9c8273967a",
+      "device_sha256": "694bda36c0bb8cf875b60ffe82d6c6186f13b30d9197d2bc1e6b7d9c8273967a"
+     },
+     {
+      "payload": "ww_avg",
+      "values": 2457504,
+      "bitwise_equal": true,
+      "host_sha256": "8a6032d9d604cc7e4e2aefdff2fd21d0d7043f37baaefbeb731325617eb9fde9",
+      "device_sha256": "8a6032d9d604cc7e4e2aefdff2fd21d0d7043f37baaefbeb731325617eb9fde9"
+     },
+     {
+      "payload": "rho_pp",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "dc47dd2b9ec4c93e691271f8546c7e9599877bcdde5bc0ed07c4e2ce123b4c86",
+      "device_sha256": "dc47dd2b9ec4c93e691271f8546c7e9599877bcdde5bc0ed07c4e2ce123b4c86"
+     },
+     {
+      "payload": "rtheta_pp",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "ddbb01b3309a5563ac7f34e43931ce22e6ba0a542b6d34d44692ba0372e53e01",
+      "device_sha256": "ddbb01b3309a5563ac7f34e43931ce22e6ba0a542b6d34d44692ba0372e53e01"
+     },
+     {
+      "payload": "_one_cell_edge_flag",
+      "values": 1,
+      "bitwise_equal": true,
+      "host_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "device_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+     }
+    ]
+   },
+   "dual_run_identical": true,
+   "mutation": {
+    "declared": "one specified edge is de-masked so its pressure gradient is no longer switched off",
+    "applied": "bdy_mask_cell[43865] 2->1; bdy_mask_edge[34400] 4->3; spec_zone_mask_edge[65] 1.0->0.0 (the first specified edge with both cells present); spec_zone_mask_cell[11] 1.0->0.0 and spec_cells[0] aliased to its neighbour (the first specified cell whose every edge has both cells)",
+    "deck_still_matches_host": false,
+    "control_has_teeth": true,
+    "payloads": [
+     {
+      "payload": "ru_p",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "ru_avg",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "rw_p",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "ww_avg",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "rho_pp",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "rtheta_pp",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "_one_cell_edge_flag",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     }
+    ]
+   },
+   "verdict": true
+  },
+  {
+   "deck": "transport-regional",
+   "kernels": [
+    "transport_edge_values_regional_v841",
+    "transport_standard_finish_regional_v841"
+   ],
+   "native_anchor": "mpas_atm_time_integration.F:4764-4861",
+   "host_oracle": "transport.advance_scalars (masked)",
+   "wall_seconds": 372.556,
+   "pass_1": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "edge_values[read lanes]",
+      "values": 7157920,
+      "bitwise_equal": true,
+      "host_sha256": "a441d322cd9b66a17bfa1908dd3a0ec15ef6a14630490b17e88206bbf9e7b612",
+      "device_sha256": "a441d322cd9b66a17bfa1908dd3a0ec15ef6a14630490b17e88206bbf9e7b612"
+     },
+     {
+      "payload": "edge_values[skipped lanes are zero]",
+      "values": 99660,
+      "bitwise_equal": true,
+      "host_sha256": "e4b9ee720041dc317e7a34dda4bff3d4ce58d4da0fa04a99e45a90cbb481b28b",
+      "device_sha256": "e4b9ee720041dc317e7a34dda4bff3d4ce58d4da0fa04a99e45a90cbb481b28b"
+     },
+     {
+      "payload": "scalars_after_transport",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "ab85f098503db8e16af7078092cfde3da30beb2bf81fb80a1918d96b2a9f4f41",
+      "device_sha256": "ab85f098503db8e16af7078092cfde3da30beb2bf81fb80a1918d96b2a9f4f41"
+     },
+     {
+      "payload": "target_density",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "993439d28d99b90bc213cb631908f664314034bc82dcc334295b68d0707d0b68",
+      "device_sha256": "993439d28d99b90bc213cb631908f664314034bc82dcc334295b68d0707d0b68"
+     },
+     {
+      "payload": "_inherited_shared_vertical_flux_mismatches",
+      "values": 1,
+      "bitwise_equal": true,
+      "host_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "device_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+     }
+    ]
+   },
+   "pass_2": {
+    "bitwise_equal": true,
+    "payloads": [
+     {
+      "payload": "edge_values[read lanes]",
+      "values": 7157920,
+      "bitwise_equal": true,
+      "host_sha256": "a441d322cd9b66a17bfa1908dd3a0ec15ef6a14630490b17e88206bbf9e7b612",
+      "device_sha256": "a441d322cd9b66a17bfa1908dd3a0ec15ef6a14630490b17e88206bbf9e7b612"
+     },
+     {
+      "payload": "edge_values[skipped lanes are zero]",
+      "values": 99660,
+      "bitwise_equal": true,
+      "host_sha256": "e4b9ee720041dc317e7a34dda4bff3d4ce58d4da0fa04a99e45a90cbb481b28b",
+      "device_sha256": "e4b9ee720041dc317e7a34dda4bff3d4ce58d4da0fa04a99e45a90cbb481b28b"
+     },
+     {
+      "payload": "scalars_after_transport",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "ab85f098503db8e16af7078092cfde3da30beb2bf81fb80a1918d96b2a9f4f41",
+      "device_sha256": "ab85f098503db8e16af7078092cfde3da30beb2bf81fb80a1918d96b2a9f4f41"
+     },
+     {
+      "payload": "target_density",
+      "values": 2413620,
+      "bitwise_equal": true,
+      "host_sha256": "993439d28d99b90bc213cb631908f664314034bc82dcc334295b68d0707d0b68",
+      "device_sha256": "993439d28d99b90bc213cb631908f664314034bc82dcc334295b68d0707d0b68"
+     },
+     {
+      "payload": "_inherited_shared_vertical_flux_mismatches",
+      "values": 1,
+      "bitwise_equal": true,
+      "host_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "device_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+     }
+    ]
+   },
+   "dual_run_identical": true,
+   "mutation": {
+    "declared": "the outermost relaxation ring is relabelled one ring inward, moving an edge out of the first-order downgrade",
+    "applied": "bdy_mask_cell[43865] 2->1; bdy_mask_edge[34400] 4->3; spec_zone_mask_edge[65] 1.0->0.0 (the first specified edge with both cells present); spec_zone_mask_cell[11] 1.0->0.0 and spec_cells[0] aliased to its neighbour (the first specified cell whose every edge has both cells)",
+    "deck_still_matches_host": false,
+    "control_has_teeth": true,
+    "payloads": [
+     {
+      "payload": "edge_values[read lanes]",
+      "bitwise_equal": false,
+      "mismatch_count": 55
+     },
+     {
+      "payload": "edge_values[skipped lanes are zero]",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "scalars_after_transport",
+      "bitwise_equal": false,
+      "mismatch_count": 110
+     },
+     {
+      "payload": "target_density",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     },
+     {
+      "payload": "_inherited_shared_vertical_flux_mismatches",
+      "bitwise_equal": true,
+      "mismatch_count": 0
+     }
+    ]
+   },
+   "verdict": true
+  }
+ ],
+ "summary": {
+  "decks": 8,
+  "decks_passed": 8,
+  "kernels_covered": 22,
+  "kernels_declared": 22,
+  "all_dual_run_identical": true,
+  "all_controls_have_teeth": true
+ }
+}

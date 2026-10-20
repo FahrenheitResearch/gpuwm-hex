@@ -1,0 +1,41 @@
+{
+  "all_field_hashes_identical": true,
+  "config_sha256": "6ac3bfadebb3639ec2cd385e99cd97f0d2717b5c5d36a7d7598c4131b1167924",
+  "dt_seconds": 5,
+  "endpoint_words": [
+    {
+      "equal": true,
+      "file": "history.2026-10-07_12.00.00.nc",
+      "native_receipt": "<run-root>/mint-class-v2/words-step0.json",
+      "step": 0
+    },
+    {
+      "equal": true,
+      "file": "history.2026-10-07_15.00.00.nc",
+      "native_receipt": "<run-root>/mint-class-v2/words-step2160.json",
+      "step": 2160
+    }
+  ],
+  "masked_file_hashes_identical": true,
+  "schema": "hex-regional-class-pair-v1",
+  "scope": "two independent dry regional dycore runs; full physics is a separate qualification",
+  "solve_cells": 43642,
+  "source_sha256": {
+    "src/hexcore/cuda_acoustic_v841.py": "7601ae667855c905d781b6287e355d5350155cf3f86943ec508bad4c3f1e211f",
+    "src/hexcore/cuda_backend/containers.py": "e8023a1076241ee36ce51f9bad40e2c3059f98bdd522415ff7773c782505fccc",
+    "src/hexcore/cuda_backend/runtime.py": "c3a5c611ce2677e17f067da88633717720b9abe595d273cf781e112ec84ea888",
+    "src/hexcore/cuda_driver.py": "38b907fb7d466d547759eac3290685f4bc4765ae882ad7d841916797875a0c2f",
+    "src/hexcore/cuda_dynamics_v841.py": "fed210892a9f2553d0f6ac49866251fab2d1d6b12d8397fa2066b6507095ff98",
+    "src/hexcore/cuda_horizontal.py": "13241acc222a9cb012ce05159853c8d0d053321eab6362dd44e6a49c1971c0d5",
+    "src/hexcore/cuda_horizontal_v841.py": "dd60e5652e66ad818d2a77b21cd242e6bc88e7245b76d2cade5300a7320e3455",
+    "src/hexcore/cuda_regional_forecast_v841.py": "e7f47e590f9d9d8f837b83602f714c075440960cf231141aaab90ee9bad23479",
+    "src/hexcore/cuda_regional_v841.py": "a9ab181e06766953eab9f85e7529f2676358f631fee522b15490eafda95f4b16",
+    "src/hexcore/cuda_transport.py": "0cf68d55d00a094590d23ec0c7af6bae8595b2b954c2cdc8efc3e9eff49c112a",
+    "src/hexcore/cuda_transport_v841.py": "6ac4eece4ed080e7f76a2239b11dc59c984501ee52db900e35e5d74762f78252",
+    "src/hexcore/cuda_v841.py": "e638896c75c72d714697247f006cad2c3eb428550411cfa451844e3f5ea9df18",
+    "src/hexcore/regional_v841.py": "e0bb6ffc57126fa73cb068de348d01d6390721fc1e0c93400eb8e7c889edc015",
+    "tools/run_cuda_regional_forecast.py": "042b5c57fe3fd4d36b51fce9b05c6735cadbfb57d69ca0ae9cd5d9f7f5fcc2e0"
+  },
+  "steps": 2160,
+  "whole_files_distinct": true
+}

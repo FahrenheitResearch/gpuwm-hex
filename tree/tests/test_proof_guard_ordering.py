@@ -30,7 +30,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
 DRIVERS = PACKAGE_DIR / "drivers"
 
-PINS = "require_frozen_execution_sources"
+#: The x4 proof REFUSES on a moved source pin; a forecast RECORDS the same
+#: hashes and whether they match (``measure_execution_sources``, 2026-10-10:
+#: the pin stopped being a forecast gate).  Either one is "this port's
+#: sources were hashed first", which is the ordering this file holds.
+PINS = ("require_frozen_execution_sources", "measure_execution_sources")
 GUARD = "verify_arwen_checkout_git"
 
 
@@ -77,7 +81,7 @@ def _first_call_lines(scope: ast.AST) -> tuple[int | None, int | None]:
     guard: list[int] = []
     for node in _own_calls(scope):
         name = _called_name(node)
-        if name == PINS:
+        if name in PINS:
             pins.append(node.lineno)
         elif name == GUARD:
             guard.append(node.lineno)
@@ -96,7 +100,7 @@ def _tool_sources() -> list[Path]:
 def _ordering_offenders() -> list[str]:
     offenders: list[str] = []
     for path in _tool_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
         for label, scope in _scopes(tree):
             pins_line, guard_line = _first_call_lines(scope)
             if guard_line is None:
@@ -104,12 +108,12 @@ def _ordering_offenders() -> list[str]:
             if pins_line is None:
                 offenders.append(
                     f"{path.relative_to(ROOT).as_posix()}::{label} calls {GUARD} "
-                    f"at line {guard_line} and never calls {PINS}"
+                    f"at line {guard_line} and never calls one of {PINS}"
                 )
             elif pins_line > guard_line:
                 offenders.append(
                     f"{path.relative_to(ROOT).as_posix()}::{label} calls {GUARD} "
-                    f"at line {guard_line} before {PINS} at line {pins_line}"
+                    f"at line {guard_line} before {PINS[0]} at line {pins_line}"
                 )
     return offenders
 
@@ -149,7 +153,7 @@ def test_the_scan_actually_reaches_the_secondary_tools() -> None:
 
     covered: set[str] = set()
     for path in _tool_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
         for _, scope in _scopes(tree):
             _, guard_line = _first_call_lines(scope)
             if guard_line is not None:
@@ -197,7 +201,7 @@ def test_secondary_tool_calls_pins_first_at_runtime(
     runner = module.runner
     order: list[str] = []
     monkeypatch.setattr(
-        runner, PINS, lambda: order.append(PINS) or {"files": {}, "sha256": "stub"}
+        runner, PINS[0], lambda: order.append(PINS[0]) or {"files": {}, "sha256": "stub"}
     )
     monkeypatch.setattr(
         runner, GUARD, lambda checkout: order.append(GUARD) or {"root": str(checkout)}
@@ -218,4 +222,4 @@ def test_secondary_tool_calls_pins_first_at_runtime(
     with pytest.raises(BaseException):
         module.main(argv)
 
-    assert order[:2] == [PINS, GUARD], f"{tool} call order was {order}"
+    assert order[:2] == [PINS[0], GUARD], f"{tool} call order was {order}"

@@ -59,7 +59,7 @@ def test_the_floor_is_the_lowest_engine_that_is_all_three_things(monkeypatch):
         _row("2.5.6"),
         _row("2.5.7", moved=("gpuwm/core/microphysics.py",)),
     ))
-    assert engine_pin.gpuwm_floor() == "2.5.6"
+    assert engine_pin.measured_gpuwm_floor() == "2.5.6"
 
     # Teeth, one clause at a time: drop each disqualifier and the floor moves
     # down to 2.5.5, which proves the clause was doing the work.
@@ -67,35 +67,53 @@ def test_the_floor_is_the_lowest_engine_that_is_all_three_things(monkeypatch):
         _row("2.5.5"),
         _row("2.5.6"),
     ))
-    assert engine_pin.gpuwm_floor() == "2.5.5"
+    assert engine_pin.measured_gpuwm_floor() == "2.5.5"
 
 
-def test_the_ceiling_is_exclusive_at_the_first_engine_that_does_not_work(
-    monkeypatch,
-):
+def test_the_range_is_the_floors_whole_minor_so_pip_never_downgrades(monkeypatch):
+    """Plan call 14 (open defect B2): an exact-patch range downgraded the engine.
+
+    0.3.3's ``<2.8.1`` made ``pip install gpuwm-hex`` replace a user's 2.8.7
+    with 2.8.0.  A measured row inside the minor that moved the seam no
+    longer lowers the ceiling; the helper binding refuses that engine by
+    name at the door instead.
+    """
+
+    monkeypatch.setattr(engine_pin, "GPUWM_INSTALL_MINIMUM", "2.5.0")
     monkeypatch.setattr(engine_pin, "PUBLISHED_ENGINES", (
         _row("2.5.6"),
         _row("2.5.7", moved=("gpuwm/io/restart.py",)),
     ))
-    assert engine_pin.gpuwm_ceiling() == "2.5.7"
-    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.5.6,<2.5.7"
+    assert engine_pin.gpuwm_ceiling() == "2.6"
+    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.5.6,<2.6"
 
 
-def test_an_unmeasured_engine_is_never_admitted(monkeypatch):
-    """The property that stops the NEXT engine cut re-opening this.
+def test_the_2_9_0_pin_derives_the_call_14_range(monkeypatch):
+    monkeypatch.setattr(engine_pin, "GPUWM_INSTALL_MINIMUM", "2.5.0")
+    monkeypatch.setattr(engine_pin, "PUBLISHED_ENGINES", (
+        _row("2.8.7", moved=("gpuwm/core/physics.py",)),
+        _row("2.8.9", moved=("gpuwm/core/physics.py",)),
+        _row("2.9.0"),
+        _row("2.9.1", moved=("gpuwm/core/rrtmg_legacy.py",)),
+    ))
+    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.9.0,<2.10"
 
-    When every measured engine above the floor works, the ceiling is the
-    next patch after the highest one measured -- not "unbounded".  An engine
-    nobody has compared against the manifest is exactly the engine the
-    original defect resolved onto.
+
+def test_an_unmeasured_minor_is_never_admitted(monkeypatch):
+    """The property that stops the NEXT engine minor re-opening this.
+
+    The ceiling is the next minor after the floor -- never "unbounded".  An
+    engine minor nobody has compared against the manifest is exactly the
+    engine the original defect resolved onto.
     """
 
+    monkeypatch.setattr(engine_pin, "GPUWM_INSTALL_MINIMUM", "2.5.0")
     monkeypatch.setattr(engine_pin, "PUBLISHED_ENGINES", (
         _row("2.5.6"),
         _row("2.5.7"),
     ))
-    assert engine_pin.gpuwm_ceiling() == "2.5.8"
-    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.5.6,<2.5.8"
+    assert engine_pin.gpuwm_ceiling() == "2.6"
+    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.5.6,<2.6"
 
 
 def test_no_usable_engine_is_a_refusal_rather_than_a_silent_range(monkeypatch):
@@ -107,244 +125,83 @@ def test_no_usable_engine_is_a_refusal_rather_than_a_silent_range(monkeypatch):
     assert "measure_engine_verdicts.py" in str(raised.value)
 
 
+@pytest.mark.parametrize("measured,minimum,expected,ceiling", [
+    ("2.9.0", "2.9.2", "2.9.2", "2.10"),
+    ("3.0.1", "2.9.2", "3.0.1", "3.1"),
+])
+def test_installation_policy_does_not_relabel_measured_bytes(
+    monkeypatch, measured, minimum, expected, ceiling,
+):
+    rows = (_row(measured),)
+    monkeypatch.setattr(engine_pin, "PUBLISHED_ENGINES", rows)
+    monkeypatch.setattr(engine_pin, "GPUWM_INSTALL_MINIMUM", minimum)
+    assert engine_pin.measured_gpuwm_floor() == measured
+    assert engine_pin.wanted_version() == measured
+    assert engine_pin.pinned_engine().version == measured
+    assert engine_pin.gpuwm_floor() == expected
+    assert engine_pin.gpuwm_requirement() == f"gpuwm>={expected},<{ceiling}"
+    assert engine_pin.PUBLISHED_ENGINES == rows
+    if expected != measured:
+        assert engine_pin.engine(expected) is None
+
+
+def test_shipped_installation_minimum_keeps_the_release_range():
+    assert engine_pin.GPUWM_INSTALL_MINIMUM == "2.9.2"
+    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.9.2,<2.10"
+
+
+def _repin_documents() -> dict[str, dict]:
+    """Every repin measurement of record, keyed by the engine version it pinned."""
+
+    import json
+
+    found = {}
+    for path in sorted((ROOT / "verification" / "engine-verdicts").glob("repin-*.json")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        found[document["pin"]["version"]] = dict(document, _path=path)
+    return found
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+#: The measurement the shipped table is rendered from: the repin JSON whose
+#: pin is the measured seam floor. Under ``verification/`` rather than
+#: ``evidence/`` because it is the table's SOURCE, not a record of a run: the
+#: sdist grafts ``verification/`` and holds ``evidence/`` out, so this gate
+#: runs on every published surface instead of skipping there.  Derived rather
+#: than named, so an engine repin is the instrument's output plus its JSON,
+#: with no version in this file to transcribe -- the transcriptions are what
+#: the engine_pin docstring counts going wrong.
+VERDICTS_OF_RECORD = _repin_documents()[engine_pin.measured_gpuwm_floor()]["_path"]
+
+
 def test_the_shipped_table_says_what_the_measurement_said():
-    """The rows this distribution actually ships, against the measurement.
-
-    Not a re-derivation -- the network instrument is
-    ``tools/measure_engine_verdicts.py`` and the JSON behind the shipped
-    table is ``verification/engine-verdicts/repin-280-20260929.json``.  This
-    is the claim the measurement makes, kept true here so that editing a row
-    without re-measuring is caught.
-
-    A NINTH TIME ON 2026-09-29: the engine published 2.7.5, 2.7.6, 2.7.7
-    and 2.8.0, which the 2.7.4 pin's ceiling kept out, and EIGHT manifest
-    files moved between the published 2.7.4 and 2.8.0 wheels
-    (``gpuwm/config.py``, ``gpuwm/core/gf.py``,
-    ``gpuwm/core/kernels/__init__.py``, ``gpuwm/core/kernels/gf.cu``,
-    ``gpuwm/core/microphysics.py``, ``gpuwm/core/physics.py``,
-    ``gpuwm/core/rrtmg_legacy.py``, ``gpuwm/io/restart.py``), the other
-    eight byte-identical, the column batch, the seam document and the
-    composed glacier unit included.  The port re-pinned to the 2.8.0 bytes
-    (tag ``0164ae0f``, which agrees with all three platform wheels), so
-    2.7.4 dropped to "fails the manifest" by those eight.  Exactly one
-    engine is usable, asserted below as the whole list.
-
-    AN EIGHTH TIME ON 2026-09-15, the narrowest move yet: the engine
-    published 2.7.4 and TWO manifest files moved between the published
-    2.7.3 and 2.7.4 wheels (``gpuwm/config.py``, one added settings-map
-    reader; ``gpuwm/core/microphysics.py``, two keyword arguments on the
-    classic Thompson path), the other fourteen byte-identical.  The port
-    re-pinned to the 2.7.4 bytes, so 2.7.3 dropped to "fails the manifest"
-    by those two, and every earlier row kept its count because both files
-    were already in its list.  Exactly one engine is usable, asserted below
-    as the whole list.
-
-    AND A SEVENTH TIME ON 2026-09-13, the widest move to that date: the engine
-    published 2.7.0, 2.7.1, 2.7.2 and 2.7.3, ELEVEN manifest files moved
-    between the published 2.6.5 wheel and the published 2.7.3 wheel, and
-    the port re-pinned to the 2.7.3 bytes, so 2.6.4 and 2.6.5 -- the whole
-    admitted range the day before -- dropped to "fails the manifest" by
-    those eleven.  2.7.0, 2.7.1 and 2.7.2 carry the same sixteen bytes as
-    each other and fail by eight (the Grell-Freitas adapter, its kernel and
-    the Noah-MP libm unit moved at 2.7.0 and stayed; the rest moved again
-    at 2.7.3).  Measured first the other way, against the manifest 0.2.3
-    shipped, all four 2.7 engines failed it -- the three earlier by seven
-    and 2.7.3 by eleven -- which is the ``<2.6.6`` ceiling doing its work
-    for the ten days between the 2.7.0 publish and this re-pin.  Exactly
-    one engine is usable now, asserted below as the whole list.
-
-    THIS TEST'S OWN FIGURES MOVED ON 2026-08-28, and the gate was the stale
-    side rather than the table.  It used to assert floor 2.5.6, ceiling
-    2.5.7, and that 2.5.5 satisfied the manifest.  All three were correct
-    against the 0.1.x pin and all three are now wrong, because the port
-    re-pinned its manifest to gpuwm 2.5.8 and ``moved`` is measured AGAINST
-    that manifest: re-pinning moves the whole column, including rows for
-    engines cut long before.  Loosening the gate would have been the wrong
-    repair; re-measuring and restating it is the right one.
-
-    AND THEY MOVED AGAIN ON 2026-08-31, the same way for the same reason:
-    the engine published 2.6.0 (the repaired steepest-gradient meter and
-    P3), three manifest files moved at that cut -- ``gpuwm/config.py``,
-    ``gpuwm/core/rrtmg_legacy.py``, ``gpuwm/io/restart.py`` -- and the port
-    re-pinned to the published 2.6.0 bytes, so 2.5.8 joined the rows that
-    fail its own former manifest.
-
-    AND A THIRD TIME ON 2026-09-01: the engine published 2.6.1 (the restart
-    schema v2 carriers payload and the P3 eight-species seam route), three
-    manifest files moved at that cut -- ``gpuwm/core/mpas_column_batch.py``,
-    ``gpuwm/config.py``, ``docs/mpas-seam.md`` -- and the port re-pinned to
-    the published 2.6.1 bytes, so 2.6.0 dropped to "fails the manifest"
-    exactly as 2.5.8 did the time before.
-
-    AND A FOURTH TIME ON 2026-09-02: the engine published 2.6.3 (the
-    aerosol-aware Thompson seam row and a config-relative file key), the
-    same three manifest files moved at that cut, and the port re-pinned to
-    the published 2.6.3 bytes, so 2.6.1 dropped to "fails the manifest".
-    2.6.2 is the 2.5.5 shape again -- a tag whose bytes match and whose
-    publish job died, so nothing of it is on PyPI -- and is asserted below
-    as satisfying the manifest and still not usable.
-
-    AND A FIFTH TIME THE SAME DAY: the engine published 2.6.4 three hours
-    after 2.6.3 (a third cumulus scheme and two fixes), SIX manifest files
-    moved between the two published wheels -- ``gpuwm/core/physics.py``,
-    ``gpuwm/core/gf.py``, ``gpuwm/core/kernels/gf.cu``,
-    ``gpuwm/core/kernels/__init__.py``, ``gpuwm/config.py``,
-    ``gpuwm/io/restart.py`` -- and the port re-pinned to the published 2.6.4
-    bytes, so 2.6.3 dropped to "fails the manifest" by exactly those six.
-    2.6.2 fails by the same six now, so its tag-only clause no longer
-    decides anything; it is asserted below as failing on bytes AND absent
-    from PyPI, so neither clause can be edited back alone.
-
-    AND A SIXTH TIME THE SAME DAY, WITHOUT A PIN MOVE: the engine published
-    2.6.5 ninety minutes after 2.6.4 (a soil-archive layout fix off the
-    physics path), all sixteen manifest files are byte-identical between
-    the two published wheels (``evidence/repin-265-20260902/
-    wheel-pair-264-265.txt``), so the manifest stayed where it was, 2.6.4
-    stayed the floor, 2.6.5 joined the usable rows and the ceiling moved
-    one patch up to 2.6.6.  That is the only widening the derivation can
-    produce -- a measured engine that passed -- and it is asserted below as
-    exactly two usable rows, so a third appearing without a measurement is
-    a failure here.
-    """
-
-    assert engine_pin.gpuwm_requirement() == "gpuwm>=2.8.0,<2.8.1"
-    assert engine_pin.gpuwm_floor() == "2.8.0"
-    assert engine_pin.gpuwm_ceiling() == "2.8.1"
-
-    # EXACTLY ONE published engine is usable.  Asserted as the whole list,
-    # not as a membership test, because "2.8.0 works" would still pass if a
-    # stale row below it were left claiming to work too -- and that stale
-    # row is what a resolver would actually pick.
-    usable = [row.version for row in engine_pin.PUBLISHED_ENGINES if row.usable]
-    assert usable == ["2.8.0"], (
-        "the re-pinned manifest is satisfied by exactly one published "
-        f"engine.  Usable: {usable}"
-    )
-    assert engine_pin.engine("2.8.0").moved == ()
-    assert engine_pin.engine("2.8.0").on_pypi
-    assert engine_pin.engine("2.8.0").offline_build_road
-
-    # The engine that was the whole range the day before now fails, by the
-    # eight files that moved between the published 2.7.4 and 2.8.0 wheels
-    # and by nothing else; 2.7.3 fails by the same eight.  Named
-    # individually so that a row silently reverting to "matches" is a
-    # failure here rather than a wider range.
-    moved_at_280 = (
-        "gpuwm/config.py",
-        "gpuwm/core/gf.py",
-        "gpuwm/core/kernels/__init__.py",
-        "gpuwm/core/kernels/gf.cu",
-        "gpuwm/core/microphysics.py",
-        "gpuwm/core/physics.py",
-        "gpuwm/core/rrtmg_legacy.py",
-        "gpuwm/io/restart.py",
-    )
-    for version in ("2.7.3", "2.7.4"):
-        row = engine_pin.engine(version)
-        assert row.moved == moved_at_280, version
-        assert row.on_pypi and row.offline_build_road and not row.usable
-    # The three 2.7 patch engines published between the two pins, which the
-    # 2.7.4 pin's ceiling kept out: each carries some of the 2.8.0 bytes
-    # already and fails by the rest.
-    assert engine_pin.engine("2.7.5").moved == (
-        "gpuwm/config.py",
-        "gpuwm/core/kernels/__init__.py",
-        "gpuwm/core/kernels/gf.cu",
-        "gpuwm/core/microphysics.py",
-        "gpuwm/core/physics.py",
-        "gpuwm/core/rrtmg_legacy.py",
-        "gpuwm/io/restart.py",
-    )
-    moved_since_276 = (
-        "gpuwm/config.py",
-        "gpuwm/core/kernels/__init__.py",
-        "gpuwm/core/microphysics.py",
-        "gpuwm/core/physics.py",
-        "gpuwm/core/rrtmg_legacy.py",
-        "gpuwm/io/restart.py",
-    )
-    for version in ("2.7.5", "2.7.6", "2.7.7"):
-        row = engine_pin.engine(version)
-        assert row.on_pypi and row.offline_build_road and not row.usable
-        if version != "2.7.5":
-            assert row.moved == moved_since_276, version
-    assert not engine_pin.engine("2.5.7").usable
-    assert not engine_pin.engine("2.5.8").usable
-    assert not engine_pin.engine("2.6.0").usable
-    assert not engine_pin.engine("2.6.1").usable
-    assert not engine_pin.engine("2.6.3").usable
-    assert not engine_pin.engine("2.6.4").usable
-    assert not engine_pin.engine("2.6.5").usable
-    moved_at_273 = (
-        "gpuwm/config.py",
-        "gpuwm/core/gf.py",
-        "gpuwm/core/kernels/__init__.py",
-        "gpuwm/core/kernels/gf.cu",
-        "gpuwm/core/kernels/noahmp_leaves.cu",
-        "gpuwm/core/microphysics.py",
-        "gpuwm/core/noahmp_glacier_gpu.py",
-        "gpuwm/core/noahmp_kernel_sources.py",
-        "gpuwm/core/physics.py",
-        "gpuwm/core/rrtmg_legacy.py",
-        "gpuwm/io/restart.py",
-    )
-    assert engine_pin.engine("2.6.5").moved == moved_at_273
-    # 2.6.4 and 2.6.5 carried the same sixteen bytes, so they fail the same
-    # way; a row that differs between them was edited, not measured.
-    assert engine_pin.engine("2.6.4").moved == moved_at_273
-    # The three earlier 2.7 engines carry the same sixteen bytes as each
-    # other and fail by ten: the eight that moved at 2.7.3, plus the GF
-    # adapter and its kernel, which 2.7.0 to 2.7.4 shared and 2.8.0 moved.
-    moved_since_270 = (
-        "gpuwm/config.py",
-        "gpuwm/core/gf.py",
-        "gpuwm/core/kernels/__init__.py",
-        "gpuwm/core/kernels/gf.cu",
-        "gpuwm/core/microphysics.py",
-        "gpuwm/core/noahmp_glacier_gpu.py",
-        "gpuwm/core/noahmp_kernel_sources.py",
-        "gpuwm/core/physics.py",
-        "gpuwm/core/rrtmg_legacy.py",
-        "gpuwm/io/restart.py",
-    )
-    for version in ("2.7.0", "2.7.1", "2.7.2"):
-        row = engine_pin.engine(version)
-        assert row.moved == moved_since_270, version
-        assert row.on_pypi and row.offline_build_road and not row.usable
-    # 2.6.2: the tag whose publish job died.  It fails this manifest by the
-    # same eleven files 2.6.5 does, so it is disqualified twice; both
-    # clauses named so that neither can be quietly edited back on its own.
-    tagged_262 = engine_pin.engine("2.6.2")
-    assert not tagged_262.satisfies_manifest
-    assert tagged_262.moved == moved_at_273
-    assert tagged_262.offline_build_road
-    assert not tagged_262.on_pypi
-    assert not tagged_262.usable
+    """Only the measured seam may resolve after a repin."""
+    documents = _repin_documents()
+    pinned = engine_pin.measured_gpuwm_floor()
+    verdicts = documents[pinned]
+    # The record's requirement was derived under the policy of its day (a
+    # one-patch range until plan call 14); the floor it measured is what
+    # still binds, and the range is that floor's whole minor.
+    assert verdicts["requirement"].startswith(f"gpuwm>={pinned},")
+    assert engine_pin.gpuwm_requirement() == f"gpuwm>={engine_pin.gpuwm_floor()},<{engine_pin.gpuwm_ceiling()}"
+    assert [row.version for row in engine_pin.PUBLISHED_ENGINES if row.usable] == [pinned]
+    current = engine_pin.engine(pinned)
+    assert current.on_pypi and current.offline_build_road and current.moved == ()
+    # The previous pin cannot silently remain installable.
+    previous = [v for v in documents if _version_key(v) < _version_key(pinned)]
+    assert previous, "no earlier repin of record to hold the previous pin to"
+    assert engine_pin.engine(max(previous, key=_version_key)).moved
     for row in engine_pin.PUBLISHED_ENGINES:
-        if row.version != "2.8.0":
-            assert row.moved, (
-                f"{row.version} claims to satisfy the manifest.  Only 2.8.0 "
-                "does; any other row with an empty moved list means the "
-                "table was patched by hand instead of re-measured"
-            )
-
-    # 2.5.5 is disqualified three separate ways now, and all three are
-    # asserted so that removing any one from the table is a failure rather
-    # than a silent floor move.  The byte clause is new; the other two are
-    # the 2026-08-27 findings and still stand.
-    tag_only = engine_pin.engine("2.5.5")
-    assert not tag_only.satisfies_manifest
-    assert not tag_only.on_pypi
-    assert not tag_only.offline_build_road
-
-
-#: The measurement the shipped table is rendered from.  Under ``verification/``
-#: rather than ``evidence/`` because it is the table's SOURCE, not a record of
-#: a run: the sdist grafts ``verification/`` and holds ``evidence/`` out, so
-#: this gate runs on every published surface instead of skipping there.
-VERDICTS_OF_RECORD = (
-    ROOT / "verification" / "engine-verdicts" / "repin-280-20260929.json"
-)
+        if row.version != pinned:
+            assert row.moved, f"unqualified engine {row.version} claims the new seam"
+    # Tag-only rows and the incomplete old build road retain their refusals.
+    assert not engine_pin.engine("2.5.5").on_pypi
+    assert not engine_pin.engine("2.5.5").offline_build_road
+    assert not engine_pin.engine("2.6.2").on_pypi
+    assert not engine_pin.engine("2.8.2").on_pypi
 
 
 def test_the_table_is_the_instruments_output_not_a_transcription():
@@ -373,8 +230,8 @@ def test_the_table_is_the_instruments_output_not_a_transcription():
         "table has no measurement to be rendered from"
     )
     verdicts = json.loads(VERDICTS_OF_RECORD.read_text(encoding="utf-8"))
-    assert verdicts["pin"]["version"] == "2.8.0"
-    assert verdicts["instrument"] == "tools/measure_engine_verdicts.py"
+    assert verdicts["pin"]["version"] == engine_pin.measured_gpuwm_floor()
+    assert verdicts["instrument"] == "tools/repin_source_tables.py"
     measured = {
         row["tag"].lstrip("v"): (
             bool(row["on_pypi"]),
@@ -391,7 +248,7 @@ def test_the_table_is_the_instruments_output_not_a_transcription():
         "PUBLISHED_ENGINES disagrees with the JSON it is supposed to be "
         "rendered from.  Re-splice it: python tools/measure_engine_verdicts.py "
         "--offline --engine-git <arwen clone> --wheel-cache <cache> "
-        "--pin-to 2.8.0 --splice"
+        f"--pin-to {engine_pin.measured_gpuwm_floor()} --splice"
     )
 
     # The manifest the JSON was measured against is the one the package
@@ -491,57 +348,67 @@ def test_the_checkout_version_is_read_from_the_tree_not_from_the_install(
 # ---------------------------------------------------------------------------
 # the door's refusal names a version
 # ---------------------------------------------------------------------------
-def test_the_door_refusal_names_the_version_found_and_the_version_wanted(
+def test_a_moved_engine_runs_and_the_door_records_what_moved(
     tmp_path, monkeypatch
 ):
-    """The refusal law: name the breakage AND the remedy.
-
-    What a user met before this existed was two digests, an instruction to
-    "re-prove before running" addressed to a developer of this port, and the
-    door's own wrapper saying the message should not be trusted.  A manifest
-    holds digests; a user cannot invert one into a version.
+    """RETIRED 2026-10-10 as a gate: an engine whose seam bytes are not the
+    pinned version's is not refused.  The door used to answer "the seam is
+    pinned to gpuwm X ... running against moved bytes would be running
+    physics nobody proved", which names missing evidence and no breakage,
+    and it closed the forecast on every engine newer than the pin (8-card RTX PRO 6000 host:
+    gpuwm 2.8.9 against the 2.8.7 pin).  The match is recorded instead.
     """
 
     root, manifest = _seam_tree(tmp_path, "2.5.7")
     monkeypatch.setattr(engine_pin, "seam_manifest", lambda: manifest)
     (root / "gpuwm/core/microphysics.py").write_bytes(b"moved\n")
 
-    problem = door.seam_pin_problem(root)
-    assert problem is not None
-    assert "gpuwm 2.5.7" in problem, "the version FOUND is not named"
-    assert f"gpuwm {engine_pin.wanted_version()}" in problem, (
-        "the version WANTED is not named"
-    )
-    assert "gpuwm/core/microphysics.py" in problem, "the moved file is not named"
-    assert engine_pin.gpuwm_requirement() in problem, "the remedy is not printed"
-    assert f"--branch v{engine_pin.wanted_version()}" in problem, (
-        "the forecast lane needs a SOURCE CHECKOUT and the refusal must say "
-        "which tag to clone; naming only the pip line leaves that lane shut"
-    )
+    assert door.seam_pin_problem(root) is None
+    record = door.seam_pin_record(root)
+    assert record["matches_measured_row"] is False
+    assert record["declared_engine_version"] == "2.5.7"
+    assert record["pinned_engine_version"] == engine_pin.wanted_version()
+    assert record["moved_from_pin"] == ["gpuwm/core/microphysics.py"]
+    assert record["absent_from_pin"] == []
+
+    identity = engine_pin.identity_of(engine_pin.inspect_seam(root))
+    assert not identity.matches_measured_row and not identity.admitted
+    assert identity.version == "2.5.7"
+    assert identity.build_commit == engine_pin.UNMEASURED_BUILD_COMMIT
+    assert identity.manifest["gpuwm/core/microphysics.py"] != manifest[
+        "gpuwm/core/microphysics.py"
+    ], "an unmatched tree is named by the bytes it was FOUND with"
 
 
-def test_the_door_refuses_before_the_run_rather_than_relaying_the_driver(
+def test_a_matching_engine_is_recorded_as_the_measured_row(tmp_path, monkeypatch):
+    root, manifest = _seam_tree(tmp_path, "2.5.7")
+    monkeypatch.setattr(engine_pin, "seam_manifest", lambda: manifest)
+
+    assert door.seam_pin_problem(root) is None
+    record = door.seam_pin_record(root)
+    assert record["matches_measured_row"] is True
+    assert record["measured_row"] == engine_pin.wanted_version()
+    assert record["moved_from_pin"] == [] and record["absent_from_pin"] == []
+
+
+def test_the_door_refuses_a_tree_with_no_seam_module_by_its_breakage(
     tmp_path, monkeypatch
 ):
-    """A named refusal, raised by the door, is what reaches the user.
-
-    ``resolve_request`` is where every check a user can act on happens.  The
-    driver's own sixteen-file check is NOT retired by this -- it is the wall,
-    it also reads the checkout's git state, and it lives inside the frozen
-    proof harness -- but the sentence the user reads comes from here.
-    """
+    """What still refuses is what cannot run: the tree does not carry the
+    module the seam constructs.  The refusal is the door's own type, so
+    ``run_forecast`` relays it verbatim."""
 
     root, manifest = _seam_tree(tmp_path, "2.5.7")
     monkeypatch.setattr(engine_pin, "seam_manifest", lambda: manifest)
-    (root / "gpuwm/io/restart.py").write_bytes(b"RESTART = 2\n")
+    (root / "gpuwm/core/mpas_column_batch.py").unlink()
 
     problem = door.seam_pin_problem(root)
     assert problem is not None
-    assert isinstance(door._refuse(problem), door.ForecastDoorRefusal), (
-        "the door's refusal type is what run_forecast relays verbatim; an "
-        "exception that is not one of this program's named refusals gets "
-        "wrapped in 'that is not one of this program's named refusals'"
-    )
+    assert "gpuwm/core/mpas_column_batch.py" in problem
+    assert "no physics for the run to call" in problem
+    assert engine_pin.gpuwm_requirement() in problem, "the remedy is not printed"
+    assert "proved" not in problem and "pinned to" not in problem
+    assert isinstance(door._refuse(problem), door.ForecastDoorRefusal)
 
 
 # ---------------------------------------------------------------------------
@@ -565,15 +432,16 @@ def test_doctor_passes_when_the_installed_engine_matches(tmp_path, monkeypatch):
     assert doctor.blocking_gaps(findings) == []
 
 
-def test_doctor_refuses_and_names_the_version_when_the_bytes_have_moved(
+def test_doctor_names_a_moved_engine_and_does_not_block_on_it(
     tmp_path, monkeypatch
 ):
-    """The check the walk found missing, and the reason it is BLOCKING.
+    """The drift is still SEEN at install time, and it no longer blocks.
 
-    Fifteen of the sixteen pinned paths sit in site-packages, so this drift
-    was visible at install time, on any box, with no card and no checkout.
-    Nothing looked, and the report said ``Every check passed`` and exited 0
-    while the forecast lane was dead.
+    This finding was blocking while the forecast refused a moved engine: a
+    report that said "every check passed" over a dead forecast lane was the
+    measured defect (2026-08-27 walk).  The forecast stopped refusing on
+    2026-10-10 (``engine_pin.identity_of``), so a blocking finding would now
+    be the false line: it would say the forecast cannot run when it does.
     """
 
     root, manifest = _seam_tree(tmp_path, "2.5.7")
@@ -586,17 +454,11 @@ def test_doctor_refuses_and_names_the_version_when_the_bytes_have_moved(
 
     findings = doctor.check_physics_seam()
     seam = _doctor_seam_finding(findings)
-    assert seam.status == doctor.MISSING
-    assert seam.required, (
-        "an engine whose seam bytes this port refuses is a WRONG install, "
-        "not a missing optional asset: pip resolved something the package's "
-        "own declared range excludes.  A non-required finding leaves the "
-        "report saying every required check passed, which is the measured "
-        "defect"
-    )
+    assert seam.status == doctor.INFO and not seam.required
     assert "2.5.7" in seam.detail and engine_pin.wanted_version() in seam.detail
-    assert engine_pin.gpuwm_requirement() in seam.remedy
-    assert [f.subject for f in doctor.blocking_gaps(findings)] == [seam.subject]
+    assert "gpuwm/core/microphysics.py" in seam.detail
+    assert "refuses" not in seam.detail
+    assert doctor.blocking_gaps(findings) == []
 
 
 def test_doctor_says_so_rather_than_crashing_when_gpuwm_cannot_be_located(
@@ -802,7 +664,7 @@ def test_an_admitted_row_rides_the_specifier_and_is_not_a_published_engine(
     assert engine_pin.admitted_engine(row.version + ".2") is None
 
 
-def _admitted_tree(tmp_path: Path, monkeypatch, version: str = "2.8.0+local.1"):
+def _admitted_tree(tmp_path: Path, monkeypatch, version: str | None = None):
     """A fake public checkout, a fake private build of it whose bytes differ
     on one path, and the admitted row measured FROM that build's bytes.
 
@@ -811,7 +673,9 @@ def _admitted_tree(tmp_path: Path, monkeypatch, version: str = "2.8.0+local.1"):
     is a byte or a version string that actually differs.
     """
 
-    root, manifest = _seam_tree(tmp_path, "2.8.0")
+    base = engine_pin.gpuwm_floor()
+    version = version or f"{base}+local.1"
+    root, manifest = _seam_tree(tmp_path, engine_pin.wanted_version())
     private = tmp_path / "gpuwm-private"
     for relative in manifest:
         target = private / relative
@@ -827,7 +691,7 @@ def _admitted_tree(tmp_path: Path, monkeypatch, version: str = "2.8.0+local.1"):
     }
     row = engine_pin.AdmittedEngine(
         version=version,
-        base="2.8.0",
+        base=base,
         build_commit="9" * 40,
         digests=tuple(sorted(digests.items())),
         glacier_composed_tu_sha256="7" * 64,
@@ -859,7 +723,7 @@ def test_an_admitted_engines_bytes_under_its_own_version_are_accepted(
     assert door.seam_pin_problem(root) is None
 
 
-def test_the_same_bytes_under_another_version_string_are_refused_by_name(
+def test_the_same_bytes_under_another_version_string_are_not_named_as_the_row(
     tmp_path, monkeypatch
 ):
     """A re-versioned copy of a measured build is neither that build nor the
@@ -876,13 +740,18 @@ def test_the_same_bytes_under_another_version_string_are_refused_by_name(
     assert inspection.misdeclared and not inspection.accepted
     assert inspection.moved == (), "the bytes ARE the row's; only the name is wrong"
 
-    problem = door.seam_pin_problem(private)
-    assert problem is not None
-    assert f"gpuwm {row.version}" in problem and "gpuwm 2.8.0" in problem
-    assert "version string and its bytes together" in problem
+    # Retired 2026-10-10 as a refusal.  The receipt names the tree by what
+    # it declares and by its bytes, and does NOT name it as the row: a row
+    # is keyed by its version string and its bytes together.
+    assert door.seam_pin_problem(private) is None
+    record = door.seam_pin_record(private)
+    assert record["matches_measured_row"] is False and record["measured_row"] is None
+    assert record["declared_engine_version"] == "2.8.0"
+    identity = engine_pin.identity_of(inspection)
+    assert identity.version == "2.8.0" and not identity.admitted
 
 
-def test_an_admitted_version_over_other_bytes_is_refused_against_the_pin(
+def test_an_admitted_version_over_other_bytes_is_recorded_against_the_pin(
     tmp_path, monkeypatch
 ):
     """The other half of the key.  A tree that calls itself the admitted
@@ -900,11 +769,13 @@ def test_an_admitted_version_over_other_bytes_is_refused_against_the_pin(
         "measured against the PUBLIC pin, so the row's own private byte "
         "counts as moved too: the row admits one engine, not a family"
     )
-    problem = door.seam_pin_problem(private)
-    assert problem is not None
-    assert f"gpuwm {row.version}" in problem
-    assert "gpuwm/io/restart.py" in problem
-    assert engine_pin.gpuwm_requirement() in problem
+    # Retired 2026-10-10 as a refusal: the tree runs and the record names
+    # what moved.
+    assert door.seam_pin_problem(private) is None
+    record = door.seam_pin_record(private)
+    assert record["matches_measured_row"] is False
+    assert record["declared_engine_version"] == row.version
+    assert "gpuwm/io/restart.py" in record["moved_from_pin"]
 
 
 def test_doctor_names_the_admitted_engine_it_verified(tmp_path, monkeypatch):
@@ -920,7 +791,7 @@ def test_doctor_names_the_admitted_engine_it_verified(tmp_path, monkeypatch):
     assert doctor.blocking_gaps(findings) == []
 
 
-def test_doctor_refuses_an_install_whose_metadata_disowns_its_bytes(
+def test_doctor_names_an_install_whose_metadata_disowns_its_bytes(
     tmp_path, monkeypatch
 ):
     """An INSTALL root carries no pyproject.toml; what it declares is pip's
@@ -936,9 +807,9 @@ def test_doctor_refuses_an_install_whose_metadata_disowns_its_bytes(
     assert engine_pin.declared_version(private) == "2.8.0"
     findings = doctor.check_physics_seam()
     seam = _doctor_seam_finding(findings)
-    assert seam.status == doctor.MISSING and seam.required
+    assert seam.status == doctor.INFO and not seam.required
     assert row.version in seam.detail and "2.8.0" in seam.detail
-    assert [f.subject for f in doctor.blocking_gaps(findings)] == [seam.subject]
+    assert doctor.blocking_gaps(findings) == []
 
 
 def test_the_adapter_admits_the_row_and_provenances_the_run_by_it(
@@ -965,18 +836,28 @@ def test_the_adapter_admits_the_row_and_provenances_the_run_by_it(
     (private / "pyproject.toml").write_text(
         '[project]\nname = "gpuwm"\nversion = "2.8.0"\n', encoding="utf-8"
     )
-    with pytest.raises(ValueError, match="version string and its bytes together"):
-        adapter._verify_checkout_root(private)
+    # Retired 2026-10-10 as refusals: a re-versioned copy and a moved byte
+    # are both recorded as the tree that was found, not as the row.
+    misdeclared = adapter._verify_checkout_root(private)
+    assert not misdeclared.matches_measured_row and not misdeclared.admitted
+    assert misdeclared.version == "2.8.0"
+    assert misdeclared.build_commit == engine_pin.UNMEASURED_BUILD_COMMIT
 
     (private / "pyproject.toml").write_text(
         f'[project]\nname = "gpuwm"\nversion = "{row.version}"\n', encoding="utf-8"
     )
     (private / "gpuwm/io/restart.py").write_bytes(b"RESTART = 3\n")
-    with pytest.raises(
-        ValueError,
-        match="pinned Arwen source hash mismatch for gpuwm/core/microphysics.py",
-    ):
+    moved = adapter._verify_checkout_root(private)
+    assert not moved.matches_measured_row and moved.version == row.version
+    assert "gpuwm/io/restart.py" in moved.moved_from_pin
+    assert moved.manifest["gpuwm/io/restart.py"] == sha256(b"RESTART = 3\n").hexdigest()
+
+    # What cannot run is still refused, by its breakage.
+    kept = (private / "gpuwm/core/mpas_column_batch.py").read_bytes()
+    (private / "gpuwm/core/mpas_column_batch.py").unlink()
+    with pytest.raises(FileNotFoundError, match="no physics to run in this tree"):
         adapter._verify_checkout_root(private)
+    (private / "gpuwm/core/mpas_column_batch.py").write_bytes(kept)
 
     # And the public tree still resolves to the public pin's identity, with
     # the surface digest the public tree actually has.

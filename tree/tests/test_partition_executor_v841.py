@@ -76,6 +76,12 @@ def test_expected_round_sequence_matches_the_step_structure():
     assert "".join(off) == (
         ("CB" + "C" * 3 + "B" + "C" * 6 + "B") * 3 + "DDD" + "D" + "A"
     )
+    # Regional: one more D per stage, between the stage's transport and the
+    # scalar boundary adjust (MPAS atm_srk3's dynamics:scalars exchange).
+    regional = expected_round_sequence(monotonic=False, regional=True)
+    assert "".join(regional) == (
+        ("CB" + "C" * 3 + "B" + "C" * 6 + "B") * 3 + "DD" * 3 + "D" + "A"
+    )
 
 
 def test_tables_match_hand_derivation(cycle_layouts):
@@ -143,9 +149,15 @@ def _link_pair(timeout=30.0):
     return result["server"], client
 
 
-def test_full_step_schedule_restores_owner_truth_end_to_end(cycle_layouts):
+@pytest.mark.parametrize("fct_parts", [1, 6, 4])
+def test_full_step_schedule_restores_owner_truth_end_to_end(cycle_layouts, fct_parts):
     """Both ranks run the whole 44-round schedule; every halo value must end
-    bitwise equal to the owner's value and every owned value must be untouched."""
+    bitwise equal to the owner's value and every owned value must be untouched.
+
+    ``fct_parts`` > 1 splits round E into that many species parts, as the
+    monotonic limiter does one species pass at a time (hex memory census item
+    4): the halos must come out the same words as the one-part round.
+    """
 
     globals_ = {
         "rho": _global_cell_field(1000.0),
@@ -208,7 +220,11 @@ def test_full_step_schedule_restores_owner_truth_end_to_end(cycle_layouts):
                 rtheta_pp=fields["rtheta_pp"],
                 ru_p=fields["ru_p"],
             )
-            exchanger = HaloExchanger(tables, links[rank], xp=np)
+            per = -(-6 // fct_parts)
+            starts = list(range(0, 6, per))
+            exchanger = HaloExchanger(tables, links[rank], xp=np,
+                                      expected_sequence=expected_round_sequence(fct_parts=len(starts)))
+            assert exchanger.fct_scale_parts == len(starts)
             exchanger.begin_step(1)
             for _subcycle in range(3):
                 for acoustic_steps in (1, 3, 6):
@@ -217,8 +233,14 @@ def test_full_step_schedule_restores_owner_truth_end_to_end(cycle_layouts):
                     exchanger.round_stage_entry(state, saved)
             for stage in (1, 2, 3):
                 exchanger.round_transport(fields["scalars"])
-                if stage == 3:
+                if stage == 3 and fct_parts == 1:
                     exchanger.round_fct_scale(fields["scale_in"], fields["scale_out"])
+                elif stage == 3:
+                    for part, first in enumerate(starts):
+                        last = min(first + per, 6)
+                        exchanger.round_fct_scale(
+                            fields["scale_in"][first:last], fields["scale_out"][first:last],
+                            part=part, parts=len(starts))
             exchanger.round_transport(fields["scalars"])  # final publish round
             exchanger.round_step_boundary(state, saved)
             exchanger.end_step()
@@ -251,7 +273,29 @@ def test_full_step_schedule_restores_owner_truth_end_to_end(cycle_layouts):
     assert receipt["rounds"]["B"]["rounds"] == 9
     assert receipt["rounds"]["C"]["rounds"] == 30
     assert receipt["rounds"]["D"]["rounds"] == 4
-    assert receipt["rounds"]["E"]["rounds"] == 1
+    assert receipt["rounds"]["E"]["rounds"] == (1 if fct_parts == 1 else -(-6 // -(-6 // fct_parts)))
+
+
+def test_split_fct_round_refuses_out_of_order_and_open(cycle_layouts):
+    """A split round E must arrive part 0 first, in order, and be complete
+    before the step ends (the schedule law over the limiter's species passes)."""
+
+    tables = HaloExchangeTables.build(cycle_layouts, 0)
+
+    class DeadLink:
+        def exchange(self, tag, payload):  # pragma: no cover - must not be reached
+            raise AssertionError("the schedule law must refuse before any wire use")
+
+    scale = np.zeros((6, NLEV, tables.n_local_cells), np.float32)
+    exchanger = HaloExchanger(tables, DeadLink(), xp=np)
+    exchanger.begin_step(1)
+    with pytest.raises(ExecutorError, match="out of order"):
+        exchanger.round_fct_scale(scale[1:2], scale[1:2], part=1, parts=6)
+    with pytest.raises(ExecutorError, match="part 6 of 6"):
+        exchanger.round_fct_scale(scale, scale, part=6, parts=6)
+    exchanger._fct_split = (3, 6)
+    with pytest.raises(ExecutorError, match="split at part 3 of 6"):
+        exchanger.end_step()
 
 
 def test_out_of_schedule_round_refuses(cycle_layouts):

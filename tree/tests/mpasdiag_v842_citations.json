@@ -1,0 +1,518 @@
+{
+  "release": "v8.4.2",
+  "commit": "f34984b2c89353cf31c235b08d3b4acd96b37bb3",
+  "rows": [
+    {
+      "citation": "mpas_atm_core.F:675-705",
+      "source_path": "src/core_atmosphere/mpas_atm_core.F",
+      "first": 675,
+      "last": 705,
+      "occurrences": 1,
+      "window_sha256": "53f2f2474d60287acfdf7a85c2ef5a32dddf1f568b6f779bb3ba0806c6b71621"
+    },
+    {
+      "citation": "mpas_atm_diagnostics_manager.F:104-126",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_atm_diagnostics_manager.F",
+      "first": 104,
+      "last": 126,
+      "occurrences": 2,
+      "window_sha256": "c7b15e4715604ad5371bd0d02b5b8700fdf67cd37bf32d0a300d7e38e083e972"
+    },
+    {
+      "citation": "mpas_atm_diagnostics_manager.F:31-63",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_atm_diagnostics_manager.F",
+      "first": 31,
+      "last": 63,
+      "occurrences": 2,
+      "window_sha256": "d0ed0b9efb4f927ca7cb396f46bb07d218e843c6d30091ced0254aba4413974b"
+    },
+    {
+      "citation": "mpas_cloud_diagnostics.F:38-55",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_cloud_diagnostics.F",
+      "first": 38,
+      "last": 55,
+      "occurrences": 7,
+      "window_sha256": "a609b8ceb2d7863a48f4e86164f0f481c09bfa0a25604aa7ecc09851fac1ba92"
+    },
+    {
+      "citation": "mpas_cloud_diagnostics.F:75-141",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_cloud_diagnostics.F",
+      "first": 75,
+      "last": 141,
+      "occurrences": 2,
+      "window_sha256": "246b0d5cd2495ace0b9d98ce00115846463f80a5b551a24dcbb5278ad7946181"
+    },
+    {
+      "citation": "mpas_cloud_diagnostics.F:99-102",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_cloud_diagnostics.F",
+      "first": 99,
+      "last": 102,
+      "occurrences": 1,
+      "window_sha256": "55ac42a00d9b0885a627e59ed4aa85b6fc7c3f9092962b20d76e1e1c30dc15a1"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1007-1033",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1007,
+      "last": 1033,
+      "occurrences": 3,
+      "window_sha256": "5fad30f2259ae61201471e7e48a8190f57c01e48ef3624c79179c4282293d29e"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1059-1146",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1059,
+      "last": 1146,
+      "occurrences": 1,
+      "window_sha256": "e519fce4d7b4691809237016a7c234360f7b8f00a2eb99fb715f006b909ad172"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1086-1114",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1086,
+      "last": 1114,
+      "occurrences": 1,
+      "window_sha256": "c277645798535284028c860fac9fa95db31b3d47abaf8da669767d0698c0c686"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1148-1172",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1148,
+      "last": 1172,
+      "occurrences": 1,
+      "window_sha256": "998fde57258e6e68e5729c23900150ca052eecbfd2119c720bd85165f558101f"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1174-1251",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1174,
+      "last": 1251,
+      "occurrences": 2,
+      "window_sha256": "4fae2c2adab548be7d313d897bb98db54567a3c6ec77c3b7f4e9ffe53fa6a286"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1253-1324",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1253,
+      "last": 1324,
+      "occurrences": 2,
+      "window_sha256": "894f63929a131e0cd0cbe9e3832b36e2e005c503d71cc31a09c27188fd041dae"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1277-1291",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1277,
+      "last": 1291,
+      "occurrences": 1,
+      "window_sha256": "a1cd43d07e9483c208c8d211759b84438488893a8f47920492ac44a2cadc533c"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1281-1289",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1281,
+      "last": 1289,
+      "occurrences": 1,
+      "window_sha256": "d91304460f87c05e32332c0a7eceadc654daf252a3923667d6870e9cc8a327aa"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1326-1573",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1326,
+      "last": 1573,
+      "occurrences": 1,
+      "window_sha256": "3b5107bad7a8c2a12930c03c56a94f0ad1a3d527c7c659b32b69525f3a839d6e"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1429-1505",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1429,
+      "last": 1505,
+      "occurrences": 1,
+      "window_sha256": "5b26395a5733828f7227b5ce1438c89723245114ef827fe3b2e3a5aabdfff935"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1507",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1507,
+      "last": 1507,
+      "occurrences": 1,
+      "window_sha256": "367b31427cbfcd9cd2c7105dbd39a1aa557cec9a100e464984fe9653a4562007"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1510-1552",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1510,
+      "last": 1552,
+      "occurrences": 1,
+      "window_sha256": "7fcc35187f359e3152cb00919343565ee35cece65a40f97b9050836b69bad29e"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1512-1516",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1512,
+      "last": 1516,
+      "occurrences": 1,
+      "window_sha256": "882acc1c1ef0bd04da1c4456ae865249ec47fce52842e5daa3ebebe164d3493f"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1527-1538",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1527,
+      "last": 1538,
+      "occurrences": 1,
+      "window_sha256": "8cb2e9e254fc55dae231bfaef36faa759ef2e38609d846c26c303634163a3fbf"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1540-1566",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1540,
+      "last": 1566,
+      "occurrences": 1,
+      "window_sha256": "d7d367c2ac27a50c75e1807278c33cf2a6307dec0486977ebdbfc87dee8751db"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:155-192",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 155,
+      "last": 192,
+      "occurrences": 1,
+      "window_sha256": "7cfb14ec81e452cbb92dc4ea0cc8ee29877287d6e2db4eafcb3f8f6756d58901"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1575-1648",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1575,
+      "last": 1648,
+      "occurrences": 2,
+      "window_sha256": "da5a50954e8ca967805ffc713e19d51b4f26162ab7c4bb8220bb93b32771ef86"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:1605-1613",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 1605,
+      "last": 1613,
+      "occurrences": 1,
+      "window_sha256": "8fe6c59bdafc507414c1b89d188814c51b031aa973ed45e2b3635272af2090d1"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:174-192",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 174,
+      "last": 192,
+      "occurrences": 2,
+      "window_sha256": "36522e217b74c2c709f89f44c13280a3746225057c02f0fc528054c2f59ddb61"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:194-225",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 194,
+      "last": 225,
+      "occurrences": 2,
+      "window_sha256": "4f8d4937524e0c4afc153370c7f2ccca314dcc8b0f3b8fcea8a8d00ebc3b56b8"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:227-251",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 227,
+      "last": 251,
+      "occurrences": 1,
+      "window_sha256": "720627c07a7fcfa93df0bbac2dde1b90b318d91ce774c28af8457996fd922983"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:253-275",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 253,
+      "last": 275,
+      "occurrences": 2,
+      "window_sha256": "bfe23ded1e560cf81514fcf8acb03b1fd6e936da15b29922662cfa8ff285e922"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:277-294",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 277,
+      "last": 294,
+      "occurrences": 1,
+      "window_sha256": "2ccb72de9750540aebfae8996b87736a7d4502c21f16050b4966690c44855927"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:296-310",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 296,
+      "last": 310,
+      "occurrences": 1,
+      "window_sha256": "cee852088f7284c361fa4fda86482b90ddf1ae42f642b16e7edeacc2cc2af160"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:312-335",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 312,
+      "last": 335,
+      "occurrences": 2,
+      "window_sha256": "e9cfbcd17d3ae7ad16905be402599bcb154af45e6cd2d2f881c927c3f51a1901"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:337-374",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 337,
+      "last": 374,
+      "occurrences": 1,
+      "window_sha256": "7cdac855bd7f67ccff18b1cd865aa61d5b1163786d169b9ae5d2fe352114bf76"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:355-403",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 355,
+      "last": 403,
+      "occurrences": 1,
+      "window_sha256": "1366144ff855deadff2a12a901b0947d5be08619f263d2e5e42a76a99ab23fd6"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:406-430",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 406,
+      "last": 430,
+      "occurrences": 1,
+      "window_sha256": "48945ace3a4e26468ded586a77311d52f6a2b32b9fab9474793c0fd15c7b7a83"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:432-587",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 432,
+      "last": 587,
+      "occurrences": 2,
+      "window_sha256": "0fad9436cb08ea400bdaadc308e043ec8efefca728228c51e98442166f57c163"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:46-152",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 46,
+      "last": 152,
+      "occurrences": 1,
+      "window_sha256": "76bf00d7a436fbb04f9a45db15f5c79c6330d139ee9d37390bf85d79c733e38b"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:46-75",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 46,
+      "last": 75,
+      "occurrences": 1,
+      "window_sha256": "c0483f5e312c79ca45a95ee3f50dcba68ecae86173b36a1fca1977d7839916fb"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:589-751",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 589,
+      "last": 751,
+      "occurrences": 2,
+      "window_sha256": "f970894a21b305852a8c7734830db3026f27fbab49c12fe08d939a4fe012ea67"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:753-819",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 753,
+      "last": 819,
+      "occurrences": 2,
+      "window_sha256": "40ed204a9b713f0e8ffd2233c65eca5ec9a3e63ca93a754bbdaff065d13e7c53"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:82-152",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 82,
+      "last": 152,
+      "occurrences": 1,
+      "window_sha256": "a337a5fd7b1f6e7d23a503dfb1c57059709cf00f49b4aa2a41538be75ceb42b2"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:861-934",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 861,
+      "last": 934,
+      "occurrences": 2,
+      "window_sha256": "6529f237165dc960ded6f1d945ae1cf1a29dbd3c9ff9d787b2ff0267a930711a"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:899",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 899,
+      "last": 899,
+      "occurrences": 1,
+      "window_sha256": "722fe247f7c07b9c3425ccb6c27a771d36571e0bfc638dac871c69c827839f2e"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:936-1057",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 936,
+      "last": 1057,
+      "occurrences": 1,
+      "window_sha256": "63d30fdaf272129d00731b6ab19f5a214acefbf345f0e7f351e133ba18494615"
+    },
+    {
+      "citation": "mpas_pv_diagnostics.F:936-984",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_pv_diagnostics.F",
+      "first": 936,
+      "last": 984,
+      "occurrences": 1,
+      "window_sha256": "47cd1af4fad8ad0c06d2aafee379bf1e9a1bdf607002006a77e3b4f2d399fc0e"
+    },
+    {
+      "citation": "mpas_soundings.F:112-130",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 112,
+      "last": 130,
+      "occurrences": 1,
+      "window_sha256": "94a1201767000257e57447f916c2c93930df7ccd0daadef0d4f88db0910b5a0d"
+    },
+    {
+      "citation": "mpas_soundings.F:112-220",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 112,
+      "last": 220,
+      "occurrences": 1,
+      "window_sha256": "24cdb8b0ee8096716581d8578ff65be51d53d6f95ce3b96e9ee8b6e791716de3"
+    },
+    {
+      "citation": "mpas_soundings.F:125-126",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 125,
+      "last": 126,
+      "occurrences": 1,
+      "window_sha256": "bfc0873ff807d3f874068cde50abdacd772baf317974774f9cf02ae90e704057"
+    },
+    {
+      "citation": "mpas_soundings.F:132-220",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 132,
+      "last": 220,
+      "occurrences": 1,
+      "window_sha256": "14eaacda9335a54eb6f27319445a34977f1be0b333770d9834e6dab66b0f7a63"
+    },
+    {
+      "citation": "mpas_soundings.F:186-203",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 186,
+      "last": 203,
+      "occurrences": 1,
+      "window_sha256": "0e7e422da51d7d578c02d0de79c85a9b56a065f8a7731bfee392e7350389a751"
+    },
+    {
+      "citation": "mpas_soundings.F:237-340",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 237,
+      "last": 340,
+      "occurrences": 2,
+      "window_sha256": "02af1306799e42d11997147e13bc66d0367fd0bc452b5379fb2ac8790782998d"
+    },
+    {
+      "citation": "mpas_soundings.F:251-257",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 251,
+      "last": 257,
+      "occurrences": 1,
+      "window_sha256": "2f104102639c8220f1423519a3a0ca9c0532176809c147cb3e14383e46af9be3"
+    },
+    {
+      "citation": "mpas_soundings.F:261-338",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 261,
+      "last": 338,
+      "occurrences": 2,
+      "window_sha256": "0de322b2ed563d6b4d0521b568e03605f2d4739b9cdd34da8f30bddcc4569a1a"
+    },
+    {
+      "citation": "mpas_soundings.F:262-294",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 262,
+      "last": 294,
+      "occurrences": 1,
+      "window_sha256": "ca1adb2a0d730be0d412c0a4a5f8b1e70d6c60fdab687cac7617ffee08101f8c"
+    },
+    {
+      "citation": "mpas_soundings.F:292-324",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 292,
+      "last": 324,
+      "occurrences": 1,
+      "window_sha256": "b9d3d4e16f5a7d10c0fa40c31e0db72db09b97c68c147574c1094146accfeacf"
+    },
+    {
+      "citation": "mpas_soundings.F:340",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 340,
+      "last": 340,
+      "occurrences": 1,
+      "window_sha256": "b068459098efed53f56426abfca88570ceb4611be5cc9268395726455982c2a5"
+    },
+    {
+      "citation": "mpas_soundings.F:344-358",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 344,
+      "last": 358,
+      "occurrences": 2,
+      "window_sha256": "75bfa34b2a890ae87dce2875faefbb7e16be4f72f7b02f7bc311260ae924a882"
+    },
+    {
+      "citation": "mpas_soundings.F:353-366",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 353,
+      "last": 366,
+      "occurrences": 1,
+      "window_sha256": "6e2778deaced52b8dd77a01c3ae04d05365bf2647139ab77a15c31fafcf1ea15"
+    },
+    {
+      "citation": "mpas_soundings.F:363-400",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 363,
+      "last": 400,
+      "occurrences": 1,
+      "window_sha256": "08eb4ec2b521ef1e782f52327d2783a88556a90ac971270f08329ae210db7a84"
+    },
+    {
+      "citation": "mpas_soundings.F:408-416",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 408,
+      "last": 416,
+      "occurrences": 1,
+      "window_sha256": "eea5f2ab036487fc9064d727fc98771a7602282cdb3a9c5e096a41f3847b9a96"
+    },
+    {
+      "citation": "mpas_soundings.F:431-490",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 431,
+      "last": 490,
+      "occurrences": 1,
+      "window_sha256": "c25f5473a35f62cc694e57f3ece62cda1a69e26301a10c8cd23ddea591b1287f"
+    },
+    {
+      "citation": "mpas_soundings.F:51-220",
+      "source_path": "src/core_atmosphere/diagnostics/mpas_soundings.F",
+      "first": 51,
+      "last": 220,
+      "occurrences": 2,
+      "window_sha256": "b0be120831fa49e761f9df5b8d20a05e8c993928a83e79bd77b1e9d09a692993"
+    },
+    {
+      "citation": "mpas_timekeeping.F:490-566",
+      "source_path": "src/framework/mpas_timekeeping.F",
+      "first": 490,
+      "last": 566,
+      "occurrences": 1,
+      "window_sha256": "c33b71bdfa15e266dd798863805d7bfa25a938637ae5048dcbc0b834cbab1b75"
+    },
+    {
+      "citation": "mpas_timekeeping.F:876-985",
+      "source_path": "src/framework/mpas_timekeeping.F",
+      "first": 876,
+      "last": 985,
+      "occurrences": 1,
+      "window_sha256": "1662b7fc8feb1150f732d2b36433040cb01ab728465d32f2d1a309912220fc84"
+    },
+    {
+      "citation": "mpas_vector_reconstruction.F:270-302",
+      "source_path": "src/operators/mpas_vector_reconstruction.F",
+      "first": 270,
+      "last": 302,
+      "occurrences": 1,
+      "window_sha256": "fad00395a2a8424dcc2f72b660f4a723f417af9b39605b900e8bf00e9d253f14"
+    }
+  ]
+}

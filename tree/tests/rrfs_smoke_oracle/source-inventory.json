@@ -1,0 +1,107 @@
+{
+  "fork_pin": "1d6e370e7b43a332074809f170532a216c2212fb",
+  "smoke_pin": "9652bbf152f8b946bf04f72a2b48ff67e15d7973",
+  "files": [
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/ssalt_mod.F90",
+      "sha256": "5d3b7eaa0aef9c34b1e03c68e0bbaf28c1fd982b720a048a4022608c79e4b2de",
+      "lines": 322
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/module_plumerise.F90",
+      "sha256": "9a1916475f23b8a02f01fe92ab418c86f391e3e65c9a7bdc995574041052be1c",
+      "lines": 182
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/module_smoke_diagnostics.F90",
+      "sha256": "3a5adf290f7d334837325459a9ca91a00f5a9af8c539729937b8bd4630b826fd",
+      "lines": 186
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/module_fire_emissions.F90",
+      "sha256": "192bebf1ca2a059e0fcc0fc141fd02afab08dda42c89fa32a90df33812c3c739",
+      "lines": 440
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/module_add_emiss_burn.F90",
+      "sha256": "668c09bb4d8247d5cb3f0793cbcb90782c26121238ed0c10868e314b94d9e1c9",
+      "lines": 110
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/module_smoke_plumerise.F90",
+      "sha256": "b0110f5e43d6de6a083fb088b9b9dac948f7a4145e1e5453f142817a80743016",
+      "lines": 2177
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/mpas_smoke_config.F90",
+      "sha256": "ad0509551a38cccc82965b3db83ff75ab138e931b73f4d45e061e3b9caeac54f",
+      "lines": 32
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/dep_dry_simple_mod.F90",
+      "sha256": "3ff6801a5f80030af2d2d4102a274b2831857f1266242bda973fbf05b3bbf15b",
+      "lines": 64
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/rad_data_mod.F90",
+      "sha256": "fc433c1a005978a5a13b32ca1753cb722588ca188b6842898497cc2e9f127713",
+      "lines": 66
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/seas_data_mod.F90",
+      "sha256": "770a7ef6c7eb3caedeb195dbfd5388c5bd54a3e1fca7a9de27810bd4b226b0d5",
+      "lines": 21
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/dust_data_mod.F90",
+      "sha256": "5a08bceeaf0719e12ea6563f553bd494b05a0fb9f5e11b45f8b5a8eb3f7b1aa4",
+      "lines": 97
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/dep_data_mod.F90",
+      "sha256": "5716e81d9e9bc88e21eb7756c852ae03e8ee5808add556b17fa5d4be38be87fb",
+      "lines": 107
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/dust_fengsha_mod.F90",
+      "sha256": "64e288d939e6c92998a52eaf56e0aa3f27be81ceeab95739247dfe897ba74378",
+      "lines": 658
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/module_wetdep_ls.F90",
+      "sha256": "11ec1db3c4a9fb51c907b944927f89b6da57f19c2ae4726fec0f1a5ef6a21169",
+      "lines": 90
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/mpas_smoke_init.F90",
+      "sha256": "0292cbd547c1ad4d033e2650ad749a80278c1487e6ea589bb337f949984b8309",
+      "lines": 93
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/seas_ngac_mod.F90",
+      "sha256": "74a87c55b0a1afe4ba77abf2c28a1aee1b1b53b346e0bc329ca0d7aeff83ff2a",
+      "lines": 189
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/module_zero_plumegen_coms.F90",
+      "sha256": "d7cce067c8af92f443f064827b63ef409bc860763ed95390f0dee9f3556ea478",
+      "lines": 187
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/module_anthro_emissions.F90",
+      "sha256": "96d606996b36ef6640b39637b6187e38e20e64c30b198ba834ebc97c7edb5951",
+      "lines": 85
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/dep_dry_mod_emerson.F90",
+      "sha256": "e92f62b74340893cb4db8efed624e4c4d5be0f2ee0766f7c97306ed5cd960b6d",
+      "lines": 420
+    },
+    {
+      "path": "src/core_atmosphere/physics/physics_noaa/SMOKE/MPAS/mpas_smoke_wrapper.F90",
+      "sha256": "21f89e7e66d09909abb18ed7f77e1e4481672a14e2ead9e6c1bea62e8e57a3ed",
+      "lines": 839
+    }
+  ],
+  "v842_smoke_exists": false
+}

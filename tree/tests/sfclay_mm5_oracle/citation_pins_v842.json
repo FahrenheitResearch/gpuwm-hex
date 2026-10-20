@@ -1,0 +1,366 @@
+{
+  "schema": "mpas-citation-pins-v842/v1",
+  "source_sha256": {
+    "physics_mmm/sf_sfclayrev.F90": "76412a20ec95275973418888b0cdc378ea92f9cc28e3731b6a1c1a6985fa6142",
+    "physics_wrf/module_sf_sfclay.F": "378f09e88c9273c1611917849d0e0e9ea08c257e90e2430230bb4af8ec31cf07",
+    "physics_wrf/module_sf_sfclayrev.F": "d116bde7341c87b9047a05f8cf5813ed3ff5f9f8782688a58e0263b76b098280",
+    "physics_wrf/sf_sfclayrev_pre.F": "427b11caf56e69d28649c0c751c74ad7975878bd173b9e006845e71e09822f36",
+    "physics_wrf/module_sf_sfcdiags.F": "7fca2c0b323ba78cde174b4fdb544d23fd76ec4b8a38e05311fb2d1f6201a207",
+    "mpas_atmphys_sfc_diagnostics.F": "58f371e66cbea45e81226f4a73739ed6f09052f3d1379570e70095f361383fbc",
+    "mpas_atmphys_driver_sfclayer.F": "1e6299a50dddf0722e954e49a0f2ce5ee03af5b5287ea7b62c35380dd0230121",
+    "mpas_atmphys_driver.F": "bc4b92775b96ad8f65bec8ab6a9944a7e06ce6b464b7629b0767fc36e52eda5c",
+    "mpas_atmphys_vars.F": "603ca2a3f7dbf3331ecacf03d03180e8d8034d2da3b1d25b8c947ebee0f61b89",
+    "mpas_atmphys_driver_seaice.F": "35baf58311d4b9a364c48123c09ab821bfb4f5836bab0d8cb007cc4f19242eed",
+    "../../framework/mpas_pool_routines.F": "17b1cfd6b4adcdfbf0a3a79e4d92a8f8c95a7c83455990326affa2f0df2708ed"
+  },
+  "windows": [
+    {
+      "citation_file": "module_sf_sfclayrev.F",
+      "source_path": "physics_wrf/module_sf_sfclayrev.F",
+      "first": 1,
+      "last": 281,
+      "occurrences": 1,
+      "window_sha256": "d116bde7341c87b9047a05f8cf5813ed3ff5f9f8782688a58e0263b76b098280"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver.F",
+      "source_path": "mpas_atmphys_driver.F",
+      "first": 277,
+      "last": 285,
+      "occurrences": 1,
+      "window_sha256": "0cf799addc623db620510ffeeeb72d72eee5474f5c5eac0d5a4eb95b487b7fd0"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_seaice.F",
+      "source_path": "mpas_atmphys_driver_seaice.F",
+      "first": 390,
+      "last": 399,
+      "occurrences": 2,
+      "window_sha256": "b81db53c87d52109ddf136477ec1c3c1b2c8a14bd766269a0ae029a81335f6e7"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 260,
+      "last": 310,
+      "occurrences": 2,
+      "window_sha256": "771c3a94d4b9ef2307249f54de086863b7e72e593399f8603c977622709703af"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 352,
+      "last": 592,
+      "occurrences": 2,
+      "window_sha256": "f440a4fb2c791f7628bc2481f9c7fa2073f748220e8a824efda15c872a05314b"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 352,
+      "last": 1088,
+      "occurrences": 1,
+      "window_sha256": "4a5f70310293efc7477cfa9991b4dd67afaeb187cafbcfd833c0071886c06535"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 429,
+      "last": 534,
+      "occurrences": 1,
+      "window_sha256": "57a5c5fbee2a323f2f59106571f926091d76595f0234042a2c2cfff001e0a50b"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 554,
+      "last": 562,
+      "occurrences": 1,
+      "window_sha256": "69fab2756c0b55246c6764098c75578bc2881fdeaf630606b02dc1f8396c0f0c"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 595,
+      "last": 796,
+      "occurrences": 1,
+      "window_sha256": "9e45e91eb6518f8777f7e88fe2c4be708556180de9909426049775136ea24ed5"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 693,
+      "last": 771,
+      "occurrences": 1,
+      "window_sha256": "7ed76b62ccfe6d7ab74c91c5c318bbc0017e4de726ca76934991653ad04cc6cc"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 839,
+      "last": 1010,
+      "occurrences": 2,
+      "window_sha256": "82f63d4120c4509dc9efdee99390937839908f46c3a381975c51861a6d135b1d"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 839,
+      "last": 1088,
+      "occurrences": 3,
+      "window_sha256": "59631b1d07eff6b51e45820ec6609a63d5e1b7f8714dc45059176ae4294c5b00"
+    },
+    {
+      "citation_file": "mpas_atmphys_sfc_diagnostics.F",
+      "source_path": "mpas_atmphys_sfc_diagnostics.F",
+      "first": 27,
+      "last": 123,
+      "occurrences": 4,
+      "window_sha256": "90834f9caf0869a2158f76e00471a642b19dd3f50fc26e5f6d2fb637e90d805d"
+    },
+    {
+      "citation_file": "mpas_atmphys_sfc_diagnostics.F",
+      "source_path": "mpas_atmphys_sfc_diagnostics.F",
+      "first": 79,
+      "last": 91,
+      "occurrences": 1,
+      "window_sha256": "005d7330678e5facfcfe5a7681c32867d12e9e589eccaae9e8efcab92b8b9171"
+    },
+    {
+      "citation_file": "mpas_atmphys_sfc_diagnostics.F",
+      "source_path": "mpas_atmphys_sfc_diagnostics.F",
+      "first": 101,
+      "last": 116,
+      "occurrences": 1,
+      "window_sha256": "85362f39453c10957f1eee15e839a131c52c93be6eeeba4a18fbee8f15618901"
+    },
+    {
+      "citation_file": "mpas_atmphys_vars.F",
+      "source_path": "mpas_atmphys_vars.F",
+      "first": 604,
+      "last": 604,
+      "occurrences": 1,
+      "window_sha256": "4870014dade85da37eadcd1e68ef37857b582e62e7448b5a47d659ed4f32e610"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 1,
+      "last": 1119,
+      "occurrences": 1,
+      "window_sha256": "76412a20ec95275973418888b0cdc378ea92f9cc28e3731b6a1c1a6985fa6142"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 27,
+      "last": 55,
+      "occurrences": 4,
+      "window_sha256": "76b5d75b6f587544d4860ac9d43441c67d23cffd36b62664b19157bb1c9c9949"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 79,
+      "last": 919,
+      "occurrences": 1,
+      "window_sha256": "a9abc7ef88b74315ec3969f184c546f494cd75735430e9c6f97af21a4802384e"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 79,
+      "last": 920,
+      "occurrences": 3,
+      "window_sha256": "1fe0644bfb542f37c68dbd16dc6d664f2ede4fe4d78760d2085a20fc2563dfd3"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 713,
+      "last": 721,
+      "occurrences": 1,
+      "window_sha256": "0e02554f95906a1b382087ffd17fd493aa0391aea535a1b09ad873848c505a31"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 922,
+      "last": 957,
+      "occurrences": 1,
+      "window_sha256": "d543b07fa750b5b16c0811e67b7b5132ab999c0abaf9a43140c9120d36585a2b"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 960,
+      "last": 981,
+      "occurrences": 1,
+      "window_sha256": "9769a8e221e47732f1fa6cf0ffd3455637d8c7aed30a460bdf8e9852b55822e5"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 987,
+      "last": 992,
+      "occurrences": 1,
+      "window_sha256": "e5b4fd314ca400d9fb742ef60fcb7f51c7935ac0830d5abd2851eed317aaf46e"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 995,
+      "last": 1000,
+      "occurrences": 1,
+      "window_sha256": "781aa394ef9de1a701efb995291b10b5413f5e056e77bc4a60bf1f9af19a5a8a"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 1003,
+      "last": 1015,
+      "occurrences": 1,
+      "window_sha256": "68280fa0d988cf12e9f2eb7dc8f3d7ccdc5a48b2f4c5562d90df726fc5475612"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 1018,
+      "last": 1030,
+      "occurrences": 1,
+      "window_sha256": "f590b3ad409d19fce6732d8b784071894c276227d0210ced1c457c9542c035bc"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 1034,
+      "last": 1047,
+      "occurrences": 1,
+      "window_sha256": "9d6ec11621858bd797bc9e310230c1a8fc3ade405a0c8c307d55a224fb146391"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 1050,
+      "last": 1063,
+      "occurrences": 1,
+      "window_sha256": "48ce41af41638459308791aacc0cc80e856dad8dd2886987697dfe72cf58a27c"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 1066,
+      "last": 1079,
+      "occurrences": 1,
+      "window_sha256": "8b3d179b8412134f20a213f75a010a806b82bcdb3bd3ec07f959a4889865c86a"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 1082,
+      "last": 1095,
+      "occurrences": 1,
+      "window_sha256": "9e737ed259b4bd0a39740b22a21f84d63d77f957d6020f3fbdf8295cd75a531a"
+    },
+    {
+      "citation_file": "physics_mmm/sf_sfclayrev.F90",
+      "source_path": "physics_mmm/sf_sfclayrev.F90",
+      "first": 1098,
+      "last": 1115,
+      "occurrences": 1,
+      "window_sha256": "c4da5cf74ca942c811582d6ec65d9cb1a42636ae3d67cf6e4fda523c0ebcbfc7"
+    },
+    {
+      "citation_file": "physics_wrf/module_sf_sfcdiags.F",
+      "source_path": "physics_wrf/module_sf_sfcdiags.F",
+      "first": 7,
+      "last": 69,
+      "occurrences": 2,
+      "window_sha256": "fd7a71a2a2bf5088d81b011403026263828a189577989acfbce632cfd7aa5359"
+    },
+    {
+      "citation_file": "physics_wrf/module_sf_sfcdiags.F",
+      "source_path": "physics_wrf/module_sf_sfcdiags.F",
+      "first": 47,
+      "last": 64,
+      "occurrences": 4,
+      "window_sha256": "17c00d350c98c84ee8ccd83cd5b535c75bb97510bc090b5d7dea50476cd562e8"
+    },
+    {
+      "citation_file": "physics_wrf/module_sf_sfclay.F",
+      "source_path": "physics_wrf/module_sf_sfclay.F",
+      "first": 1,
+      "last": 968,
+      "occurrences": 1,
+      "window_sha256": "378f09e88c9273c1611917849d0e0e9ea08c257e90e2430230bb4af8ec31cf07"
+    },
+    {
+      "citation_file": "physics_wrf/module_sf_sfclay.F",
+      "source_path": "physics_wrf/module_sf_sfclay.F",
+      "first": 265,
+      "last": 946,
+      "occurrences": 3,
+      "window_sha256": "5b58af9b773e16b7eb3b13a54cff9879fb2c20288c68d783b09a5d44d8fc75b7"
+    },
+    {
+      "citation_file": "physics_wrf/module_sf_sfclay.F",
+      "source_path": "physics_wrf/module_sf_sfclay.F",
+      "first": 781,
+      "last": 789,
+      "occurrences": 1,
+      "window_sha256": "c852e4074b92088cbd64f219f0022b7f163b398feb81bda9c00b77c1f761bce8"
+    },
+    {
+      "citation_file": "physics_wrf/module_sf_sfclay.F",
+      "source_path": "physics_wrf/module_sf_sfclay.F",
+      "first": 949,
+      "last": 964,
+      "occurrences": 1,
+      "window_sha256": "ef5c0035240660ab14ce836fcfc11cfcaca1c1f6d9c261b8df83cb56a8774478"
+    },
+    {
+      "citation_file": "sf_sfclayrev_pre.F",
+      "source_path": "physics_wrf/sf_sfclayrev_pre.F",
+      "first": 1,
+      "last": 101,
+      "occurrences": 1,
+      "window_sha256": "427b11caf56e69d28649c0c751c74ad7975878bd173b9e006845e71e09822f36"
+    },
+    {
+      "citation_file": "src/framework/mpas_pool_routines.F",
+      "source_path": "../../framework/mpas_pool_routines.F",
+      "first": 4761,
+      "last": 4791,
+      "occurrences": 1,
+      "window_sha256": "34b17dc35e6f3cffc7fad27412aeee597fde677d6d98500f53168e0633005283"
+    },
+    {
+      "citation_file": "correct_referee/mpas_atmphys_driver_sfclayer.F",
+      "source_path": "correct_referee/mpas_atmphys_driver_sfclayer.F",
+      "first": 535,
+      "last": 546,
+      "occurrences": 1,
+      "window_sha256": "5ababc43c4c967b463a67bcab3e21b4ca6794b38349fba04fd987930b4dfd301"
+    },
+    {
+      "citation_file": "correct_referee/mpas_atmphys_lsm_shared.F",
+      "source_path": "correct_referee/mpas_atmphys_lsm_shared.F",
+      "first": 62,
+      "last": 105,
+      "occurrences": 1,
+      "window_sha256": "7d1433fa44c7733fc3d30180ce5a054a2dcacdbef4e63bb63f2acf2e183290de"
+    },
+    {
+      "citation_file": "mpas_atmphys_driver_sfclayer.F",
+      "source_path": "mpas_atmphys_driver_sfclayer.F",
+      "first": 428,
+      "last": 546,
+      "occurrences": 1,
+      "window_sha256": "5a6399f19826c0eec1d328f4fca12d1f7d1e9898900744b09f93162f209275eb"
+    }
+  ],
+  "referee_sha256": {
+    "correct_referee/mpas_atmphys_driver_sfclayer.F": "337b46eea82265f4a6753d286349e11a856b529ee6a7d428468cf3c4f4ffc26a",
+    "correct_referee/mpas_atmphys_lsm_shared.F": "ab18b2d026da2676ff6bb2e67abfcd6b817d72a4db13e93c05cd97acee288a6b"
+  }
+}

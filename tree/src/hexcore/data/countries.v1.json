@@ -1,0 +1,14 @@
+{
+  "schema": "gpuwm-hex.countries/v1",
+  "product_sets": {
+    "country-standard": ["--no-global", "--no-mesh-view", "--region", "country=region:12.8,121.8,1900,2200", "--points", "Manila@14.5995,120.9842;Tacloban@11.244,125.004;Davao@7.19,125.455", "--jobs", "2", "--frame-jobs", "1"]
+  },
+  "countries": [{
+    "id": "philippines",
+    "mesh": {"id": "ph48-3", "spec": "countries/ph48-3.spec.json", "point_deg": [12.8,121.8], "fine_dx_m": 3000.0, "background_km": 48.0, "core_radius_km": 0.0, "dt_seconds": 18.75, "n_levels": 55},
+    "init_source": "gfs",
+    "vertical_spec": "countries/tc55-v1.json",
+    "scorecard": {"region": {"west":116.0,"south":4.0,"east":127.5,"north":22.0,"step_degrees":0.125}, "satellite_qpe": {"label":"cmorph","variable":"cmorph","units":"mm/hr","product":"NOAA CMORPH v1 CDR gauge-adjusted 8 km 30 min","files":{}}},
+    "product_set": "country-standard"
+  }]
+}

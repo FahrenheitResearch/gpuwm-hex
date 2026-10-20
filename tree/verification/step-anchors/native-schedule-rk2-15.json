@@ -1,0 +1,75 @@
+{
+  "upstream_commit": "91c5eac175eebeaf4206bacd5cb50c39dff3c152",
+  "rows": [
+    {
+      "dt": 15.0,
+      "substeps": 2,
+      "order": 2,
+      "large_bits": [
+        1075838976,
+        1075838976,
+        1084227584
+      ],
+      "acoustic_bits": [
+        1075838976,
+        1075838976,
+        1075838976
+      ],
+      "counts": [
+        1,
+        1,
+        2
+      ]
+    },
+    {
+      "dt": 20.0,
+      "substeps": 4,
+      "order": 2,
+      "large_bits": [
+        1079334229,
+        1079334229,
+        1087722837
+      ],
+      "acoustic_bits": [
+        1070945621,
+        1070945621,
+        1070945621
+      ],
+      "counts": [
+        2,
+        2,
+        4
+      ]
+    },
+    {
+      "dt": 60.0,
+      "substeps": 2,
+      "order": 2,
+      "large_bits": [
+        1092616192,
+        1092616192,
+        1101004800
+      ],
+      "acoustic_bits": [
+        1092616192,
+        1092616192,
+        1092616192
+      ],
+      "counts": [
+        1,
+        1,
+        2
+      ]
+    }
+  ],
+  "compiler": "GNU Fortran (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "flags": [
+    "-O0",
+    "-fno-fast-math",
+    "-ffp-contract=off"
+  ],
+  "upstream_source_sha256": "937e3191a646b0f3f14aaf1678f57b0d6880574f06e402a5053ff6ed12ab706b",
+  "program_sha256": "bb42ce926546f7fb83bd4068baf92ccad982df3c320325567c99e615f8a52c72",
+  "prior_rows_reproduced": true,
+  "scope": "compiled native RK2 schedule block; no full native endpoint claim"
+}

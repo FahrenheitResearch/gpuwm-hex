@@ -1,0 +1,134 @@
+{
+ "schema": "gpuwm-hex.native-dry-reference-pins/v1",
+ "made": "2026-10-11, the reference host (Intel Core Ultra 7 270K Plus), ifx 2026.0.0 20260331, Intel MPI 2021.18.0, PnetCDF 1.12.3 built with gcc 15.2.0",
+ "note": "data_sha256 covers the floating-point variables of the 13 outputs of one arm (reference_digest.py); MPAS writes a random file_id into each file, so file hashes are not reproducible. A rerun of v8.4.1-ifx-o3/rk3-s6 reproduced its digest. The digests are a property of this compiler, these flags and this CPU family; a different one may legitimately produce others.",
+ "init_sha256_file": "e1e81bef44501fd583c903e35db2d168147937827d013c12eb5276a2d319cfea",
+ "grid_sha256_file": "8a825312a713bbe959c33ed03c2b503e5ec626238de6b15a686cd0ad5b40c986",
+ "pnetcdf_tarball_sha256": "439e359d09bb93d0e58a6e3f928f39c2eae965b6c97f64e67cd42220d6034f77",
+ "upstream": {
+  "v8.4.1": "91c5eac175eebeaf4206bacd5cb50c39dff3c152",
+  "v8.4.2": "f34984b2c89353cf31c235b08d3b4acd96b37bb3"
+ },
+ "executables_sha256": {
+  "v8.4.1-ifx-o3": "fe4703c7f9780f25ac5b49cebbff0d9456c2e26b369b979811b7a2621482a934",
+  "v8.4.1-ifx-valuesafe": "fd6a7864b411aafba66f21a08d14b6e4c353768ec780c114983a32ddc3bbb79f",
+  "v8.4.2-ifx-o3": "2fa2c051d87b24696f4db3c04cfbb6f86c51297f4a6496b704ae1385d47f3fdd",
+  "v8.4.2-ifx-valuesafe": "388e219afd6edc7d7157d7513af35ff4cc962ec96da77e77e092c99de6d72df9",
+  "v8.4.1-ifx-valuesafe-init_atmosphere": "283632834fb2c8478fbd71fa6cbea478e30361b2ecbb9fb7ffcd5c0c22bb44d8",
+  "refhost-v8.4.2-gnu-strict-full-physics-atmosphere": "a71feef594ae020f86aa9450608e21b8e2074415479de521438a7701e5b1d479",
+  "refhost-v8.4.2-gnu-strict-full-physics-init_atmosphere": "b22542c3a0330ccde6d52bfe4aa2b05897b0edb8f83cfeb5caaf41694ffdb9cd",
+  "refhost-v8.4.2-gnu-o3-full-physics-atmosphere": "426e2dc1b85e6c6fbcbf0e1a1b78590ae94d6a6962c858b580a657042643c46f"
+ },
+ "arms": {
+  "v8.4.1-ifx-o3/rk2-s2": {
+   "outputs": 13,
+   "data_sha256": "ff570fbdcdcb04cbcbc5a70262c1eda93470922116ded7e94f09f44d25bd2ccf"
+  },
+  "v8.4.1-ifx-o3/rk2-s4": {
+   "outputs": 13,
+   "data_sha256": "c2c7535487e2137e46caff86affcdb4349e9818e0d484e70007ff656113df3df"
+  },
+  "v8.4.1-ifx-o3/rk3-s6": {
+   "outputs": 13,
+   "data_sha256": "40d57169463652701b53d2ef1fa4c847fb78e37f359b4b069e3e3eebbb5ad9df"
+  },
+  "v8.4.1-ifx-valuesafe/rk2-s2": {
+   "outputs": 13,
+   "data_sha256": "d72376c02df4125107ecfc09981c46e50a0e2afc92752395c163065a2fef4454"
+  },
+  "v8.4.1-ifx-valuesafe/rk2-s4": {
+   "outputs": 13,
+   "data_sha256": "30927029a3c8a4146c97bce50ee211171b73e0d4fa4edeae4c58727d2f5fc3dd"
+  },
+  "v8.4.1-ifx-valuesafe/rk3-s6": {
+   "outputs": 13,
+   "data_sha256": "548af56d8310848c8494846683775831152923add246b02af91517414e57cdbb"
+  },
+  "v8.4.2-ifx-o3/rk2-s2": {
+   "outputs": 13,
+   "data_sha256": "ff570fbdcdcb04cbcbc5a70262c1eda93470922116ded7e94f09f44d25bd2ccf"
+  },
+  "v8.4.2-ifx-o3/rk2-s4": {
+   "outputs": 13,
+   "data_sha256": "c2c7535487e2137e46caff86affcdb4349e9818e0d484e70007ff656113df3df"
+  },
+  "v8.4.2-ifx-o3/rk3-s6": {
+   "outputs": 13,
+   "data_sha256": "40d57169463652701b53d2ef1fa4c847fb78e37f359b4b069e3e3eebbb5ad9df"
+  },
+  "v8.4.2-ifx-valuesafe/rk2-s2": {
+   "outputs": 13,
+   "data_sha256": "d72376c02df4125107ecfc09981c46e50a0e2afc92752395c163065a2fef4454"
+  },
+  "v8.4.2-ifx-valuesafe/rk2-s4": {
+   "outputs": 13,
+   "data_sha256": "30927029a3c8a4146c97bce50ee211171b73e0d4fa4edeae4c58727d2f5fc3dd"
+  },
+  "v8.4.2-ifx-valuesafe/rk3-s6": {
+   "outputs": 13,
+   "data_sha256": "548af56d8310848c8494846683775831152923add246b02af91517414e57cdbb"
+  }
+ },
+ "reference_host_full_physics": {
+  "host": "the reference host (Intel Core Ultra 7 270K Plus)",
+  "gfortran": "15.2.0",
+  "glibc": "2.43",
+  "mpich": "4.3.2",
+  "pnetcdf": "1.14.1",
+  "maths": "host glibc; acceptance pending",
+  "precision": "single",
+  "strict_flags": [
+   "-O3",
+   "-ffp-contract=off",
+   "-fno-tree-vectorize",
+   "-fno-unsafe-math-optimizations",
+   "-ffree-line-length-none",
+   "-fconvert=big-endian",
+   "-ffree-form"
+  ],
+  "externals": {
+   "MMM-physics": "a4baf7f3243d1db0dbc5f63473f895bdbdc05c30",
+   "UGWP": "c1c893edcf171af5639af60e3a3a528816f6cc2b",
+   "MPAS-Data": "c57dbc7be629802c6e848770a9e44b9bc602be41"
+  },
+  "cpu_model": "Intel(R) Core(TM) Ultra 7 270K Plus",
+  "cpu_features": "fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdt_a rdseed adx smap clflushopt clwb intel_pt sha_ni xsaveopt xsavec xgetbv1 xsaves split_lock_detect user_shstk avx_vnni lam wbnoinvd dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req hfi vnmi umip pku ospke waitpkg gfni vaes vpclmulqdq rdpid bus_lock_detect movdiri movdir64b fsrm md_clear serialize arch_lbr ibt flush_l1d arch_capabilities",
+  "libm_host_probe_sha256": "0d32ea19437b50aa9d49d38fee58d73309f3fa87a061109b52c823fa8da12ab8",
+  "libm_host_probe_digests": {
+   "glibc": "2.43",
+   "sinf": "390e64d57b3ff538",
+   "cosf": "380ea7beeacf4e7f",
+   "tanf": "d6232d70fe62ae31",
+   "sincos_s": "390e64d57b3ff538",
+   "sincos_c": "380ea7beeacf4e7f",
+   "asinf": "168181578a60f248",
+   "acosf": "d201dcd6f9490024",
+   "atanf": "bf2b6fd8c77205fc",
+   "atan2f": "b28654634f9ee199",
+   "expf": "8742ac29041c685a",
+   "logf": "18c9bbe840d796c3",
+   "log10f": "76ed55387e063883",
+   "powf": "e386f48064777d17",
+   "erff": "b45a73e7a0032515",
+   "tanhf": "777da9b9d0ee67d7",
+   "cos": "8afe6e20f005a876",
+   "atan": "67c1b62519915f45",
+   "exp": "b2c027317701f69b",
+   "log": "b4ccfa30adffdcb3",
+   "log10": "97ea09baca61f8b8",
+   "pow": "6e0d5bce8e5dc265"
+  },
+  "thompson_tables": {
+   "MP_THOMPSON_QIautQS_DATA.DBL": "9d270e5364b0c3e0a1f80d3251d67e673206e7203fadc905a16774bd3f43acf1",
+   "MP_THOMPSON_QRacrQG_DATA.DBL": "3762e7f77abde1248a64e650372dd71505e20478173bfc7ca04b8fda424b1872",
+   "MP_THOMPSON_QRacrQS_DATA.DBL": "5880b9d3b6bbe936101ab1db5316659f5563136371c36da47b14c13d23fbf9ee",
+   "MP_THOMPSON_freezeH2O_DATA.DBL": "081ced9efcfd7c4034616435fa9d29a36bc5cc1b6f0b0edfee56260ea73c9edf"
+  },
+  "build_tables_sha256": "9567233eaa31419c42cd1f8ca395e88092ec841eec9f642a3af2aca32ae6699e",
+  "binary_sha256": {
+   "atmosphere": "a71feef594ae020f86aa9450608e21b8e2074415479de521438a7701e5b1d479",
+   "init_atmosphere": "b22542c3a0330ccde6d52bfe4aa2b05897b0edb8f83cfeb5caaf41694ffdb9cd",
+   "atmosphere-o3": "426e2dc1b85e6c6fbcbf0e1a1b78590ae94d6a6962c858b580a657042643c46f"
+  }
+ }
+}

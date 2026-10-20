@@ -1,0 +1,1 @@
+Immutable copies of the seventeen p4 tools and aerosol adapter used in the complete native arithmetic experiment. File bytes and original ownership paths are pinned in ../native_arithmetic_inputs.json. These are test inputs, not production registration or an alternative mathematics implementation. Preserve the pinned copies when the owner evolves its current tools.

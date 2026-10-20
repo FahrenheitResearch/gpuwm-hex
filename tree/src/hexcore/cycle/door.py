@@ -292,7 +292,8 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
                         help="how long each fine forecast runs")
     parser.add_argument("--history-every-minutes", type=int, default=30, metavar="M")
     parser.add_argument("--dt", type=float, default=20.0, metavar="SECONDS",
-                        help="the fine grid's timestep; must hold an anchor")
+                        help="the fine grid's timestep, registered on each cull "
+                             "and run by its forecast (no anchor is required)")
     parser.add_argument("--nominal-dx-m", type=float, default=4000.0, metavar="METRES")
     parser.add_argument("--class-id", default="graded-4457m-dt20-z7", metavar="ID",
                         help="the minted regional configuration class these "

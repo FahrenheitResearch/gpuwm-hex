@@ -81,7 +81,7 @@ HALO_RINGS = 3
 RANK_ROLES = {0: "server", 1: "client"}
 
 CLAIM = (
-    "one uninterrupted real-initialized x4.163842 MPAS-A v8.4.1 CUDA forecast "
+    "one uninterrupted real-initialized x4.163842 MPAS-A v8.4.2 CUDA forecast "
     "executed as a 2:1 two-rank domain decomposition across two nodes, with "
     "owner-truth halo exchange at every stencil boundary and per-boundary "
     "owned-region reconstruction for the partition-invariance gate"
@@ -492,7 +492,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
     # Source pins verify first: the checkout guard imports the seam manifest
     # from a pinned module, so that module's bytes are proven before its
     # constants are trusted.
-    source_before = proof.require_frozen_execution_sources()
+    source_before = proof.measure_execution_sources()
     arwen_git_before = proof.verify_arwen_checkout_git(arwen_checkout)
     authority_before = forecast.verify_forecast_authorities(paths)
 
@@ -676,19 +676,33 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
             f"configuration digest {config_sha} != expected {args.expect_config_sha}"
         )
 
-    # The design's 44-round table includes the monotonic-FCT round E; the
-    # proven full-physics config runs with config_monotonic and
-    # config_positive_definite both False, so its step issues 43 rounds and
-    # the E hook stays dormant until a limiter-on config exercises it.
+    # The round string follows the run's own schedule (as the same-host
+    # driver's does): acoustic rounds per stage from RKSchedule, the FCT
+    # round E when the limiter is on.  It used to assume RK3 / 6 sub-steps
+    # with the limiter off, which the MPAS-A defaults (RK2, 2 sub-steps,
+    # monotonic on; hexcore.mpas_defaults) no longer are.
+    from hexcore.integration import RKSchedule
+
+    _config = host["config"]
     _limiter_on = bool(
-        getattr(host["config"], "config_monotonic", False)
-        or getattr(host["config"], "config_positive_definite", False)
+        getattr(_config, "config_monotonic", False)
+        or getattr(_config, "config_positive_definite", False)
+    )
+    _rk = RKSchedule.from_mpas(
+        float(_config.config_dt),
+        order=int(_config.config_time_integration_order),
+        acoustic_substeps=int(_config.config_number_of_sub_steps),
+        dynamics_splits=int(_config.config_dynamics_split_steps),
     )
     exchanger = HaloExchanger(
         tables,
         link,
         xp=cp,
-        expected_sequence=expected_round_sequence(monotonic=_limiter_on),
+        expected_sequence=expected_round_sequence(
+            monotonic=_limiter_on,
+            dynamics_splits=int(_config.config_dynamics_split_steps),
+            acoustic_steps=tuple(stage.acoustic_steps for stage in _rk.stages),
+        ),
     )
     driver.halo_exchanger_v841 = exchanger
     courier = OwnedRegionCourier(layouts, rank, link)
@@ -885,7 +899,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0915
     if fingerprints is not None:
         fingerprints.close()
 
-    source_after = proof.require_frozen_execution_sources()
+    source_after = proof.measure_execution_sources()
     arwen_git_after = proof.verify_arwen_checkout_git(arwen_checkout)
     if source_after != source_before or arwen_git_after != arwen_git_before:
         raise RuntimeError("source or Arwen bytes changed during execution")

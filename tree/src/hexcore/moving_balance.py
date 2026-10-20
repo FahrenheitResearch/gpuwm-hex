@@ -1,0 +1,606 @@
+"""Constrained moving-mesh thermodynamic initialization; never a time filter.
+
+The native vertical pressure/buoyancy operator does not commute with a
+conservative remap or the nonlinear equation of state. Carry its acceleration
+and use weighted Newton corrections of density/theta mass subject to
+that operator and both column integrals. Moist tracer masses are held fixed.
+The Newton projection uses a tridiagonal Schur block plus two integral rows:
+O(levels * cells) work and storage, with no dense per-column matrices.
+
+This constrains the vertical pressure contribution, not horizontal balance,
+transport or total vertical acceleration. Terrain-domain changes can require
+real pressure changes; no local projection can remove those while retaining
+all the original column budgets.
+"""
+
+import os
+
+import numpy as np
+
+#: The saved native diagnostics the carried force is computed from.  A moving
+#: checkpoint carries them; an analysis transfer (hexcore.analysis_remap) reads
+#: only prognostic fields from an analysis file and has none.
+CARRIED_FORCE_FIELDS = ("pressure_perturbation", "density_perturbation", "exner")
+
+#: Vapour and cloud water: the pair the remapped state is saturation-adjusted on (saturation_adjustment).
+SATURATION_SPECIES = ("qv", "qc")
+#: Latent heat of vaporisation and dry heat capacity as MPAS-A v8.4.2 Thompson uses them (lvap0, cp).
+LATENT_HEAT, DRY_CP, DRY_RGAS, VAPOR_RGAS = 2.5e6, 1004.5, 287.0, 461.6
+
+
+def liquid_saturation_mixing_ratio(temperature, pressure):
+    """Saturation mixing ratio over liquid water as MPAS-A v8.4.2 Thompson computes it (``rslf``).
+
+    Flatau et al. (1992) polynomial, module_mp_thompson.F.
+    """
+    x = np.maximum(-80.0, np.asarray(temperature, dtype=np.float64) - 273.16)
+    esl = .611583699e03 + x * (.444606896e02 + x * (.143177157e01 + x * (.264224321e-1 + x * (
+        .299291081e-3 + x * (.203154182e-5 + x * (.702620698e-8 + x * (.379534310e-11
+                                                                    + x * (-.321582393e-13))))))))
+    pressure = np.asarray(pressure, dtype=np.float64)
+    esl = np.minimum(esl, pressure * 0.15)
+    return 0.622 * esl / np.maximum(1.0e-4, pressure - esl)
+
+
+def evaporation(rho, heat, zz, vapor, cloud):
+    """Cloud water (mixing ratio) a cell evaporates to reach liquid saturation, with its latent cooling.
+
+    ``rho`` and ``heat`` are dry density and theta_m mass (``rho_theta``), ``vapor``/``cloud`` mixing
+    ratios.  Newton iterations on qv + x = qs(T - L x / cp), at the cell's Exner function; never more
+    than the cloud water there.  Returns (x, the cell's temperature before).
+    """
+    rho = np.asarray(rho, dtype=np.float64)
+    heat = np.asarray(heat, dtype=np.float64)
+    vapor = np.asarray(vapor, dtype=np.float64)
+    cloud = np.maximum(np.asarray(cloud, dtype=np.float64), 0.0)
+    exner = (np.asarray(zz, dtype=np.float64) * (DRY_RGAS / 1.0e5) * heat) ** (DRY_RGAS / (DRY_CP - DRY_RGAS))
+    pressure = 1.0e5 * exner ** (DRY_CP / DRY_RGAS)
+    temperature = heat / rho / (1.0 + VAPOR_RGAS / DRY_RGAS * vapor) * exner
+    x = np.zeros_like(cloud)
+    for _ in range(4):
+        cooled = temperature - LATENT_HEAT / DRY_CP * x
+        saturation = liquid_saturation_mixing_ratio(cooled, pressure)
+        slope = (liquid_saturation_mixing_ratio(cooled + 0.01, pressure) - saturation) / 0.01
+        x = x - (vapor + x - saturation) / (1.0 + LATENT_HEAT / DRY_CP * slope)
+        x = np.clip(x, 0.0, cloud)
+    return x, temperature, exner
+
+
+def saturation_adjustment(vapor, cloud, rho, heat, zz, donor_evaporation, total, *, threshold=1.0e-9):
+    """Evaporate the cloud water the remap itself left in subsaturated air, with its latent cooling.
+
+    ``vapor``/``cloud`` are the target's FP64 water products (dry density times mixing ratio), ``rho`` and
+    ``heat`` its dry density and theta_m products, ``donor_evaporation`` the donors' own evaporation
+    (``evaporation`` on the source, times dry density) carried by the same overlap, ``total`` the target
+    integral.  Returns (vapor, cloud, heat, receipt).
+
+    THE BREAKAGE THIS PREVENTS: the overlap remap carries vapour, cloud water and theta_m each
+    conservatively, so mixing a cloudy donor with drier donors (or with the warmer constant-theta air a
+    higher donor lends below its ground) leaves cloud water in subsaturated air: 9.4 % of all cloud
+    water on the 2025-11-08 12Z smoke case, against 0.06 % in the carried state itself.  Thompson
+    evaporated it on its first call after the move, at fixed density, so the cooling (0.4-0.5 K in the
+    lowest layers of far-field fog cells at 48.0N 126.3E, 23.5N 104.5E, 29.8N 102.5E) dropped their
+    pressure at once and the surface pressure fell and rebounded 200-260 Pa in two 225 s steps
+    (1.15 Pa/s, 3.6 times the fixed run).
+
+    The same evaporation, with the same latent cooling, now happens here, before the balanced
+    initialization builds the column, so the column starts in balance with it.  Only the excess over
+    what the donors would evaporate themselves is adjusted (the subsaturated cloud a running model
+    holds between microphysics calls is carried as it is).  Dry mass and each cell's total water are
+    unchanged; the phase change moves water from cloud to vapour and lowers theta_m mass by its latent
+    cooling, and the receipt declares both.
+    """
+    rho = np.asarray(rho, dtype=np.float64)
+    heat = np.asarray(heat, dtype=np.float64)
+    x, temperature, exner = evaporation(rho, heat, zz, vapor / rho, cloud / rho)
+    moved = (x * rho) - donor_evaporation
+    moved = np.where(moved > threshold * rho, np.minimum(moved, np.maximum(cloud, 0.0)), 0.0)
+    receipt = dict(method="target saturation adjustment of the cloud water the remap left subsaturated beyond "
+                          "the donors' own; latent cooling applied before the balanced initialization",
+                   cells=int(np.count_nonzero(np.any(moved > 0, axis=0))), layers=int(np.count_nonzero(moved > 0)),
+                   cloud_to_vapor_kg=float(total(moved)), cloud_total_kg=float(total(cloud)),
+                   largest_mixing_ratio=float(np.max(moved / rho, initial=0.0)))
+    if not np.any(moved > 0):
+        receipt.update(theta_mass_change_kg_kelvin=0.0, largest_cooling_k=0.0)
+        return vapor, cloud, heat, receipt
+    q_old = vapor / rho
+    q_new = q_old + moved / rho
+    cooled = temperature - LATENT_HEAT / DRY_CP * moved / rho
+    new_heat = rho * cooled / exner * (1.0 + VAPOR_RGAS / DRY_RGAS * q_new)
+    new_heat = np.where(moved > 0, new_heat, heat)
+    receipt.update(theta_mass_change_kg_kelvin=float(total(new_heat - heat)),
+                   largest_cooling_k=float(np.max(temperature - cooled)))
+    return vapor + moved, cloud - moved, new_heat, receipt
+
+
+def balance_scope(weights, state, environ=None):
+    """``(apply, reason)``: whether a remap takes the balanced initialization.
+
+    It applies to every height remap whose payload carries the saved native
+    pressure split, unless ``GPUWM_HEX_MOVING_BALANCE=0`` selects the previous
+    thermodynamic path (kept as a comparison knob; the default is on).  THE
+    BREAKAGE THE PAYLOAD CHECK PREVENTS: an analysis transfer has no saved
+    pressure split and the balanced path reads it by key, so every analysis
+    remap onto a new mesh would fail with KeyError once balance is the
+    default.  It keeps its previous path and its receipt says why, by name.
+    """
+    environ = os.environ if environ is None else environ
+    if not getattr(weights, "redistributes_vertical", False):
+        return False, "horizontal-only map: the vertical geometry does not change"
+    missing = [name for name in CARRIED_FORCE_FIELDS if name not in state]
+    if missing:
+        return False, ("the payload carries no saved native pressure split (missing "
+                       + ", ".join(missing) + "), so there is no source force to carry; "
+                       "an analysis transfer takes this path")
+    if environ.get("GPUWM_HEX_MOVING_BALANCE", "1") == "0":
+        return False, ("GPUWM_HEX_MOVING_BALANCE=0: the previous thermodynamic path, "
+                       "kept as a comparison knob")
+    return True, "carried native vertical pressure acceleration"
+
+
+def project_columns(rho, heat, tracer, acceleration, v, ref):
+    # Minimum relative thermodynamic change subject to native vertical force
+    # and independent column mass / theta-mass budgets. Schur complement of
+    # a tridiagonal force block and two integral constraints.
+    rho, heat, tracer, acceleration = (
+        np.asarray(x, dtype=np.float64) for x in (rho, heat, tracer, acceleration)
+    )
+    if (
+        rho.ndim != 2
+        or rho.shape[0] < 2
+        or heat.shape != rho.shape
+        or tracer.shape != rho.shape
+    ):
+        raise ValueError(
+            "moving balance needs matching mass-grid fields and at least two layers"
+        )
+    if acceleration.shape != (rho.shape[0] + 1, rho.shape[1]):
+        raise ValueError("moving balance acceleration must be on interfaces")
+    if any(not np.isfinite(x).all() for x in (rho, heat, tracer, acceleration)):
+        raise ValueError("moving balance received a non-finite field")
+    if np.any(rho <= 0) or np.any(heat <= 0) or np.any(tracer < 0):
+        raise ValueError(
+            "moving balance needs positive thermodynamics and nonnegative water mass; "
+            f"minimum rho={rho.min():.17g}, heat={heat.min():.17g}, water={tracer.min():.17g}"
+        )
+    r, h = rho.copy(), heat.copy()
+    dz = np.asarray(v.dzw, dtype=float)
+    zz = np.asarray(v.zz, dtype=float)
+    rb = np.asarray(ref.rho_base, dtype=float)
+    pb = (
+        zz
+        * 287
+        * np.asarray(ref.rho_theta_base, dtype=float)
+        * np.asarray(ref.exner_base, dtype=float)
+    )
+    a = np.asarray(v.rdzu, dtype=float)[1:]
+    wm = np.asarray(v.fzm, dtype=float)[1:] * 9.80616
+    wp = np.asarray(v.fzp, dtype=float)[1:] * 9.80616
+    target_r = dz @ rho
+    target_h = dz @ heat
+    for it in range(8):
+        p = 1e5 * (287 * zz * h / 1e5) ** 1.4
+        pp = p - pb
+        load = r + tracer - rb
+        f = (
+            a[:, None] * np.diff(pp, axis=0)
+            + wm[:, None] * load[1:]
+            + wp[:, None] * load[:-1]
+        )
+        fm = wm[:, None] / 9.80616
+        fp = wp[:, None] / 9.80616
+        metric = fm * zz[1:] + fp * zz[:-1]
+        ri = fm * r[1:] + fp * r[:-1]
+        loading = 1.0 + 0.5 * (tracer[1:] / r[1:] + tracer[:-1] / r[:-1])
+        inertia = ri * metric * loading
+        f -= acceleration[1:-1] * inertia
+        # Force Jacobian coefficients on rho and heat below/above interface.
+        rl = wp[:, None] - acceleration[1:-1] * metric * (
+            fp * loading - 0.5 * ri * tracer[:-1] / r[:-1] ** 2
+        )
+        ru = wm[:, None] - acceleration[1:-1] * metric * (
+            fm * loading - 0.5 * ri * tracer[1:] / r[1:] ** 2
+        )
+        deriv = 1.4 * p / h
+        hl = -a[:, None] * deriv[:-1]
+        hu = a[:, None] * deriv[1:]
+        vr = rho * rho
+        vh = heat * heat
+        diag = (
+            rl * rl * vr[:-1] + ru * ru * vr[1:] + hl * hl * vh[:-1] + hu * hu * vh[1:]
+        )
+        off = ru[:-1] * rl[1:] * vr[1:-1] + hu[:-1] * hl[1:] * vh[1:-1]
+        # Normalize the budget equations (no need to use physical area here).
+        cr = dz[:, None] / target_r
+        ch = dz[:, None] / target_h
+        br = rl * vr[:-1] * cr[:-1] + ru * vr[1:] * cr[1:]
+        bh = hl * vh[:-1] * ch[:-1] + hu * vh[1:] * ch[1:]
+        b = np.stack((f, br, bh), axis=-1)
+        d = diag.copy()
+        b = b.copy()
+        for k in range(1, len(d)):
+            mult = off[k - 1] / d[k - 1]
+            d[k] -= mult * off[k - 1]
+            b[k] -= mult[:, None] * b[k - 1]
+        b[-1] /= d[-1, :, None]
+        for k in range(len(d) - 2, -1, -1):
+            b[k] = (b[k] - off[k, :, None] * b[k + 1]) / d[k, :, None]
+        x, ur, uh = b[..., 0], b[..., 1], b[..., 2]
+        srr = np.sum(vr * cr * cr, axis=0) - np.sum(br * ur, axis=0)
+        shh = np.sum(vh * ch * ch, axis=0) - np.sum(bh * uh, axis=0)
+        srh = -np.sum(br * uh, axis=0)
+        er = (dz @ r - target_r) / target_r - np.sum(br * x, axis=0)
+        eh = (dz @ h - target_h) / target_h - np.sum(bh * x, axis=0)
+        det = srr * shh - srh * srh
+        lr = (er * shh - eh * srh) / det
+        lh = (eh * srr - er * srh) / det
+        lf = x - ur * lr - uh * lh
+        dr = vr * cr * lr
+        dh = vh * ch * lh
+        dr[:-1] += vr[:-1] * rl * lf
+        dr[1:] += vr[1:] * ru * lf
+        dh[:-1] += vh[:-1] * hl * lf
+        dh[1:] += vh[1:] * hu * lf
+        r -= dr
+        h -= dh
+        if (
+            not np.isfinite(r).all()
+            or not np.isfinite(h).all()
+            or np.min(r) <= 0
+            or np.min(h) <= 0
+        ):
+            raise ValueError("moving balance produced non-positive thermodynamics")
+        if abs(f).max() < 1e-10:
+            break
+    if abs(f).max() > 1e-8:
+        raise ValueError("moving column balance did not converge")
+    return (
+        r,
+        h,
+        dict(
+            iterations=it + 1,
+            residual=float(abs(f).max()),
+            mass=float(np.max(abs(dz @ r - target_r) / target_r)),
+            heat=float(np.max(abs(dz @ h - target_h) / target_h)),
+            rho_change=float(abs(r / rho - 1).max()),
+            heat_change=float(abs(h / heat - 1).max()),
+        ),
+    )
+
+
+def source_pressure_acceleration(old, vertical, moist):
+    """Native vertical pressure/buoyancy residual divided by w inertia.
+
+    The residual sign is the negative of the w tendency. This sign is kept
+    on both sides of the constraint. Physical w also includes a terrain/u
+    term; only the vertical pressure contribution is transferred here.
+    """
+    r = old["rho"].astype(np.float64)
+    rr = old["density_perturbation"].astype(np.float64)
+    pp = old["pressure_perturbation"].astype(np.float64)
+    q = sum((old["scalars"][i].astype(np.float64) for i in moist), np.zeros_like(r))
+    dp = -9.80616 * (rr + r * q)
+    fm = np.asarray(vertical.fzm, dtype=float)[1:, None]
+    fp = np.asarray(vertical.fzp, dtype=float)[1:, None]
+    zz = np.asarray(vertical.zz, dtype=float)
+    inertia = (
+        (fm * r[1:] + fp * r[:-1])
+        * (fm * zz[1:] + fp * zz[:-1])
+        * (1.0 + 0.5 * (q[1:] + q[:-1]))
+    )
+    result = np.zeros((r.shape[0] + 1, r.shape[1]))
+    result[1:-1] = (
+        np.asarray(vertical.rdzu, dtype=float)[1:, None] * np.diff(pp, axis=0)
+        - fm * dp[1:]
+        - fp * dp[:-1]
+    ) / inertia
+    return result
+
+
+def _sparse_bracket_rounding(out, exact, measure, mask, target):
+    """Solve a sparse failed rounding budget within the original brackets.
+
+    Prefix rounding can miss an admissible combination when a new tracer
+    occupies only a few cells. Meet in the middle bounds this fallback to
+    two arrays of at most 65536 subset sums; dense fields keep the fast path.
+    """
+    ids = np.flatnonzero(mask)
+    if not 0 < len(ids) <= 32 or np.any(measure.ravel()[ids] < 0):
+        return out
+    nearest = exact.ravel()[ids].astype(np.float32)
+    lower = np.where(nearest > exact.ravel()[ids], np.nextafter(nearest, np.float32(-np.inf)), nearest)
+    upper = np.where(nearest < exact.ravel()[ids], np.nextafter(nearest, np.float32(np.inf)), nearest)
+    candidate = out.copy()
+    candidate.ravel()[ids] = lower
+    remaining = target - float(np.sum(candidate.astype(float) * measure))
+    quanta = (upper.astype(float)-lower.astype(float))*measure.ravel()[ids]
+    split = len(ids)//2
+
+    def sums(values):
+        result = np.zeros(1)
+        for value in values:
+            result = np.concatenate((result, result+value))
+        return result
+
+    left, right = sums(quanta[:split]), sums(quanta[split:])
+    order = np.argsort(right, kind='stable')
+    sorted_right = right[order]
+    positions = np.searchsorted(sorted_right, remaining-left)
+    best = (float('inf'), 0, 0)
+    for offset in (-1, 0):
+        selected = np.clip(positions+offset, 0, len(right)-1)
+        errors = abs(left+sorted_right[selected]-remaining)
+        i = int(np.argmin(errors))
+        if errors[i] < best[0]:
+            best = (float(errors[i]), i, int(order[selected[i]]))
+    bits = best[1] | (best[2] << split)
+    for i, index in enumerate(ids):
+        if bits & (1 << i):
+            candidate.ravel()[index] = upper[i]
+    return candidate
+
+
+def conservative_float32(exact, measure, target, *, eligible=None, rtol=5e-10):
+    """Round within one ULP while closing the integrated product budget.
+
+    Only values that were inexact in the ordinary FP32 cast are eligible.
+    Thus identity carries and exact zero tracers stay bitwise untouched.
+    A deterministic prefix chooses adjacent floats; a small greedy tail
+    resolves the residual. Refuse if FP32 cannot represent the requested
+    tolerance instead of treating the observed error as an allowance.
+    """
+    exact = np.asarray(exact, dtype=float)
+    measure = np.broadcast_to(measure, exact.shape)
+    out = exact.astype(np.float32)
+    total = float(np.sum(out.astype(float) * measure))
+    error = float(target - total)
+    tolerance = rtol * max(abs(target), float(np.sum(abs(exact) * measure)), 1e-300)
+    mask = out.astype(float) != exact
+    if eligible is not None:
+        mask &= np.broadcast_to(eligible, exact.shape)
+    ids = np.flatnonzero(mask)
+    if abs(error) > tolerance and len(ids):
+        flat = out.ravel()
+        next_values = np.nextafter(
+            flat[ids], np.float32(np.inf if error > 0 else -np.inf)
+        )
+        quanta = (
+            next_values.astype(float) - flat[ids].astype(float)
+        ) * measure.ravel()[ids]
+        # Only rounding toward the other bracketing float is admissible.
+        valid = (next_values.astype(float) - exact.ravel()[ids]) * (
+            flat[ids].astype(float) - exact.ravel()[ids]
+        ) <= 0
+        ids, next_values, quanta = ids[valid], next_values[valid], quanta[valid]
+        prefix = np.cumsum(quanta)
+        stop = int(np.argmin(abs(np.concatenate(([0.0], prefix)) - error)))
+        flat[ids[:stop]] = next_values[:stop]
+        error -= float(prefix[stop - 1]) if stop else 0.0
+        # Resolve only the unconsumed tail. Each selected value moves once.
+        for j in range(stop, len(ids)):
+            if abs(error) <= tolerance:
+                break
+            if abs(error - quanta[j]) < abs(error):
+                flat[ids[j]] = next_values[j]
+                error -= float(quanta[j])
+    actual = float(np.sum(out.astype(float) * measure))
+    if abs(actual - target) > max(tolerance, 128 * np.finfo(float).eps * abs(target)):
+        out = _sparse_bracket_rounding(out, exact, measure, mask, target)
+        actual = float(np.sum(out.astype(float) * measure))
+    if abs(actual - target) > max(tolerance, 128 * np.finfo(float).eps * abs(target)):
+        raise ValueError("FP32 moving integral cannot meet its conservation tolerance; "
+                         f"target={target:.17g}, actual={actual:.17g}, tolerance={tolerance:.17g}, "
+                         f"nonzero={np.count_nonzero(exact)}, eligible={len(ids)}, "
+                         f"range=[{exact.min():.17g}, {exact.max():.17g}]")
+    return out
+
+
+def extend_below_ground(weights, old, moist):
+    """Hand an absolute-height map the donors' lowest theta, exner and water loading."""
+    extend = getattr(weights, "extend_below_ground", None)
+    if extend is None or "exner" not in old:
+        return
+    rho = old["rho"].astype(np.float64)
+    loading = 1.0 + sum((old["scalars"][i].astype(np.float64) for i in moist), np.zeros_like(rho))
+    extend(old["rho_theta"].astype(np.float64) / rho, old["exner"], loading)
+
+
+def remap_balanced_thermodynamics(payload, weights, prepared):
+    """Map products, initialize the carried force, then round conservatively."""
+    from types import SimpleNamespace
+
+    old, v, ref = payload["state"], prepared.vertical, prepared.reference
+    moist = [
+        i
+        for i, name in enumerate(payload["scalar_names"])
+        if name in ("qv", "qc", "qr", "qi", "qs", "qg", "qh")
+    ]
+    extend_below_ground(weights, old, moist)
+    rho = weights.mass_intensive(old["rho"], density=old["rho"])
+    mass_domain = weights.last_domain_reconciliation
+    heat = weights.mass_intensive(old["rho_theta"], density=old["rho"])
+    heat_domain = weights.last_domain_reconciliation
+    # Vapour and cloud water are adjusted to the target's saturation before the balance (saturation_adjustment);
+    # their products are kept for the tracer cast below.
+    names = list(payload["scalar_names"])
+    adjusted, adjusted_domains, adjustment = {}, {}, None
+    declared = dict(heat=0.0)
+    if all(name in names for name in SATURATION_SPECIES):
+        iv, ic = (names.index(name) for name in SATURATION_SPECIES)
+        for i in (iv, ic):
+            adjusted[i] = weights.mass_intensive(old["rho"].astype(float) * old["scalars"][i], density=old["rho"])
+            adjusted_domains[i] = weights.last_domain_reconciliation
+        donor, _, _ = evaporation(old["rho"], old["rho_theta"], payload["vertical"].zz,
+                                  old["scalars"][iv], old["scalars"][ic])
+        donor = weights.mass_intensive(old["rho"].astype(float) * donor, density=old["rho"])
+        adjusted[iv], adjusted[ic], heat, adjustment = saturation_adjustment(
+            adjusted[iv], adjusted[ic], rho, heat, v.zz, donor,
+            lambda value: float(weights.totals(value, source=False)[0]))
+        declared = dict(heat=adjustment["theta_mass_change_kg_kelvin"],
+                        **{names[iv]: adjustment["cloud_to_vapor_kg"], names[ic]: -adjustment["cloud_to_vapor_kg"]})
+    # The total water mass alone enters the balance equations. Individual
+    # tracers are remapped again below to avoid retaining all FP64 products.
+    water = np.zeros_like(rho)
+    for i in moist:
+        water += adjusted[i] if i in adjusted else weights.mass_intensive(
+            old["rho"].astype(float) * old["scalars"][i], density=old["rho"]
+        )
+    acceleration = weights.interface_intensive(
+        source_pressure_acceleration(old, payload["vertical"], moist)
+    )
+    acceleration[[0, -1]] = 0.0
+    exact_rho, exact_heat = rho.copy(), heat.copy()
+    records = []
+    for start in range(0, rho.shape[1], 4096):
+        stop = min(start + 4096, rho.shape[1])
+        sl = slice(start, stop)
+        vs = SimpleNamespace(
+            dzw=v.dzw, zz=v.zz[:, sl], rdzu=v.rdzu, fzm=v.fzm, fzp=v.fzp
+        )
+        rs = SimpleNamespace(
+            rho_base=ref.rho_base[:, sl],
+            rho_theta_base=ref.rho_theta_base[:, sl],
+            exner_base=ref.exner_base[:, sl],
+        )
+        exact_rho[:, sl], exact_heat[:, sl], record = project_columns(
+            rho[:, sl], heat[:, sl], water[:, sl], acceleration[:, sl], vs, rs
+        )
+        records.append(record)
+    # Do not project an exactly unchanged donor column: its saved native
+    # diagnostics, including FP32 evaluation residue, already own its force.
+    counts = np.bincount(weights.rows, minlength=len(weights.target_area))
+    donors = np.full(len(counts), -1, dtype=int)
+    donors[weights.rows] = weights.cols
+    unchanged = counts == 1
+    cols = np.flatnonzero(unchanged)
+    unchanged[cols] &= weights.target_area[cols] == weights.source_area[donors[cols]]
+    cols = np.flatnonzero(unchanged)
+    unchanged[cols] &= np.all(
+        weights.target_zgrid[:, cols] == weights.source_zgrid[:, donors[cols]], axis=0
+    )
+    cols = np.flatnonzero(unchanged)
+    # Cumulative integration can add FP64 cancellation even on an identity
+    # stencil. Admit only arithmetic noise, never a finite domain correction.
+    tol = 128 * np.finfo(float).eps
+    unchanged[cols] &= np.all(
+        abs(rho[:, cols] / old["rho"][:, donors[cols]] - 1.0) <= tol, axis=0
+    ) & np.all(
+        abs(heat[:, cols] / old["rho_theta"][:, donors[cols]] - 1.0) <= tol, axis=0
+    )
+    cols = np.flatnonzero(unchanged)
+    donor = donors[cols]
+    old_water = np.zeros((rho.shape[0], len(cols)))
+    for i in moist:
+        old_water += old["rho"][:, donor].astype(float) * old["scalars"][i][:, donor]
+    unchanged[cols] &= np.all(
+        abs(water[:, cols] - old_water) <= tol * abs(old_water), axis=0
+    )
+    # Geometry identity alone does not imply reference-state identity. Check
+    # the saved native pressure split before copying any original column.
+    cols = np.flatnonzero(unchanged)
+    donor = donors[cols]
+    old_h = old["rho_theta"][:, donor]
+    ex = old["exner"][:, donor]
+    hb = ref.rho_theta_base[:, cols]
+    pp = (
+        v.zz[:, cols]
+        * np.float32(287.0)
+        * (ex * (old_h - hb) + hb * (ex - ref.exner_base[:, cols]))
+    )
+    unchanged[cols] &= np.all(
+        pp == old["pressure_perturbation"][:, donor], axis=0
+    ) & np.all(
+        old["rho"][:, donor] - ref.rho_base[:, cols]
+        == old["density_perturbation"][:, donor],
+        axis=0,
+    )
+    exact_rho[:, unchanged] = old["rho"][:, donors[unchanged]]
+    exact_heat[:, unchanged] = old["rho_theta"][:, donors[unchanged]]
+    measure = weights.target_dzw[:, None] * weights.target_area
+
+    def cast_product(source, exact, domain, change=0.0):
+        # ``change``: the declared saturation-adjustment change of this total (zero for dry mass).
+        before = float(weights.totals(source, source=True)[0])
+        error = float(weights.totals(exact, source=False)[0] - before - change)
+        allowance = (
+            256
+            * np.finfo(float).eps
+            * float(weights.totals(abs(source), source=True)[0])
+        )
+        if abs(error) > allowance:
+            raise ValueError(
+                "balanced moving integral exceeds FP64 arithmetic allowance"
+            )
+        actual = conservative_float32(
+            exact, measure, before + change, eligible=~unchanged[None, :]
+        )
+        after = float(weights.totals(actual, source=False)[0])
+        receipt = dict(
+            before=[before],
+            after=[after],
+            absolute_error=[after - before - change],
+            saturation_adjustment=[change],
+            rounding_envelope=[
+                float(np.sum(abs(actual.astype(float) - exact) * measure))
+            ],
+            fp64_error=[error],
+            terrain_domain_reconciliation=domain,
+            accounting="whole-column global totals; constrained balance and conservative FP32 rounding",
+        )
+        return actual, receipt
+
+    rho, mass = cast_product(old["rho"], exact_rho, mass_domain)
+    heat, heat_receipt = cast_product(old["rho_theta"], exact_heat, heat_domain, declared["heat"])
+    tracers = {}
+    scalars = np.empty((len(payload["scalar_names"]), *rho.shape), dtype=np.float32)
+    for i, name in enumerate(payload["scalar_names"]):
+        source = old["rho"].astype(float) * old["scalars"][i]
+        if i in adjusted:
+            exact, domain = adjusted.pop(i), adjusted_domains[i]
+        else:
+            exact = weights.mass_intensive(source, density=old["rho"])
+            domain = weights.last_domain_reconciliation
+        change = declared.get(name, 0.0)
+        before = float(weights.totals(source, source=True)[0])
+        fp64 = float(weights.totals(exact, source=False)[0] - before - change)
+        if abs(fp64) > 256 * np.finfo(float).eps * float(
+            weights.totals(abs(source), source=True)[0]
+        ):
+            raise ValueError(
+                "balanced tracer integral exceeds FP64 arithmetic allowance"
+            )
+        # A tracer can have a nonzero terrain-domain correction even when
+        # dry mass and theta mass do not. Its copy mask must be independent.
+        copy_tracer = unchanged.copy()
+        cols = np.flatnonzero(copy_tracer)
+        donor_product = source[:, donors[cols]]
+        copy_tracer[cols] &= np.all(
+            abs(exact[:, cols] - donor_product) <= tol * abs(donor_product), axis=0
+        )
+        mixing = exact / rho
+        mixing[:, copy_tracer] = old["scalars"][i][:, donors[copy_tracer]]
+        scalars[i] = conservative_float32(
+            mixing, measure * rho, before + change, eligible=~copy_tracer[None, :]
+        )
+        actual = rho.astype(float) * scalars[i]
+        after = float(weights.totals(actual, source=False)[0])
+        tracers[name] = dict(
+            before=[before],
+            after=[after],
+            absolute_error=[after - before - change],
+            saturation_adjustment=[change],
+            rounding_envelope=[float(np.sum(abs(actual - exact) * measure))],
+            fp64_error=[fp64],
+            terrain_domain_reconciliation=domain,
+            positivity_roundoff=getattr(weights, "last_positivity_roundoff", None),
+            accounting=mass["accounting"],
+        )
+    record = {key: max(row[key] for row in records) for key in records[0]}
+    record.update(
+        method="constrained native vertical pressure acceleration; column mass, theta mass and water masses retained",
+        saturation_adjustment=adjustment,
+        unchanged_columns=int(unchanged.sum()),
+        horizontal_balance_constrained=False,
+        damping_added=False,
+    )
+    return rho, heat, scalars, mass, heat_receipt, tracers, record

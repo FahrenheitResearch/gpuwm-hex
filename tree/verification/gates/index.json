@@ -1,0 +1,45 @@
+{
+  "schema": "mpas-gate-index-v1",
+  "scope": "Existing verification decks plus the landed-GPU headline; native publications and recorded inventory unchanged.",
+  "gates": {
+    "G1": [
+      {
+        "path": "decks/f0-G1-explicit-dry-dycore-march-small.json",
+        "sha256": "2e65b930a611194abacfda5c3eef12eab9aeb4286144f2697a5a6d5b4d79c976"
+      },
+      {
+        "path": "decks/f0-G1-explicit-dry-none-march-small.json",
+        "sha256": "ac0f5a4c02188b9e6fd419cb5467fcca701257b8d71742df1224d0886aa2d41d"
+      },
+      {
+        "path": "decks/f0-G1-explicit-dry-dycore-march-medium.json",
+        "sha256": "669632d196bc9dccf23aeae4bc198ec01d21dd5c31d87945eeb1f26012abc9b3"
+      },
+      {
+        "path": "decks/f0-G1-explicit-dry-none-march-medium.json",
+        "sha256": "715792ba427630b5fdbad4bbc2759d5e2da918821b301ea17dedf350ebd0bda7"
+      }
+    ],
+    "G2": [
+      {
+        "path": "decks/f4-M0-mesoscale-march-small-rank1.json",
+        "sha256": "845686431c26411375ad1ff2479458d79d212364114894479eb4fb15b25c5d5b"
+      },
+      {
+        "path": "decks/f4-M0-x1.2562-2023-03-31_12.00.00-convection_permitting-rank1.json",
+        "sha256": "833633a7ddfedb9b4c03020d331ec0df96e50335783de6dab66b7daac6df9eba"
+      },
+      {
+        "path": "decks/mpas-headline-convection-permitting.json",
+        "sha256": "f51aa096d9e621b69b8ed3b996300aab2e1a317a8fd1af48672154e8843061f5"
+      }
+    ]
+  },
+  "landed_decks": [
+    "f4-M0-mesoscale-march-small-rank1",
+    "f4-M0-x1.2562-2023-03-31_12.00.00-convection_permitting-rank1",
+    "mpas-headline-convection-permitting"
+  ],
+  "data_manifest": "data-manifest.json",
+  "note": "Every deck pins its inputs by sha256 under data/, which a public checkout does not carry: rebuild the native references and inputs with the recipes in tools/native_dry_reference and tools/native_physics_reference and lay them out as data-manifest.json lists, then run tools/mpas_gate.sh --gates G1,G2 --index verification/gates/index.json --ratchet verification/gates/ratchet.json --out DIR. Process count is fixed per deck."
+}

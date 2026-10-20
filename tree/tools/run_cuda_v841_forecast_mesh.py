@@ -12,8 +12,10 @@ command runs the frozen shape without changing it.
 
 Everything after ``--`` is handed verbatim to ``run_cuda_v841_forecast.main``.
 The port tree is never modified: the mesh shape is bound at runtime and
-``require_frozen_execution_sources()`` still verifies the six executing
-modules by SHA-256 before the bind and again around the run.
+The executing modules are hashed before the bind and again around the run
+and recorded with whether they match the x4 proof's pins
+(``measure_execution_sources``); since 2026-10-10 a difference is recorded,
+not refused.
 
 ``--verify-only`` performs the whole bind, including the fail-closed
 cross-examination of the mesh files, and stops before the forecast.
@@ -56,6 +58,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt-json", type=Path, default=None)
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--dt", default=None,
+                        help="run timestep: 'auto' (default, MPAS-A's 6 s per km of "
+                             "nominal spacing), 'row' (the registered value) or seconds")
+    parser.add_argument("--max-wind", type=float, default=None,
+                        help="largest horizontal wind (m/s) the bind's advective "
+                             "stability estimate assumes (default: the mesh row's, 125)")
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
 
@@ -85,9 +93,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.selftest:
         return _selftest(binding_mod, proof, forecast, args.mesh, grid, static)
 
+    # The bind measures stability and cadence integrality against what the
+    # forecast will execute, so it takes the same schedule the forecast's own
+    # arguments name (MPAS-A defaults when they name none).
+    from hexcore import mpas_defaults
+
+    row = binding_mod.MESH_BINDINGS.get(args.mesh)
+    radiation = float(_extract(rest, "--radiation-seconds")
+                      or mpas_defaults.DEFAULT_RADIATION_SECONDS)
+    dt_choice = mpas_defaults.resolve_dt(
+        args.dt,
+        nominal_dx_m=None if row is None else float(row.nominal_dx_m),
+        row_dt_seconds=None if row is None else float(row.dt_seconds),
+        radiation_seconds=radiation,
+    )
     receipt = binding_mod.bind_mesh(
         proof, args.mesh, grid=Path(grid), static=Path(static),
         forecast=forecast,
+        dt_seconds=float(dt_choice["dt_seconds"]),
+        time_integration_order=int(_extract(rest, "--time-integration-order")
+                                   or mpas_defaults.DEFAULT_TIME_INTEGRATION_ORDER),
+        acoustic_substeps=int(_extract(rest, "--acoustic-substeps")
+                              or mpas_defaults.DEFAULT_ACOUSTIC_SUBSTEPS),
+        radiation_seconds=radiation,
+        max_wind_m_s=args.max_wind,
     )
     receipt["repo"] = str(repo)
     receipt["argv_after_separator"] = rest
@@ -132,9 +161,19 @@ def _selftest(binding_mod, proof, forecast, mesh: str, grid: str, static: str) -
     # authority, that bind_mesh compares against -- a bare constants_fingerprint
     # digests a null authority and could never match a no-op bind.
     fingerprint0 = binding_mod.binding_fingerprint(proof, Path(static))["sha256"]
+    # The frozen native row is a no-op only at the schedule the native
+    # reference was recorded at, which is passed explicitly (since
+    # 2026-10-10 the defaults are MPAS-A's, not x4's).
+    row = registry.get(mesh)
+    recorded = {}
+    if row is not None:
+        recorded["dt_seconds"] = float(row.dt_seconds)
+        if row.frozen_native:
+            recorded.update(time_integration_order=3, acoustic_substeps=6,
+                            radiation_seconds=600.0)
     receipt = binding_mod.bind_mesh(
         proof, mesh, grid=Path(grid), static=Path(static), forecast=forecast,
-        log=lambda *a, **k: None,
+        log=lambda *a, **k: None, **recorded,
     )
     check(
         f"correct bind accepted ({mesh})",

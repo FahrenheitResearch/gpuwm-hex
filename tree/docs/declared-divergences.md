@@ -1,17 +1,22 @@
 # Declared divergences
 
-gpuwm-hex runs ArWen's physics, not MPAS's. Whole-model agreement with native
-MPAS-Atmosphere therefore stopped being reachable the moment that choice was
-made, and on 2026-08-20 physics parity was retired as a goal: **the dynamical
-core stays pinned to native v8.4.1 byte-identity — that pin is the correctness
-anchor — and the physics is judged by skill against observations, MRMS and
-ASOS, not by agreement with another model.**
+**This register is about the default ArWen physics route.** On that route
+gpuwm-hex runs ArWen's physics, not MPAS's, so whole-model agreement with
+native MPAS-Atmosphere is not reachable there and is not its standard: **the
+dynamical core is byte-identical to native v8.4.2 on the measured cases (see
+[compatibility](mpas-compatibility.md)), and ArWen's physics is judged by skill
+against observations, MRMS and ASOS, not by agreement with another model.**
+Since 0.4.0 the MPAS physics suites are a separate route, ported from MPAS-A
+v8.4.2 and matched against native MPAS bit for bit
+([the MPAS physics seam](manual/mpas-physics-seam.md)); they carry none of the
+divergences below.
 
 This document is the register of the known physics-shaped differences against
 native. Each one is **declared**: measured, mechanism named, referee named. A
 declared divergence is not a blocker and it is not a licence to ignore a
-defect — a bias that is wrong against *observations* is still wrong. Retiring
-MPAS as the referee changes the referee; it does not clear a finding.
+defect — a bias that is wrong against *observations* is still wrong. Judging
+ArWen's physics by observations instead of by MPAS changes the referee; it
+does not clear a finding.
 
 **The status of the referee itself: it has run.** The first real run is
 2026-08-25 on the proving node (RTX 5090) — four full-physics forecasts on the
@@ -160,6 +165,36 @@ is byte-identical to 2.7.3 on all 500 arrays of that profile
 That the manifest does not reach the boundary-layer kernel is a named
 follow-up; it is not a claim this page makes.
 
+The 2026-10-05 move to the gpuwm 2.8.6 candidate (an unpublished
+2.8.6 engine build) moved ten of the sixteen pinned files
+against the 2.8.0 manifest, measured against the engine tree:
+`gpuwm/config.py`, `gpuwm/core/gf.py`, `gpuwm/core/kernels/gf.cu`,
+`gpuwm/core/kernels/__init__.py`, `gpuwm/core/microphysics.py`,
+`gpuwm/core/physics.py`, `gpuwm/core/rrtmg_legacy.py`,
+`gpuwm/core/noahmp_runtime.py`, `gpuwm/core/noahmp_kernel_sources.py` and
+`gpuwm/io/restart.py`. The column batch, the seam document and the other
+Noah-MP files are byte-identical, and the composed glacier unit digest is
+unchanged (`cde4bfcc...`). Outside the sixteen, the boundary-layer and
+surface-layer kernels (`ysu.cu`, `ysu.py`, `sfclay.cu`), the shortwave
+kernel (`rrtmg_sw.cu`) and the radiation preparation moved too.
+Unlike the 2.8.0 move this one is NOT byte-neutral through the seam, and it
+is declared here. The seam-level A/B
+(`../verification/engine-verdicts/seam-ab-{convective,capped}-2.8.0-vs-2.8.6-candidate-534c6dea3.json`,
+RTX 5090) leaves 364 of 500 arrays byte-identical on the convective profile
+with Grell-Freitas (RAINC by at most 1.7e-5 mm against 0.24 mm, theta
+tendency by at most 2.6e-7 K/s, relative 8e-4), 437 of 500 without
+cumulus (theta tendency at most 5.3e-9 K/s), and 498 of 500 on the capped
+profile (one step of theta tendency, 1.3e-7 K/s, and the theta it feeds,
+3.1e-5 K). These are rounding-scale moves, not a scheme change. The same
+2.8.6 arm repeated on a second RTX 5090 on another machine is 500 of 500
+identical on both profiles, and repeated on one card it is 500 of 500
+identical. A one-hour forecast on the registered `x1.40962` mesh (GFS
+2026-10-01 00Z, 30 steps of 120 s, two frames) writes the initial frame
+byte-identical to the 2.8.0 run (`049df3e2...`) and a different hour-one
+frame (`622248ed...` against `30152b7a...`). Repeated runs on the 2.8.6
+candidate are byte-identical to each other. Under the hex law the
+referee for this move is observations, not the previous engine.
+
 The 2026-09-29 move to gpuwm 2.8.0 moved eight of the sixteen pinned
 files between the published 2.7.4 and 2.8.0 wheels, measured wheel against
 wheel (`../verification/engine-verdicts/repin-280-20260929.json`):
@@ -272,6 +307,97 @@ and ASOS do not observe model theta above level 45. That is the boundary
 holding, not a gap in the run — the run has no authority here and says so.
 Choosing the profile reference is not an automated decision, and this work did not
 make it.
+
+**Profile referee, 2026-10-05 (GFS analyses).** One case: x1.40962, 55
+levels to a 30 km lid, 72 h from the GFS 2026-10-01 00Z analysis, scored
+against the GFS 0.25-degree analyses at 24, 48 and 72 h. The analysis is
+interpolated in ln p to each cell's model pressure, area weighted. This is an
+analysis referee, not radiosondes. It is one case on one mesh, run on an
+RTX 4090 with the gpuwm 2.8.0 engine. Against an analysis, the drift
+measured above against native is three separate defects with three
+different causes:
+
+| defect at 72 h | where | GF control | cause |
+|---|---|---|---|
+| cold drift near 250 hPa, -1.11 K at 250 hPa, about -0.018 K/h | tropics, -1.82 K at 210 hPa | yes | GF heating profile |
+| warm bias at 100 hPa, +0.83 K | the tropical cold point, +1.19 K at 96 hPa | yes | mostly GF (see below) |
+| 15 hPa RMS growth to 4.6 K | the south polar cap top, -13.4 K at 12 hPa | no | the 30 km lid |
+
+- **GF heating profile.** Replacing Grell-Freitas with New Tiedtke and
+  changing nothing else takes the 250 hPa bias from -1.11 to -0.50 K (RMS
+  2.22 to 1.76), the tropical 210 hPa bias from -1.82 to -0.50 K, and the
+  100 hPa bias from +0.83 to +0.60 K. The run uses `--convection ntiedtke` at
+  dt 120 s under a candidate timestep mint, so it is a measurement only. The
+  control's radiative cooling at 250 hPa is about -1.6 K/day net.
+- **The 30 km lid.** The 15 hPa RMS sits in the top six levels over the
+  south polar cap. There theta falls 6.6 to 11 K/day with resolved w near
+  zero, and the cap cools from 230.8 K to 218.9 K at k=54 while the analysis
+  holds near 225 K. Upper damping makes it neither better nor worse in a way
+  that would explain it. Starting the w damping at 29 km instead of 22 km
+  makes the cap worse (-15.2 K at 14 hPa against -11.2 K). Starting it at
+  18 km makes it slightly better (-9.6 K). Removing the radiative tendency
+  above k=46 makes it only slightly smaller and warms the north polar top by
+  3 K. This is the low-lid signature: there is no wave-driven polar
+  downwelling above the lid, and no non-orographic gravity-wave drag in this
+  suite. It needs a lid or drag decision, not a seam fix.
+- **Radiation seams ruled out.** CAM monthly ozone on the above-lid
+  radiation layers, in place of the shifted O3DATA profile, changes
+  250/100 hPa by less than 0.02 K and makes 15 hPa slightly worse (global
+  -1.08 to -1.32 K). The per-column LW buffer count (native nlayers per
+  column, against hex's one area-weighted p_top) differs only in the 9 % of
+  columns at the pole whose top is above 10 hPa (2 layers against 3). There
+  the top-layer heating changes by -0.03 to -0.06 K/day, and 0 elsewhere.
+  A +5 K error in the t8w top value moves LW heating by exactly 0, because
+  the wrapper overwrites tlev(kte+1), and moves SW by about -0.01 K/day.
+  None of the three is the drift.
+- **GF over-reports its own rain.** With a hook on each GF call, the deep
+  branch reports 1.9 times the water it removes from the column (shallow
+  balances to 2 %). The 72 h global budget shows the same thing: reported
+  precipitation 4.43 mm/day against 2.92 mm/day evaporation, with
+  precipitable water rising, an implied source of +1.67 mm/day. New Tiedtke
+  closes it to +0.26 mm/day. The WRF 4.6.1 Fortran GF oracle columns
+  shipped with the engine do the same (deep `pret` is 1.29 to 1.66 times the
+  column `outq + outqc` loss, shallow `prets` matches), so this is native
+  WRF GF behaviour, not a port defect. The heating it applies sits between
+  the two (0.33 mm/day equivalent against 0.25 removed and 0.44 reported),
+  so it does not drive the cold drift. It does inflate RAINC, which bears on
+  section 2's live-referee sign.
+
+**Fixed by default, 2026-10-05: New Tiedtke at 20 km and coarser.** This
+ruling was delegated by the owner on 2026-10-05: New Tiedtke becomes the hex
+coarse-mesh default once a second case confirms it. It supersedes the
+2026-08-26 resolution rule's Grell-Freitas answer for those meshes. The
+reason is the observation-scored drift above, not parity.
+
+The rule now has three bands:
+- below 3 km, no cumulus scheme (unchanged);
+- 3 to 20 km, Grell-Freitas (unchanged);
+- 20 km and coarser, New Tiedtke (`hexcore.convection_admission.NTIEDTKE_AT_OR_ABOVE_M`).
+
+20 km is where the registered rows change timestep. Every row at 20 km or
+coarser declares dt 120 s, and that is the one timestep the new
+`dt_key(120.0, "ntiedtke")` anchor admits. So no finer row loses an
+anchor.
+
+Both cases confirm it against radiosondes (IGRA2, tropics 20S-20N, 250 hPa
+bias/RMS in K):
+
+| case | GF | New Tiedtke |
+|---|---|---|
+| GFS 2026-10-01 00Z, at 48 h | -2.29/2.45 | -0.61/0.87 |
+| GFS 2026-01-15 00Z, at 72 h | -2.57/2.97 | -0.96/1.52 |
+
+Against GFS analyses, the global 250 hPa bias goes from -1.11 to -0.50 K and
+from -1.18 to -0.63 K. The cost is a colder 500 hPa (global bias -0.62
+against -0.05 K and -0.64 against -0.40 K) at about equal RMS.
+
+The anchor pair is two 72 h runs on two RTX 5090s (sm_120), which wrote 13
+of 13 byte-identical frames. A second pair on one RTX 4090 (sm_89) matched
+too. The receipt is `evidence/dt-anchor-ntiedtke-20261005/RECEIPT.md`.
+
+Grell-Freitas stays reachable at every spacing with `--convection gf`. The
+south-polar 15 hPa drift is not touched by this change and stays a named
+follow-up (lid height or non-orographic gravity-wave drag).
 
 ## 2. Convective-to-explicit precipitation repartition
 
@@ -461,6 +587,28 @@ three-species set (`lbc_qv`, `lbc_qc`, `lbc_qr`), takes no model scalar
 registry, and returns byte-identical fields whether the model integrates six
 species or seventeen. Widening the model's registry moves no boundary file, no
 reader path and no boundary digest on the CUDA route the cascade runs.
+
+---
+
+## 5. Hour-0 reflectivity is computed, not the allocated zero (0.4.0)
+
+Native MPAS-A (and WRF) write `refl10cm` as its allocated default, zero, at
+the initial time: the history field is filled only inside a due step's
+microphysics call, and the first call has not happened. Hex used to copy
+that. An init that carries hydrometeors then showed no storms at f000 in
+maps and scores (the wofs ensemble's hour-0 CSI 0 and -60 dBZ maximum bias).
+
+From 0.4.0 the f000 frame carries the active scheme's own 10 cm reflectivity
+of the initial state: the backend's `initial_refl10cm` evaluates the
+engine's between-steps operator `gpuwm.da.obsop.simulated_reflectivity` (the
+same per-scheme routines the due step calls) on a column view of the initial
+hydrometeors, with temperature diagnosed from the initial theta and
+pressure. Every other variable of the f000 frame, and every later frame, is
+unchanged. Two cases still write the allocated zero, and the frame's
+`refl10cm_provenance` attribute says which: a selection with no
+microphysics, and a scheme whose reflectivity the engine cannot separate
+from its step (it refuses by name). The referee is observations (MRMS), not
+native's zero.
 
 ---
 

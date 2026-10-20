@@ -14,7 +14,7 @@ sidecar.  The forecast itself remains device-resident between steps.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import importlib.util
 import json
@@ -219,8 +219,13 @@ class PreparedCudaInputs:
         input_bytes: dict[str, dict[str, Any]],
         reference_wind_profiles: V841ReferenceWindProfiles | None = None,
         allow_regional_sentinels: bool = False,
+        seal: bool = True,
     ) -> "PreparedCudaInputs":
         """Seal the complete host execution boundary before either upload.
+
+        ``seal=False`` returns before the execution fingerprint is computed;
+        the caller then seals with :class:`BackgroundFingerprintSeal` and joins
+        it before the prepared inputs are used.
 
         ``allow_regional_sentinels`` says this mesh's outermost ring carries
         MPAS's limited-area one-cell-edge sentinels by construction, so the
@@ -273,9 +278,57 @@ class PreparedCudaInputs:
             allow_regional_sentinels=allow_regional_sentinels,
         )
         object.__setattr__(prepared, "advection_coefficients", coefficients)
+        if not seal:
+            return prepared
         sealed = fingerprint_prepared_execution(prepared, config)
         object.__setattr__(prepared, "expected_execution_fingerprint", sealed)
         return prepared
+
+
+class BackgroundFingerprintSeal:
+    """Compute a prepared execution fingerprint on a thread; ``join`` seals it.
+
+    THE COST THIS REMOVES, MEASURED (rented box, 2026-10-13, 20 km global, warm):
+    the fingerprint -- a SHA-256 and a finiteness check over every execution
+    input array -- took 14.8 s of the forecast's host preparation on the main
+    thread, after which the init's surface diagnostics, start humidity and
+    physics constructor were read and built one after another.  None of those
+    reads or writes an array the fingerprint hashes, so the two now run at the
+    same time.  The fingerprint itself is the unchanged
+    :func:`fingerprint_prepared_execution`; ``join`` re-raises its refusal (a
+    non-finite input) before anything is uploaded, and only then stores the
+    seal, so a reader can never see a half-built record.
+    """
+
+    def __init__(self, prepared: "PreparedCudaInputs", config: DryDycoreConfig) -> None:
+        import threading
+
+        if prepared.expected_execution_fingerprint is not None:
+            raise CudaDualRunError("prepared inputs are already sealed")
+        self._prepared = prepared
+        self._config = config
+        self._result: dict[str, Any] | None = None
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._run, name="hex-prepared-fingerprint", daemon=True
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            self._result = fingerprint_prepared_execution(self._prepared, self._config)
+        except BaseException as error:  # re-raised by join() on the caller's thread
+            self._error = error
+
+    def join(self) -> "PreparedCudaInputs":
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        if self._prepared.expected_execution_fingerprint is None:
+            object.__setattr__(
+                self._prepared, "expected_execution_fingerprint", self._result
+            )
+        return self._prepared
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,15 +643,19 @@ def _host_edge_sign_record(mesh: Any) -> dict[str, Any]:
     counts = np.ascontiguousarray(
         np.asarray(_host_mesh_value(mesh, "nEdgesOnCell"), dtype=np.int32)
     )
+    # Whole-array form of the per-slot loop (20.1 s of Python on conus3km,
+    # G3 2026-10-12): slots past nEdgesOnCell stay zero, an edge index reads
+    # cellsOnEdge exactly as the loop's integer indexing did (a negative one
+    # counts from the end, an out-of-range one raises IndexError).
     signs = np.zeros(edges_on_cell.shape, dtype=np.float32)
-    for cell in range(edges_on_cell.shape[0]):
-        for slot in range(int(counts[cell])):
-            edge = int(edges_on_cell[cell, slot])
-            signs[cell, slot] = (
-                np.float32(1.0)
-                if int(cells_on_edge[edge, 0]) == cell
-                else np.float32(-1.0)
-            )
+    if edges_on_cell.ndim != 2 or counts.shape != (edges_on_cell.shape[0],):
+        raise CudaDualRunError("edgesOnCell and nEdgesOnCell disagree on the cell count")
+    if counts.size and int(counts.max()) > edges_on_cell.shape[1]:
+        raise IndexError("nEdgesOnCell names more slots than edgesOnCell holds")
+    used = np.arange(edges_on_cell.shape[1])[None, :] < counts[:, None]
+    cell, slot = np.nonzero(used)
+    owner = cells_on_edge[edges_on_cell[cell, slot], 0]
+    signs[cell, slot] = np.where(owner == cell, np.float32(1.0), np.float32(-1.0))
     return _authority_array_record(signs)
 
 
@@ -637,6 +694,28 @@ def fingerprint_prepared_execution(
     """Hash every host value that controls a generic CUDA trajectory."""
 
     configuration_sha256 = canonical_sha256(asdict(config))
+    source_release = getattr(config, "source_release", "v8.2.3")
+    is_v841 = source_release == V841_SOURCE_RELEASE
+    authority_config = config
+    if is_v841:
+        if prepared.reference_wind_profiles is None:
+            raise CudaDualRunError(
+                "v8.4.1 execution fingerprint requires reference wind profiles"
+            )
+        # The v8.4.1 seal records its own damping profile: the vertical
+        # group's dss record is replaced below.  The authority fingerprint
+        # (cuda_driver, a frozen execution source) builds the v8.2.3 profile
+        # from the config it is handed and, with the advection coefficients
+        # supplied, reads nothing else from it; handed config_xnutr = 0 it
+        # builds the all-zero profile at no cost.  THE COST THIS REMOVES,
+        # MEASURED (G3, 2026-10-12, conus3km, prep cache missed): the v8.2.3
+        # profile's Python loop over every cell and level took 209.2 s of
+        # the 292.3 s host validation, for a record nothing kept.
+        if prepared.advection_coefficients is None:
+            raise CudaDualRunError(
+                "v8.4.1 execution fingerprint requires the sealed advection coefficients"
+            )
+        authority_config = replace(config, config_xnutr=0.0)
     authority_initial = cuda_authority_initial_fingerprint(
         prepared.state,
         prepared.saved_diagnostics,
@@ -644,16 +723,11 @@ def fingerprint_prepared_execution(
         vertical=prepared.vertical,
         reference=prepared.reference,
         terrain_metrics=prepared.terrain_metrics,
-        config=config,
+        config=authority_config,
         advection_coefficients=prepared.advection_coefficients,
     )
-    source_release = getattr(config, "source_release", "v8.2.3")
     v841_context = None
-    if source_release == V841_SOURCE_RELEASE:
-        if prepared.reference_wind_profiles is None:
-            raise CudaDualRunError(
-                "v8.4.1 execution fingerprint requires reference wind profiles"
-            )
+    if is_v841:
         selected_dss = build_v841_vertical_velocity_damping(
             np.asarray(prepared.vertical.zgrid),
             xnutr=config.config_xnutr,
@@ -721,17 +795,74 @@ def fingerprint_prepared_execution(
     return _finalize_execution_fingerprint(core)
 
 
+class _HostLayoutView:
+    """An uploaded container seen in the host's padded layout.
+
+    Compacted device tables (``cuda_backend/compaction.py``) store fewer
+    padding slots than the host arrays; the authority fingerprint hashes the
+    host layout, so the compacted members are rebuilt exactly for hashing.
+    """
+
+    def __init__(self, owner: Any, **overrides: Any) -> None:
+        self._owner = owner
+        self._overrides = overrides
+
+    def __getattr__(self, name: str) -> Any:
+        overrides = object.__getattribute__(self, "_overrides")
+        if name in overrides:
+            return overrides[name]
+        return getattr(object.__getattribute__(self, "_owner"), name)
+
+
+def _host_layout_mesh(mesh: Any) -> Any:
+    if not hasattr(mesh, "full_edge_stencil"):
+        return mesh
+    edges_on_edge, weights_on_edge = mesh.full_edge_stencil()
+    return _HostLayoutView(
+        mesh,
+        edges_on_edge=edges_on_edge,
+        weights_on_edge=weights_on_edge,
+        max_edges2=int(mesh.file_max_edges2),
+    )
+
+
+def _host_layout_terrain(terrain: Any) -> Any:
+    if not hasattr(terrain, "full_layout"):
+        return terrain
+    zb_cell, zb3_cell = terrain.full_layout()
+    return _HostLayoutView(terrain, zb_cell=zb_cell, zb3_cell=zb3_cell)
+
+
+def _host_layout_vertical(vertical: Any) -> Any:
+    # hx stays on the host until something asks for it on the device
+    # (containers.DeviceVerticalGrid).  The fingerprint hashes that host copy,
+    # the very bytes an upload would carry, so hashing does not upload it.
+    if getattr(vertical, "hx_resident", True):
+        return vertical
+    host_hx = getattr(vertical, "_hx_host", None)
+    if host_hx is None:
+        return vertical
+    return _HostLayoutView(vertical, hx=host_hx)
+
+
+def _host_layout_advection(coefficients: Any) -> Any:
+    if not hasattr(coefficients, "full_layout"):
+        return coefficients
+    return _HostLayoutView(coefficients, **coefficients.full_layout())
+
+
 def _device_authority_initial_fingerprint(
     driver: CudaDryDycoreDriver,
 ) -> dict[str, Any]:
     atmosphere = driver.atmosphere
-    mesh = atmosphere.mesh
-    vertical = atmosphere.vertical
+    mesh = _host_layout_mesh(atmosphere.mesh)
+    vertical = _host_layout_vertical(atmosphere.vertical)
     reference = atmosphere.reference
     terrain = atmosphere.terrain
     if terrain is None:
         raise CudaDualRunError("uploaded CUDA atmosphere has no terrain metrics")
-    coefficients = driver.coefficients
+    terrain = _host_layout_terrain(terrain)
+    coefficients = _host_layout_advection(driver.coefficients)
 
     def arrays(
         owner: Any,

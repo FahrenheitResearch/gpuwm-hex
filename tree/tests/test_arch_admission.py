@@ -52,6 +52,7 @@ def _fake_cupy(monkeypatch, *, major, minor, name="Fake GPU", targets=FAKE_NVRTC
 
     runtime = types.SimpleNamespace(
         getDeviceCount=lambda: 1,
+        getDevice=lambda: 0,
         getDeviceProperties=lambda device_id: {
             "major": major,
             "minor": minor,
@@ -584,13 +585,16 @@ def test_numeric_route_on_the_real_card():
 
 
 def test_kernel_cache_contraction_pin_is_architecture_independent():
+    from hexcore import numerics
     from hexcore.cuda_backend.runtime import KernelCache
 
-    # The NVRTC contraction pin is part of the numerical contract on every
-    # architecture, not an sm_120 accident, and the probe compiles with it.
-    defaults = KernelCache.__init__.__kwdefaults__["base_options"]
-    assert tuple(defaults) == ("--std=c++17", "--fmad=false")
-    assert arch_admission.NUMERIC_ROUTE_OPTIONS == tuple(defaults)
+    # The NVRTC contraction pin is part of the strict numerical contract on
+    # every architecture, not an sm_120 accident.  The cache's default base is
+    # the process's numerics mode (fast by default, strict the opt-in: owner
+    # ruling 2026-10-16), and the probe compiles with the same mode.
+    assert KernelCache.__init__.__kwdefaults__["base_options"] is None
+    assert numerics.kernel_base("strict") == ("--std=c++17", "--fmad=false")
+    assert arch_admission.NUMERIC_ROUTE_OPTIONS == numerics.kernel_base("strict")
 
 
 # --- registry entries are records, not switches --------------------------

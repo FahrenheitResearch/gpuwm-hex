@@ -1,0 +1,14 @@
+{
+  "schema": "mpas.iau-owner-hook-proposal/v1",
+  "source_sha256": {
+    "tree/src/hexcore/mpasphys/driver_v842.py": "e6dec6fc772977cb6dcf59418f52552ad51f4d4f541fd4a1137ca1b82bc57862",
+    "tree/src/hexcore/mpasphys/runtime_v842.py": "9bf2c00377455647a8c48984db631bafdb3b273f90b796f59df6b983f3aeb562",
+    "tree/src/hexcore/cuda_driver.py": "a1c7f0aed6ef7662a2c6002b7ee43bc6a74711244006f7c891ca0be0a7824e3f"
+  },
+  "patch_sha256": "b5f34fcb99701d690f08e153d2925f8a3d32902e976f2880df9a6ea5c65e0b15",
+  "applied": false,
+  "syntax_checked": true,
+  "forecast_identity": false,
+  "remaining": "Rust NEAREST record selection and authentic read/dispatch witnesses; actual analysis-minus-background inputs",
+  "reason": "nonzero IAU mass must enter first saved density tendency and total held density must enter rthdynten as native does"
+}

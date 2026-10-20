@@ -22,7 +22,7 @@ native artifact appears anywhere in the mesh's lineage at runtime; the
 provenance receipt records `native_runtime_dependency: false`. Proven end
 to end on x1.40962 against the native golden: the mint is
 schema-complete (all 134 native variables, 0 missing), 75 carried fields
-bit-identical, the constructed vertical within millimetres of the native
+matching their recorded arrays, the constructed vertical within millimetres of the native
 one (`zgrid` max 3.9 mm over a 30 km column), and the produced init
 starts the dycore. The constructed
 vertical is not the native vertical byte for byte; the quantified deltas
@@ -31,9 +31,9 @@ live in that receipt.
 **Capsule mode (`--capsule` + `--reference`) — the compatibility mode,
 and the byte-anchored one.** The vertical arrays are read out of a
 **native-minted init-class file** for this exact mesh, and the capsule's
-`zgrid` is asserted bit-identical against the reference before a single
-level is trusted. This is the mode behind the door's bit-parity proof of
-record (92/92 carried fields bit-identical against a native golden —
+`zgrid` is checked for exact array equality against the reference before a single
+level is trusted. This is the mode behind the door's initial-array comparison of
+record (92/92 carried fields matching the recorded native golden arrays —
 [`docs/init-door.md`](../init-door.md), *Proof of record*), and the mode
 to choose when the run must reproduce a native vertical exactly. It is
 the only mode that needs a native `init_atmosphere_model` artifact.

@@ -37,10 +37,10 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.3.3", (
-        "0.3.3 is the declared cut: every NVIDIA architecture NVRTC can "
-        "compile the kernels for runs by default, on the gpuwm 2.8.0 pin; "
-        "moving it is a release decision, not an edit"
+    assert declared == "0.4.1", (
+        "0.4.1 is the current release candidate. Changing this pin requires "
+        "a release decision; passing this source check does not qualify "
+        "the candidate for publication."
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")
@@ -152,12 +152,11 @@ def test_the_console_script_reaches_a_real_entry_point(declaration: dict) -> Non
     assert callable(main)
 
 
-def test_the_user_facing_names_carry_no_mpas_token(declaration: dict) -> None:
+def test_distribution_names_and_requested_mpas_verification_door(declaration: dict) -> None:
     """MPAS may be a trademark, so the distribution is spelled gpuwm-hex.
 
-    The brand and the spellings a user types never use the MPAS name;
-    nominative reference in prose documentation is fine and is used freely in
-    README.md and docs/.
+    The distribution and console script retain gpuwm-hex. The full MPAS
+    campaign explicitly requests verify-mpas as a nominative subcommand.
     """
 
     project = declaration["project"]
@@ -171,7 +170,8 @@ def test_the_user_facing_names_carry_no_mpas_token(declaration: dict) -> None:
     assert parser.prog == "gpuwm-hex"
     for action in parser._subparsers._group_actions:  # type: ignore[union-attr]
         for name in getattr(action, "choices", {}):
-            assert "mpas" not in name.lower(), name
+            assert "mpas" not in name.lower() or name == "verify-mpas", name
+        assert "verify-mpas" in getattr(action, "choices", {})
 
 
 def test_the_preferred_environment_spellings_carry_the_distribution_name() -> None:
@@ -210,7 +210,7 @@ def test_the_import_namespace_carries_no_other_project_name() -> None:
     THE BREAKAGE THIS PREVENTS.  Through 0.1.1 the package installed as
     ``mpas_port``, so every user's import line carried another project's
     name for a relationship this port holds over only half the model: the
-    DYCORE and the MESH are kept byte-identical to MPAS-A v8.4.1 and are
+    DYCORE numerics and MESH conventions implement MPAS-A v8.4.x and are
     pinned as a specification, while the physics is deliberately not MPAS's
     at all -- it is ArWen's column-batch seam.  A name is a claim, and that
     one was wrong in the direction that matters, towards somebody else's
@@ -384,12 +384,16 @@ def test_no_package_data_file_lands_outside_the_declaration(
     from fnmatch import fnmatch
 
     patterns = declaration["tool"]["setuptools"]["package-data"]["hexcore"]
+    excluded = declaration["tool"]["setuptools"]["packages"]["find"].get("exclude", [])
     stray: list[str] = []
     for path in sorted(PACKAGE.rglob("*")):
         if path.is_dir() or path.suffix == ".py":
             continue
         if "__pycache__" in path.parts:
             continue  # a build product of the sources beside it, never input
+        package_name = ".".join(("hexcore", *path.relative_to(PACKAGE).parts[:-1]))
+        if any(fnmatch(package_name, pattern) for pattern in excluded):
+            continue  # excluded packages do not contribute wheel data
         relative = path.relative_to(PACKAGE).as_posix()
         if not any(fnmatch(relative, pattern) for pattern in patterns):
             stray.append(relative)
@@ -547,6 +551,40 @@ def test_the_evidence_pointer_reaches_the_sdist() -> None:
         "of a measurement rather than a file they are missing.  Without it "
         "in the sdist that link resolves to nothing"
     )
+
+
+def test_kernel_packs_and_release_assets_are_outside_the_distributions(declaration) -> None:
+    assert not list((PACKAGE / "data").glob("kernel-pack*.json"))
+    excluded = declaration["tool"]["setuptools"]["exclude-package-data"]["hexcore"]
+    assert "data/kernel-pack*.json" in excluded
+    # Seed the file list as if a future broad graft or stale SOURCES.txt included
+    # release assets. The manifest must actively remove them.
+    from setuptools._distutils.filelist import FileList
+    files = FileList()
+    files.allfiles = ["release-assets/kernel-packs/kernel-pack-cuda13.json",
+                      "src/hexcore/data/kernel-pack-cuda13.json"]
+    files.files = list(files.allfiles)
+    for line in (ROOT / "MANIFEST.in").read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            files.process_template_line(line)
+    assert not files.files
+
+
+def test_build_refuses_a_pack_that_reaches_wheel_data(tmp_path) -> None:
+    # Execute the real build guard with the native build parent replaced, so
+    # this test checks a stale build directory without compiling native code.
+    module = ast.parse((ROOT / "setup.py").read_text())
+    guard = next(row for row in module.body if isinstance(row, ast.ClassDef) and row.name == "BuildHex")
+    namespace = {"Path": Path, "BuildPy": type("BuildPy", (), {"run": lambda self: None})}
+    exec(compile(ast.Module(body=[guard], type_ignores=[]), "setup.py", "exec"), namespace)
+    command = namespace["BuildHex"]()
+    command.build_lib = str(tmp_path)
+    command.run()
+    path = tmp_path / "hexcore/data/kernel-pack-accidental.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{}")
+    with pytest.raises(RuntimeError, match="release assets, not wheel data"):
+        command.run()
 
 
 #: Documents that are internal working material and must never be inside a

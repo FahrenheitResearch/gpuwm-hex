@@ -15,7 +15,7 @@ from .errors import MpasPortError
 # binaries it drives.  ``.init_door`` and ``.forecast_door`` are stdlib-only
 # at import; their netCDF4/cupy/driver needs are named runtime refusals.
 from .cull_door import add_cull_parser
-from .init_door import add_init_parser
+from .init_door import add_init_parser, add_surface_update_parser
 # The checkout probe lives with the forecast door because that door is the
 # one that cannot open without a checkout at all.  Stated once: two copies
 # of "is this a checkout" would be two things to keep true, and the answer
@@ -42,7 +42,8 @@ def _require_mesh_paths(arguments: argparse.Namespace) -> None:
             raise MpasPortError(
                 f"{flag} was not given and there is no default outside a source "
                 "checkout.  Mesh grid and static files are external assets: "
-                "gpuwm-hex ships neither and has no fetch path for them, so a "
+                "gpuwm-hex ships neither and has no general fetch path for them "
+                "(verify-dycore downloads only its fixed small test mesh), so a "
                 "guessed default would name a file that does not exist.  Obtain "
                 "the pair from the MPAS-Atmosphere mesh downloads and pass both "
                 "--grid and --static explicitly (see README, 'Assets you must "
@@ -200,15 +201,31 @@ def build_parser() -> argparse.ArgumentParser:
         prog="gpuwm-hex",
         description=(
             "gpuwm-hex: front doors for the GPU-native global variable-resolution "
-            "model core (a port of MPAS-Atmosphere v8.4.1)"
+            "model core (a port of MPAS-Atmosphere v8.4.2)"
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    from .country_door import add_country_parser
+    add_country_parser(commands)
 
     version = commands.add_parser(
         "version", help="report the installed distribution and version"
     )
     version.set_defaults(handler=_version)
+
+    from .verify_dycore_door import add_verify_dycore_parser
+    add_verify_dycore_parser(commands)
+
+    from .verify_mpas import add_verify_mpas_parser
+    add_verify_mpas_parser(commands)
+    from .verify_mpas import run_cached_dycore
+    cached = commands.choices["verify-dycore"]
+    cached.set_defaults(legacy_dycore_handler=cached.get_default("handler"), handler=run_cached_dycore)
+    cached.add_argument("--cached-deck", type=Path, help="verify a pinned cached dycore forecast without rebuilding native")
+    cached.add_argument("--receipt", type=Path)
+    cached.add_argument("--ratchet", type=Path)
+    cached.add_argument("--comparator", type=Path)
 
     # First after `version`, because it is the command a fresh install
     # should reach for.  This distribution cannot carry the Rust engines,
@@ -261,6 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
     add_intermediate_parser(commands)
 
     add_init_parser(commands)
+    add_surface_update_parser(commands)
+
+    # Beside init, because it ends in init: one table-driven path from any
+    # declared source (GFS, IFS, AIFS, ENS/GEFS members, ERA5, ...) to the
+    # same init door.  A new source model is a table row, not a code path.
+    from .init_sources import add_init_source_parser
+
+    add_init_source_parser(commands)
+    from .surface_series import add_surface_series_parser
+    add_surface_series_parser(commands)
 
     # After init, because it consumes the culled init: one boundary file per
     # intermediate valid time, through rw_mpas_lbc on its wps-intermediate
@@ -274,6 +301,22 @@ def build_parser() -> argparse.ArgumentParser:
     # names the command and its one requirement, rather than hiding a
     # capability the distribution has.
     add_forecast_parser(commands)
+
+    # Right after forecast, because a moving run is a chain of forecasts: the
+    # tracker on the model's own frames, member preparation ahead of each move
+    # and the balanced remap between members.  Stdlib-only at import.
+    from .moving_door import add_moving_parser
+
+    add_moving_parser(commands)
+
+    from .observation_scorecard import add_score_parser
+
+    add_score_parser(commands)
+
+    from .ensemble import add_ensemble_parser
+    from .ensemble_prepare import add_ensemble_prepare_parser
+    add_ensemble_parser(commands)
+    add_ensemble_prepare_parser(commands)
 
     # Immediately after forecast, because it IS the forecast door: `pair`
     # takes every forecast flag from `add_forecast_arguments`, runs that one
@@ -298,6 +341,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_cycle_parser(commands)
 
+    # The named physics suites, resolved on the host: stdlib + json only.
+    from .physics_door import add_physics_parser
+
+    add_physics_parser(commands)
+
+    # Right after `physics`: the MPAS suites it lists read tables and device
+    # maths that this command builds from the install (stdlib at import).
+    from .mpasphys.resources_build import add_physics_resources_parser
+
+    add_physics_resources_parser(commands)
+    from .assets import add_fetch_assets_parser
+    add_fetch_assets_parser(commands)
+
     render = commands.add_parser(
         "render",
         help="MPAS history -> product PNGs through the Rust path "
@@ -307,13 +363,79 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_render_arguments(render)
     render.set_defaults(handler=_render)
+
+    # After render, because it drives render: the standard product set (maps
+    # on every view a mesh has, soundings, meteograms) in one command, and
+    # the forecast door's own last stage by default.
+    from .products_door import add_products_parser
+
+    add_products_parser(commands)
+
+    # After products, because it is products without the drawing: the same
+    # Rust converter, frames filed as NetCDF for any reader.
+    from .export_door import add_export_parser
+
+    add_export_parser(commands)
+
+    # Last, because it composes every door above from a data row: mesh,
+    # static, init-source, forecast, products, export and score in one
+    # command, with its plan, status.json and events.jsonl.
+    from .global_door import add_global_parser, add_run_plan_parser, add_sources_parser
+
+    add_global_parser(commands)
+    from .s2s_door import add_s2s_parser
+
+    add_s2s_parser(commands)
+    add_run_plan_parser(commands)
+    add_sources_parser(commands)
+    from .global_cycle import add_global_cycle_parser
+
+    add_global_cycle_parser(commands)
+    _add_numerics_option(commands)
     return parser
+
+
+NUMERICS_HELP = (
+    "kernel numerics: 'fast' (the default) compiles with FMA contraction and flush-to-zero (IEEE division and "
+    "square root kept; land surface keeps its subnormals); 'strict' compiles every kernel the way the bitwise "
+    "proofs measured it and is the opt-in for byte-identity to native MPAS-A. Same key as the namelist's "
+    "config_numerics and the GPUWM_HEX_NUMERICS environment variable")
+
+
+def _add_numerics_option(commands: argparse._SubParsersAction) -> None:
+    """``--numerics {fast,strict}`` on every door (owner ruling 2026-10-16: strict is opt-in)."""
+    for sub in commands.choices.values():
+        if any("--numerics" in action.option_strings for action in sub._actions):
+            continue
+        sub.add_argument("--numerics", choices=("fast", "strict"), default=None, help=NUMERICS_HELP)
+
+
+def _select_numerics(arguments: argparse.Namespace) -> None:
+    """Fix the process's numerics before any kernel compiles; ranks and subprocesses inherit it."""
+    from . import numerics
+    text = None
+    path = getattr(arguments, "physics_namelist", None)
+    if path is not None:
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = None
+    chosen, source = numerics.resolve(getattr(arguments, "numerics", None), text)
+    numerics.set_mode(chosen, source=source)
+    arguments.numerics = chosen
+    arguments.numerics_source = source
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     try:
+        _select_numerics(arguments)
+        if arguments.command in {"init", "lbc"}:
+            from .time_ledger import stage
+
+            with stage(f"prep.{arguments.command}"):
+                return int(arguments.handler(arguments))
         return int(arguments.handler(arguments))
     except (MpasPortError, OSError, ValueError) as error:
         print(f"gpuwm-hex: {error}", file=sys.stderr)

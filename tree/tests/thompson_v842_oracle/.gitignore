@@ -1,0 +1,13 @@
+.nan-inputs/
+.nan-fixtures/
+.nan-oracle/
+.nan-matrix/
+.nan-matrix-manifest.json
+.driver-inputs/
+.driver-inputs-v2/
+.driver-inputs-v3/
+.driver-inputs-v4/
+.complex-inputs/
+.driver-binaries-v4/
+.driver-reconstruction/
+.native-single-deck-control/

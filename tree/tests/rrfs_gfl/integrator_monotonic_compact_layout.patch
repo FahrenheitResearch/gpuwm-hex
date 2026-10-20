@@ -1,0 +1,9 @@
+--- a/tree/src/hexcore/cuda_monotonic_rrfs.py
++++ b/tree/src/hexcore/cuda_monotonic_rrfs.py
+@@ -221,4 +221,5 @@
+     if scalar_tendency is not None:scalar_tendency[...] = a['scalar_tend'][...,:original_nc].reshape(scalar_tendency.shape)
+     result=a['scalars_new'][...,:original_nc]
+     target=a['rho_zz_int'] if advance_density else a['rho_zz_new']
+-    return CudaScalarTransportResult(result[0] if squeezed else result,target[...,:original_nc])
++    return CudaScalarTransportResult(cp.ascontiguousarray(result[0] if squeezed else result),
++                                     cp.ascontiguousarray(target[...,:original_nc]))

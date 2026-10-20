@@ -1,0 +1,109 @@
+{
+  "schema": "gpuwm-hex.global-runs/v1",
+  "about": "Global experiment rows for `gpuwm-hex global`: one command from a row and a cycle to a mesh, a native static, an init, a forecast on every card the mesh needs, products, a lat-lon export and an observation score. A new resolution, mesh or physics arm is a row here, not a code path. Meshes are the NCAR-published quasi-uniform x1 meshes, fetched by URL and pinned by the SHA-256 of the archive and of the grid file inside it; the static is built from that grid by rw_mpas_static with the native init_atmosphere static stream and the native gravity-wave-drag statistics; the init comes from the init-source table; the forecast door picks the card count from its own capacity rows.",
+  "mesh_cache_env": "GPUWM_HEX_GLOBAL_CACHE",
+  "static": {
+    "builder": "rw_mpas_static",
+    "argv": ["--native-init", "--native-gwd-static"],
+    "about": "The native MPAS-A v8.4.2 init_atmosphere static stream and its native GWD statistics. A binary that does not know these flags is refused by name at the static stage rather than run without them."
+  },
+  "vertical_spec": "countries/tc55-v1.json",
+  "vertical_spec_about": "MPAS-A's default 55-level grid to 30 km with the tropical-cyclone stretching (config_tc_vertical_grid), the vertical every published x1 init uses.",
+  "score": {
+    "region": {"west": -180.0, "south": -90.0, "east": 180.0, "north": 90.0, "step_degrees": 0.25}
+  },
+  "meshes": {
+    "x1.40962": {
+      "url": "https://www2.mmm.ucar.edu/projects/mpas/atmosphere_meshes/x1.40962.tar.gz",
+      "archive_sha256": "37a423f0bbb1cfdfdc22bc0ef2fab41218ae9453932f89603a1d18bcbec7675e",
+      "archive_bytes": 25720699,
+      "grid_member": "x1.40962.grid.nc",
+      "grid_sha256": "9a9e1909a755dac209462ceb0bfffd77ac1b37503169568b7f296707ee612bb9",
+      "grid_bytes": 56039332,
+      "cells": 40962,
+      "nominal_dx_m": 120000.0
+    },
+    "x1.163842": {
+      "url": "https://www2.mmm.ucar.edu/projects/mpas/atmosphere_meshes/x1.163842.tar.gz",
+      "archive_sha256": "31a811b5b3c4bf11092993de7f0060d0430e0ef5bf00d1f43db29d6ac9736e87",
+      "archive_bytes": 106099154,
+      "grid_member": "x1.163842.grid.nc",
+      "grid_sha256": "e90ac8fadbe1330f3e4ef26bccb3125e37cc7031c70affeb68c2b69860c69c0c",
+      "grid_bytes": 224139172,
+      "cells": 163842,
+      "nominal_dx_m": 60000.0
+    },
+    "x1.655362": {
+      "url": "https://www2.mmm.ucar.edu/projects/mpas/atmosphere_meshes/x1.655362.tar.gz",
+      "archive_sha256": "57845db683df6df2934226cad0c6bbc72c28f3484eb6439b37bb6098ebe694d3",
+      "archive_bytes": 435565379,
+      "grid_member": "x1.655362.grid.nc",
+      "grid_sha256": "0e004e17ec86021eac35f929ab33c54d44283eebc7c9acf5dbc3d4a700c9d755",
+      "grid_bytes": 896538532,
+      "cells": 655362,
+      "nominal_dx_m": 30000.0
+    },
+    "x1.2621442": {
+      "url": "https://www2.mmm.ucar.edu/projects/mpas/atmosphere_meshes/x1.2621442.tar.gz",
+      "archive_sha256": "386f5a3aa2268474c794ed17f0d4ffba20a845033f27f99ba90f2fe99b92e0a4",
+      "archive_bytes": 1659416265,
+      "grid_member": "x1.2621442.grid.nc",
+      "grid_sha256": "3d14d3eb280c0b7cbf1150004f7b3d819373c55ce2459851ede9e45188243f47",
+      "grid_bytes": 3586135972,
+      "cells": 2621442,
+      "nominal_dx_m": 15000.0
+    }
+  },
+  "physics": {
+    "arwen": {
+      "about": "ArWen physics, the hex default suite, in the default physics mode. No override: the forecast door's own default.",
+      "overrides": {},
+      "max_dt_seconds": 300,
+      "max_dt_why": "YSU over the surface layer makes single-layer hot spots at the boundary-layer top when the step is long: on the 120 km globe (GFS 2026-10-11 12Z, 24 h) a layer more than 5 K hotter than both neighbours in 3.2 cells per frame at 600 s (worst +24 K), 0.5 at 360 s (worst +23 K), 0.2 at 300 s (worst +5 K); native MPAS-A v8.4.2 mesoscale_reference shows 0.1 to 0.2 (worst +6 to +8 K). With Morrison and Grell-Freitas one runs away (381 K at 6.5 h, refused by RRTMGP). MYNN at 600 s shows none. The 300 s step scores the same as 600 s against sondes and the GFS analysis (z500 10.0 m, T850 1.11 K at f24) and draws the same weather. Cause: two explicit tendencies applied over the whole step overshoot their donor layers. YSU's boundary-layer-top heat and vapour entrainment reaches across several layers, the receiving layer gets more vapour than its donors hold, and microphysics condenses it and heats that layer (MPAS's own YSU carries the same term). New Tiedtke can also ask a thin layer for more water than it holds (x1.40962 cell 398, Tibet, +18 h: -4.44 g/kg from a layer holding 2.18 g/kg, +3.8 g/kg and +2.6 K into the layer above, +7.9 K hot layer). The engine bounds both: YSU's entrainment by its donor Courant number, New Tiedtke's rates per column so no layer loses more water than it holds. With both, the 120 km globe at its own 600 s step over 24 h shows no hot layer below level 30 (13 without either, 1 with the YSU bound alone), and the maps show the same weather. So this cap binds only on an engine that lacks either bound (gpuwm 2.9.0 lacks both); max_dt_retired_by_engine names the engine identities that carry them, and the row runs the mesh's own step when all are present. Delete the cap when hex requires such an engine.",
+      "max_dt_retired_by_engine": ["ysu-wrf-v4.8.0-entrainment-courant-v2", "new-tiedtke-wrf461-cumastrn-donor-bound-v2"]
+    },
+    "morrison": {
+      "about": "The suite gpuwm-global runs on its native physics: Morrison two-moment microphysics (WRF mp_physics=10), Grell-Freitas cumulus, YSU boundary layer, revised MM5 surface layer, Noah land surface and RTE+RRTMGP radiation. It is the like-for-like arm for a user moving from gpuwm-global to hex global, run through the engine's generic column seam picked from WOOF's registry.",
+      "overrides": {
+        "mp_physics": "10",
+        "config_convection_scheme": "cu_grell_freitas",
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev",
+        "config_lsm_scheme": "sf_noah",
+        "config_radt_lw_scheme": "rrtmgp_lw",
+        "config_radt_sw_scheme": "rrtmgp_sw"
+      },
+      "differences_from_shaped_after": [
+        "gpuwm-global sets morr_rimed_ice=1 (hail as the rimed-ice category); the generic seam runs the engine's Morrison at its registry default",
+        "gpuwm-global steps physics on a spectral Gaussian grid; here the same schemes run per MPAS cell under the hex dycore"
+      ],
+      "max_dt_seconds": 300,
+      "max_dt_why": "YSU over the surface layer makes single-layer hot spots at the boundary-layer top when the step is long: on the 120 km globe (GFS 2026-10-11 12Z, 24 h) a layer more than 5 K hotter than both neighbours in 3.2 cells per frame at 600 s (worst +24 K), 0.5 at 360 s (worst +23 K), 0.2 at 300 s (worst +5 K); native MPAS-A v8.4.2 mesoscale_reference shows 0.1 to 0.2 (worst +6 to +8 K). With Morrison and Grell-Freitas one runs away (381 K at 6.5 h, refused by RRTMGP). MYNN at 600 s shows none. The 300 s step scores the same as 600 s against sondes and the GFS analysis (z500 10.0 m, T850 1.11 K at f24) and draws the same weather. Cause: YSU applies its boundary-layer-top heat and vapour entrainment explicitly; at a long step it reaches across several layers, the receiving layer overshoots its donors, and microphysics condenses the extra vapour and heats that layer (MPAS's own YSU carries the same term). The engine bounds that term by its donor Courant number (identity ysu-wrf-v4.8.0-entrainment-courant-v2; gpuwm 2.9.0 lacks it). This arm keeps its cap on every engine: it runs Grell-Freitas, and its own row has not been run at the long step on a bounded engine."
+    }
+  },
+  "rows": [
+    {"id": "global-120km", "mesh": "x1.40962", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
+     "about": "120 km quasi-uniform globe: the quick row, and the one that fits a 16 GB consumer card"},
+    {"id": "global-60km", "mesh": "x1.163842", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
+     "about": "60 km quasi-uniform globe"},
+    {"id": "global-30km", "mesh": "x1.655362", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
+     "about": "30 km quasi-uniform globe"},
+    {"id": "global-15km", "mesh": "x1.2621442", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
+     "about": "15 km quasi-uniform globe; on cards under about 64 GB the door spreads it over every visible card"},
+    {"id": "global-120km-morrison", "mesh": "x1.40962", "physics": "morrison", "hours": 24, "history_every_minutes": 180,
+     "about": "120 km globe on the gpuwm-global suite (Morrison)"},
+    {"id": "global-60km-morrison", "mesh": "x1.163842", "physics": "morrison", "hours": 24, "history_every_minutes": 180,
+     "about": "60 km globe on the gpuwm-global suite (Morrison)"},
+    {"id": "global-30km-morrison", "mesh": "x1.655362", "physics": "morrison", "hours": 24, "history_every_minutes": 180,
+     "about": "30 km globe on the gpuwm-global suite (Morrison)"},
+    {"id": "global-15km-morrison", "mesh": "x1.2621442", "physics": "morrison", "hours": 24, "history_every_minutes": 180,
+     "about": "15 km globe on the gpuwm-global suite (Morrison)"}
+  ],
+  "measured_seconds_per_forecast_hour": [
+    {"mesh": "x1.2621442", "cards": 8, "card": "RTX PRO 6000 Blackwell 96 GB", "card_match": "rtx pro 6000", "seconds": 52.2, "basis": "all-in, 8-card same-host, 2026-10-10"},
+    {"mesh": "x1.655362", "cards": 2, "card": "RTX PRO 6000 Blackwell 96 GB", "card_match": "rtx pro 6000", "seconds": 22.8, "basis": "2026-10-10"},
+    {"mesh": "x1.655362", "cards": 1, "card": "RTX PRO 6000 Blackwell 96 GB", "card_match": "rtx pro 6000", "seconds": 63.2, "basis": "2026-10-10"},
+    {"mesh": "x1.163842", "cards": 1, "card": "RTX PRO 6000 Blackwell 96 GB", "card_match": "rtx pro 6000", "seconds": 21.5, "basis": "17.9 s measured at the 360 s step (2026-10-10), scaled by 360/300 for the YSU arms' 300 s cap"},
+    {"mesh": "x1.40962", "cards": 1, "card": "RTX 5070 Ti 16 GB", "card_match": "rtx 5070 ti", "seconds": 5.5, "basis": "forecast door 132.8 s for 24 h at the 300 s step (the YSU arms' cap), warm kernel cache, GFS 2026-10-11 12Z, measured 2026-10-14"}
+  ]
+}

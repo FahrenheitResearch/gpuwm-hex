@@ -1,0 +1,96 @@
+{
+  "schema": "hex.native-undefined-exclusions/v1",
+  "policy": "Proof-bar ruling 1: words where native MPAS-A itself reads undefined memory are excluded only with a full witness (measured run-to-run variation of the pinned strict binary, plus a bounds-checked build naming the read) and the owner's sign-off for that specific case. Averaged, RMS or relative-error grades never count as landing proof. Ruling 2: every proof fixes the process count and states it. An entry covers exactly one unit, one case, one field and one word set; tools/native_undefined_exclusions.py refuses everything else, and every word outside the set is still compared with no tolerance.",
+  "paths": "Witness and sign-off paths are relative to the repository root (the folder that holds tree/). They are home evidence and are not part of the public tree.",
+  "entries": [
+    {
+      "id": "p21-ozone-exact-final-latitude",
+      "unit": "p21-rad-shared",
+      "case": "exact-final-ozone-table-latitude",
+      "label": "DECLARED RESIDUE (native reads undefined memory); never called identical",
+      "native": {
+        "release": "MPAS-A v8.4.2",
+        "commit": "f34984b2c89353cf31c235b08d3b4acd96b37bb3",
+        "source": "src/core_atmosphere/physics/mpas_atmphys_o3climatology.F",
+        "lines": "164-184",
+        "undefined_read": {
+          "line": 165,
+          "statement": "if(lat.ge.lat_ozone(i) .and. lat.lt.lat_ozone(i+1)) exit",
+          "array": "lat_ozone",
+          "index": 65,
+          "upper_bound": 64
+        },
+        "mechanism": "A cell whose latitude equals the final ozone-table latitude exactly passes neither endpoint test at 157-162, so the search loop at 164-166 reaches i=64 and reads lat_ozone(65), one past the 64-entry table. Whether it exits there depends on that undefined value, so i1/i2 become 64/65 or 65/66, and lines 171-184 build every month and level of that cell's ozmixm from latitude entries past the end of the table."
+      },
+      "trigger": "Reached only by the synthetic witness fixture: the first global cell's latitude is patched to exactly the final OZONE_LAT.TBL latitude. No selected real case reaches it, and the real-case replays compare every word with no exclusion.",
+      "field": "ozmixm",
+      "layout": {
+        "netcdf_dims": ["nCells", "nOznLevels", "nMonths"],
+        "order": "C",
+        "shape_tail": [59, 12]
+      },
+      "cell_index": 0,
+      "mpas_indices": "ozmixm(month=1:12, level=1:59, cell=1)",
+      "netcdf_c_words": {"first": 0, "last": 707, "count": 708},
+      "witness": {
+        "native_binary": "pinned strict native MPAS-A v8.4.2 atmosphere_model, unchanged",
+        "native_binary_sha256": "a71feef594ae020f86aa9450608e21b8e2074415479de521438a7701e5b1d479",
+        "input_sha256": "567d3732d86d1a263062a3e17ffbd5c1a8272b548d0894d0a8432aecdaeb2b6a",
+        "fixture_sha256": "13d5e97f1c74b8c1cf45afee42ac8124abed8438e765c0e3573f14f7ccfc173a",
+        "mesh": "x1.2562, 2023-03-31 12Z initial state, zero run duration, radiation initialization on",
+        "runs": 8,
+        "hosts": 2,
+        "process_counts": [1, 2],
+        "repeats_per_process_count": 2,
+        "varying_words": 47,
+        "varying_word_indices": [11, 23, 59, 143, 155, 167, 179, 239, 251, 263, 275, 287, 299, 311, 323, 335, 347, 359, 371, 383, 395, 407, 419, 431, 443, 455, 467, 479, 491, 503, 515, 527, 539, 551, 563, 575, 587, 599, 611, 623, 635, 647, 659, 671, 683, 695, 707],
+        "observation": "Every varying word is month 12 (C index 11 mod 12). Repeats at one process are stable on each host, but the two hosts disagree on 27 words; at two processes the words differ from one process on both hosts, and in the supplementary second-host session the two-process repeats also differ from each other. Words outside the set are identical across every run, host and process count (full-field masked reconstruction in the policy receipts).",
+        "bounds_check": {
+          "line": 165,
+          "message": "At line 165 of file mpas_atmphys_o3climatology.F: Fortran runtime error: Index '65' of dimension 1 of array 'lat_ozone' above upper bound of 64",
+          "build": "bounds-checked owned build of the whole pristine native module"
+        },
+        "receipts": [
+          {"role": "primary", "what": "four runs (one and two processes, two repeats each) on the first host", "path": "receipts/native-undefined/p21-rad-shared/native-full-defect-host-a-v7.json", "sha256": "2cd583ffbd139e40b3a2d31a8b0add8eaa8769e979a46808dc508f6b6ea2b38e"},
+          {"role": "primary", "what": "four runs (one and two processes, two repeats each) on the second host", "path": "receipts/native-undefined/p21-rad-shared/native-full-defect-host-b-v7.json", "sha256": "b4f5e625bd9ce5e06cbeb5bee811db24bb0bf3a4760c3c71757d70160f9d883e"},
+          {"role": "bounds", "what": "standalone strict repeats plus the bounds-checked build naming line 165, index 65", "path": "receipts/native-undefined/p21-rad-shared/native-exact-latitude.json", "sha256": "ab9def559beffc4333ed10a1443dde6b36bb3a5ee91d43210f3c822f14b928e5"},
+          {"role": "policy", "what": "proposal-time host-glibc comparison: 0 of 1,813,188 words differ outside the set", "path": "receipts/native-undefined/p21-rad-shared/native-policy-host-masked-v2.json", "sha256": "231921d123667308ecfc09be24709bb557926d71cd904a57ab014569b847ecc8"},
+          {"role": "policy", "what": "proposal-time CUDA comparison: 0 of 1,813,188 words differ outside the set", "path": "receipts/native-undefined/p21-rad-shared/native-policy-cuda.json", "sha256": "642ef596b7cda91ac376aa98a4972b79d433ec26d3a2c63efbc4010094a0cd6f"},
+          {"role": "supplementary", "what": "four more runs on the second host, bound by both policy receipts; twelve runs together vary in 57 words, all inside the set", "path": "receipts/native-undefined/p21-rad-shared/native-full-defect-host-b-v8.json", "sha256": "f265ca5b4b0f8087fd7e5bda55409774d3ee245ef88bdc9785e0bc3b480c056c"}
+        ]
+      },
+      "sign_off": {
+        "by": "owner",
+        "date": "2026-10-14",
+        "time_utc": "about 17:50Z",
+        "verbatim": "the moas thing sure",
+        "approves": "the p21-rad-shared proposal: ozmixm(month=1:12, level=1:59, first global cell), NetCDF C words 0..707",
+        "record": "receipts/native-undefined/p21-rad-shared/SIGN-OFF.json"
+      },
+      "process_count": {
+        "native": 1,
+        "hex": 1,
+        "statement": "The all-input check is stated at one native process and one hex process. The witness itself ran at one and two native processes."
+      },
+      "consumers": ["tests/radshared_v842/native_policy_replay.py"],
+      "all_input_check": {
+        "date": "2026-10-14",
+        "receipt": "receipts/native-undefined/p21-rad-shared/all-input-cuda.json",
+        "sha256": "7258a8a1df72056f72239f6de415694f5090d58b39a8c822438a3f67e9851eaf",
+        "backend": "hex-cuda",
+        "mesh": "x1.2562 (2,562 cells), 59 ozone levels, 12 months",
+        "native_process_count": 1,
+        "hex_process_count": 1,
+        "native_output": "a fresh run of the pinned strict binary on the second host, word-identical to that host's witnessed one-process rows",
+        "fresh_witness": {"path": "receipts/native-undefined/p21-rad-shared/native-full-defect-host-b-v9.json", "sha256": "c6fa6d0af97543a8f6e6f521c523c9ae5cd065ebb67f9b00d3cac1ac3fea2fe5"},
+        "field_words": 1813896,
+        "excluded_words": 708,
+        "compared_words": 1813188,
+        "differing_words_outside_set": 0,
+        "masked_witness_rows": 16,
+        "observed_varying_words_all_witness_rows": 57,
+        "intended_endpoint_diagnostic": "the port's own in-bounds endpoint for the excluded cell: 0 of 708 words differ from the table's northern row; diagnostic only, never an identity claim"
+      }
+    }
+  ]
+}

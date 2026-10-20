@@ -1,8 +1,8 @@
-"""MPAS-A v8.4.1 height-based hybrid vertical coordinate authority.
+"""MPAS-A v8.4.2 height-based hybrid vertical coordinate authority.
 
 Logical floating fields use Fortran order ``(vertical_level, horizontal_entity)``.
 The scalar implementation follows ``src/core_init_atmosphere/mpas_init_atm_cases.F``
-from the pinned MPAS-A v8.4.1 source.  It deliberately keeps the native loop
+from the pinned MPAS-A v8.4.2 source.  It deliberately keeps the native loop
 ordering for terrain and coordinate-surface smoothing so a compiled native
 oracle can referee the result.
 
@@ -14,11 +14,24 @@ Two details are load-bearing:
 * the native ``do k=2,kz-1`` surface loop maps to Python
   ``range(1, first_height_level)``.  Stopping at ``first_height_level - 1``
   omits one native interface.
+
+A LIMITED-AREA MESH IS REFUSED, EXCEPT AS A HALO.  The authority is a
+closed-sphere one: a regional mesh's outermost ring has neighbours that were
+cut away, and a coordinate surface smoothed there is smoothed against nothing,
+so its values are not the global ones.  ``regional_halo=True`` admits such a
+mesh only as a WORKING REGION that a caller cuts down afterwards to a region
+lying far enough inside it that the cut-away neighbours cannot reach it
+(:func:`hexcore.mesh_point.generate_point`, the halo route).  The arithmetic
+is untouched: a rim edge reads its one cell on both sides, so its own ``zxu``
+is zero and it is discarded with the rim.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+import json
+import subprocess
 from typing import Any, Literal
 
 import numpy as np
@@ -35,6 +48,25 @@ IntArray = NDArray[np.integer[Any]]
 #: of one edge, so the width changes no result bit; the equivalence suite
 #: asserts that at widths 1, 7 and one whole mesh.
 EDGE_METRIC_CHUNK_EDGES = 32_768
+
+
+def materialize_rust_artifact(request: dict[str, Any]) -> dict[str, Any]:
+    """Marshal the constructed contract to the engine's Rust container codec."""
+    from .rust_geometry import geometry_engine
+
+    engine, _ = geometry_engine()
+    result = subprocess.run(
+        [str(engine), "--protocol", "hex-init-artifact-v1"],
+        input=json.dumps(request, allow_nan=False).encode("utf-8"),
+        capture_output=True, check=False,
+    )
+    if result.returncode:
+        raise ValueError(result.stderr.decode("utf-8", errors="replace").strip()
+                         or f"artifact bridge exited {result.returncode}")
+    receipt = json.loads(result.stdout)
+    if receipt.get("schema") != "hex-init-artifact-v1":
+        raise ValueError("artifact bridge returned a different protocol schema")
+    return receipt
 
 
 def _mesh_array(mesh: object, name: str) -> NDArray[Any]:
@@ -94,73 +126,6 @@ def _refuse(knob: str, value: object, reason: str, remedy: str) -> None:
     raise ConfigurationRefusal(knob, value, reason, remedy)
 
 
-def _vertical_interfaces(
-    n_vert_levels: int,
-    ztop: float,
-    dtype: np.dtype[Any],
-    scheme: Literal["tc", "legacy", "specified"],
-    specified_zw: FloatArray | None,
-) -> FloatArray:
-    """Transcribe the three v8.4.1 interface-height branches."""
-
-    nz = n_vert_levels + 1
-    if scheme == "specified":
-        if specified_zw is None:
-            _refuse(
-                "specified_zeta_levels",
-                None,
-                "scheme='specified' requires nVertLevels+1 interface heights",
-                "specified_zeta_levels=[0, ..., ztop]",
-            )
-        zw = np.asarray(specified_zw, dtype=dtype)
-        if zw.shape != (nz,):
-            _refuse(
-                "specified_zeta_levels",
-                f"shape={zw.shape}",
-                f"the native source requires exactly {nz} values",
-                f"an array with shape ({nz},)",
-            )
-        return np.array(zw, copy=True)
-
-    eta = np.arange(nz, dtype=dtype) / dtype.type(n_vert_levels)
-    if scheme == "legacy":
-        return eta ** dtype.type(1.5) * dtype.type(ztop)
-    if scheme != "tc":
-        _refuse(
-            "vertical_grid_scheme",
-            scheme,
-            "the pinned source has only specified, tc, and legacy branches",
-            "vertical_grid_scheme='tc'",
-        )
-
-    if n_vert_levels >= 55:
-        als, alt, zetal = (0.075, 1.70, 0.75)
-    else:
-        als, alt, zetal = (0.075, 1.23, 0.31)
-    als = dtype.type(als)
-    alt = dtype.type(alt)
-    zetal = dtype.type(zetal)
-    zl = dtype.type(1.0) - alt * (dtype.type(1.0) - zetal)
-    zw = np.empty(nz, dtype=dtype)
-    low = eta < zetal
-    scaled = eta / zetal
-    zw[low] = (
-        als * eta[low]
-        + (
-            dtype.type(3.0) * (dtype.type(1.0) - alt)
-            + dtype.type(2.0) * (alt - als) * zetal
-        )
-        * scaled[low] ** 2
-        - (
-            dtype.type(2.0) * (dtype.type(1.0) - alt)
-            + (alt - als) * zetal
-        )
-        * scaled[low] ** 3
-    ) * dtype.type(ztop)
-    zw[~low] = (zl + alt * (eta[~low] - zetal)) * dtype.type(ztop)
-    return zw
-
-
 @dataclass(frozen=True, slots=True)
 class _CellNeighborPlan:
     """One ordered gather per cell-edge slot for the native neighbor sum.
@@ -213,52 +178,6 @@ def _build_cell_neighbor_plan(mesh: object) -> _CellNeighborPlan:
     return _CellNeighborPlan(tuple(owners), tuple(sources), tuple(weights))
 
 
-def edge_dc_squared_over_twelve(
-    dc_edge: FloatArray, dtype: np.dtype[Any]
-) -> FloatArray:
-    """``dcEdge**2/12`` reproducing numpy's SCALAR power, not its array square.
-
-    THE BREAKAGE THIS PREVENTS, MEASURED 2026-08-27 on the 112,676-cell parent
-    ``v6.75.112676``: ``np.float32(x) ** 2`` and ``float32_array ** 2`` are not
-    the same number.  numpy rewrites the array form to ``np.square`` -- one
-    correctly-rounded multiply -- while the scalar form goes through the libm
-    ``powf``, which on the proving RTX 5090 (glibc, numpy 2.5.2) returns one ULP high
-    for 207 of that mesh's 338,022 edges.  ``dcEdge`` is float32 on a real
-    generated static, so vectorizing this edge loop with ``arr ** 2`` moved
-    ``zb`` in 39 elements and ``zb3`` in 18,141 -- it silently changed the
-    vertical artifact every downstream digest is registered against, while
-    every other field stayed bitwise equal.
-
-    ``np.power(a, b)`` with TWO arrays keeps the ``powf`` path: 0 of 338,022
-    differ from the scalar expression on that box, and 0 of 200,000 random
-    float32 on a Windows/numpy 2.2.6 desktop.  ``test_vertical_vectorized_
-    equivalence`` holds this against the element-wise scalar expression.
-
-    SEPARATE FINDING, NOW MEASURED (the libm-identity finding, 2026-08-27): the scalar answer
-    itself is the libm's, so the same source produces different ``zb``/``zb3``
-    bits on different C libraries.  This function reproduces the artifact of
-    record; it does NOT make that artifact platform-independent, and the
-    measurement says how far from it we are.  On this parent's own float32
-    ``dcEdge`` -- identical input bytes on both boxes, SHA-256/16
-    ``689494c58c8c0c47`` -- ``dcEdge**2/12`` differs from the correctly-rounded
-    answer in 207 of 338,022 edges under glibc 2.43 and 14 of 338,022 under
-    the MSVC CRT, and **the two boxes disagree with each other in 215 of
-    338,022**, every one by a single ULP.  ``np.square`` gives the same digest
-    on both.
-
-    So the portable form EXISTS and is one multiply away.  Adopting it is not
-    this function's call to make: it would move ``zb``, ``zb3`` and the whole
-    1,059,621,268-byte artifact every downstream digest is registered against,
-    which is a re-registration decision above this function, written up in
-    ``evidence/pins-373-20260827/RECEIPT.md``.  Until that ruling exists this
-    function stays exactly as it is, and the receipt says which libm minted the
-    bytes -- see ``hexcore.libm_identity``.
-    """
-
-    exponent = np.full(dc_edge.shape, 2.0, dtype=dc_edge.dtype)
-    return (np.power(dc_edge, exponent) / 12.0).astype(dtype, copy=False)
-
-
 def _laplacian_without_area(
     mesh: object,
     field: FloatArray,
@@ -295,6 +214,223 @@ def _laplacian_without_area(
     return out
 
 
+
+#: The request fields that are arrays.  They stay numpy arrays in the request
+#: dict; hex-vertical-v2 frames them as raw little-endian words and v1 turns
+#: them into JSON lists.  Integer fields go as <i4/<i8 and the rest as <f4/<f8,
+#: which the engine widens to the f64 a JSON number would have parsed to.
+_VERTICAL_ARRAYS = ("terrain", "counts", "edges_on_cell", "cells_on_cell", "cells_on_edge",
+                    "dc", "dv", "area", "deriv", "zgrid")
+_VERTICAL_INTEGER_ARRAYS = frozenset({"counts", "edges_on_cell", "cells_on_cell", "cells_on_edge"})
+
+
+def _rust_vertical_request(mesh: object, terrain: FloatArray, *, mode: str) -> dict:
+    """Marshal arrays; all coordinate calculations run in the engine's rw-mpas crate."""
+    if terrain.dtype not in (np.dtype("float32"), np.dtype("float64")):
+        raise TypeError("Rust vertical bridge requires float32 or float64")
+    return dict(
+        mode=mode, width=terrain.dtype.itemsize, terrain=np.asarray(terrain),
+        counts=_mesh_array(mesh, "nEdgesOnCell"),
+        edges_on_cell=_mesh_array(mesh, "edgesOnCell"),
+        cells_on_cell=_mesh_array(mesh, "cellsOnCell"),
+        cells_on_edge=_mesh_array(mesh, "cellsOnEdge"),
+        dc=_mesh_array(mesh, "dcEdge"), dv=_mesh_array(mesh, "dvEdge"),
+        area=_mesh_array(mesh, "areaCell"), levels=3, top=30000.0,
+        scheme="tc", specified=None, projection="linear_interpolation",
+        terrain_passes=0, smooth=False, surface_passes=0, minimum_fraction=0.3,
+        hybrid=False, transition=30000.0, damping=0.0, damping_start=12000.0,
+        regional_halo=True, order=2, deriv=np.zeros(0), zgrid=np.zeros(0),
+    )
+
+
+@lru_cache(maxsize=8)
+def _check_vertical_engine(path: str, size: int, modified_ns: int) -> None:
+    from pathlib import Path
+    from .engines import EngineRefusal
+
+    if b"rw_mpas_geometry --protocol hex-vertical-v1" not in Path(path).read_bytes():
+        raise EngineRefusal(
+            f"{path} lacks hex-vertical-v1; the older bridge cannot compute the "
+            "v8.4.2 coordinate surface and omega metric arithmetic. Rebuild rw_mpas_geometry."
+        )
+
+
+@lru_cache(maxsize=8)
+def _vertical_engine_speaks_v2(path: str, size: int, modified_ns: int) -> bool:
+    from pathlib import Path
+    return b"rw_mpas_geometry --protocol hex-vertical-v2" in Path(path).read_bytes()
+
+
+def _as_lists(request: dict) -> dict:
+    return {key: (value.tolist() if key in _VERTICAL_ARRAYS and isinstance(value, np.ndarray) else value)
+            for key, value in request.items()}
+
+
+def _run_rust_vertical(request: dict) -> bytes:
+    """hex-vertical-v1: the whole request as JSON, the whole answer as bytes."""
+    from .rust_geometry import geometry_engine
+
+    engine, _ = geometry_engine()
+    stat = engine.stat()
+    _check_vertical_engine(str(engine), stat.st_size, stat.st_mtime_ns)
+    result = subprocess.run([str(engine), "--protocol", "hex-vertical-v1"],
+                            input=json.dumps(_as_lists(request), allow_nan=False).encode(),
+                            capture_output=True, check=False)
+    if result.returncode:
+        raise ValueError(result.stderr.decode("utf-8", errors="replace").strip())
+    return result.stdout
+
+
+def _v2_array(name: str, value: Any) -> np.ndarray:
+    array = np.asarray(value)
+    if name in _VERTICAL_INTEGER_ARRAYS:
+        wire = "<i4" if array.dtype == np.dtype("int32") else "<i8"
+    else:
+        wire = "<f4" if array.dtype == np.dtype("float32") else "<f8"
+    selected = np.dtype(wire)
+    # Keep conversions on the caller's thread to retain NumPy's error policy.
+    if array.dtype != selected:
+        return np.ascontiguousarray(array, dtype=selected)
+    from .host_parallel import contiguous_copy
+
+    return contiguous_copy(array, dtype=selected)
+
+
+def _write_all(stream, view: memoryview) -> None:
+    while len(view):
+        written = stream.write(view)
+        view = view[written:]
+
+
+def _read_into(stream, view: memoryview) -> int:
+    got = 0
+    while got < len(view):
+        count = stream.readinto(view[got:])
+        if not count:
+            break
+        got += count
+    return got
+
+
+def _run_rust_vertical_v2(engine, request: dict, dtype: np.dtype, shapes: list[tuple],
+                          trailer: int) -> tuple[list[FloatArray], bytes]:
+    """hex-vertical-v2: arrays go and come back as raw words, written straight from
+    and read straight into numpy memory.  At 30 km the v1 edge request was 1.65 GB
+    of JSON text encoded on one thread here and parsed on one thread in the engine."""
+    import tempfile
+
+    arrays = {name: _v2_array(name, request[name]) for name in _VERTICAL_ARRAYS}
+    header = {key: value for key, value in request.items() if key not in _VERTICAL_ARRAYS}
+    header["arrays"] = [dict(name=name, dtype=array.dtype.str, shape=list(array.shape))
+                        for name, array in arrays.items()]
+    head = json.dumps(header, allow_nan=False).encode()
+    outputs = [np.empty(shape, dtype=dtype.newbyteorder("<")) for shape in shapes]
+    tail = bytearray(trailer)
+    with tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen([str(engine), "--protocol", "hex-vertical-v2"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=errors, bufsize=0)
+        complete = True
+        try:
+            try:
+                _write_all(process.stdin, memoryview(b"HEXVRT2\0" + len(head).to_bytes(8, "little") + head))
+                for array in arrays.values():
+                    _write_all(process.stdin, memoryview(array).cast("B"))
+            except BrokenPipeError:
+                complete = False  # the engine refused early; its stderr says why
+            finally:
+                try:
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
+            for array in outputs:
+                view = memoryview(array).cast("B")
+                complete = _read_into(process.stdout, view) == len(view) and complete
+            complete = _read_into(process.stdout, memoryview(tail)) == trailer and complete
+            extra = process.stdout.read(1)
+        finally:
+            process.stdout.close()
+            code = process.wait()
+        if code or not complete or extra:
+            errors.seek(0)
+            message = errors.read().decode("utf-8", errors="replace").strip()
+            raise ValueError(message or f"vertical bridge exited {code} with an incomplete answer")
+    return outputs, bytes(tail)
+
+
+def _vertical_call(request: dict, dtype: np.dtype, shapes: list[tuple],
+                   trailer: int = 0) -> tuple[list[FloatArray], bytes]:
+    """Arrays of ``shapes`` plus ``trailer`` raw bytes; v2 framing when the engine has it."""
+    from .rust_geometry import geometry_engine
+
+    engine, _ = geometry_engine()
+    stat = engine.stat()
+    _check_vertical_engine(str(engine), stat.st_size, stat.st_mtime_ns)
+    if _vertical_engine_speaks_v2(str(engine), stat.st_size, stat.st_mtime_ns):
+        return _run_rust_vertical_v2(engine, request, dtype, shapes, trailer)
+    raw = _run_rust_vertical(request)
+    body = raw[:len(raw) - trailer] if trailer else raw
+    return _decode_vertical(body, dtype, shapes), raw[len(raw) - trailer:] if trailer else b""
+
+
+def _decode_vertical(raw: bytes, dtype: np.dtype, shapes: list[tuple]) -> list[FloatArray]:
+    expected = sum(int(np.prod(shape)) for shape in shapes) * dtype.itemsize
+    if len(raw) != expected:
+        raise ValueError(f"vertical bridge returned {len(raw)} bytes; expected {expected}")
+    values = np.frombuffer(raw, dtype=dtype.newbyteorder("<"))
+    arrays, offset = [], 0
+    for shape in shapes:
+        count = int(np.prod(shape))
+        arrays.append(values[offset:offset + count].reshape(shape).copy())
+        offset += count
+    return arrays
+
+
+@lru_cache(maxsize=8)
+def _check_compression_engine(path: str, size: int, modified_ns: int) -> None:
+    from pathlib import Path
+    from .engines import EngineRefusal
+    if b"rw_mpas_geometry --protocol hex-advection-compression-v1" not in Path(path).read_bytes():
+        raise EngineRefusal(f"{path} lacks native advection compression; rebuild rw_mpas_geometry")
+
+
+def compress_native_advection(counts, neighbors, owners, deriv, dc, dv, *, garbage=-1):
+    """Marshal native atmospheric-core compression through the Rust bridge.
+
+    MPAS v8.4.2 core_atmosphere/mpas_atm_core.F:1391-1534. Inputs and
+    returned cell IDs use zero-based mesh indexing; coefficients are RKIND.
+    """
+    from .rust_geometry import geometry_engine
+    deriv = np.asarray(deriv)
+    if deriv.dtype not in (np.dtype("float32"), np.dtype("float64")) or deriv.ndim != 3:
+        raise TypeError("deriv must have floating shape (nEdges,2,nCoefficients)")
+    nc = len(counts)
+    request = dict(width=deriv.dtype.itemsize, counts=np.asarray(counts).tolist(),
+        neighbors=np.where(np.asarray(neighbors) == garbage, -1, neighbors).tolist(),
+        owners=np.where(np.asarray(owners) == garbage, -1, owners).tolist(),
+        dc=np.asarray(dc).tolist(), dv=np.asarray(dv).tolist(), stencil=deriv.shape[2], deriv=deriv.tolist())
+    engine, _ = geometry_engine()
+    stat = engine.stat()
+    _check_compression_engine(str(engine), stat.st_size, stat.st_mtime_ns)
+    result = subprocess.run([str(engine), "--protocol", "hex-advection-compression-v1"],
+        input=json.dumps(request, allow_nan=False).encode(), capture_output=True, check=False)
+    if result.returncode:
+        raise ValueError(result.stderr.decode("utf-8", errors="replace").strip())
+    ne, _, stride = deriv.shape
+    split = 2 * ne * stride * deriv.dtype.itemsize
+    coef, third = _decode_vertical(result.stdout[:split], deriv.dtype, [(ne, stride), (ne, stride)])
+    integer = np.frombuffer(result.stdout[split:], dtype="<i8")
+    if len(integer) != ne + ne * stride:
+        raise ValueError("native compression returned an incomplete cell stencil")
+    n_adv = integer[:ne].copy()
+    cells = integer[ne:].reshape(ne, stride).copy() - 1
+    cells[cells == nc] = garbage
+    return coef, third, n_adv, cells
+
+
+def edge_dc_squared_over_twelve(dc_edge: FloatArray, dtype: np.dtype) -> FloatArray:
+    """Native integer square; compatibility helper, outside the init data path."""
+    return (dc_edge * dc_edge / dtype.type(12.0)).astype(dtype, copy=False)
+
 def smooth_terrain(
     mesh: object,
     terrain: FloatArray,
@@ -311,19 +447,10 @@ def smooth_terrain(
             "terrain smoothing passes cannot be negative",
             "nsmterrain=1",
         )
-    if plan is None and passes > 0:
-        plan = _build_cell_neighbor_plan(mesh)
-    result = np.asarray(terrain).copy()
-    for _ in range(passes):
-        first = _laplacian_without_area(
-            mesh, result, skip_zero_center=True, plan=plan
-        )
-        hs = result + result.dtype.type(0.216) * first
-        second = _laplacian_without_area(
-            mesh, hs, skip_zero_center=True, plan=plan
-        )
-        result = hs - hs.dtype.type(0.216) * second
-    return result
+    request = _rust_vertical_request(mesh, np.asarray(terrain), mode="terrain")
+    request["terrain_passes"] = passes
+    raw = _run_rust_vertical(request)
+    return _decode_vertical(raw, np.asarray(terrain).dtype, [(np.asarray(terrain).size,)])[0]
 
 
 def _validate_parameters(
@@ -397,8 +524,15 @@ def build_vertical_grid(
     hybrid_transition_height: float = 30_000.0,
     xnutr: float = 0.0,
     damping_start: float = 22_000.0,
+    regional_halo: bool = False,
+    boundary_met_path: str | None = None,
 ) -> VerticalGrid:
-    """Build all native vertical-coordinate fields for a closed/global mesh."""
+    """Build all native vertical-coordinate fields for a closed/global mesh.
+
+    ``regional_halo=True`` admits a limited-area mesh as a working halo whose
+    rim the caller discards (see the module note); without it a limited-area
+    mesh is refused by name.
+    """
 
     _validate_parameters(
         n_vert_levels=n_vert_levels,
@@ -431,177 +565,41 @@ def build_vertical_grid(
         raise ValueError("terrain contains non-finite values")
     dtype = ter.dtype
 
-    neighbor_plan = _build_cell_neighbor_plan(mesh)
-    ter = smooth_terrain(mesh, ter, terrain_smoothing_passes, plan=neighbor_plan)
-    zw = _vertical_interfaces(n_vert_levels, ztop, dtype, scheme, specified_zw)
-    if not np.all(np.isfinite(zw)) or not np.all(np.diff(zw) > 0):
+    if not regional_halo and np.any(_mesh_array(mesh, "cellsOnEdge") < 0):
         _refuse(
-            "specified_zeta_levels" if scheme == "specified" else "vertical_grid_scheme",
-            "non-monotonic",
-            "MPAS interface heights must be finite and strictly increasing",
-            "strictly increasing heights from 0 to ztop",
+            "regional_boundary_metrics", False,
+            "this constructor does not invent exterior state; limited-area metrics require a caller-owned working halo",
+            "regional_halo=True with a working halo whose rim is discarded",
         )
-    zero_tolerance = np.finfo(dtype).eps * max(float(abs(zw[-1])), 1.0) * 8.0
-    if abs(float(zw[0])) > zero_tolerance:
-        _refuse(
-            "specified_zeta_levels" if scheme == "specified" else "vertical_grid_scheme",
-            float(zw[0]),
-            "the first reference interface must be model height zero",
-            "the first interface equal to 0.0 m",
-        )
-    if scheme == "specified":
-        ztop = float(zw[-1])
-        if xnutr != 0.0 and not damping_start < ztop:
-            _refuse("zd", damping_start, "damping begins at or above the specified top", "zd < specified top")
-
-    dzw = np.diff(zw)
-    rdzw = np.reciprocal(dzw)
-    zu = (zw[:-1] + zw[1:]) * dtype.type(0.5)
-    dzu = np.full(n_vert_levels, np.nan, dtype=dtype)
-    rdzu = np.full(n_vert_levels, np.nan, dtype=dtype)
-    rdzwp = np.full(n_vert_levels, np.nan, dtype=dtype)
-    rdzwm = np.full(n_vert_levels, np.nan, dtype=dtype)
-    dzu[1:] = dtype.type(0.5) * (dzw[1:] + dzw[:-1])
-    rdzu[1:] = np.reciprocal(dzu[1:])
-    rdzwp[1:] = dzw[:-1] / (dzw[1:] * (dzw[1:] + dzw[:-1]))
-    rdzwm[1:] = dzw[1:] / (dzw[:-1] * (dzw[1:] + dzw[:-1]))
-
-    fzp = np.full(n_vert_levels, np.nan, dtype=dtype)
-    fzm = np.full(n_vert_levels, np.nan, dtype=dtype)
-    if interface_projection == "linear_interpolation":
-        fzp[1:] = dtype.type(0.5) * dzw[1:] / dzu[1:]
-        fzm[1:] = dtype.type(0.5) * dzw[:-1] / dzu[1:]
-    else:
-        fzm[1:] = dtype.type(0.5) * dzw[1:] / dzu[1:]
-        fzp[1:] = dtype.type(0.5) * dzw[:-1] / dzu[1:]
-
-    cof1 = (
-        (dtype.type(2.0) * dzu[1] + dzu[2])
-        / (dzu[1] + dzu[2])
-        * dzw[0]
-        / dzu[1]
+    request = _rust_vertical_request(mesh, ter, mode="grid")
+    request.update(
+        levels=n_vert_levels, top=ztop, scheme=scheme,
+        specified=None if specified_zw is None else np.asarray(specified_zw).tolist(),
+        projection=interface_projection, terrain_passes=terrain_smoothing_passes,
+        smooth=smooth_surfaces, surface_passes=surface_smoothing_passes,
+        minimum_fraction=minimum_layer_fraction, hybrid=hybrid_coordinate,
+        transition=hybrid_transition_height, damping=xnutr, damping_start=damping_start,
+        regional_halo=regional_halo,
     )
-    cof2 = dzu[1] / (dzu[1] + dzu[2]) * dzw[0] / dzu[2]
-    cf1 = float(fzp[1] + cof1)
-    cf2 = float(fzm[1] - cof1 - cof2)
-    cf3 = float(cof2)
-
-    if hybrid_coordinate:
-        ah = np.zeros(n_vert_levels + 1, dtype=dtype)
-        below = zw < dtype.type(hybrid_transition_height)
-        ah[below] = np.cos(
-            dtype.type(0.5 * np.pi)
-            * zw[below]
-            / dtype.type(hybrid_transition_height)
-        ) ** 6
-        candidates = np.flatnonzero(~below)
-        first_height_level = (
-            int(candidates[0]) if candidates.size else n_vert_levels + 1
+    if boundary_met_path is not None:
+        request["boundary"] = dict(
+            met_path=str(boundary_met_path),
+            lat=_mesh_array(mesh, "latCell").tolist(),
+            lon=_mesh_array(mesh, "lonCell").tolist(),
+            mask=_mesh_array(mesh, "bdyMaskCell").tolist(),
         )
-    else:
-        ah = dtype.type(1.0) - zw / dtype.type(ztop)
-        first_height_level = n_vert_levels + 1
-
-    hx = np.broadcast_to(ter, (n_vert_levels + 1, n_cells)).copy()
-    if smooth_surfaces:
-        mean_dc = np.empty(n_cells, dtype=dtype)
-        n_edges_on_cell = _mesh_array(mesh, "nEdgesOnCell").astype(np.int64, copy=False)
-        edges_on_cell = _mesh_array(mesh, "edgesOnCell").astype(np.int64, copy=False)
-        dc_edge = _mesh_array(mesh, "dcEdge")
-        for cell in range(n_cells):
-            count = int(n_edges_on_cell[cell])
-            if count <= 0:
-                raise ValueError(f"cell {cell} has no active edges")
-            active_edges = edges_on_cell[cell, :count]
-            mean_dc[cell] = np.mean(dc_edge[active_edges], dtype=dtype)
-        sm0 = np.maximum(
-            dtype.type(0.01),
-            dtype.type(0.125)
-            * np.minimum(dtype.type(1.0), dtype.type(3000.0) / mean_dc),
-        )
-        stop = min(first_height_level, n_vert_levels)
-        for level in range(1, stop):
-            hx[level] = hx[level - 1]
-            # sm depends only on the level, so the native inner pass recomputed
-            # one identical 112,676-element product every one of its passes.
-            sm = sm0 * min((3.0 * float(zw[level]) / ztop) ** 2.0, 1.0)
-            for _ in range(surface_smoothing_passes + level + 1):
-                candidate = hx[level] + sm * _laplacian_without_area(
-                    mesh, hx[level], skip_zero_center=False, plan=neighbor_plan
-                )
-                thickness = (
-                    zw[level] + ah[level] * candidate
-                    - zw[level - 1]
-                    - ah[level - 1] * hx[level - 1]
-                )
-                accept = thickness > dtype.type(minimum_layer_fraction) * dzw[level - 1]
-                hx[level, accept] = candidate[accept]
-        if first_height_level <= n_vert_levels:
-            hx[first_height_level:] = dtype.type(0.0)
-
-    zgrid = zw[:, None] + ah[:, None] * hx
-    physical_dz = np.diff(zgrid, axis=0)
-    if not np.all(np.isfinite(zgrid)) or np.any(physical_dz <= 0):
-        location = np.argwhere(~np.isfinite(physical_dz) | (physical_dz <= 0))
-        sample = location[0].tolist() if location.size else None
-        raise ValueError(
-            "hybrid coordinate produced a non-finite or non-positive physical "
-            f"layer thickness; first bad [level,cell]={sample}"
-        )
-    zz = dzw[:, None] / physical_dz
-
-    cells_on_edge = _mesh_array(mesh, "cellsOnEdge").astype(np.int64, copy=False)
-    dc_edge = _mesh_array(mesh, "dcEdge")
-    c0 = cells_on_edge[:, 0]
-    c1 = cells_on_edge[:, 1]
-    if np.any(c0 < 0) or np.any(c1 < 0):
-        _refuse(
-            "regional_boundary_metrics",
-            "boundary edge",
-            "the closed-sphere vertical authority does not invent exterior state",
-            "a closed global mesh or an explicit regional boundary implementation",
-        )
-    zxu = dtype.type(0.5) * (
-        zgrid[:-1, c1]
-        - zgrid[:-1, c0]
-        + zgrid[1:, c1]
-        - zgrid[1:, c0]
-    ) / dc_edge[None, :]
-
-    lower_interfaces = zgrid[:-1]
-    dss = np.zeros_like(lower_interfaces)
-    if xnutr != 0.0:
-        active = lower_interfaces > dtype.type(damping_start + 0.1)
-        phase = (
-            dtype.type(0.5 * np.pi)
-            * (lower_interfaces - dtype.type(damping_start))
-            / dtype.type(ztop - damping_start)
-        )
-        dss[active] = dtype.type(xnutr) * np.sin(phase[active]) ** 2
-
-    result = VerticalGrid(
-        zw=zw,
-        dzw=dzw,
-        rdzw=rdzw,
-        zu=zu,
-        dzu=dzu,
-        rdzu=rdzu,
-        rdzwp=rdzwp,
-        rdzwm=rdzwm,
-        fzp=fzp,
-        fzm=fzm,
-        ah=ah,
-        hx=hx,
-        zgrid=zgrid,
-        zz=zz,
-        zxu=zxu,
-        dss=dss,
-        cf1=cf1,
-        cf2=cf2,
-        cf3=cf3,
-        first_height_level=first_height_level,
-    )
-    validate_vertical_grid(result, n_cells=n_cells, n_edges=int(cells_on_edge.shape[0]))
+    dtype = ter.dtype
+    n, nc, ne = n_vert_levels, n_cells, len(request["dc"])
+    shapes = [(n + 1,), *[(n,)] * 9, (n + 1,),
+              (n + 1, nc), (n + 1, nc), (n, nc), (n, ne), (n, nc), (3,)]
+    arrays, kz = _vertical_call(request, dtype, shapes, trailer=8)
+    # This is public metadata, whereas the native smoothing loop uses kz=nz
+    # even when the hybrid transition has no interface in the model domain.
+    first_height_level = int.from_bytes(kz, "little")
+    if not hybrid_coordinate or not np.any(arrays[0] >= hybrid_transition_height):
+        first_height_level = n + 1
+    result = VerticalGrid(*arrays[:-1], *(float(x) for x in arrays[-1]), first_height_level)
+    validate_vertical_grid(result, n_cells=nc, n_edges=ne)
     return result
 
 
@@ -646,113 +644,17 @@ def build_edge_vertical_metrics(
             "the pinned init source implements only orders 2, 3, and 4",
             "theta_adv_order=3",
         )
-    cells_on_edge = _mesh_array(mesh, "cellsOnEdge").astype(np.int64, copy=False)
-    n_edges = int(cells_on_edge.shape[0])
-    if cells_on_edge.shape != (n_edges, 2):
-        raise ValueError(f"cellsOnEdge must have shape (nEdges,2), got {cells_on_edge.shape}")
-    n_cells = int(vertical.zgrid.shape[1])
-    dc_edge = np.asarray(_mesh_array(mesh, "dcEdge"))
-    dv_edge = np.asarray(_mesh_array(mesh, "dvEdge"))
-    area_cell = np.asarray(_mesh_array(mesh, "areaCell"))
-    if dc_edge.shape != (n_edges,) or dv_edge.shape != (n_edges,):
-        raise ValueError("dcEdge/dvEdge do not match nEdges")
-    if area_cell.shape != (n_cells,):
-        raise ValueError("areaCell does not match vertical nCells")
-    if (
-        not np.all(np.isfinite(dc_edge))
-        or not np.all(np.isfinite(dv_edge))
-        or not np.all(np.isfinite(area_cell))
-        or np.any(dc_edge <= 0)
-        or np.any(area_cell <= 0)
-    ):
-        raise ValueError("edge lengths and cell areas must be finite and positive")
-
-    deriv_two: FloatArray | None = None
-    cells_on_cell: IntArray | None = None
-    n_edges_on_cell: IntArray | None = None
-    if theta_adv_order != 2:
-        deriv_two = _logical_deriv_two(mesh, n_edges)
-        cells_on_cell = _mesh_array(mesh, "cellsOnCell").astype(np.int64, copy=False)
-        n_edges_on_cell = _mesh_array(mesh, "nEdgesOnCell").astype(np.int64, copy=False)
-        required = int(np.max(n_edges_on_cell, initial=0)) + 1
-        if deriv_two.shape[0] < required:
-            raise ValueError(
-                f"deriv_two has {deriv_two.shape[0]} coefficients but topology requires {required}"
-            )
-
     dtype = vertical.zgrid.dtype
-    nlev = vertical.n_vert_levels
-    zb = np.zeros((nlev + 1, 2, n_edges), dtype=dtype)
-    zb3 = np.zeros_like(zb)
-
-    # The native ordering is edge-major then level-major; every term below is a
-    # pure function of one edge, so the level and edge loops vectorize with no
-    # reassociation at all.  The slot accumulation into d2_1/d2_2 keeps native
-    # order by staying an explicit ordered loop over slots, and skips inactive
-    # slots with `where=` rather than adding a zero -- adding +0.0 to a -0.0
-    # partial sum would change its sign bit.
-    raw1 = cells_on_edge[:, 0]
-    raw2 = cells_on_edge[:, 1]
-    missing = (raw1 < 0) & (raw2 < 0)
-    cell1 = np.where(raw1 < 0, raw2, raw1)
-    cell2 = np.where(raw2 < 0, cell1, raw2)
-    out_of_range = ~missing & ((cell1 >= n_cells) | (cell2 >= n_cells))
-    refused = missing | out_of_range
-    if np.any(refused):
-        first = int(np.flatnonzero(refused)[0])
-        if bool(missing[first]):
-            raise ValueError(f"edge {first} has no interior cell")
-        raise ValueError(f"edge {first} references an out-of-range cell")
-
-    zg = vertical.zgrid[:nlev]
-    half = dtype.type(0.5)
-    used_slots = 0 if n_edges_on_cell is None else int(n_edges_on_cell.max(initial=0))
-    # Bounded working set: the per-chunk temporaries are (nVertLevels, chunk).
-    chunk = max(1, min(n_edges, EDGE_METRIC_CHUNK_EDGES))
-    for start in range(0, n_edges, chunk):
-        stop = min(start + chunk, n_edges)
-        c1 = cell1[start:stop]
-        c2 = cell2[start:stop]
-        scale1 = (dv_edge[start:stop] / area_cell[c1]).astype(dtype, copy=False)
-        scale2 = (dv_edge[start:stop] / area_cell[c2]).astype(dtype, copy=False)
-        z1 = zg[:, c1]
-        z2 = zg[:, c2]
-        if theta_adv_order == 2:
-            z_edge = half * (z1 + z2)
-            z_edge3: FloatArray | None = None
-        else:
-            assert deriv_two is not None
-            assert cells_on_cell is not None
-            assert n_edges_on_cell is not None
-            dc2_over_12 = edge_dc_squared_over_twelve(dc_edge[start:stop], dtype)
-            d2_1 = deriv_two[0, 0, start:stop] * z1
-            d2_2 = deriv_two[0, 1, start:stop] * z2
-            for slot in range(used_slots):
-                for centre, partial, side in ((c1, d2_1, 0), (c2, d2_2, 1)):
-                    neighbor = cells_on_cell[centre, slot]
-                    active = (n_edges_on_cell[centre] > slot) & (neighbor >= 0)
-                    if not np.any(active):
-                        continue
-                    gathered = zg[:, np.where(active, neighbor, 0)]
-                    np.add(
-                        partial,
-                        deriv_two[slot + 1, side, start:stop] * gathered,
-                        out=partial,
-                        where=active,
-                    )
-            z_edge = half * (z1 + z2) - dc2_over_12 * (d2_1 + d2_2)
-            z_edge3 = (
-                -dc2_over_12 * (d2_1 - d2_2) if theta_adv_order == 3 else None
-            )
-        zb[:nlev, 0, start:stop] = (z_edge - z1) * scale1
-        zb[:nlev, 1, start:stop] = (z_edge - z2) * scale2
-        if z_edge3 is None:
-            zb3[:nlev, 0, start:stop] = dtype.type(0.0) * scale1
-            zb3[:nlev, 1, start:stop] = dtype.type(0.0) * scale2
-        else:
-            zb3[:nlev, 0, start:stop] = z_edge3 * scale1
-            zb3[:nlev, 1, start:stop] = z_edge3 * scale2
-
+    nc = vertical.zgrid.shape[1]
+    request = _rust_vertical_request(mesh, np.zeros(nc, dtype=dtype), mode="edge")
+    ne = len(request["dc"])
+    request.update(levels=vertical.n_vert_levels, order=theta_adv_order,
+                   zgrid=vertical.zgrid, regional_halo=True)
+    if theta_adv_order != 2:
+        deriv = _logical_deriv_two(mesh, ne)
+        request["deriv"] = np.transpose(deriv, (2, 1, 0))
+    shapes = [(vertical.n_vert_levels + 1, 2, ne)] * 2
+    (zb, zb3), _ = _vertical_call(request, dtype, shapes)
     if not np.all(np.isfinite(zb)) or not np.all(np.isfinite(zb3)):
         raise ValueError("constructed zb/zb3 contain non-finite values")
     return VerticalEdgeMetrics(zb=zb, zb3=zb3, theta_adv_order=theta_adv_order)

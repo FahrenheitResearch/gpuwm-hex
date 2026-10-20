@@ -393,6 +393,9 @@ _V841_DYCORE_BINDINGS: Mapping[str, _KnobBinding] = MappingProxyType(
         "config_epssm_maximum",
         "config_epssm_transition_bottom_z",
         "config_epssm_transition_top_z",
+        "config_number_cam_damping_levels",
+        "config_number_rayleigh_damp_u_levels",
+        "config_rayleigh_damp_u_timescale_days",
     )
     | _bindings("development", "config_gpu_aware_mpi")
 )
@@ -420,9 +423,9 @@ _KNOWN_UNSUPPORTED: Mapping[str, tuple[str, str]] = MappingProxyType(
             "config_do_restart": "restart orchestration is outside DryDycoreConfig",
             "config_print_global_minmax_vel": "printout controls are outside DryDycoreConfig",
             "config_print_detailed_minmax_vel": "printout controls are outside DryDycoreConfig",
-            "config_sst_update": "the production physics update is not linked",
-            "config_sstdiurn_update": "the production physics update is not linked",
-            "config_deepsoiltemp_update": "the production physics update is not linked",
+            "config_sst_update": "surface alarms are configured by the physics suite, outside DryDycoreConfig",
+            "config_sstdiurn_update": "surface alarms are configured by the physics suite, outside DryDycoreConfig",
+            "config_deepsoiltemp_update": "surface alarms are configured by the physics suite, outside DryDycoreConfig",
             "config_bucket_update": "the production physics update is not linked",
             "config_sounding_interval": "sounding output is outside DryDycoreConfig",
         }.items()
@@ -491,6 +494,12 @@ def dry_dycore_config_from_namelist(
         )
     admitted_groups = frozenset(binding.group for binding in bindings.values())
     parsed = parse_fortran_namelist(text)
+    if source_release == "v8.4.1" and any(
+        key in assignments for assignments in parsed.values() for key in (
+            "config_number_cam_damping_levels","config_number_rayleigh_damp_u_levels",
+            "config_rayleigh_damp_u_timescale_days")):
+        from .config_v841 import V841UpperDampingDryConfig
+        config_type = V841UpperDampingDryConfig
     values: dict[str, object] = {}
     seen_attributes: set[str] = set()
     for group, assignments in parsed.items():
@@ -547,6 +556,18 @@ def dry_dycore_config_from_namelist(
         values.setdefault("config_smagorinsky_coef", 0.125)
     if "config_smdiv" in values:
         values["config_divergence_damping"] = bool(values["config_smdiv"] != 0.0)
+    if source_release == "v8.4.1":
+        # A namelist that leaves these unset runs MPAS's Registry defaults
+        # (config_positive_definite false, config_apvm_upwinding 0.5 in both
+        # v8.4.1 and the RRFS v2 fork 8.3.1-noaa), which are also the values
+        # hex's own forecast-column lane runs.  The dataclass defaults are the
+        # JW authority's (true and 0.0).  THE BREAKAGE THIS PREVENTS, measured
+        # 2026-10-05: RRFS v2's namelist read through
+        # this door gave config_positive_definite=True, which the CUDA lane
+        # refuses, and config_apvm_upwinding=0.0, which runs silently and
+        # differs from the fork that namelist configures.
+        values.setdefault("config_positive_definite", False)
+        values.setdefault("config_apvm_upwinding", 0.5)
     return config_type.from_mapping(values)
 
 

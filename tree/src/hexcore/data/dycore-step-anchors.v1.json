@@ -1,0 +1,38 @@
+{
+  "schema": "gpuwm-hex.dycore-step-anchors/v1",
+  "anchors": [
+    {
+      "dt_seconds": 20.0,
+      "order": 2,
+      "acoustic_substeps": 4,
+      "dynamics_splits": 3,
+      "certificate": "verification/step-anchors/rk2-20-4.json",
+      "certificate_sha256": "845d91347e6be33021df69ffa619944873f20a1ddab7938f79f9b50a7ef955b3",
+      "native_schedule": "verification/step-anchors/native-schedule.json",
+      "card": "RTX 5090",
+      "basis": "Native schedule bits, one coefficient evaluation per split, bitwise scalar target density, and two repeatable dry steps on a real mesh. Native endpoint qualification is separate."
+    },
+    {
+      "dt_seconds": 60.0,
+      "order": 2,
+      "acoustic_substeps": 2,
+      "dynamics_splits": 3,
+      "certificate": "verification/step-anchors/rk2-60-2.json",
+      "certificate_sha256": "fe21572cc825c955d6dd1a030c3dfacdb7a1f93ffa582b019b082ec410b2a7b6",
+      "native_schedule": "verification/step-anchors/native-schedule.json",
+      "card": "RTX 5090",
+      "basis": "Native schedule bits, one coefficient evaluation per split, bitwise scalar target density, and two repeatable dry steps on a real mesh. Native endpoint qualification is separate."
+    },
+    {
+      "dt_seconds": 15.0,
+      "order": 2,
+      "acoustic_substeps": 2,
+      "dynamics_splits": 3,
+      "certificate": "verification/step-anchors/rk2-15-2.json",
+      "certificate_sha256": "69c465df6459a12e5eb71d155a8d6afa9095f17453d9a6c093b784e7d8f78f64",
+      "native_schedule": "verification/step-anchors/native-schedule-rk2-15.json",
+      "card": "RTX PRO 6000 Blackwell Server Edition",
+      "basis": "Native real32 schedule bits, one coefficient evaluation per split, bitwise scalar target density at dt15, and two repeatable dry steps on a Rust-generated 2562-cell real mesh. Native endpoint and whole-physics qualification remain separate."
+    }
+  ]
+}

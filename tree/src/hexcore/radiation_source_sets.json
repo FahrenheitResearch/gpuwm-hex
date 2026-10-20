@@ -1,0 +1,20 @@
+{
+    "baseline":  {
+                     "gpuwm/core/rrtmg_lw.py":  "550376f27ac860cb3a4d909d754cec8bbe8af433cce924c6932bc1326c41ec05",
+                     "gpuwm/core/rrtmg_sw.py":  "290c389d6ba7d0ca197b43ed3048a6097cbb477617912f1ddd4d0ed0664d73b3",
+                     "gpuwm/core/rrtmg_mcica.py":  "3947f739003363e0902d1c058e80ca0111545c4e0b2acc0548891041fa0be7de",
+                     "gpuwm/core/rrtmg_legacy_prep.py":  "93f230eff3d226539656dd32f955ab077cb17f8ff3ff57dddbc97bb63bd2828e",
+                     "gpuwm/core/kernels/rrtmg_sw.cu":  "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+                     "gpuwm/ingest/wrf_ozone.py":  "8594158cb44e65a2bbd25fa861c3ede4ff379f45251a4e45cb03ac2d9ebcd69c"
+                 },
+    "candidate":  {
+                      "gpuwm/core/rrtmg_lw.py":  "64e31cfa237971b890e0be0104661da429dbe44d2473f4353fbe381e8935f375",
+                      "gpuwm/core/rrtmg_sw.py":  "84b06e58d3b7b845764d0aedb991fa85ef305bdcaad662666f24e3b977d82661",
+                      "gpuwm/core/rrtmg_mcica.py":  "3947f739003363e0902d1c058e80ca0111545c4e0b2acc0548891041fa0be7de",
+                      "gpuwm/core/rrtmg_legacy_prep.py":  "d2ace549355dffbf596883e52ad4291a98dde7e4c338800a5679c35b54906202",
+                      "gpuwm/core/kernels/rrtmg_sw.cu":  "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+                      "gpuwm/ingest/wrf_ozone.py":  "00923f5733ee83416ef7f5145169ea8d526ecb50e4104de802b024aea64eb8c7",
+                      "gpuwm/ingest/ozone_pressure_device.py":  "39195f7494aff7da6c714e6f26d2275f491e51d10e886a68f3b6c855a51116c2",
+                      "gpuwm/ingest/ozone_pressure_device.cu":  "0ad11a8ab573e904b0ab0e38f41ab3b202fa295295140305f19c6810335b27e0"
+                  }
+}

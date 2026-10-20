@@ -1,0 +1,23 @@
+{
+  "base": "eb3de18a2ee6155b2e6099665cbdbf19e3bdcd47",
+  "status": "HOLD: LW marching fixture remains slower; no H60 speed qualification",
+  "files": {
+    "gpuwm/core/kernel_shape.py": {
+      "base": "fb1b73cd5384127b5d92cd46e9829cddc689c84d7c0648a5b3fdd35e05e5d819",
+      "candidate": "e6091a0d03d7a1e52e27c447095866b0f04cd20b9a88fc3349c7babee3f54324"
+    },
+    "gpuwm/core/rrtmg_lw.py": {
+      "base": "e899ce92bb2e09ed8d70a5368795fed21eb1bbd0c4faf8d3cd0195d3182bc6cd",
+      "candidate": "f6f28cb31cdb76505c8f180573ca3fc8ab982523e836d0962ecd9f75313f1dec"
+    },
+    "gpuwm/core/rrtmg_sw.py": {
+      "base": "4521cad52318b43c2fac6813c0a685bc092918084660ae5a348aa75530862997",
+      "candidate": "0c0028cc8f42783c3ba1c6a39ab74559ee2f9473ba41dd853a051c65ce7350d8"
+    },
+    "gpuwm/core/wsm6.py": {
+      "base": "c1ef3748c2177f6c9a6d7ed9c5566c7576bf447b16cf7ff526afb414a2ede0fe",
+      "candidate": "9c92b89a978a718a4fd9b637b56325cd1b488176877220afce677e2784b271d2"
+    }
+  },
+  "patch_sha256": "069a92424a44037ee06dd3052ca7326850c334c08534f8870efe7dca47953f10"
+}

@@ -173,8 +173,9 @@ terms, priced from your card.
 **Architecture is admission too, and every NVIDIA architecture NVRTC can
 compile the kernels for is admitted, with no flag.** The kernels are
 compiled by NVRTC for your card when the run starts, and they ask for
-nothing an older card lacks, so the floor is the CUDA 13 toolkit's:
-compute capability 7.5 (Turing) and newer. A card NVRTC cannot compile for
+nothing an older card lacks, so the floor is the installed CUDA toolkit's
+(CUDA 12 or 13): compute capability 7.5 (Turing) and newer, and compute
+capability 12.0 from CUDA 12.8 on. A card NVRTC cannot compile for
 is refused by name, because no kernel could be built for it. The one other
 architecture refusal is the IEEE check below, on an unanchored card, when
 ordinary arithmetic is not IEEE; nothing else about the architecture
@@ -481,6 +482,27 @@ it carries a padded atmosphere, two levels of lateral-boundary state and 22
 more kernels, so the door prices it as `row=... limited-area` rather than
 scaling the global row. That row's core is an ENVELOPE over five measured
 culls rather than a fit, so it over-predicts the smaller ones on purpose.
+
+### The vertical grid on RRFS meshes: `--invariant`
+
+RRFS v2 runs MPAS with an `invariant` stream: the model reads `zgrid`, `zz`,
+`zb`, `zb3` and the rest of the vertical metric set from
+`<mesh>.invariant.nc_L60_GFS`, not from the init file. The `conus12km` and
+`conus3km` rows name that file, and when it sits beside `--grid` or
+`--static` the door passes it to the driver without being asked. The console
+prints a `VERTICAL GRID` line and the receipt's `vertical_grid` block says
+which file was used and why.
+
+Why it matters, measured on conus12km with physics off: the init file's grid
+is 2.7 mm off in `zgrid` and 8e-5 relative in `zz`, and running on it put hex
+2.0e-4 K RMS theta away from NOAA's MPAS at hour 1. With the invariant file
+and the cold-start recompute of the coupled diagnostics, the difference is
+3.3e-5 K, against NOAA's own rounding envelope of 2.8e-5 K.
+
+`--invariant FILE` names a different file. `--no-invariant` reads the grid
+from the init file, which reproduces runs made before this default. An
+invariant file with a different level count from the init is refused before
+the card is touched.
 
 ## 6.9 Cycling — following weather from one cycle to the next
 

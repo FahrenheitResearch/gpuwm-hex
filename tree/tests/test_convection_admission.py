@@ -39,7 +39,9 @@ from hexcore import convection_admission, dt_admission
 from hexcore.convection_admission import (
     CONVECTION_OFF_BELOW_M,
     ConvectionAdmissionError,
+    NTIEDTKE_AT_OR_ABOVE_M,
     SCHEME_GRELL_FREITAS,
+    SCHEME_NTIEDTKE,
     SCHEME_OFF,
 )
 from hexcore.config_v841 import V841MpasColumnPhysicsConfig
@@ -55,13 +57,27 @@ def test_the_ruling_switches_convection_off_below_three_kilometres():
     assert convection_admission.convection_for_spacing(2_999.0) == SCHEME_OFF
     assert convection_admission.convection_for_spacing(750.0) == SCHEME_OFF
     assert convection_admission.convection_for_spacing(1_000.0) == SCHEME_OFF
-    # At and above the threshold the proven configuration is unchanged.
+    # From the threshold up to 20 km the proven configuration is unchanged.
     assert (
         convection_admission.convection_for_spacing(3_000.0) == SCHEME_GRELL_FREITAS
     )
     assert (
-        convection_admission.convection_for_spacing(120_000.0) == SCHEME_GRELL_FREITAS
+        convection_admission.convection_for_spacing(19_999.0) == SCHEME_GRELL_FREITAS
     )
+
+
+def test_the_2026_10_05_ruling_selects_new_tiedtke_at_twenty_kilometres_and_coarser():
+    """Obs-scored on two 72 h x1.40962 cases; see the RECEIPT it names."""
+
+    assert NTIEDTKE_AT_OR_ABOVE_M == 20_000.0
+    assert convection_admission.convection_for_spacing(20_000.0) == SCHEME_NTIEDTKE
+    assert convection_admission.convection_for_spacing(120_000.0) == SCHEME_NTIEDTKE
+    decision = convection_admission.convection_decision(nominal_dx_m=120_000.0)
+    assert decision["source"] == "resolution"
+    assert decision["ntiedtke_threshold_m"] == NTIEDTKE_AT_OR_ABOVE_M
+    assert "2026-10-05" in decision["ntiedtke_ruling"]
+    assert "2026-10-05" in decision["note"]
+    assert "RECEIPT.md" in convection_admission.NTIEDTKE_MEASUREMENT
 
 
 def test_the_finest_spacing_anywhere_on_the_mesh_decides():
@@ -82,7 +98,7 @@ def test_the_finest_spacing_anywhere_on_the_mesh_decides():
     coarse = convection_admission.convection_decision(
         nominal_dx_m=120_000.0, minimum_dc_edge_m=97_076.0
     )
-    assert coarse["scheme"] == SCHEME_GRELL_FREITAS
+    assert coarse["scheme"] == SCHEME_NTIEDTKE
     assert coarse["finest_spacing_m"] == 97_076.0
     assert coarse["below_threshold"] is False
 
@@ -110,8 +126,41 @@ def test_a_spacing_that_is_not_a_positive_length_is_refused_by_name():
 def test_the_config_name_and_the_sealed_constructor_name_agree():
     assert convection_admission.constructor_scheme(SCHEME_GRELL_FREITAS) == "gf"
     assert convection_admission.constructor_scheme(SCHEME_OFF) is None
-    with pytest.raises(ConvectionAdmissionError):
-        convection_admission.constructor_scheme("cu_ntiedtke")
+    assert convection_admission.constructor_scheme(SCHEME_NTIEDTKE) == "ntiedtke"
+    # A name no physics selection resolved has no constructor name; a
+    # cumulus option of WOOF's registry gets one when a run selects it
+    # (tests/test_arbitrary_physics.py).
+    with pytest.raises(ConvectionAdmissionError, match="not a cumulus selection this run resolved"):
+        convection_admission.constructor_scheme("cu_never_resolved")
+
+
+def test_new_tiedtke_below_twenty_kilometres_is_reached_only_by_asking_for_it():
+    """The RRFS v2 12 km scheme: 'auto' picks it only at 20 km and coarser.
+
+    Until 2026-10-05 'auto' never chose it; the ruling of that date made it
+    the default at 20 km and coarser, so this keeps checking the band where
+    it is still only an explicit selection.
+    """
+
+    assert SCHEME_NTIEDTKE in convection_admission.ADMITTED_CONVECTION_SCHEMES
+    assert convection_admission.label(SCHEME_NTIEDTKE) == "New Tiedtke"
+    assert convection_admission.gf_ishallow(SCHEME_NTIEDTKE) == 0
+    assert "ntiedtke" in convection_admission.EVERY_STEP_SCHEMES
+    for dx in (750.0, 3_000.0, 12_000.0, 19_999.0):
+        assert convection_admission.convection_decision(nominal_dx_m=dx)[
+            "scheme"
+        ] != SCHEME_NTIEDTKE
+    chosen = convection_admission.convection_decision(
+        nominal_dx_m=12_000.0, minimum_dc_edge_m=10_000.0, requested="ntiedtke"
+    )
+    assert chosen["scheme"] == SCHEME_NTIEDTKE
+    assert chosen["constructor_scheme"] == "ntiedtke"
+    assert chosen["source"] == "explicit"
+    assert "RRFS v2" in chosen["note"]
+    fine = convection_admission.convection_decision(
+        nominal_dx_m=2_000.0, requested="ntiedtke"
+    )
+    assert "OVERRIDES the ruling" in fine["note"]
 
 
 def test_gf_shallow_is_off_when_there_is_no_gf_to_be_shallow_in():
@@ -134,8 +183,11 @@ def test_a_bare_run_below_three_kilometres_selects_no_cumulus_scheme():
         SCHEME_OFF
     )
     assert convection_admission.default_convection_scheme(
-        nominal_dx_m=120_000.0
+        nominal_dx_m=15_000.0
     ) == SCHEME_GRELL_FREITAS
+    assert convection_admission.default_convection_scheme(
+        nominal_dx_m=120_000.0
+    ) == SCHEME_NTIEDTKE
 
 
 def test_an_explicit_switch_is_an_ab_arm_and_says_so():
@@ -176,25 +228,42 @@ def test_the_proven_grell_freitas_configuration_is_unchanged():
 
 
 def test_convection_off_is_admitted_as_a_configuration_of_its_own():
+    """No anchor exists for convection-off at 120 s; since 2026-10-10 that
+    is recorded, not refused, and the configuration builds."""
+
     config = V841MpasColumnPhysicsConfig(
         config_dt=120.0,
         config_bldt_seconds=120.0,
         config_convection_scheme=SCHEME_OFF,
         config_cudt_seconds=None,
     )
-    # No anchor exists for convection-off at 120 s, so the frozen lane still
-    # refuses it -- by name, and for the RIGHT reason.
+    config.validate()
+    record = dt_admission.anchor_record(
+        120.0, radiation_seconds=600.0, surface_pbl_seconds=120.0,
+        cumulus_seconds=None, cumulus_scheme=None,
+    )
+    assert record["matched"] is False
+
+
+def test_an_unknown_convection_scheme_is_still_refused():
+    config = V841MpasColumnPhysicsConfig(config_convection_scheme="cu_never_resolved")
     with pytest.raises(ConfigurationRefusal) as error:
         config.validate()
-    message = str(error.value)
-    assert "convection off" in message
-    assert "anchor" in message
+    assert "config_convection_scheme" in str(error.value)
+    assert "never called" in str(error.value)
 
 
-def test_a_third_convection_scheme_is_still_refused():
-    config = V841MpasColumnPhysicsConfig(config_convection_scheme="cu_ntiedtke")
-    with pytest.raises(ConfigurationRefusal):
-        config.validate()
+def test_new_tiedtke_is_anchored_at_120_s_and_nowhere_else():
+    """Its own 2026-10-05 anchor admits the RK3 120 s lane; every other
+    timestep is still refused, because a GF anchor measured a different
+    forcing and New Tiedtke has earned none there."""
+
+    config = V841MpasColumnPhysicsConfig(config_convection_scheme=SCHEME_NTIEDTKE)
+    config.validate()
+    anchor = dt_admission.admitted_timestep(120.0, "ntiedtke", 120.0)
+    assert anchor is not None and anchor.admitted_on == "2026-10-05"
+    for dt in (100.0, 75.0, 20.0, 5.0):
+        assert dt_admission.admitted_timestep(dt, "ntiedtke", dt) is None, dt
 
 
 def test_the_cumulus_cadence_and_the_scheme_must_agree():
@@ -225,18 +294,21 @@ def test_the_registry_is_keyed_by_configuration_not_by_timestep_alone():
 
 
 def test_a_convection_off_run_cannot_borrow_the_grell_freitas_anchor():
+    """The record never reads the GF row for a convection-off run: the
+    nearest row it reports is the convection-off configuration's own, and a
+    match is never claimed from the GF anchor."""
+
     assert dt_admission.admitted_timestep(120.0, "gf") is not None
-    with pytest.raises(dt_admission.DtAdmissionError) as error:
-        dt_admission.require_dt_anchor(
-            120.0,
-            radiation_seconds=600.0,
-            surface_pbl_seconds=120.0,
-            cumulus_seconds=None,
-            cumulus_scheme=None,
-        )
-    message = str(error.value)
-    assert "convection off" in message
-    assert "earns its own" in message or "anchor" in message
+    record = dt_admission.anchor_record(
+        120.0,
+        radiation_seconds=600.0,
+        surface_pbl_seconds=120.0,
+        cumulus_seconds=None,
+        cumulus_scheme=None,
+    )
+    assert record["matched"] is False
+    assert record["nearest_row"] is None
+    assert record["configuration"]["cumulus_scheme"] is None
 
 
 def test_every_registered_anchor_keys_on_its_own_configuration():
@@ -245,23 +317,32 @@ def test_every_registered_anchor_keys_on_its_own_configuration():
 
 
 def test_a_candidate_mint_separates_the_two_configurations():
-    """20 s holds a GF anchor; convection-off at 20 s is still unearned."""
+    """20 s holds a GF anchor and a convection-off anchor: each is its own
+    row, and a candidate mint at an anchored configuration keeps that row."""
 
-    assert dt_admission.admitted_timestep(20.0, "gf") is not None
-    with pytest.raises(dt_admission.DtAdmissionError):
-        # Nothing for a candidate mint to earn: this configuration is anchored.
-        dt_admission.candidate_mint(
-            20.0,
-            authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-            card="test, no card",
-            cumulus_scheme="gf",
-        )
+    gf = dt_admission.admitted_timestep(20.0, "gf")
+    off = dt_admission.admitted_timestep(20.0, None)
+    assert gf is not None and off is not None and gf is not off
+    with dt_admission.candidate_mint(
+        20.0,
+        authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
+        card="test, no card",
+        cumulus_scheme="gf",
+    ) as row:
+        assert row is gf
 
 
 def test_the_unanchored_refusal_names_the_configuration():
-    message = dt_admission.unanchored_refusal(20.0, cumulus_scheme=None)
-    assert "convection off" in message
-    assert "20 s" in message
+    """The record names the configuration where the refusal used to."""
+
+    record = dt_admission.anchor_record(
+        30.0, radiation_seconds=1800.0, surface_pbl_seconds=30.0,
+        cumulus_seconds=None, cumulus_scheme=None,
+    )
+    assert record["matched"] is False
+    assert record["configuration"]["cumulus_scheme"] is None
+    assert record["configuration"]["dt_seconds"] == 30.0
+    assert "convection off" in record["registered"]
 
 
 def test_the_admitted_summary_distinguishes_the_configurations():
@@ -352,20 +433,17 @@ def test_the_row_override_admits_a_convection_off_mint_at_an_anchored_timestep()
 
 
 def test_the_row_override_still_refuses_an_anchored_configuration():
-    """The guard keeps its teeth for the configuration that IS anchored."""
+    """RETIRED 2026-10-10: an anchored configuration may be overridden."""
 
     from hexcore import mesh_row_candidate
 
-    with pytest.raises(dt_admission.DtAdmissionError) as error:
-        mesh_row_candidate.candidate_mesh_dt(
-            "x1.40962",
-            20.0,
-            authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-            cumulus_scheme="gf",
-        )
-    message = str(error.value)
-    assert "holds a real" in message
-    assert "GF" in message
+    with mesh_row_candidate.candidate_mesh_dt(
+        "x1.40962",
+        20.0,
+        authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
+        cumulus_scheme="gf",
+    ):
+        assert dict(mesh_row_candidate.active_overrides()) == {"x1.40962": 20.0}
 
 
 def test_the_physics_cadence_table_reports_no_convection_rather_than_a_zero():
@@ -390,7 +468,8 @@ def test_the_physics_cadence_table_reports_no_convection_rather_than_a_zero():
     cadences = _v841_physics_cadences(off)
     assert cadences["convection"] is None
     assert cadences["microphysics"] == 120.0
-    assert cadences["radiation_lw"] == 600.0
+    # MPAS-A's radiation default, config_radtlw/sw_interval = 00:30:00.
+    assert cadences["radiation_lw"] == 1800.0
 
 
 def test_the_run_refuses_two_sources_for_one_convection_decision():
@@ -426,14 +505,22 @@ def test_the_door_answers_the_convection_question_from_the_row_alone():
     from hexcore import forecast_door
 
     admitted = forecast_door.admit_timestep(
-        "x1.40962", 120.0, nominal_dx_m=120_000.0, convection="auto"
+        "x1.40962", 120.0, nominal_dx_m=120_000.0, convection="auto",
+        radiation_seconds=600.0,
     )
-    assert admitted["cumulus_scheme"] == "gf"
+    assert admitted["convection"]["constructor_scheme"] == "ntiedtke"
     assert admitted["convection"]["source"] == "resolution"
-    assert admitted["convection"]["scheme"] == SCHEME_GRELL_FREITAS
-    # The anchor's verdict rides along, so a caller sees what the row's
-    # physics did before spending a card on it.
-    assert admitted["physics_health"].startswith("REFERENCE")
+    assert admitted["convection"]["scheme"] == SCHEME_NTIEDTKE
+    # The anchor's verdict rides along as evidence, so a caller sees what
+    # the row's physics did before spending a card on it.
+    assert admitted["anchor"]["row"]["physics_health"].startswith("TRACKS THE CONTROL")
+    # The Grell-Freitas reference stays reachable as an explicit arm.
+    gf = forecast_door.admit_timestep(
+        "x1.40962", 120.0, nominal_dx_m=120_000.0, convection="gf",
+        radiation_seconds=600.0,
+    )
+    assert gf["convection"]["constructor_scheme"] == "gf"
+    assert gf["anchor"]["row"]["physics_health"].startswith("REFERENCE")
 
 
 def test_every_registered_row_gets_the_scheme_its_own_spacing_selects():
@@ -476,11 +563,14 @@ def test_every_registered_row_gets_the_scheme_its_own_spacing_selects():
     sys.modules["_test_mesh_binding_convection"] = module
     spec.loader.exec_module(module)
 
-    coarse, fine = [], []
+    coarse, fine, tiedtke = [], [], []
     for name, row in module.MESH_BINDINGS.items():
         dx = float(row.nominal_dx_m)
         decision = convection_admission.convection_decision(nominal_dx_m=dx)
-        if dx >= CONVECTION_OFF_BELOW_M:
+        if dx >= NTIEDTKE_AT_OR_ABOVE_M:
+            assert decision["scheme"] == SCHEME_NTIEDTKE, name
+            tiedtke.append(name)
+        elif dx >= CONVECTION_OFF_BELOW_M:
             assert decision["scheme"] == SCHEME_GRELL_FREITAS, name
             coarse.append(name)
         else:
@@ -488,6 +578,15 @@ def test_every_registered_row_gets_the_scheme_its_own_spacing_selects():
             fine.append(name)
         # Either way the decision is the RULING's and not a flag's.
         assert decision["source"] == "resolution", name
+        # THE BREAKAGE THE 20 km THRESHOLD PREVENTS: a row moved to New
+        # Tiedtke whose own timestep holds no New Tiedtke anchor would
+        # refuse a bare run that ran before.  Every row the 2026-10-05
+        # ruling moves must be admitted at its dt.
+        if decision["scheme"] == SCHEME_NTIEDTKE:
+            assert dt_admission.admitted_timestep(
+                float(row.dt_seconds), "ntiedtke", float(row.dt_seconds)
+            ) is not None, (name, row.dt_seconds)
+    assert tiedtke, "no registered row is at or above 20 km"
     # Both arms have to be exercised, or this test is single-sided again
     # without saying so.
     assert coarse, "no registered row is at or above the threshold"

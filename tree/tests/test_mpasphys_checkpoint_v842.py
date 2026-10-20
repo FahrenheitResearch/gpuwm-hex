@@ -1,0 +1,165 @@
+"""Native sealed checkpoint export, restore and original-clock admission."""
+from fractions import Fraction
+from pathlib import Path
+from types import SimpleNamespace
+import json
+import xml.etree.ElementTree as ET
+
+import numpy as np
+import pytest
+
+from hexcore.mpasphys.checkpoint_v842 import resolve_route
+from hexcore.mpasphys.forecast_v842 import namelist_option
+from hexcore.mpasphys.moving_mpi_v842 import PoolWords, HostArrays, WindowWords, ServiceWords
+from hexcore.mpasphys.moving_v842 import STATE_FIELDS, SAVED_FIELDS
+
+
+TEXT = "&nhyd_model\nconfig_start_time='2026-10-17_00:00:00'\n/\n"
+CONFIG = SimpleNamespace(receipt=lambda: dict(suite='convection_permitting', options={}))
+
+
+def member():
+    mesh = SimpleNamespace(arrays=dict(
+        areaCell=np.arange(3, dtype=np.float32)+1,
+        cellsOnEdge=np.array([[0, 1], [1, 2], [2, 0], [0, 2]], np.int32),
+        edgesOnCell=np.array([[0, 2, 3], [0, 1, 2], [1, 2, 3]], np.int32)))
+    grid = SimpleNamespace(vertical_grid=SimpleNamespace(
+        zgrid=np.arange(9, dtype=np.float32).reshape(3, 3),
+        dzw=np.ones((2, 3), np.float32)))
+    reference = SimpleNamespace(**{name: np.full((2, 3), index+1, np.float32)
+        for index, name in enumerate(('rho_base', 'rho_theta_base', 'pressure_base', 'exner_base'))})
+    state = SimpleNamespace(**{name: np.arange(8 if name == 'rho_u' else 9 if name == 'rho_w' else 18 if name == 'scalars' else 6, dtype=np.float32).reshape(
+        (2, 4) if name == 'rho_u' else (3, 3) if name == 'rho_w' else (3, 2, 3) if name == 'scalars' else (2, 3)) for name in STATE_FIELDS}, time_seconds=360)
+    saved = SimpleNamespace(**{name: np.ones((2, 4) if name == 'normal_velocity' else (3, 3) if name == 'vertical_velocity' else (2, 3), np.float32)
+                               for name in SAVED_FIELDS})
+    state.scalars[-1].view(np.uint32)[0, 0] = 0x80000000
+    fields = []
+    for pool, name, dimensions, shape, levels, kind in (
+        ('diag_physics', 'qke', ['nVertLevels', 'nCells'], [2, 4], 2, 'real'),
+        ('sfc_input', 'tslb', ['nSoilLevels', 'nCells'], [4, 4], 1, 'real'),
+        ('sfc_input', 'sst', ['nCells'], [4], 1, 'real'),
+        ('tend', 'rt_diabatic_tend', ['nVertLevels', 'nCells'], [2, 4], 1, 'real'),
+        *((('sfc_input', name, ['nCells'], [4], 1, 'real')) for name in ('xland', 'xice', 'isltyp', 'ivgtyp')),
+        ('sfc_input', 'isice_lu', [], [], 1, 'integer')):
+        fields.append(dict(pool=pool, name=name, pool_name=name, dimensions=dimensions,
+                           shape=shape, nlevels=levels, kind=kind, components=[]))
+    layout = SimpleNamespace(fields=fields, dimensions={'nCells': 3},
+        configs=dict(config_do_restart=False, config_do_DAcycling=False),
+        root=ET.fromstring('<registry><streams><stream name="restart"><var name="qke"/><var name="tslb"/></stream></streams></registry>'), enabled=lambda item: True)
+    native = PoolWords(layout)
+    for row in fields:
+        for level in range(1, row['nlevels']+1):
+            words = np.full(row['shape'], level+2, np.float32 if row['kind'] == 'real' else np.int32)
+            if row['name'] == 'qke':
+                words.view(np.uint32)[0, 0] = 0x80000000 if level == 1 else 0x7fc12345
+            native.put_field(row['pool'], row['pool_name'], words, level=level)
+    session = SimpleNamespace(native=native, config=SimpleNamespace(suite='convection_permitting'),
+        precipitation_window=WindowWords({'rain': np.arange(3, dtype=np.float32), 'steps': np.arange(3, dtype=np.int32)}),
+        surface_service=ServiceWords({'february': 29}))
+    dycore = SimpleNamespace(cp=HostArrays, atmosphere=SimpleNamespace(state=state, saved=saved))
+    return (mesh, grid, None, state, reference, saved, ('qv', 'qc', 'tke')), layout, session, dycore
+
+
+def write_checkpoint(tmp_path):
+    inputs, layout, session, dycore = member()
+    arguments = SimpleNamespace(checkpoint_hours='0.1,0.2', history_every_minutes=6)
+    route, text = resolve_route(arguments, TEXT)
+    assert route.resolve_schedule(Fraction(720), Fraction(60), []) == 720
+    route.begin('2026-10-17_00:00:00')
+    route.bind_inputs(inputs, CONFIG)
+    assert not route.after_step(6, steps=12, dt=60, session=session, dycore=dycore,
+        mesh=inputs[0], vertical=inputs[1].vertical_grid, names=inputs[6],
+        layout=layout, out=tmp_path, columns=None)
+    path = tmp_path/'checkpoint.t00000360.pkl'
+    assert path.is_file()
+    assert len(route.receipt()['native_checkpoints']) == 1
+    return path, inputs, layout, session
+
+
+def test_native_checkpoint_roundtrip_keeps_physics_levels_and_precipitation_window(tmp_path):
+    path, inputs, layout, session = write_checkpoint(tmp_path)
+    route, text = resolve_route(SimpleNamespace(restart_from=path, checkpoint_hours='0.2',
+        history_every_minutes=6, da_analysis=tmp_path/'analysis.nc'), TEXT)
+    assert route.resolve_schedule(Fraction(720), Fraction(60), []) == 360
+    assert namelist_option(text, 'nhyd_model', 'config_start_time') == '2026-10-17_00:06:00'
+    assert namelist_option(text, 'restart', 'config_do_restart') is False
+    route.mark_restart(layout)
+    assert layout.configs['config_do_restart'] and layout.configs['config_do_DAcycling']
+    route.bind_inputs(inputs, CONFIG)
+    state, saved, weights = route.resume_dycore(mesh=inputs[0], grid=inputs[1], state=inputs[3],
+        saved=inputs[5], reference=inputs[4], names=inputs[6], target_grid='unused')
+    assert weights is None and state.time_seconds == 360
+    for name in STATE_FIELDS:
+        np.testing.assert_array_equal(getattr(state, name).view(np.uint32), getattr(inputs[3], name).view(np.uint32))
+    for name in SAVED_FIELDS:
+        np.testing.assert_array_equal(getattr(saved, name), getattr(inputs[5], name))
+    before = {key: value.copy() for key, value in session.native.data.items()}
+    for key in session.native.data:
+        session.native.data[key].fill(0)
+    session.precipitation_window.restore({'rain': np.zeros(3, np.float32), 'steps': np.zeros(3, np.int32)})
+    session.surface_service.restore_restart_state({'february': 28})
+    restored = route.restore_physics(session, layout, None, inputs[0])
+    assert restored['fields'] == 9
+    for key in (('diag_physics', 'qke', 1), ('diag_physics', 'qke', 2), ('sfc_input', 'tslb', 1), ('tend', 'rt_diabatic_tend', 1)):
+        np.testing.assert_array_equal(session.native.data[key].view(np.uint32), before[key].view(np.uint32))
+    for name in ('sst', 'xland', 'xice', 'isltyp', 'ivgtyp'):
+        np.testing.assert_array_equal(session.native.data['sfc_input', name, 1], before['sfc_input', name, 1])
+    np.testing.assert_array_equal(session.precipitation_window.snapshot()['steps'], np.arange(3))
+    assert session.surface_service.restart_state() == {'february': 29}
+
+
+@pytest.mark.parametrize('change', ['mesh', 'vertical', 'reference', 'species'])
+def test_restart_rejects_changed_identity_before_cuda(tmp_path, change):
+    path, inputs, _, _ = write_checkpoint(tmp_path)
+    route, _ = resolve_route(SimpleNamespace(restart_from=path, history_every_minutes=6), TEXT)
+    if change == 'mesh': inputs[0].arrays['areaCell'][0] += 1
+    if change == 'vertical': inputs[1].vertical_grid.zgrid[0, 0] += 1
+    if change == 'reference': inputs[4].pressure_base[0, 0] += 1
+    if change == 'species': inputs = (*inputs[:-1], ('qc', 'qv', 'tke'))
+    with pytest.raises(ValueError, match='mesh, vertical grid, base state or species'):
+        route.bind_inputs(inputs, CONFIG)
+
+
+def test_restart_rejects_changed_physics_before_cuda(tmp_path):
+    path, inputs, _, _ = write_checkpoint(tmp_path)
+    route, _ = resolve_route(SimpleNamespace(restart_from=path, history_every_minutes=6), TEXT)
+    changed = SimpleNamespace(receipt=lambda: dict(suite='convection_permitting', options={'pbl': 'changed'}))
+    with pytest.raises(ValueError, match='physics configuration or numerics'):
+        route.bind_inputs(inputs, changed)
+
+
+def test_restart_rejects_timestep_clock_and_original_end_mismatches(tmp_path):
+    path, _, _, _ = write_checkpoint(tmp_path)
+    route, _ = resolve_route(SimpleNamespace(restart_from=path, history_every_minutes=6), TEXT)
+    with pytest.raises(ValueError, match='timestep differs'):
+        route.resolve_schedule(720, 30, [])
+    with pytest.raises(ValueError, match='original forecast end'):
+        route.resolve_schedule(360, 60, [])
+
+
+@pytest.mark.parametrize('hours', ['0', '-1', 'nan', '0.00001'])
+def test_checkpoint_rejects_invalid_boundaries(hours):
+    with pytest.raises((ValueError, ZeroDivisionError)):
+        resolve_route(SimpleNamespace(checkpoint_hours=hours), TEXT)
+
+
+def test_checkpoint_uses_native_history_interval_when_cli_omits_it():
+    route, _ = resolve_route(SimpleNamespace(checkpoint_hours='0.1'), TEXT)
+    streams = [SimpleNamespace(name='output', directions=('output',), output_interval='00:06:00')]
+    assert route.resolve_schedule(720, 60, streams) == 720
+    assert route.frame_seconds == 360
+    route, _ = resolve_route(SimpleNamespace(checkpoint_hours='0.1', history_every_minutes=5), TEXT)
+    with pytest.raises(ValueError, match='history frames'):
+        route.resolve_schedule(720, 60, [])
+
+
+def test_native_da_analysis_without_any_carrier_fails_before_pool_decode():
+    with pytest.raises(ValueError, match='requires --restart-from'):
+        resolve_route(SimpleNamespace(da_analysis=Path('analysis.nc')), TEXT)
+
+
+def test_five_minute_cycle_accepts_the_public_float_hours_representation():
+    route, _ = resolve_route(SimpleNamespace(checkpoint_hours=str(5/60),
+        history_every_minutes=5), TEXT)
+    assert route.resolve_schedule(Fraction(str(5/60))*3600, 60, []) == 300
+    assert route.checkpoint_due(5, 60)

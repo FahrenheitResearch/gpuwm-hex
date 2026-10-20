@@ -1,0 +1,52 @@
+{
+  "schema": "i4-medium-active-whole-forecast-and-images/v1",
+  "sealed_at": "2026-10-14T04:37:58.380093+00:00",
+  "forecast_revision": "13904ae2e98dd6f7a117308b2b31bbdfb00ee418",
+  "generator_revision": "01cff0a7acc8e57013de56d773abe0cb9df5253e",
+  "process_count": 1,
+  "steps_completed": 120,
+  "written_words": 797790024,
+  "written_word_differences": 0,
+  "streams": {
+    "diag_ugwp": {
+      "words": 56505411,
+      "differences": 0,
+      "samples": 198
+    },
+    "diagnostics": {
+      "words": 1751679,
+      "differences": 0,
+      "samples": 198
+    },
+    "output": {
+      "words": 187116858,
+      "differences": 0,
+      "samples": 864
+    },
+    "surface": {
+      "words": 184356,
+      "differences": 0,
+      "samples": 18
+    },
+    "restart": {
+      "words": 552231720,
+      "differences": 0,
+      "samples": 2624
+    }
+  },
+  "recorded_noncompared_samples": 900,
+  "images_rendered_and_opened": 24,
+  "actual_render_exit": 0,
+  "official_forecast_acceptance_claimed": false,
+  "no_new_forecast_started_to_make_images": true,
+  "exclusions": [],
+  "files": {
+    "receipts/sheets/p14-read-probe-x1.10242-2023-03-31-rank1-published-assets-v4/sheets.json": "556b20b27596cfc07ad75b577b4100d5506d1964b875ac18db0275332359d3e1",
+    "receipts/sheets/p14-read-probe-x1.10242-2023-03-31-rank1-published-assets-v4/sheet-custody.json": "e0c1096e53fe636bf4f66ba548e87eade1cae138ee49f15b4327ebbfa0895306",
+    "receipts/sheets/p14-read-probe-x1.10242-2023-03-31-rank1-published-assets-v4/visual-inspection.json": "e783c51cbf98e98e29c309b847bedae826f4879aa9f2c6f67643257389ad8466",
+    "receipts/sheets/p14-read-probe-x1.10242-2023-03-31-rank1-published-assets-v4/word-proof.json": "e5823878000c83e56bf6d5f1371776bb8af3532e2e4104252f2cc8fea78ff000",
+    "receipts/sheets/p14-read-probe-x1.10242-2023-03-31-rank1-published-assets-v4/compare.json": "4090fd6b214796b3eee79b45fa4bc18456689e778266d9294d5cf1f919c39e1c",
+    "receipts/sheets/p14-read-probe-x1.10242-2023-03-31-rank1-published-assets-v4/actual-output-inventory.json": "99867bf082c9d1503ba7c4fb9d7f9cc02bcc79577ac9a3f5ae1f9b4fcb54a534",
+    "receipts/sheets/p14-read-probe-x1.10242-2023-03-31-rank1-published-assets-v4/completion.json": "ecbd15dca87ddf5ba61207c3442858e2cbdadc9f8cb1b76105a1178d7187bbd3"
+  }
+}

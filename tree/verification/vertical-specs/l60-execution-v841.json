@@ -1,0 +1,103 @@
+{
+  "execution_source_commit": "13edda8bbf5aa2452630160de1d921c334bf8932",
+  "dycore_source_commit": "91c5eac175eebeaf4206bacd5cb50c39dff3c152",
+  "inputs": [
+    {
+      "file": "init.nc",
+      "bytes": 2140249364,
+      "sha256": "a73759aa4c0c3233cf6eee6d6630422652faa23d101972a4c81ec0b5f97e3cc1"
+    },
+    {
+      "file": "conus12km.grid.nc",
+      "bytes": 167235640,
+      "sha256": "245c511b0ba39d9df74ff5d611634e481646ad003bff8ea6e36f081d5b483c56"
+    },
+    {
+      "file": "conus12km.static.nc",
+      "bytes": 275923012,
+      "sha256": "55b7cb11ec6cad7418e47d86d9ade248b2a6d84ba0b71bcc798e4389cda89458"
+    }
+  ],
+  "n_cells": 157859,
+  "n_edges": 475138,
+  "n_vertices": 317280,
+  "layers": 59,
+  "interfaces": 60,
+  "top_m": 25878.712,
+  "dt_seconds": 60.0,
+  "time_integration_order": 2,
+  "acoustic_substeps": 2,
+  "dynamics_splits": 3,
+  "monotonic": true,
+  "cam_coefficient": 2.0,
+  "cam_levels": 8,
+  "rayleigh_u": true,
+  "damping_start_m": 16000.0,
+  "radiation_seconds": 1800.0,
+  "steps": 1,
+  "status": "passed",
+  "forecast_seconds": 60.0,
+  "history_frames": 2,
+  "integration_wall_seconds": 41.6729526584968,
+  "physical_gates": {
+    "0": {
+      "finite_all_fields": true,
+      "moisture_negative_counts": {
+        "qc": 0,
+        "qg": 0,
+        "qi": 0,
+        "qr": 0,
+        "qs": 0,
+        "qv": 210
+      },
+      "positive_rho_theta_pressure": true,
+      "precipitation_nonnegative": true,
+      "q2_policy": "published bitwise; negatives allowed (native parity); finiteness gated",
+      "soil_moisture_range": [
+        0.0260000117123127,
+        1.0
+      ]
+    },
+    "1": {
+      "finite_all_fields": true,
+      "moisture_negative_counts": {
+        "qc": 0,
+        "qg": 0,
+        "qi": 0,
+        "qr": 0,
+        "qs": 0,
+        "qv": 0
+      },
+      "positive_rho_theta_pressure": true,
+      "precipitation_nonnegative": true,
+      "q2_policy": "published bitwise; negatives allowed (native parity); finiteness gated",
+      "soil_moisture_range": [
+        0.026000026613473892,
+        1.0
+      ]
+    }
+  },
+  "step_health": [
+    {
+      "exner_min": 0.34567496180534363,
+      "finite": true,
+      "hot_cell": {
+        "boundary_ring": 0,
+        "cell": 26712,
+        "level": 0,
+        "vertical_velocity_max_abs": 2.0919902324676514,
+        "zone": "free interior"
+      },
+      "hydrometeor_min": 0.0,
+      "qv_max": 0.020059360191226006,
+      "qv_min": 0.0,
+      "rho_min": 0.03854185342788696,
+      "step": 1,
+      "theta_m_max": 637.6439208984375,
+      "theta_m_min": 277.03082275390625,
+      "vertical_velocity_abs_max": 2.0919902324676514
+    }
+  ],
+  "receipt_sha256": "a9b30e2f74da97db9e6b9d2ecb1877e463ee9ec94b3b01f8603c8073cb457048",
+  "scope": "one real coupled limited-area execution step with numeric health gates; unanchored measurement, no native endpoint or forecast-skill qualification"
+}

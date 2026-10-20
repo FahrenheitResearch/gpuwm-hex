@@ -37,10 +37,12 @@ and a forecast receipt, with one met_intermediate receipt or verbatim refusal
 per source. Every verdict quoted in the tables below is reproduced verbatim
 here, so the table is readable on its own.
 
-The one authored table this matrix required, `Vtable.ECMWF-OD.rw`, is in
-the repository at `vtables/Vtable.ECMWF-OD.rw`. It is a repository asset
-rather than a packaged one: it is consumed by `gpuwm`'s RW-WPS
-`met_intermediate` writer, upstream of anything this distribution installs.
+The one authored table this matrix required, `Vtable.ECMWF-OD.rw`, ships
+inside the package at `hexcore/data/vtables/Vtable.ECMWF-OD.rw`, beside the
+other Vtables the init-source rows name. It is packaged because
+`gpuwm-hex init-source` hands it to `gpuwm`'s `met_intermediate` writer from
+an installed wheel; a table left in the repository is a table a pip install
+does not have.
 
 ## Sources with a runnable registry route
 

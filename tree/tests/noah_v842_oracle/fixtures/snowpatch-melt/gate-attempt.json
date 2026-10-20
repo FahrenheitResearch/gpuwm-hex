@@ -1,0 +1,51 @@
+{
+  "failures": [
+    "G0 CPU tests or citation audit failed"
+  ],
+  "inputs": {},
+  "passed": false,
+  "process_counts": [],
+  "schema": "mpas-gate-v1",
+  "stages": {
+    "G0": {
+      "exit_codes": [
+        1,
+        0
+      ],
+      "wall_seconds": 191.38415128272027
+    }
+  },
+  "wall_seconds": 191.38423730805516,
+  "scope": "clean fixed-source trial merge into current integrate; attempt stopped at G0; no G1/G2 pass inferred",
+  "checkout_commit": "3aa55a46ad0f9006dda87b6e1caf2a2b614367cd",
+  "source_sha256": "6b4e9299215dbbac03b7e4197151d2ca435b4b6c62242a2186d2d6a3d314654f",
+  "tests_passed": 3760,
+  "tests_failed": 20,
+  "tests_skipped": 562,
+  "tests_deselected": 141,
+  "citation_failures": 0,
+  "unchanged_shared_failure_set": true,
+  "failed_tests": [
+    "FAILED tests/test_capacity_copy_elisions.py::test_modified_execution_sources_match_the_migration_table",
+    "FAILED tests/test_contract_hostprep.py::test_acoustic_all_output_fields[7-False-13]",
+    "FAILED tests/test_contract_hostprep.py::test_acoustic_all_output_fields[7-True-14]",
+    "FAILED tests/test_contract_hostprep.py::test_acoustic_all_output_fields[19-True-20]",
+    "FAILED tests/test_cuda_regional_kernels.py::test_a_new_cull_of_a_minted_class_refuses_for_its_deck_and_nothing_else",
+    "FAILED tests/test_cuda_regional_kernels.py::test_the_class_key_is_measured_from_the_tree_not_declared",
+    "FAILED tests/test_cuda_regional_kernels.py::test_digest_and_cell_count_mismatches_refuse_separately",
+    "FAILED tests/test_cuda_regional_kernels.py::test_a_presented_receipt_is_checked_by_content_not_by_name",
+    "FAILED tests/test_cuda_regional_kernels.py::test_an_unmeasured_finest_edge_cannot_grow_its_class",
+    "FAILED tests/test_cuda_v841_full_physics_x4.py::test_exact_release_scope_and_all_execution_sources_are_frozen",
+    "FAILED tests/test_regional_forecast_anchor.py::test_a_different_cull_of_the_same_region_is_refused",
+    "FAILED tests/test_regional_mesh_binding.py::test_claim_refuses_a_scheme_it_cannot_name",
+    "FAILED tests/test_tier_membership.py::test_every_test_file_on_disk_is_named_by_a_tier[tests/test_identity_extend.py]",
+    "FAILED tests/test_tier_membership.py::test_every_test_file_on_disk_is_named_by_a_tier[tests/test_native_advection_order.py]",
+    "FAILED tests/test_tier_membership.py::test_every_test_file_on_disk_is_named_by_a_tier[tests/test_noah_v842.py]",
+    "FAILED tests/test_tier_membership.py::test_every_test_file_on_disk_is_named_by_a_tier[tests/test_radiation_chunk_v841.py]",
+    "FAILED tests/test_tier_membership.py::test_every_test_file_on_disk_is_named_by_a_tier[tests/test_radiation_ozone_memo_v841.py]",
+    "FAILED tests/test_tier_membership.py::test_every_test_file_on_disk_is_named_by_a_tier[tests/test_samehost_physics_scope_cuda_cache_v841.py]",
+    "FAILED tests/test_wheel_reach.py::test_the_fix_did_not_move_the_minted_digest",
+    "FAILED tests/test_wheel_reach.py::test_the_digest_is_earned_from_a_package_with_no_checkout_above_it"
+  ],
+  "ratchet_raised": false
+}

@@ -100,16 +100,20 @@ def test_an_explicit_cadence_records_itself_as_a_selection_never_the_default():
 
 
 def test_the_decision_names_every_physics_call_rate_the_run_uses():
-    """Radiation is on its own fixed cadence and was never welded to dt; the
+    """Radiation is on its own cadence and was never welded to dt; the
     receipt records it beside the surface/PBL one so nothing is left to
-    divide."""
+    divide.  The default is MPAS-A's 00:30:00 (Registry.xml:2316, 2321)."""
 
     decision = pbl_cadence.pbl_cadence_decision(dt_seconds=5.0, requested="60")
-    assert decision["radiation_seconds"] == 600.0
-    assert decision["radiation_steps_between_calls"] == 120
-    assert decision["radiation_calls_per_hour"] == 6.0
+    assert decision["radiation_seconds"] == 1800.0
+    assert decision["radiation_steps_between_calls"] == 360
+    assert decision["radiation_calls_per_hour"] == 2.0
     assert "applied unchanged" in decision["hold_semantics"]
     assert "Radiation keeps its own cadence" in decision["hold_semantics"]
+    run = pbl_cadence.pbl_cadence_decision(
+        dt_seconds=5.0, requested="60", radiation_seconds=600.0
+    )
+    assert run["radiation_steps_between_calls"] == 120
 
 
 def test_the_engine_call_count_is_one_more_than_the_steady_rate_when_held():
@@ -236,20 +240,21 @@ def test_a_derived_row_is_never_a_registered_one():
 
 
 def test_a_held_cadence_at_an_unanchored_timestep_is_refused_as_the_welded_run_would_be():
+    """RETIRED 2026-10-10: a held cadence at an unanchored timestep is
+    recorded as unmatched, never refused, exactly as the welded run is."""
+
     assert dt_admission.admitted_timestep(3.0, None) is None
     assert dt_admission.derived_held_cadence_anchor(3.0, None, 120.0) is None
     assert dt_admission.admitted_timestep(3.0, None, 120.0) is None
-    with pytest.raises(dt_admission.DtAdmissionError) as caught:
-        dt_admission.require_dt_anchor(
-            3.0,
-            radiation_seconds=600.0,
-            surface_pbl_seconds=120.0,
-            cumulus_seconds=None,
-            cumulus_scheme=None,
-        )
-    message = str(caught.value)
-    assert "holds no timestep anchor" in message
-    assert "derives its row from the WELDED anchor" in message
+    record = dt_admission.anchor_record(
+        3.0,
+        radiation_seconds=600.0,
+        surface_pbl_seconds=120.0,
+        cumulus_seconds=None,
+        cumulus_scheme=None,
+    )
+    assert record["matched"] is False
+    assert record["configuration"]["surface_pbl_seconds"] == 120.0
 
 
 def test_a_derived_row_refuses_an_incommensurate_cadence_rather_than_rounding():
@@ -264,23 +269,26 @@ def test_a_derived_row_refuses_an_incommensurate_cadence_rather_than_rounding():
 
 
 def test_require_dt_anchor_admits_the_held_cadence_and_still_refuses_radiation():
-    anchor = dt_admission.require_dt_anchor(
+    """The held cadence is matched through the derived row; a radiation
+    cadence the anchor never measured is recorded as a mismatch, not refused."""
+
+    record = dt_admission.anchor_record(
         5.0,
         radiation_seconds=600.0,
         surface_pbl_seconds=120.0,
         cumulus_seconds=None,
         cumulus_scheme=None,
     )
-    assert anchor.derived is True
-    with pytest.raises(dt_admission.DtAdmissionError) as caught:
-        dt_admission.require_dt_anchor(
-            5.0,
-            radiation_seconds=1200.0,
-            surface_pbl_seconds=120.0,
-            cumulus_seconds=None,
-            cumulus_scheme=None,
-        )
-    assert "at physics cadences this run does not use" in str(caught.value)
+    assert record["matched"] is True
+    assert record["row"]["derived_from"] is not None
+    other = dt_admission.anchor_record(
+        5.0,
+        radiation_seconds=1200.0,
+        surface_pbl_seconds=120.0,
+        cumulus_seconds=None,
+        cumulus_scheme=None,
+    )
+    assert other["matched"] is False and other["cadences_match"] is False
 
 
 def test_a_registered_held_row_wins_the_exact_lookup(monkeypatch):
@@ -311,9 +319,14 @@ def test_the_roster_names_a_held_row_and_says_when_it_is_derived():
 
 
 def test_the_unanchored_refusal_names_the_held_cadence_and_the_way_out():
-    message = dt_admission.unanchored_refusal(3.0, None, 120.0)
-    assert "surface/PBL cadence held at 120 s" in message
-    assert "--pbl-cadence 120" in message
+    """The record names the held cadence where the refusal used to."""
+
+    record = dt_admission.anchor_record(
+        3.0, radiation_seconds=600.0, surface_pbl_seconds=120.0,
+        cumulus_seconds=None, cumulus_scheme=None,
+    )
+    assert record["configuration"]["surface_pbl_seconds"] == 120.0
+    assert record["matched"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -341,15 +354,18 @@ def test_a_candidate_mint_earns_a_held_row_the_derived_row_does_not_pretend_to_b
 
 
 def test_a_candidate_mint_still_refuses_a_configuration_that_is_anchored():
-    with pytest.raises(dt_admission.DtAdmissionError) as caught:
-        dt_admission.candidate_mint(
-            5.0,
-            authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
-            card="test, no card",
-            cumulus_scheme=None,
-            cumulus_seconds=None,
-        )
-    assert "nothing for a candidate mint to earn" in str(caught.value)
+    """RETIRED 2026-10-10: a mint at an anchored configuration keeps the row."""
+
+    registered = dt_admission.registered_anchor(5.0, None, None)
+    assert registered is not None
+    with dt_admission.candidate_mint(
+        5.0,
+        authorization=dt_admission.CANDIDATE_MINT_AUTHORIZATION,
+        card="test, no card",
+        cumulus_scheme=None,
+        cumulus_seconds=None,
+    ) as row:
+        assert row is registered
 
 
 def test_the_mesh_row_guard_admits_the_held_configuration_under_a_mint():
@@ -412,16 +428,29 @@ def test_the_frozen_config_admits_a_held_cadence_without_a_mint():
 
 
 def test_the_frozen_config_refuses_a_held_cadence_at_an_unanchored_timestep():
+    """RETIRED 2026-10-10: a held cadence at an unanchored timestep builds,
+    and one that is not a whole number of steps is still refused."""
+
     from hexcore.config_v841 import V841MpasColumnPhysicsSmagorinskyGwdoConfig
     from hexcore.errors import ConfigurationRefusal
 
-    with pytest.raises(ConfigurationRefusal):
+    V841MpasColumnPhysicsSmagorinskyGwdoConfig(
+        config_dt=3.0,
+        config_bldt_seconds=120.0,
+        config_cudt_seconds=None,
+        config_convection_scheme="off",
+    ).validate()
+    with pytest.raises(ConfigurationRefusal) as caught:
         V841MpasColumnPhysicsSmagorinskyGwdoConfig(
-            config_dt=3.0,
+            config_dt=7.0,
             config_bldt_seconds=120.0,
             config_cudt_seconds=None,
             config_convection_scheme="off",
+            config_radt_seconds=1806.0,
         ).validate()
+    assert "surface_pbl_seconds=120 s is not a positive integer multiple" in str(
+        caught.value
+    )
 
 
 def test_the_proven_configuration_still_validates_unchanged():
@@ -439,25 +468,26 @@ def test_the_door_answers_the_cadence_question_from_the_row_alone():
     admitted = forecast_door.admit_timestep(
         "x1.40962", 120.0, nominal_dx_m=120_000.0
     )
-    assert admitted["surface_pbl_seconds"] == 120.0
+    assert admitted["pbl_cadence"]["surface_pbl_seconds"] == 120.0
     assert admitted["pbl_cadence"]["source"] == "welded"
     assert admitted["pbl_cadence"]["held"] is False
-    assert admitted["surface_pbl_anchor_derived_from"] is None
 
 
 def test_the_door_admits_a_held_cadence_and_says_the_row_is_derived():
     from hexcore import forecast_door
 
     admitted = forecast_door.admit_timestep(
-        "x1.40962", 120.0, nominal_dx_m=120_000.0, pbl_cadence="600"
+        "x1.40962", 120.0, nominal_dx_m=120_000.0, pbl_cadence="600",
+        radiation_seconds=600.0,
     )
-    assert admitted["surface_pbl_seconds"] == 600.0
+    assert admitted["pbl_cadence"]["surface_pbl_seconds"] == 600.0
     assert admitted["pbl_cadence"]["held"] is True
     assert admitted["pbl_cadence"]["steps_between_calls"] == 5
-    assert admitted["surface_pbl_anchor_derived_from"] == dt_admission.dt_key(
-        120.0, "gf"
-    )
-    assert admitted["physics_health"].startswith("NOT MEASURED")
+    # x1.40962 defaults to New Tiedtke since 2026-10-05, so the held row is
+    # derived from that scheme's welded 120 s row -- recorded as evidence.
+    row = admitted["anchor"]["row"]
+    assert row["derived_from"] == dt_admission.dt_key(120.0, "ntiedtke")
+    assert row["physics_health"].startswith("NOT MEASURED")
 
 
 def test_the_door_refuses_an_incommensurate_cadence_by_name_before_any_card():
@@ -473,15 +503,16 @@ def test_the_door_refuses_an_incommensurate_cadence_by_name_before_any_card():
 
 
 def test_the_door_refuses_a_held_cadence_at_an_unanchored_timestep_by_name():
+    """RETIRED 2026-10-10: admitted and recorded; an incommensurate held
+    cadence is the refusal that remains (the test after this one)."""
+
     from hexcore import forecast_door
 
-    with pytest.raises(forecast_door.ForecastDoorRefusal) as caught:
-        forecast_door.admit_timestep(
-            "nowhere", 3.0, nominal_dx_m=120_000.0, pbl_cadence="120"
-        )
-    message = str(caught.value)
-    assert "surface/PBL held at 120 s" in message
-    assert "holds no timestep anchor" in message
+    admitted = forecast_door.admit_timestep(
+        "nowhere", 3.0, nominal_dx_m=120_000.0, pbl_cadence="120"
+    )
+    assert admitted["admitted"] is True
+    assert admitted["anchor"]["matched"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,1039 @@
+{
+  "schema": "gpuwm-hex.source-profiles/v1",
+  "about": "Each row pins an outside model configuration that hex is measured against: which source code, which mesh files, which namelist, and how hex stands against each dycore setting. A re-pin is an edit to this table plus the stage proofs. Rows name what they describe; no code path keys on a row id.",
+  "profiles": [
+    {
+      "id": "mpas-a-v8.4.2",
+      "describes": "Upstream MPAS-Atmosphere v8.4.2, the release the hex dycore is pinned to (re-pinned from v8.4.1, commit 91c5eac175eebeaf4206bacd5cb50c39dff3c152, on 2026-10-11: no dycore arithmetic hex ports changed; config_number_of_sub_steps defaults to 4 instead of 2)",
+      "role": "dycore_pin",
+      "model_source": {
+        "repository": "https://github.com/MPAS-Dev/MPAS-Model",
+        "tag": "v8.4.2",
+        "commit": "f34984b2c89353cf31c235b08d3b4acd96b37bb3",
+        "registry_version": "8.4.2"
+      }
+    },
+    {
+      "id": "rrfs-v2",
+      "describes": "NOAA's RRFS v2 (MPAS dycore, JEDI analysis) as its public workflow builds and runs it",
+      "role": "outside_reference",
+      "read_on": "2026-10-03",
+      "workflow": {
+        "repository": "https://github.com/NOAA-EMC/rrfs-workflow",
+        "branch": "rrfs-mpas-jedi",
+        "commit": "85ea55c0c64a07e1891bcd8e050441e09d30b5ec",
+        "commit_date": "2026-10-02"
+      },
+      "model_candidates": [
+        {
+          "id": "workflow-pin",
+          "repository": "https://github.com/RRFSx/MPAS-Model",
+          "commit": "1d6e370e7b43a332074809f170532a216c2212fb",
+          "commit_date": "2026-06-19",
+          "branch": "rrfs_20260619",
+          "registry_version": "8.3.1-noaa",
+          "upstream_release": "v8.3.1",
+          "how_found": "the workflow's sorc/MPAS-Model gitlink at the workflow commit; the workflow's build clones recursively, which checks this commit out",
+          "physics_submodules": [
+            {
+              "path": "src/core_atmosphere/physics/physics_mmm",
+              "repository": "https://github.com/NCAR/MMM-physics.git",
+              "commit": "a4baf7f3243d1db0dbc5f63473f895bdbdc05c30"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/GFL",
+              "repository": "https://github.com/NOAA-GSL/GFL.git",
+              "commit": "bf6a4b0d58f112322fbf9b11d43ed2027aeb56fa"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/MYNN-EDMF",
+              "repository": "https://github.com/NCAR/MYNN-EDMF",
+              "commit": "c942418a47a29dee09b51b377286da6bb25160e3"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/MYNN-SFC",
+              "repository": "https://github.com/NCAR/MYNN-SFC.git",
+              "commit": "b66187f54a0c169e36592552634867474e603ac0"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/RUCLSM",
+              "repository": "https://github.com/NOAA-GSL/RUCLSM.git",
+              "commit": "8c9f1a8bb2cfb5fb8d115440fced566361fe0f20"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/SMOKE",
+              "repository": "https://github.com/NOAA-GSL/SMOKE.git",
+              "commit": "9652bbf152f8b946bf04f72a2b48ff67e15d7973"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/TEMPO",
+              "repository": "https://github.com/NCAR/TEMPO",
+              "commit": "9adf9ef2827104640125f0c322e1218fce74e94c"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/UGWP",
+              "repository": "https://github.com/NOAA-GSL/UGWP",
+              "commit": "c1c893edcf171af5639af60e3a3a528816f6cc2b"
+            }
+          ]
+        },
+        {
+          "id": "fork-tip",
+          "repository": "https://github.com/RRFSx/MPAS-Model",
+          "commit": "c3f78a5a76c7e054b5677f67aecd312ca7f928c0",
+          "commit_date": "2026-09-18",
+          "branch": "gsl/develop",
+          "registry_version": "8.4.1-noaa",
+          "upstream_release": "v8.4.1",
+          "how_found": "tip of the fork's default branch on the read date; 549 commits ahead of and 2 behind the workflow pin, merge base f11901c4daf755f76003d09640ad2b1913430ebb",
+          "physics_submodules": [
+            {
+              "path": "src/core_atmosphere/physics/physics_mmm",
+              "repository": "https://github.com/NCAR/MMM-physics.git",
+              "commit": "a4baf7f3243d1db0dbc5f63473f895bdbdc05c30"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/GFL",
+              "repository": "https://github.com/NOAA-GSL/GFL.git",
+              "commit": "bf6a4b0d58f112322fbf9b11d43ed2027aeb56fa"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/MYNN-EDMF",
+              "repository": "https://github.com/NCAR/MYNN-EDMF",
+              "commit": "c6d08709e83fbc6245e91a65600fd78c7219f1ee"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/MYNN-SFC",
+              "repository": "https://github.com/NCAR/MYNN-SFC.git",
+              "commit": "b66187f54a0c169e36592552634867474e603ac0"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/RUCLSM",
+              "repository": "https://github.com/NOAA-GSL/RUCLSM.git",
+              "commit": "8c9f1a8bb2cfb5fb8d115440fced566361fe0f20"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/SMOKE",
+              "repository": "https://github.com/NOAA-GSL/SMOKE.git",
+              "commit": "5d2c71e2cf4083b6beeedbfa4d2091674b1556ea"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/TEMPO",
+              "repository": "https://github.com/NCAR/TEMPO",
+              "commit": "9adf9ef2827104640125f0c322e1218fce74e94c"
+            },
+            {
+              "path": "src/core_atmosphere/physics/physics_noaa/UGWP",
+              "repository": "https://github.com/NOAA-GSL/UGWP",
+              "commit": "c1c893edcf171af5639af60e3a3a528816f6cc2b"
+            },
+            {
+              "path": "src/core_atmosphere/stochastic_physics",
+              "repository": "https://github.com/dtcenter/stochastic_physics.git",
+              "commit": "1ed03f55444fdf7d49b7687fc4e477de0a276e99"
+            }
+          ]
+        }
+      ],
+      "operational_model_candidate": null,
+      "operational_model_candidate_note": "Which of the two the real-time runs execute is not public. Physics references default to the workflow pin, which is what the public build produces.",
+      "analysis": {
+        "repository": "https://github.com/NOAA-EMC/RDASApp",
+        "commit": "1bfecf33f005c7ca3c41414aba0d155ba1f8bc29",
+        "commit_date": "2026-09-17",
+        "how_found": "the workflow's sorc/RDASApp gitlink at the workflow commit"
+      },
+      "mesh_set": {
+        "preparation_source": "gfs-public-quarter-degree",
+        "preparation_assets": {"grid": "grid", "static": "static", "invariant": "invariant_L60_GFS", "{mesh}.ugwp_oro_data": "ugwp_oro_data"},
+        "preparation_landuse_table": "MODIFIED_IGBP_MODIS_NOAH",
+        "preparation_vertical": {"mode": "published", "asset": "invariant"},
+        "fix_root": "https://noaa-gsl-experimental-pds.s3.amazonaws.com/fix_rrfs2/v2.1.4-3.4/main/",
+        "how_found": "the workflow's fix/<mesh>/ symlinks at the workflow commit, matched against the public bucket listing on the read date",
+        "how_found_is_inference": "The symlinks point into fix/.agent, which workflow/tools/init.sh:8-50 links to a machine-local FIX_RRFS2 directory on each supported HPC, and workflow/tools/link_fix_meshes.sh can relink meshes from a machine-local FIX_MESHES on four of them. Treating fix_rrfs2/v2.1.4-3.4/main on the public bucket as the mirror of those directories is an inference from the workflow's VERSION (v2.1.4) and from every linked name resolving there; the HPC directories themselves were not read.",
+        "meshes": {
+          "conus12km": {
+            "cells": 157859,
+            "grid": {
+              "key": "meshes/conus12km.20251017/conus12km.grid.nc",
+              "bytes": 167235640,
+              "s3_etag": "785f5befc9ba7beb166679776b17c974-20"
+            },
+            "static": {
+              "key": "meshes/conus12km.20251017/conus12km.static.nc",
+              "bytes": 275923012,
+              "s3_etag": "73dca8b89ea3100b9113c0089553d060-33"
+            },
+            "ugwp_oro_data": {
+              "key": "meshes/conus12km.20251017/conus12km.ugwp_oro_data.nc",
+              "bytes": 12643980,
+              "s3_etag": "2d79d2186048b77f16e9497ff3a9a5f1-2"
+            },
+            "invariant_L60_GFS": {
+              "key": "meshes/conus12km.20260319/conus12km.invariant.nc_L60_GFS",
+              "bytes": 957584940,
+              "s3_etag": "4a67562a3a4cbb88bcffb9bab1341ca3-115"
+            },
+            "graph_info": {
+              "key": "graphinfo/conus12km.20250321/conus12km.graph.info"
+            },
+            "note": "The 20250321 folder holds a grid file with the same size and S3 ETag as the 20251017 grid, but its static and orographic files differ from the ones the workflow links, and its L60 invariant files are not the ones the workflow links."
+          },
+          "conus3km": {
+            "cells": 2341818,
+            "grid": {
+              "key": "meshes/conus3km.20251017/conus3km.grid.nc",
+              "bytes": 2587577704,
+              "s3_etag": "df8ae0f57cd20f7452d1047c80f61908-309"
+            },
+            "static": {
+              "key": "meshes/conus3km.20251017/conus3km.static.nc",
+              "bytes": 4086429764,
+              "s3_etag": "cf58ac71b33d32758c3e94d540a1e4c3-488"
+            },
+            "ugwp_oro_data": {
+              "key": "meshes/conus3km.20251017/conus3km.ugwp_oro_data.nc",
+              "bytes": 187358952,
+              "s3_etag": "75e1cc3d38cf2c70263806075e660d19-23"
+            },
+            "invariant_L60_GFS": {
+              "key": "meshes/conus3km.20260319/conus3km.invariant.nc_L60_GFS",
+              "bytes": 14164674656,
+              "s3_etag": "9389b5ae6fcf1b01344534735d6f9ea6-1689"
+            },
+            "graph_info": {
+              "key": "graphinfo/conus3km_mpas.graph.info"
+            }
+          }
+        },
+        "invariant_rule": "The forecast links <mesh>.invariant.nc_L<n>_<driving model>, with n the line count of the level file, so the L60 level file selects the 20260319 invariant files for both meshes; the 20251017 folders carry the L65 invariants."
+      },
+      "vertical": {
+        "level_file": "fix/vert_levels/L60.txt",
+        "level_file_sha256": "ca3b4be1aa1f2ac8b1e9e833ae6dc452e91100a965377634430cd59703cb8390",
+        "interfaces": 60,
+        "layers": 59,
+        "top_m": 25878.712,
+        "hex_vertical_spec": "verification/vertical-specs/rrfs-l60-v1.json",
+        "preparation_vertical_spec": "data/profiles/rrfs-l60-v1.json",
+        "hex_vertical_spec_sha256": "08b1409642f43e465235d96fc6a89578ee38e4e8660bf7fedcf08dd0a3fc8593",
+        "init_namelist": "parm/hrrrv5/namelist.init_atmosphere",
+        "init_settings": {
+          "config_nsmterrain": 1,
+          "config_smooth_surfaces": true,
+          "config_dzmin": 0.3,
+          "config_nsm": 30,
+          "config_tc_vertical_grid": true,
+          "config_blend_bdy_terrain": true,
+          "config_theta_adv_order": 3,
+          "config_coef_3rd_order": 0.25
+        },
+        "init_settings_note": "With config_specified_zeta_levels set, MPAS takes the interfaces from the file and ignores config_tc_vertical_grid and config_ztop. The hybrid coordinate differs by candidate in form, not value: the workflow pin (8.3.1-noaa) has no config_hybrid_coordinate or config_hybrid_top_z option and hard-codes hybrid true with zh 30000.0 (mpas_init_atm_cases.F:4650-4656 at 1d6e370e); the fork tip (8.4.1-noaa) has both options, the namelist sets neither, and their defaults are the same true and 30000 m. The real-data init routine sets its w-damping coefficient to zero (xnutr 0, zd 12000 m), so no init damping applies."
+      },
+      "namelist": {
+        "file": "parm/hrrrv5/namelist.atmosphere",
+        "file_sha256": "70ad70cec7354baa75fd8a670151b915a792f11f2b2c1625d76ccbde6489f299",
+        "lines_1_26": {
+          "what": "the &nhyd_model, &damping and &limited_area groups, verbatim, with the workflow's ${dt}, ${substeps}, ${start_time} and ${run_duration} placeholders",
+          "hex_copy": "verification/source-namelists/rrfs-v2-namelist.atmosphere.lines-1-26",
+          "sha256": "f60415a16c48a7daa8fac34c0cccde26ae692cbd3071e981eee08341216aa99e",
+          "bytes": 772,
+          "placeholders": {
+            "conus3km": {"dt": "20.0", "substeps": "4"},
+            "conus12km": {"dt": "60.0", "substeps": "2"},
+            "start_time": "2026-10-01_00:00:00",
+            "run_duration": "01:00:00"
+          }
+        },
+        "nhyd_model": {
+          "config_time_integration_order": 2,
+          "config_split_dynamics_transport": true,
+          "config_dynamics_split_steps": 3,
+          "config_horiz_mixing": "2d_smagorinsky",
+          "config_visc4_2dsmag": 0.05,
+          "config_scalar_advection": true,
+          "config_monotonic": true,
+          "config_coef_3rd_order": 0.25,
+          "config_epssm": 0.1,
+          "config_smdiv": 0.1
+        },
+        "damping": {
+          "config_mpas_cam_coef": 2.0,
+          "config_rayleigh_damp_u": true,
+          "config_zd": 16000.0,
+          "config_xnutr": 0.2,
+          "config_number_cam_damping_levels": 8
+        },
+        "limited_area": {
+          "config_apply_lbcs": true
+        },
+        "IAU": {
+          "config_IAU_option": "off"
+        },
+        "per_mesh": {
+          "source": "workflow/config_resources/config.meshdep",
+          "conus3km": {
+            "config_dt": 20.0,
+            "config_number_of_sub_steps": 4,
+            "radiation_minutes": 15,
+            "convection": "off"
+          },
+          "conus12km": {
+            "config_dt": 60.0,
+            "config_number_of_sub_steps": 2,
+            "radiation_minutes": 30,
+            "convection": "cu_ntiedtke with config_gfl_sub3d = 1"
+          }
+        },
+        "unset_registry_defaults": "Every dycore option the file does not set takes the Registry default of the model candidate. The two candidates and v8.4.1 share every common default except config_epssm (0.1 in 8.3.1-noaa; 0.0 and ignored in v8.4.1 and 8.4.1-noaa). Upstream v8.4.2, the hex pin since 2026-10-11, differs from all three in one more: config_number_of_sub_steps defaults to 4 there and to 2 in both candidates; the RRFS namelists set it themselves, so their runs are unaffected. 8.3.1-noaa lacks the v8.4.1 LES, mix_scalars and epssm profile options; both candidates add config_scalar_eddy_mix, config_h_scalar_filter4 and config_lbc_w."
+      },
+      "hex_lanes": {
+        "namelist-dry": {
+          "door": "hexcore.config.dry_dycore_config_from_namelist(text, source_release='v8.4.1')",
+          "config_type": "hexcore.config_v841.V841UpperDampingDryConfig",
+          "what": "hex's namelist door: the dry v8.4.1 lane read from a namelist.atmosphere, as read_dry_dycore_config does (src/hexcore/config.py:465-570)"
+        },
+        "forecast-column": {
+          "door": "gpuwm-hex forecast (src/hexcore/drivers/run_cuda_v841_forecast.py:733-846, build_forecast_config)",
+          "config_type": "hexcore.config_v841.V841UpperDampingSmagorinskyConfig",
+          "what": "the lane the forecast door builds. The door exposes only the timestep, the physics cadences, the convection selection, the mixing selection and the boundary switch (read off the grid); every other dycore setting is a literal of this type, and no namelist is read"
+        }
+      },
+      "hex_dycore_settings_how_held": "Every key in the public namelist's lines 1-26 (namelist.lines_1_26) has a row. A row names, per hex lane, the state hex meets today; a refused state names the refusal that fires first on that lane (knob, reason, file and function), and further_layers names each refusal behind it that a port must also lift. tests/test_source_profiles.py reads the pinned lines through the namelist door until it admits, and requires the refusals it meets to be exactly the namelist-dry rows, knob by knob, reason by reason and function by function; it applies each knob to the forecast-column lane alone, with the row's context, and requires the same of that lane; and it holds every further layer to its file and function by source.",
+      "hex_dycore_settings": [
+        {
+          "knob": "config_time_integration_order",
+          "requested": 2,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted",
+              "context": {
+                "config_dt": 20,
+                "config_number_of_sub_steps": 4,
+                "config_radt_seconds": 900,
+                "config_bldt_seconds": 20,
+                "config_cudt_seconds": null,
+                "config_convection_scheme": "off"
+              }
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "src/core_atmosphere/dynamics/mpas_atm_time_integration.F:2066-2093 (stage table), :2210 (vertical coefficients recomputed only for order 3), :2676-2680 (split transport rk_timestep(1)=dt/2), :4752-4753 (scalar weight 1/2 at the first stage)",
+          "note": "Both orders use three stages. Order 2 reuses first-stage vertical coefficients and selects a half first-stage scalar density weight. Step certificates are keyed by order, acoustic count and split count."
+        },
+        {
+          "knob": "config_number_of_sub_steps",
+          "requested": {
+            "conus3km": 4,
+            "conus12km": 2
+          },
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted",
+              "context_by_mesh": {
+                "conus3km": {
+                  "config_dt": 20.0,
+                  "config_time_integration_order": 2,
+                  "config_radt_seconds": 900.0,
+                  "config_bldt_seconds": 20.0,
+                  "config_cudt_seconds": null,
+                  "config_convection_scheme": "off"
+                },
+                "conus12km": {
+                  "config_dt": 60.0,
+                  "config_time_integration_order": 2,
+                  "config_radt_seconds": 1800.0,
+                  "config_bldt_seconds": 60.0,
+                  "config_cudt_seconds": 60.0
+                }
+              }
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml default 2; set per mesh by the workflow's config.meshdep",
+          "note": "Order-2 step certificates hold 4 substeps at 20 s and 2 substeps at 60 s."
+        },
+        {
+          "knob": "config_monotonic",
+          "requested": true,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "src/core_atmosphere/dynamics/mpas_atm_time_integration.F atm_advance_scalars_mono_work",
+          "note": "Native v8.4.1 nonzero-tracer flux replay and bitwise CPU/CUDA contracts are recorded in verification/scalar-transport/nonzero-v841.json. The regional boundary residual and copy masks follow the same native source. The generic forecast option is --monotonic. This is a dycore operator proof, not coupled forecast qualification."
+        },
+        {
+          "knob": "config_mpas_cam_coef",
+          "requested": 2.0,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted",
+              "context": {
+                "config_horiz_mixing": "2d_smagorinsky",
+                "config_visc4_2dsmag": 0.05,
+                "config_smagorinsky_coef": 0.125
+              }
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "src/core_atmosphere/dynamics/mpas_atm_time_integration.F:6390-6408 (visc2cam floor on the Smagorinsky viscosity over the top config_number_cam_damping_levels levels)",
+          "note": "Native upper damping is executable. Rust and CUDA match the compiled v8.4.1 single-precision CAM and Rayleigh source-block arrays. The real-mesh driver runs 3 CAM applications and 9 Rayleigh applications per step and repeats its device result. The 16 km start selects the existing native vertical-velocity damping authority. Whole native endpoint qualification remains separate."
+        },
+        {
+          "knob": "config_number_cam_damping_levels",
+          "requested": 8,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml config_number_cam_damping_levels, default 4; read at mpas_atm_time_integration.F:6390-6408",
+          "note": "Native upper damping is executable. Rust and CUDA match the compiled v8.4.1 single-precision CAM and Rayleigh source-block arrays. The real-mesh driver runs 3 CAM applications and 9 Rayleigh applications per step and repeats its device result. The 16 km start selects the existing native vertical-velocity damping authority. Whole native endpoint qualification remains separate."
+        },
+        {
+          "knob": "config_rayleigh_damp_u",
+          "requested": true,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "src/core_atmosphere/dynamics/mpas_atm_time_integration.F:6607-6630 (linear ramp over config_number_rayleigh_damp_u_levels, timescale config_rayleigh_damp_u_timescale_days)",
+          "note": "Native upper damping is executable. Rust and CUDA match the compiled v8.4.1 single-precision CAM and Rayleigh source-block arrays. The real-mesh driver runs 3 CAM applications and 9 Rayleigh applications per step and repeats its device result. The 16 km start selects the existing native vertical-velocity damping authority. Whole native endpoint qualification remains separate."
+        },
+        {
+          "knob": "config_zd",
+          "requested": 16000.0,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "src/core_atmosphere/mpas_atm_core.F atm_compute_damping_coefs (w damping start height)",
+          "note": "Native upper damping is executable. Rust and CUDA match the compiled v8.4.1 single-precision CAM and Rayleigh source-block arrays. The real-mesh driver runs 3 CAM applications and 9 Rayleigh applications per step and repeats its device result. The 16 km start selects the existing native vertical-velocity damping authority. Whole native endpoint qualification remains separate."
+        },
+        {
+          "knob": "config_epssm",
+          "requested": 0.1,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted",
+              "warning": "LegacyEpssmIgnored"
+            },
+            "forecast-column": {
+              "state": "admitted",
+              "warning": "LegacyEpssmIgnored"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "v8.4.1 mpas_atm_time_integration.F:174-197 (mpas_atm_dynamics_checks) warns and ignores any nonzero value; 8.3.1-noaa consumes it as a constant",
+          "note": "Read and ignored with upstream's own warning (hexcore.config_v841.LegacyEpssmIgnored), as v8.4.1 does; only a non-real value refuses. The native v8.4.1 build printed that warning and ran with 0.1 on 2026-10-03, and hex's v8.4.1 step is bitwise identical for 0.0, 0.1, 0.5 and NaN (tests/test_epssm_v841.py, tests/test_epssm_v841_cuda.py). At L60 every level is below the 30 km transition, so the v8.4.1 profile gives 0.1 at every level, the value the namelist asks for."
+        },
+        {
+          "knob": "config_dt",
+          "mesh": "conus3km",
+          "requested": 20.0,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted",
+              "context": {
+                "config_radt_seconds": 900.0,
+                "config_bldt_seconds": 20.0,
+                "config_cudt_seconds": null,
+                "config_convection_scheme": "off",
+                "config_time_integration_order": 2,
+                "config_number_of_sub_steps": 4
+              }
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "workflow config.meshdep (dt 20 s, radiation every 15 min, convection off at 3 km)",
+          "note": "An order-2 dycore step certificate exists. The native endpoint on the public mesh remains a separate check."
+        },
+        {
+          "knob": "config_dt",
+          "mesh": "conus12km",
+          "requested": 60.0,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted",
+              "context": {
+                "config_radt_seconds": 1800.0,
+                "config_bldt_seconds": 60.0,
+                "config_cudt_seconds": 60.0,
+                "config_convection_scheme": "cu_ntiedtke",
+                "config_time_integration_order": 2,
+                "config_number_of_sub_steps": 2
+              }
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "workflow config.meshdep (dt 60 s, radiation every 30 min, cu_ntiedtke at 12 km)",
+          "note": "An order-2 dycore step certificate exists. The forecast-column context selects New Tiedtke, the scheme the workflow runs at 12 km (hexcore.cuda_ntiedtke_column_v841); config_gfl_sub3d = 1 is inert under cu_ntiedtke in the fork. The native endpoint on the public mesh remains a separate check."
+        },
+        {
+          "knob": "config_start_time",
+          "requested": "${start_time}, filled by the workflow",
+          "hex_today": "refused",
+          "lanes": {
+            "namelist-dry": {
+              "state": "refused",
+              "reason": "calendar and alarm scheduling are outside DryDycoreConfig",
+              "site": "src/hexcore/config.py",
+              "function": "dry_dycore_config_from_namelist"
+            },
+            "forecast-column": {
+              "state": "no_field"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml nhyd_model config_start_time",
+          "note": "A calendar key, not dycore arithmetic. The forecast door takes the start and the length from its own inputs and arguments; the namelist door has no calendar binding."
+        },
+        {
+          "knob": "config_run_duration",
+          "requested": "${run_duration}, filled by the workflow",
+          "hex_today": "refused",
+          "lanes": {
+            "namelist-dry": {
+              "state": "refused",
+              "reason": "calendar and alarm scheduling are outside DryDycoreConfig",
+              "site": "src/hexcore/config.py",
+              "function": "dry_dycore_config_from_namelist"
+            },
+            "forecast-column": {
+              "state": "no_field"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml nhyd_model config_run_duration",
+          "note": "As config_start_time."
+        },
+        {
+          "knob": "config_split_dynamics_transport",
+          "requested": true,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml default true",
+          "note": "The column lane's literal is the same value."
+        },
+        {
+          "knob": "config_dynamics_split_steps",
+          "requested": 3,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml default 3",
+          "note": "The column lane's literal is the same value."
+        },
+        {
+          "knob": "config_horiz_mixing",
+          "requested": "2d_smagorinsky",
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F smagorinsky_2d",
+          "note": "The forecast door's default; its lane is V841MpasColumnPhysicsSmagorinskyGwdoConfig."
+        },
+        {
+          "knob": "config_visc4_2dsmag",
+          "requested": 0.05,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml default 0.05",
+          "note": "The Smagorinsky lane's literal is the same value."
+        },
+        {
+          "knob": "config_scalar_advection",
+          "requested": true,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml default true",
+          "note": "The column lane's literal is the same value."
+        },
+        {
+          "knob": "config_coef_3rd_order",
+          "requested": 0.25,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml default 0.25",
+          "note": "The column lane's literal is the same value."
+        },
+        {
+          "knob": "config_smdiv",
+          "requested": 0.1,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml default 0.1",
+          "note": "The namelist door derives config_divergence_damping from it."
+        },
+        {
+          "knob": "config_xnutr",
+          "requested": 0.2,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml default 0.2",
+          "note": "The column lane's literal is the same value."
+        },
+        {
+          "knob": "config_apply_lbcs",
+          "requested": true,
+          "hex_today": "admitted",
+          "lanes": {
+            "namelist-dry": {
+              "state": "admitted"
+            },
+            "forecast-column": {
+              "state": "admitted"
+            }
+          },
+          "further_layers": [],
+          "upstream_source": "Registry.xml limited_area config_apply_lbcs",
+          "note": "Admitted by the configuration on both lanes; the drivers still require a regional runtime with admitted boundary state, and the forecast door reads the switch off the grid's bdyMask."
+        },
+        {
+          "knob": "vertical",
+          "kind": "declaration",
+          "requested": "L60 level file, 59 layers, top 25878.712 m",
+          "hex_today": "admitted",
+          "lanes": {},
+          "further_layers": [],
+          "upstream_source": "core_init_atmosphere mpas_init_atm_cases.F:3089-3110 (specified zeta levels)",
+          "note": "Not a namelist.atmosphere key. Declared as verification/vertical-specs/rrfs-l60-v1.json. The real imported conus12km atmosphere executes one coupled 60 s step with 59 layers and 60 interfaces at order 2, two acoustic substeps, monotonic transport, CAM coefficient 2 over eight levels, Rayleigh damping of u and a 16 km damping start. Numeric health gates pass. Receipt: verification/vertical-specs/l60-execution-v841.json. This unanchored execution measurement does not qualify a native regional endpoint or forecast skill."
+        }
+      ],
+      "dycore_audit": {
+        "method": "Routine by routine comparison of mpas_atm_time_integration.F, mpas_atm_core.F, mpas_atm_boundaries.F and the vector operators, after removing comments, OpenACC directives, timers and whitespace; every routine that still differs is listed here. Registry defaults were compared for the nhyd_model, damping, limited_area, IAU and restart records.",
+        "summary": {
+          "fork-tip": "By source reading, at RRFS's settings the 8.4.1-noaa dycore routines do v8.4.1's arithmetic: every difference is inert, an I/O contract (DA cycling), or outside the dycore. This is a reading of source, not a dycore L4 measurement.",
+          "workflow-pin": "By source reading, at RRFS's settings the 8.3.1-noaa dycore solves the same equations as v8.4.1 but with a different operation order in the vertically implicit acoustic solve and in the Smagorinsky deformation, so a v8.4.1 port can reach it only inside a rounding envelope unless those two routines are also ported in their 8.3.1 form. Two inert classifications wait on mesh values (meshDensity, u_init and v_init). It carries the same DA cycling I/O contract as the fork tip (port, stage H6)."
+        },
+        "rows": [
+          {
+            "candidate": "workflow-pin",
+            "item": "vertically implicit acoustic solve",
+            "routines": [
+              "atm_advance_acoustic_step_work",
+              "atm_compute_vert_imp_coefs_work",
+              "atm_compute_damping_coefs"
+            ],
+            "difference": "8.3.1 folds a scalar config_epssm and the substep length into the coefficients (dtseps); v8.4.1 keeps the substep length out of the coefficients, applies per-level weights etp, etm, ewp, ewm from the height profile, and multiplies dts**2 into the tridiagonal.",
+            "at_rrfs_settings": "The same equations at L60, where every level gets 0.1, but a different floating-point operation order.",
+            "class": "declare",
+            "source_sites": [
+              {"routine":"atm_advance_acoustic_step_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:3783","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L3783"},
+              {"routine":"atm_advance_acoustic_step_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:2646","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L2646"},
+              {"routine":"atm_compute_vert_imp_coefs_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:3366","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L3366"},
+              {"routine":"atm_compute_vert_imp_coefs_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:2225","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L2225"},
+              {"routine":"atm_compute_damping_coefs","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:1274","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L1274"},
+              {"routine":"atm_compute_damping_coefs","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/mpas_atm_core.F:1268","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/mpas_atm_core.F#L1268"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "config_epssm",
+            "routines": [
+              "mpas_atm_dynamics_checks"
+            ],
+            "difference": "Live constant in 8.3.1 (Registry default 0.1); ignored with a warning in v8.4.1, which uses the four config_epssm_* profile knobs.",
+            "at_rrfs_settings": "Same value at every L60 level (top 25878.712 m, transition from 30000 m).",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"mpas_atm_dynamics_checks","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:134","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L134"},
+              {"routine":"mpas_atm_dynamics_checks","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:144","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L144"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "2-D Smagorinsky deformation",
+            "routines": [
+              "atm_compute_dyn_tend_work",
+              "smagorinsky_2d",
+              "atm_initialize_deformation_weights"
+            ],
+            "difference": "8.3.1 reads defc_a and defc_b from the init file (made by init_atmosphere) and forms sqrt(d_diag**2 + d_off_diag**2); v8.4.1 builds deformation_coef_c2, s2, cs at model start and forms sqrt(0.25*(d11-d22)**2 + d12**2).",
+            "at_rrfs_settings": "Algebraically equal; different coefficient source and different rounding.",
+            "class": "declare",
+            "source_sites": [
+              {"routine":"atm_compute_dyn_tend_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:6106","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L6106"},
+              {"routine":"atm_compute_dyn_tend_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:5150","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L5150"},
+              {"routine":"smagorinsky_2d","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F:119","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F#L119"},
+              {"routine":"atm_initialize_deformation_weights","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:1620","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L1620"},
+              {"routine":"atm_initialize_deformation_weights","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_init_atmosphere/mpas_atm_advection.F:744","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_init_atmosphere/mpas_atm_advection.F#L744"},
+              {"routine":"atm_initialize_deformation_weights","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_init_atmosphere/mpas_atm_advection.F:744","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_init_atmosphere/mpas_atm_advection.F#L744"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "w Rayleigh damping coefficient dss",
+            "routines": [
+              "atm_compute_damping_coefs"
+            ],
+            "difference": "8.3.1 divides dss by meshDensity**0.25; v8.4.1 removed the division.",
+            "at_rrfs_settings": "Inert if meshDensity is 1.0 on every cell of the mesh, which a cut of a uniform mesh should carry. VERIFY from the grid file at stage H2.",
+            "class": "inert (VERIFY)",
+            "source_sites": [
+              {"routine":"atm_compute_damping_coefs","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:1274","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L1274"},
+              {"routine":"atm_compute_damping_coefs","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/mpas_atm_core.F:1268","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/mpas_atm_core.F#L1268"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "perturbation Coriolis term",
+            "routines": [
+              "atm_compute_dyn_tend_work"
+            ],
+            "difference": "v8.4.1 subtracts the Coriolis force on the reference wind u_init, v_init from the momentum tendency; 8.3.1 does not.",
+            "at_rrfs_settings": "Adds exact zeros when u_init and v_init are zero, as a real-data init writes them. VERIFY in the invariant file at stage H2.",
+            "class": "inert (VERIFY)",
+            "source_sites": [
+              {"routine":"atm_compute_dyn_tend_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:6106","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L6106"},
+              {"routine":"atm_compute_dyn_tend_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:5150","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L5150"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "mixing refactor into u_, w_ and scalar_dissipation_3d",
+            "routines": [
+              "u_dissipation_3d",
+              "w_dissipation_3d",
+              "scalar_dissipation_3d_les"
+            ],
+            "difference": "v8.4.1 moved the inline 8.3.1 mixing into subroutines and adds LES terms scaled by tau_12_factor.",
+            "at_rrfs_settings": "config_les_model = none sets tau_12_factor = 0, which adds an exact zero; the remaining arithmetic is the 8.3.1 arithmetic.",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"u_dissipation_3d","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F:579","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F#L579"},
+              {"routine":"w_dissipation_3d","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F:951","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F#L951"},
+              {"routine":"scalar_dissipation_3d_les","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F:1157","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_dissipation_models.F#L1157"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "options new in v8.4.1",
+            "routines": [
+              "atm_compute_dyn_tend",
+              "mpas_atm_iau"
+            ],
+            "difference": "LES models and surface fluxes, config_mix_scalars, IAU revisions.",
+            "at_rrfs_settings": "All off by default and not set by the namelist; IAU is off.",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"atm_compute_dyn_tend","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:5788","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L5788"},
+              {"routine":"atm_compute_dyn_tend","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:4905","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L4905"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "scalar transport and monotonic limiter",
+            "routines": [
+              "atm_advance_scalars_work",
+              "atm_advance_scalars_mono_work",
+              "advance_scalars"
+            ],
+            "difference": "Halo and GPU plumbing only; the NOAA scalar eddy mixing and 4th-order scalar filter are gated by config_scalar_eddy_mix (default false) and config_h_scalar_filter4 (default 0).",
+            "at_rrfs_settings": "Same arithmetic.",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"atm_advance_scalars_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:4671","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L4671"},
+              {"routine":"atm_advance_scalars_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:3613","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L3613"},
+              {"routine":"atm_advance_scalars_mono_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:5097","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L5097"},
+              {"routine":"atm_advance_scalars_mono_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:4180","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L4180"},
+              {"routine":"advance_scalars","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:2911","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L2911"},
+              {"routine":"advance_scalars","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:1753","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L1753"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "lateral boundary w",
+            "routines": [
+              "atm_zero_gradient_w_bdy_work"
+            ],
+            "difference": "8.3.1-noaa selects w at the boundary by config_lbc_w; v8.4.1 hard-codes zero.",
+            "at_rrfs_settings": "Default zero, as upstream.",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"atm_zero_gradient_w_bdy_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:7868","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L7868"},
+              {"routine":"atm_zero_gradient_w_bdy_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:7399","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L7399"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "GPU, halo and timer plumbing",
+            "routines": [
+              "atm_srk3",
+              "atm_timestep",
+              "atm_recover_large_step_variables_work",
+              "atm_compute_solve_diagnostics_work",
+              "mpas_reconstruct_2d",
+              "mpas_atm_get_bdy_tend"
+            ],
+            "difference": "config_gpu_aware_mpi, pre and post data movement routines, OpenACC data clauses.",
+            "at_rrfs_settings": "No CPU arithmetic changes.",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"atm_srk3","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:1855","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L1855"},
+              {"routine":"atm_srk3","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:802","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L802"},
+              {"routine":"atm_timestep","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:1789","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L1789"},
+              {"routine":"atm_timestep","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:738","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L738"},
+              {"routine":"atm_recover_large_step_variables_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:4307","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L4307"},
+              {"routine":"atm_recover_large_step_variables_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:3189","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L3189"},
+              {"routine":"atm_compute_solve_diagnostics_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:7061","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L7061"},
+              {"routine":"atm_compute_solve_diagnostics_work","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:6506","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L6506"},
+              {"routine":"mpas_reconstruct_2d","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/operators/mpas_vector_reconstruction.F:205","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/operators/mpas_vector_reconstruction.F#L205"},
+              {"routine":"mpas_reconstruct_2d","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/operators/mpas_vector_reconstruction.F:205","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/operators/mpas_vector_reconstruction.F#L205"},
+              {"routine":"mpas_atm_get_bdy_tend","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_boundaries.F:375","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_boundaries.F#L375"},
+              {"routine":"mpas_atm_get_bdy_tend","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_boundaries.F:375","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_boundaries.F#L375"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "DA cycling read and write",
+            "routines": [
+              "atm_core_init",
+              "atm_core_run"
+            ],
+            "difference": "When config_do_DAcycling is set, atm_core_init starts from the da_state stream (mpas_atm_core.F:142-143 at 1d6e370e) and resets its input alarm when not restarting (:165-166), and atm_core_run resets the da_state output alarm (:668-669). Upstream v8.4.1 reads the flag only on its restart path (:522).",
+            "at_rrfs_settings": "RRFS's warm cycles set do_DAcycling true (scripts/exrrfs_fcst.sh:30 at the workflow commit), so the public build runs this path. An I/O contract, not dycore arithmetic. Stage H6.",
+            "class": "port",
+            "source_sites": [
+              {"routine":"atm_core_init","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:25","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L25"},
+              {"routine":"atm_core_init","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/mpas_atm_core.F:38","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/mpas_atm_core.F#L38"},
+              {"routine":"atm_core_run","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:620","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L620"},
+              {"routine":"atm_core_run","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/mpas_atm_core.F:617","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/mpas_atm_core.F#L617"}
+            ]
+          },
+          {
+            "candidate": "workflow-pin",
+            "item": "physics coupling and diagnostics",
+            "routines": [
+              "atm_mpas_init_block",
+              "atm_do_timestep",
+              "atm_reset_diagnostics",
+              "summarize_timestep"
+            ],
+            "difference": "TEMPO init, emission input, physics halo groups, extra precipitation and hail diagnostics, surface pressure tendency printout.",
+            "at_rrfs_settings": "Outside the dycore: physics goes its own way on hex (2026-08-20 ruling); diagnostics do not feed back.",
+            "class": "declare",
+            "source_sites": [
+              {"routine":"atm_mpas_init_block","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:366","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L366"},
+              {"routine":"atm_mpas_init_block","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/mpas_atm_core.F:375","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/mpas_atm_core.F#L375"},
+              {"routine":"atm_do_timestep","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:993","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L993"},
+              {"routine":"atm_do_timestep","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/mpas_atm_core.F:1005","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/mpas_atm_core.F#L1005"},
+              {"routine":"atm_reset_diagnostics","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:968","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L968"},
+              {"routine":"atm_reset_diagnostics","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/mpas_atm_core.F:971","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/mpas_atm_core.F#L971"},
+              {"routine":"summarize_timestep","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:8509","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L8509"},
+              {"routine":"summarize_timestep","source":"workflow-pin","commit":"1d6e370e7b43a332074809f170532a216c2212fb","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:8093","url":"https://github.com/RRFSx/MPAS-Model/blob/1d6e370e7b43a332074809f170532a216c2212fb/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L8093"}
+            ]
+          },
+          {
+            "candidate": "fork-tip",
+            "item": "SPPT hooks",
+            "routines": [
+              "atm_srk3",
+              "atm_core_init",
+              "atm_do_timestep"
+            ],
+            "difference": "stochastic_physics pattern init, advance and apply under STOCHASTIC_PHYSICS and do_sppt.",
+            "at_rrfs_settings": "The deterministic run has do_sppt false (exrrfs_fcst.sh:55); members only.",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"atm_srk3","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:1855","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L1855"},
+              {"routine":"atm_srk3","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:1858","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L1858"},
+              {"routine":"atm_core_init","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:25","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L25"},
+              {"routine":"atm_core_init","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/mpas_atm_core.F:25","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/mpas_atm_core.F#L25"},
+              {"routine":"atm_do_timestep","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:993","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L993"},
+              {"routine":"atm_do_timestep","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/mpas_atm_core.F:1051","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/mpas_atm_core.F#L1051"}
+            ]
+          },
+          {
+            "candidate": "fork-tip",
+            "item": "scalar eddy mixing and 4th-order scalar filter",
+            "routines": [
+              "atm_advance_scalars",
+              "atm_advance_scalars_work"
+            ],
+            "difference": "New opt-in block at the first RK stage.",
+            "at_rrfs_settings": "config_scalar_eddy_mix false and config_h_scalar_filter4 0 by default; the namelist sets neither.",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"atm_advance_scalars","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:4541","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L4541"},
+              {"routine":"atm_advance_scalars","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:4560","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L4560"},
+              {"routine":"atm_advance_scalars_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:4671","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L4671"},
+              {"routine":"atm_advance_scalars_work","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:4729","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L4729"}
+            ]
+          },
+          {
+            "candidate": "fork-tip",
+            "item": "lateral boundary w",
+            "routines": [
+              "atm_zero_gradient_w_bdy_work"
+            ],
+            "difference": "config_lbc_w selector.",
+            "at_rrfs_settings": "Default zero, as upstream.",
+            "class": "inert",
+            "source_sites": [
+              {"routine":"atm_zero_gradient_w_bdy_work","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:7868","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L7868"},
+              {"routine":"atm_zero_gradient_w_bdy_work","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:8063","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L8063"}
+            ]
+          },
+          {
+            "candidate": "fork-tip",
+            "item": "DA cycling read and write",
+            "routines": [
+              "atm_core_init",
+              "atm_core_run"
+            ],
+            "difference": "Starts from the da_state stream when config_do_DAcycling is set and resets the da_state input and output alarms (mpas_atm_core.F:137, :160, :695 at c3f78a5a), and skips the initial mpasout write. The workflow pin carries the same contract (its own row).",
+            "at_rrfs_settings": "An I/O contract, not dycore arithmetic. Stage H6.",
+            "class": "port",
+            "source_sites": [
+              {"routine":"atm_core_init","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:25","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L25"},
+              {"routine":"atm_core_init","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/mpas_atm_core.F:25","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/mpas_atm_core.F#L25"},
+              {"routine":"atm_core_run","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:620","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L620"},
+              {"routine":"atm_core_run","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/mpas_atm_core.F:643","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/mpas_atm_core.F#L643"}
+            ]
+          },
+          {
+            "candidate": "fork-tip",
+            "item": "physics coupling and diagnostics",
+            "routines": [
+              "atm_mpas_init_block",
+              "atm_compute_cellsoncellsoncell",
+              "atm_reset_diagnostics",
+              "summarize_timestep",
+              "mpas_atm_halos"
+            ],
+            "difference": "Grell-Freitas sub-3d halo group and neighbour lists, TEMPO init, emission input, extra diagnostics and printouts.",
+            "at_rrfs_settings": "Outside the dycore.",
+            "class": "declare",
+            "source_sites": [
+              {"routine":"atm_mpas_init_block","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:366","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L366"},
+              {"routine":"atm_mpas_init_block","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/mpas_atm_core.F:384","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/mpas_atm_core.F#L384"},
+              {"routine":"atm_compute_cellsoncellsoncell","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/mpas_atm_core.F:1626","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/mpas_atm_core.F#L1626"},
+              {"routine":"atm_reset_diagnostics","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/mpas_atm_core.F:968","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/mpas_atm_core.F#L968"},
+              {"routine":"atm_reset_diagnostics","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/mpas_atm_core.F:997","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/mpas_atm_core.F#L997"},
+              {"routine":"summarize_timestep","source":"upstream","commit":"f34984b2c89353cf31c235b08d3b4acd96b37bb3","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:8509","url":"https://github.com/MPAS-Dev/MPAS-Model/blob/f34984b2c89353cf31c235b08d3b4acd96b37bb3/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L8509"},
+              {"routine":"summarize_timestep","source":"fork-tip","commit":"c3f78a5a76c7e054b5677f67aecd312ca7f928c0","site":"src/core_atmosphere/dynamics/mpas_atm_time_integration.F:8711","url":"https://github.com/RRFSx/MPAS-Model/blob/c3f78a5a76c7e054b5677f67aecd312ca7f928c0/src/core_atmosphere/dynamics/mpas_atm_time_integration.F#L8711"}
+            ]
+          }
+        ]
+      }
+    }
+    ,{
+      "id": "gfs-public-quarter-degree",
+      "describes": "Public NCEP GFS 0.25 degree pressure-level GRIB2 forecast archive",
+      "role": "preparation_source",
+      "fetch_entry": "gpuwm.fetch:fetch_gfs_fullfile",
+      "fetch_source": "gfs",
+      "interval_hours": 3,
+      "intermediate": {"binary": "met_intermediate", "map_source": "ncep-gfs", "vtable": {"resource": "data/profiles/Vtable.GFS", "sha256": "1d196a00bf15bc01c87c4897fd2817b1a046a87ec156701f0d15430a7af1ac4a", "source": "https://raw.githubusercontent.com/wrf-model/WPS/v4.6.0/ungrib/Variable_Tables/Vtable.GFS"}, "nfglevels": 42, "nfgsoillevels": 4},
+      "init_switches": {"extrap-airtemp": "linear", "use-spechumd": "no", "theta-adv-order": 3, "coef-3rd-order": 0.25, "virtual-factor": "reproduce-fortran", "deep-soil-moisture": "reproduce-fortran", "frac-seaice": "yes", "tsk-seaice-threshold": 271.4, "oned-underflow": "preserve"}
+    }
+  ]
+}

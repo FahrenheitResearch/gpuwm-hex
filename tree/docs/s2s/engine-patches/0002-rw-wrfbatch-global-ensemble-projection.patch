@@ -1,0 +1,46 @@
+--- a/tools/rustwx/crates/rw-wrfbatch/src/panel.rs
++++ b/tools/rustwx/crates/rw-wrfbatch/src/panel.rs
+@@ -22,7 +22,8 @@
+
+ use rustwx_core::{Field2D, GridProjection, GridShape, LatLonGrid, ProductKey};
+ use rustwx_products::direct::{build_full_domain_projected_map_with_projection,
+-    full_domain_panel_resolved_projection, direct_map_frame_aspect_ratio};
++    full_domain_panel_resolved_projection, direct_map_frame_aspect_ratio,
++    build_projected_map_with_projection, panel_resolved_projection};
+ use rustwx_products::plot_design::StaticPlotDesign;
+ use rustwx_render::{
+     ColorScale, ContourLayer, LegendControls, MapRenderRequest, PngCompressionMode,
+@@ -139,9 +140,20 @@
+         request.height,
+         request.projection,
+     );
+-    let resolved = full_domain_panel_resolved_projection(request.lat_deg,request.lon_deg,
++    // A global regular grid needs the presentation builder's Robinson
++    // frame and its matching inverse raster transform. The unconditional
++    // full-domain builder used a degree extent with a Robinson inverse in
++    // metres, sampling only a tiny equatorial neighbourhood across the map.
++    let global_geographic = matches!(request.projection, None | Some(GridProjection::Geographic))
++        && (domain.bounds.1 - domain.bounds.0).abs() >= 300.0
++        && (domain.bounds.3 - domain.bounds.2).abs() >= 150.0;
++    let resolve_projection = if global_geographic { panel_resolved_projection }
++        else { full_domain_panel_resolved_projection };
++    let build_projection = if global_geographic { build_projected_map_with_projection }
++        else { build_full_domain_projected_map_with_projection };
++    let resolved = resolve_projection(request.lat_deg,request.lon_deg,
+         request.projection,domain.bounds,target_ratio).map_err(|err|err.to_string())?;
+-    let projected = build_full_domain_projected_map_with_projection(
++    let projected = build_projection(
+         request.lat_deg,
+         request.lon_deg,
+         request.projection,
+--- a/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
++++ b/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
+@@ -9,7 +9,7 @@
+ use rustwx_render::{ContourLayer, LegendControls, LegendMode, LevelDensity, RenderDensity, advisory};
+ use crate::{panel::{PanelRequest, layout_path, render_panel, safe_component}, scales};
+
+-pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\tRENDERED\tFAILED";
++pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\tglobal-ensemble-projection\tRENDERED\tFAILED";
+ const CONTRACT: &str = "gpuwm-resident-ensemble-products.v1";
+
+ fn attr(file: &File, name: &str) -> Result<String, String> {

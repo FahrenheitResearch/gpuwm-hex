@@ -1,165 +1,98 @@
 # gpuwm-hex
 
-A GPU-native global variable-resolution atmospheric model core: the dynamical
-core of **MPAS-Atmosphere v8.4.1** ported to CUDA, running **ArWen's physics**
-rather than MPAS's, on one consumer card.
+MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.1 ports the whole model to
+CUDA: the dynamical core, both MPAS physics suites and their scheme options,
+initialization and static fields, the incremental analysis update, limited-area
+runs, streams, restart and diagnostics (the scheme list and what is not yet in
+are in `tree/README.md`). Alongside it runs ArWen's own physics
+(the default) and capabilities MPAS does not have: one-command global
+forecasts, local time stepping and an experimental storm-following region. It
+runs on one consumer card.
 
-This is the repository. The distribution it builds lives in [`tree/`](tree/)
-and its user-facing documentation is [`tree/README.md`](tree/README.md), which
-carries the install matrix, the front doors, the measured limitations and the
-assets a user must supply. This page is the repository-level orientation: what
-this project is, what it is pinned to, and what it is judged by.
+This is the repository. The distribution it builds lives in [`tree/`](tree/),
+and its user documentation is [`tree/README.md`](tree/README.md) (the
+capability contract: every claim with its scope) and the
+[user manual](tree/docs/manual/index.md). This page says what the project is,
+what it is matched against and how that is checked.
 
-**Install:** `pip install gpuwm-hex`. The engine range it declares
-(`gpuwm>=2.8.0,<2.8.1`, stated once in [`tree/pyproject.toml`](tree/pyproject.toml)
-and derived from a measured table rather than typed) is a hard floor and a hard
-ceiling, and pip resolves it for you. `tree/README.md` carries the full matrix.
+**Install:** `pip install gpuwm-hex`. It requires the ArWen engine, gpuwm 2.9
+(`gpuwm>=2.9.0,<2.10`), and pip resolves it.
+
+---
+
+## What 0.4.1 claims, and how far
+
+Each line is measured, and each carries its scope. Nothing outside the scope
+is claimed. [`tree/README.md`](tree/README.md) gives the detail.
+
+Kernels compile with fast numerics by default (FMA contraction, flush-to-zero); `--numerics strict` is the opt-in for bitwise identity to native MPAS-A, and every identity claim here was measured with it.
+
+| Claim | Scope |
+|---|---|
+| The dynamical core is byte-identical to native MPAS-A v8.4.2 built with the pinned strict recipe (GNU Fortran, single precision, no FP contraction or vectorised reassociation). | `x1.40962`, 55 levels, real terrain, dry, 5 days, two dates; the same mesh with water vapour and with five condensates transported, on 1, 2 and 4 ranks of one card; `x1.163842` with water vapour; one dry step on `x1.2562`. Hex and the reference run on the same host C library. |
+| A 24-hour forecast of the `convection_permitting` suite with all ten of its physics schemes on the GPU is bitwise identical to native MPAS-A v8.4.2 in every field hex writes: 545,733,285 values, 0 different. | `x1.2562`, one process, 2023-03-31 12Z, exact mode. Native also writes about 105 million values hex does not write yet; they are counted, not hidden. |
+| Every other MPAS-A v8.4.2 physics scheme in this release is bitwise identical to native on real inputs captured from a native run, and a forecast with it on was compared with native, map by map. | Per scheme. A whole-forecast match is claimed only for the forecast above. |
+| Correct mode is the default on every route. On the MPAS suites it fixes 5 defects found in native MPAS-A v8.4.2; on the ArWen route it applies the corrections the engine carries (WB4, WB5); `--physics-mode exact` reproduces native bit for bit. | Each fix is checked against its own native referee build. No combined referee is claimed. |
+| Real-data initialization and the static builder match native field for field. IAU, limited-area boundaries, streams, restart and the diagnostics match native on real captured inputs. | Per unit, on the cases in `tree/README.md`. A few static words where native reads undefined memory are labelled declared residue, never identical. |
+| `gpuwm-hex forecast --analysis` starts a forecast from an MPAS analysis bundle (direct insertion, IAU, cycling restart, remap). | Measured on the ArWen physics route. IAU also runs across a restart, on the explicit MPAS suite route, on same-host multi-card ranks and in member rosters; IAU on multi-card local time stepping is refused by name. |
+| `gpuwm-hex global` runs a global forecast in one command. It is the main global model; gpuwm-global remains available as a second (spectral) global model. | Rows are defined at 120, 60, 30 and 15 km, on ArWen physics and on the gpuwm-global suite; the measured runs are the 120 km rows. |
+| A storm-following 3 km region, experimental: `gpuwm-hex moving`. | ArWen physics, three 48-hour tropical cyclone runs; the balanced remap between moves is the default. |
+| RRFS-MPAS runs end to end from a pip install: the GSL fork's dycore on the GPU, its ported physics on the GPU by default, the rest through the fork's native library, which `physics-resources build` compiles from the fork's source on your machine. | With every physics slot on the native library (`--physics-default-backend native-cpu`), a one-hour `hrrrv5` run on `x1.2562`, one process, is bitwise to the native fork build in every field hex writes; each GPU port is bitwise as a module replay. RRFS initial conditions come from the fork's own init (named gap). |
+
+Named gaps, each with its reason, are listed in
+[`tree/README.md`](tree/README.md#not-in-this-release).
 
 ---
 
 ## The two relationships that define this project
 
-### To `gpuwm` (ArWen) — a one-way dependency across two declared seams
+### To native MPAS-Atmosphere v8.4.2: matched wherever a match is reachable
 
-The port owns no physics. Every physics column in the forecast lane runs
-through ArWen's column-batch seam, so gpuwm-hex and `gpuwm` share one physics
-implementation instead of two that drift.
+The referee for anything that ports MPAS is native MPAS itself: the pinned
+v8.4.2 source (commit `f34984b2`) built with a strict GNU recipe, run on the
+same inputs, compared word for word. "Identical" here always means every
+stored word, with no tolerance. Where hex cannot match (a value native reads
+from undefined memory, a field hex does not write yet), the gap is counted and
+named, never averaged away.
 
-The dependency is strictly one-directional, and that is measured, not assumed:
-`hexcore` imports `gpuwm` at 5 sites under `tree/src/` and 14 under
-`tree/tools/`; `gpuwm` imports `hexcore` at **zero** sites. There is no cycle,
-which is why the two can be separate repositories at all.
+The reference is rebuildable from this repository:
+[`tree/tools/native_dry_reference/`](tree/tools/native_dry_reference/) builds the
+dycore reference, [`tree/tools/native_physics_reference/`](tree/tools/native_physics_reference/)
+the physics reference, and [`tree/verification/gates/`](tree/verification/gates/)
+holds the gate decks every change to the port must pass before it lands: the
+dry dycore, both MPAS suites on the native backend, and the all-GPU forecast
+above. A claim whose reference cannot be rebuilt is not made.
 
-Two seams cross the boundary, and neither is a source dependency:
+Native MPAS has defects of its own. Matching it exactly found real ones.
+**Correct mode**, the default on every route, fixes the ones this release
+carries; `--physics-mode exact` puts every one of them back. A fix that a
+scheme does not carry yet is never a refusal: the run keeps native behaviour
+for it and names the gap at start-up and in its receipt.
 
-| seam | what crosses | how it refuses |
-| --- | --- | --- |
-| **Python** | the `gpuwm` distribution, `>=2.8.0,<2.8.1` (the forecast runs on the installed engine; a git clone at the pinned tag is optional) | 16 source files pinned by SHA-256; a moved byte refuses by name before a device is touched |
-| **Rust binaries** | `rw_mpas_init`, `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_static`, `rw_mpas_lbc`, built in `gpuwm`'s `tools/rustwx` workspace and published in its bridge bundle from v2.5.8 | each carries an ABI marker and a `GPUWM_BRIDGE_SOURCE_REV` stamp, so a stale binary is detectable rather than silently wrong |
+**ArWen's physics is judged by observations, not by MPAS.** It is a different
+physics implementation, so matching MPAS was never its standard; its referee
+is skill against MRMS, Stage-IV, ASOS and radiosondes, and its measured
+differences from native MPAS are registered in
+[`tree/docs/declared-divergences.md`](tree/docs/declared-divergences.md). A
+bias that is wrong against observations is still wrong.
 
-Mesh generation and the `gpuwm mesh` door stay in `gpuwm`. The `rw-mpas` crate
-depends by path on `rw-store`, `static-fields` and `rustwx-core` — 776
-first-party files across the closure — and `static-fields` is `gpuwm`'s own WPS
-geography stack. Vendoring that closure here would fork it into two repos;
-moving it would invert three path dependencies across a repository boundary and
-un-ship a `gpuwm` front door. gpuwm-hex consumes the four binaries through the
-environment-variable ladder its doors already have.
+### To `gpuwm` (ArWen): a one-way dependency
 
-### To native MPAS-Atmosphere v8.4.1 — pinned in the dycore, divergent in the physics
-
-**The dycore stays pinned.** Byte-identity of the dynamical core against native
-MPAS-A v8.4.1 is kept, and it is the only correctness anchor this project has.
-It is achievable, it is the thing that was actually ported, and without it there
-is no anchor at all. See *The pin* below.
-
-**The physics goes its own way.** The port already runs ArWen's physics, not
-MPAS's, so whole-model parity against MPAS stopped being reachable the moment
-that choice was made — every remaining "correctness defect" against native is
-physics-shaped for exactly that reason. Physics parity is therefore **retired as
-a goal**, and the known differences are **declared divergences, not blockers**:
-
-- the Grell-Freitas cumulus scheme is a different generation (2018 formulation
-  here, the 2013 ensemble fork in native v8.4.1);
-- an upper-band potential-temperature drift, `+0.019 K/h` above level 45,
-  reaching `+0.46 K` at 24 h;
-- a convective rainfall deficit, `rainc` -36 % / -34 % across two cases;
-- a downstream condensate surplus, `+50 %` cloud water and `+62 %` rain water in
-  the domain mean at 24 h.
-
-All four are quantified in `tree/README.md`, registered with mechanism,
-magnitude and the named observational referee for each in
-[`tree/docs/declared-divergences.md`](tree/docs/declared-divergences.md), and
-reproduced in `NOTICE` as part of the derivative marking BSD-3-Clause
-requires.
-
-**The verification of record for physics is obs-skill** — MRMS and ASOS — not
-agreement with MPAS. Matching another model's choices was never evidence of
-being right.
-
-**This is not licence to ignore a defect.** A bias that is wrong against
-*observations* is still wrong. The upper-band theta drift does not become
-acceptable because MPAS is no longer the referee; it changes referee.
-
-The obs-skill verification **has now run** — four full-physics forecasts on the
-163,842-cell mesh scored against Stage-IV precipitation, MRMS reflectivity and
-ASOS surface reports, 2026-08-25, with the
-verdict for each divergence in
-[`tree/docs/declared-divergences.md`](tree/docs/declared-divergences.md). It
-reaches two of the three. The theta drift is not one of them: rain gauges and
-airport thermometers do not measure the stratosphere, and the profile referee
-that would settle it is still open work.
-
----
-
-## The pin
-
-`tree/src/hexcore/cuda_arwen_physics_v841.py` pins sixteen `gpuwm` source
-files by SHA-256, and `tree/src/hexcore/drivers/run_cuda_v841_full_physics_x4.py` names the
-`gpuwm` commit they were taken from:
-
-```
-ARWEN_COMMIT = 26daaab7ef5c1104166fe61503cdd9487750f1af
-```
-
-That commit is the seam-converge merge (annotated tag
-`pin/mpas-port-arwen-seam-v4`): the refl10cm seam lineage (`6e333822e`,
-`pin/mpas-port-arwen-seam-v3`) folded into the engine release line at
-`613b681d3`. It is the first pin that sits ON the engine's release lineage
-rather than beside it, which is the property that matters: a public engine
-snapshot cut from the release line carries exactly the sixteen pinned files.
-
-All sixteen hash-match at that commit, and at no other ref checked. Measured
-2026-08-25 against the `gpuwm` object store:
-
-| ref | files matching |
-| --- | --- |
-| `26daaab7e` (this pin, on the release lineage) | **16 / 16** |
-| the engine release line's pre-merge tip (`613b681d3`) | 14 / 16 (the two refl-seam files) |
-| `pin/mpas-port-arwen-seam-v3` (`6e333822e`) | 9 / 16 |
-| `pin/mpas-port-arwen-seam-v2` (`0d04db712`) | 8 / 16 |
-| `pin/mpas-port-arwen-seam` (`629ddb6f0`) | 7 / 16 |
-
-The anchor is the *reachability of that object*. A commit that survives only as
-the tip of one `gpuwm` development branch is one branch deletion away from being
-unreachable — at which point the sixteen pins could never be verified again and
-every proof built on them would become unfalsifiable. Every pin the port has
-ever executed is tag-anchored in `gpuwm` — `pin/mpas-port-arwen-seam` through
-`pin/mpas-port-arwen-seam-v4`, local tags and explicitly not release tags —
-and v4 is additionally an ancestor of the release line's future tips, so
-ordinary release history keeps it reachable without the tag.
-
-### Verifying it
-
-`tests/test_proof_guard_pins.py` verifies the manifest against a real `gpuwm`
-object store. Point `$GPUWM_OBJECT_STORE` at a `gpuwm` checkout that holds the
-pinned commit; with the variable unset the guard has nowhere to look and says
-so.
-
-```sh
-cd tree
-PYTHONPATH=src python -m pytest tests/test_proof_guard_pins.py tests/test_proof_guard_ordering.py -q
-```
-
-The two outcomes are deliberately different. A box that **has** a `gpuwm` store
-which no longer holds the commit **refuses by name** — that is the failure the
-guard exists for. A box with **no** store at all (a CI runner, a fresh clone on
-another machine) skips with a message saying which anchor went unverified, so
-the skip cannot be read as a pass.
-
-### The two legs that need hardware
-
-The pin has two further legs that no repository can carry:
-
-- **The native authority** — about 6.9 GiB of byte-pinned grid, static, init and
-  native-history files, pinned by masked SHA-256 (the random `file_id` netCDF
-  attribute is masked out so a bit-exact rerun satisfies the pin while one
-  flipped data byte refuses). They ship with no fetch path and live on the
-  dedicated nodes.
-- **The compiled-endpoint fixture** — `tools/compare_v841_compiled_endpoint.py`
-  wants `tree/oracle/jw-x1.2562-v8.4.1-split3-endpoint-nonclaim`, six files
-  pinned by SHA-256. That directory is not in this checkout.
-
-Both are stated here as unverified-here rather than implied to be green.
+- **The default physics** is ArWen's, reached through the engine's
+  column-batch seam, so gpuwm-hex and `gpuwm` share one implementation of it.
+  Sixteen engine files are pinned by SHA-256; `gpuwm-hex doctor` reports
+  whether the installed engine still matches.
+- **The MPAS physics ports** are this project's own (`tree/src/hexcore/mpasphys/`).
+  They compile with device maths headers read from the installed `gpuwm` at
+  run time.
+- **The Rust field engines** (`rw_mpas_init`, `rw_mpas_static`,
+  `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_lbc`, `rw_wrfbatch` and the
+  others) are built in `gpuwm`'s Rust workspace and reach a user through its
+  bridge bundle (`gpuwm fetch-bridges`). Two of them, `rw_mpas_geometry` and
+  `rw_mpas_stream`, ship in the gpuwm-hex wheel instead, pinned by SHA-256,
+  because no released gpuwm carries the versions this release needs. Mesh
+  generation stays in `gpuwm`.
+- `gpuwm` does not import `hexcore`, so the two can be separate repositories.
 
 ---
 
@@ -167,27 +100,28 @@ Both are stated here as unverified-here rather than implied to be green.
 
 ```
 LICENSE          Apache-2.0
-NOTICE           MPAS-Atmosphere BSD-3-Clause verbatim + the derivative marking
+NOTICE           every upstream, its terms and what derives from it
 README.md        this page
-.github/         the battery workflow (no publish job, deliberately)
+.github/         the CPU-tier workflow and the publish workflow
 tree/            the gpuwm-hex distribution
-  src/hexcore/     the port itself (`import hexcore`; `mpas_port` through 0.1.1)
-  tools/           harnesses, proof guards, comparators
+  src/hexcore/     the port (`import hexcore`)
+    mpasphys/        the MPAS-A v8.4.2 physics driver and scheme ports
+  tools/           native reference recipes, gate runner, comparators
   tests/           the three-tier battery
-  verification/    schemas, manifests and vertical specs the docs invoke
+  verification/    gate decks, schemas, manifests and vertical specs
   evidence/        see EVIDENCE.md
-  docs/            the manual, the door pages, the declared divergences
+  docs/            the manual and the door pages
+  licenses/        every upstream licence text
 ```
 
 Every measurement quoted in this repository names the receipt it came from.
-The receipt files themselves are not carried here — `tree/evidence/EVIDENCE.md`
-says why and what to ask for.
+The receipts themselves are not carried here; `tree/evidence/EVIDENCE.md` says
+why and what an `evidence/...` reference means.
 
 ## Running the battery
 
-Three tiers, split by **what a machine has to own**, each naming what it is
-missing rather than dying somewhere unrecognisable. Tier 1 needs nothing but
-Python:
+Three tiers, split by what a machine has to own. Each names what it is missing
+rather than failing somewhere unrecognisable. Tier 1 needs nothing but Python:
 
 ```sh
 cd tree
@@ -196,17 +130,28 @@ PYTHONPATH=src python -m pytest -q -m "not gpu and not bigcard and not assets" \
 ```
 
 `tools/battery/README.md` covers all three. `GPUWM_HEX_NO_LOCAL_GPU=1` bans
-device contact outright.
+device contact outright. The gate decks need the native references and a
+card; `tree/verification/gates/README.md` says how to lay them out and run
+them.
 
 ## Licence
 
-Apache-2.0, the same licence `gpuwm` ships under. The upstream it derives from,
-MPAS-Atmosphere v8.4.1 (LANL/UCAR), is BSD-3-Clause; those terms govern the
-MPAS-derived portions and travel with every copy. `NOTICE` reproduces that
-licence in full and carries the marking BSD-3-Clause separately requires of a
-derivative work. Both files ship inside the wheel and the sdist, and the built
-wheel declares `License-Expression: Apache-2.0` with both under
-`dist-info/licenses/`.
+Apache-2.0, the same licence `gpuwm` ships under, except where an upstream's
+own terms govern a ported portion. MPAS-Atmosphere (LANS and UCAR) is
+BSD-3-Clause, and its terms travel with every copy. The physics ports also
+carry NCAR MMM-physics (BSD-3-Clause), WRF physics as MPAS distributes it (the
+WRF public-domain notice), RRTMG (AER, BSD-3-Clause) and Noah-MP (UCAR's terms,
+which are **not** Apache-2.0 and do not allow selling it or a work that
+contains it). `NOTICE` names every upstream and its terms,
+`tree/THIRD-PARTY-NOTICES.txt` lists the derived files, and `tree/licenses/`
+holds the texts, including those of the Rust crates the wheel's compiled
+helpers link; all required permissive texts ship in the wheel and sdist.
+
+UCAR Noah-MP v5.0 and UGWP ports are withheld from this public export.
+UCAR's Noah-MP terms forbid sale; UGWP remains on licence hold. Their
+upstream pins and attribution remain in `NOTICE` sections 4 and 8. The public
+wheel contains no Fortran runtime. An opt-in cannot restore an excluded port.
+The default ArWen route uses its separate WRF-lineage physics.
 
 This is **not** the version available from LANS and UCAR, and neither they nor
 their contributors endorse it. Results from gpuwm-hex are not results from

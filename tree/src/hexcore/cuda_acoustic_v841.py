@@ -7,6 +7,8 @@ fingerprinted.
 
 from __future__ import annotations
 
+from dataclasses import replace
+import os
 from typing import Any
 
 import numpy as np
@@ -333,13 +335,13 @@ extern "C" __global__ void acoustic_column_solve_v841(
         const int i = C2(k, cell, ncells);
         const int im = C2(k - 1, cell, ncells);
         const float delta_saved = mpas_sub(rw_save[i], rw[i]);
-        const float density_interface = mpas_mul(
-            mpas_add(mpas_mul(fzm[k], zz[i]), mpas_mul(fzp[k], zz[im])),
-            mpas_add(mpas_mul(fzm[k], rho_zz[i]),
-                mpas_mul(fzp[k], rho_zz[im])));
+        const float zz_interface = mpas_add(
+            mpas_mul(fzm[k], zz[i]), mpas_mul(fzp[k], zz[im]));
+        const float rho_interface = mpas_add(
+            mpas_mul(fzm[k], rho_zz[i]), mpas_mul(fzp[k], rho_zz[im]));
         float value = mpas_add(rw_p[i], delta_saved);
-        value = mpas_sub(value, mpas_mul(mpas_mul(mpas_mul(
-            dts, dss[i]), density_interface), w[i]));
+        value = mpas_sub(value, mpas_mul(mpas_mul(mpas_mul(mpas_mul(
+            dts, dss[i]), zz_interface), rho_interface), w[i]));
         value = mpas_div(value, mpas_add(1.0f, mpas_mul(dts, dss[i])));
         rw_p[i] = mpas_sub(value, delta_saved);
         ww_avg[i] = mpas_add(ww_avg[i], mpas_mul(ewp[k], rw_p[i]));
@@ -356,10 +358,288 @@ extern "C" __global__ void acoustic_column_solve_v841(
                 mpas_mul(mpas_mul(ewp[k], coftz[i]), rw_p[i]))));
     }
 }
+
+/* Element forms of acoustic_rs_ts_v841 and acoustic_column_solve_v841.
+   rs/ts at (level, cell) read only that level's inputs, so one thread per
+   (level, cell), cell fastest, runs the per-cell loop body for its level
+   unchanged.  The column solve keeps its tridiagonal sweeps serial per
+   column; its first and last loops, whose levels are independent, run one
+   thread per (level, cell).  Every value is the same helper sequence on the
+   same operands, so outputs carry the same bits. */
+extern "C" __global__ void acoustic_rs_ts_elem_v841(
+    const int nlev, const int ncells, const int nedges, const int max_edges,
+    const float dts, const int *n_edges_on_cell, const int *edges_on_cell,
+    const int *cells_on_edge, const float *edge_sign_on_cell,
+    const float *dv_edge, const float *inv_area_cell,
+    const float *theta_m, const float *rdzw,
+    const float *cofrz, const float *coftz, const float *ewm,
+    const float *ru_p, const float *rw_p,
+    const float *rho_pp, const float *rtheta_pp,
+    const float *tend_rho, const float *tend_rt,
+    float *rs, float *ts)
+{
+    const int element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (element >= nlev * ncells) return;
+    const int cell = element % ncells;
+    const int k = element / ncells;
+    const int count = n_edges_on_cell[cell];
+    const int index = C2(k, cell, ncells);
+    float r = 0.0f;
+    float t = 0.0f;
+    for (int slot = 0; slot < count; ++slot) {
+        const int edge = edges_on_cell[CES(cell, slot, max_edges)];
+        const int c0 = cells_on_edge[2 * edge];
+        const int c1 = cells_on_edge[2 * edge + 1];
+        float flux = mpas_mul(
+            edge_sign_on_cell[CES(cell, slot, max_edges)], dts);
+        flux = mpas_mul(flux, dv_edge[edge]);
+        flux = mpas_mul(flux, ru_p[E2(k, edge, nedges)]);
+        flux = mpas_mul(flux, inv_area_cell[cell]);
+        r = mpas_sub(r, flux);
+        t = mpas_sub(t, mpas_mul(mpas_mul(flux, 0.5f), mpas_add(
+            theta_m[C2(k, c1, ncells)],
+            theta_m[C2(k, c0, ncells)])));
+    }
+    r = mpas_add(mpas_add(rho_pp[index], mpas_mul(dts, tend_rho[index])),
+        r);
+    r = mpas_sub(r, mpas_mul(mpas_mul(dts, cofrz[k]), mpas_sub(
+        mpas_mul(ewm[k + 1], rw_p[C2(k + 1, cell, ncells)]),
+        mpas_mul(ewm[k], rw_p[index]))));
+    t = mpas_add(mpas_add(rtheta_pp[index], mpas_mul(dts, tend_rt[index])),
+        t);
+    t = mpas_sub(t, mpas_mul(mpas_mul(dts, rdzw[k]), mpas_sub(
+        mpas_mul(mpas_mul(ewm[k + 1], coftz[C2(k + 1, cell, ncells)]),
+            rw_p[C2(k + 1, cell, ncells)]),
+        mpas_mul(mpas_mul(ewm[k], coftz[index]), rw_p[index]))));
+    rs[index] = r;
+    ts[index] = t;
+}
+
+extern "C" __global__ void acoustic_column_pre_v841(
+    const int nlev, const int ncells, const float dts,
+    const float *zz, const float *tend_rw, const float *rs, const float *ts,
+    const float *cofwr, const float *cofwz, const float *cofwt,
+    const float *etp, const float *etm, const float *ewm,
+    float *rw_p, const float *rho_pp, const float *rtheta_pp, float *ww_avg)
+{
+    const int element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (element >= (nlev - 1) * ncells) return;
+    const int cell = element % ncells;
+    const int k = 1 + element / ncells;
+    const int i = C2(k, cell, ncells);
+    const int im = C2(k - 1, cell, ncells);
+    ww_avg[i] = mpas_add(ww_avg[i], mpas_mul(ewm[k], rw_p[i]));
+
+    const float theta_implicit = mpas_sub(
+        mpas_mul(mpas_mul(etp[k], zz[i]), ts[i]),
+        mpas_mul(mpas_mul(etp[k - 1], zz[im]), ts[im]));
+    const float theta_explicit = mpas_sub(
+        mpas_mul(mpas_mul(etm[k], zz[i]), rtheta_pp[i]),
+        mpas_mul(mpas_mul(etm[k - 1], zz[im]), rtheta_pp[im]));
+    const float density_implicit = mpas_add(
+        mpas_mul(etp[k], rs[i]), mpas_mul(etp[k - 1], rs[im]));
+    const float density_explicit = mpas_add(
+        mpas_mul(etm[k], rho_pp[i]),
+        mpas_mul(etm[k - 1], rho_pp[im]));
+    const float heat_upper = mpas_add(
+        mpas_mul(etp[k], ts[i]), mpas_mul(etm[k], rtheta_pp[i]));
+    const float heat_lower = mpas_add(
+        mpas_mul(etp[k - 1], ts[im]),
+        mpas_mul(etm[k - 1], rtheta_pp[im]));
+
+    float inner = mpas_sub(tend_rw[i], mpas_mul(cofwz[i],
+        mpas_add(theta_implicit, theta_explicit)));
+    inner = mpas_sub(inner, mpas_mul(cofwr[i],
+        mpas_add(density_implicit, density_explicit)));
+    inner = mpas_add(inner, mpas_mul(cofwt[i], heat_upper));
+    inner = mpas_add(inner, mpas_mul(cofwt[im], heat_lower));
+    rw_p[i] = mpas_add(rw_p[i], mpas_mul(dts, inner));
+}
+
+extern "C" __global__ void acoustic_column_sweep_v841(
+    const int nlev, const int ncells, const float dts,
+    const float *a_tri, const float *alpha_tri, const float *gamma_tri,
+    float *rw_p)
+{
+    const int cell = blockDim.x * blockIdx.x + threadIdx.x;
+    if (cell >= ncells) return;
+    const float dts2 = mpas_mul(dts, dts);
+    for (int k = 1; k < nlev; ++k) {
+        const int i = C2(k, cell, ncells);
+        const int im = C2(k - 1, cell, ncells);
+        rw_p[i] = mpas_mul(mpas_sub(rw_p[i], mpas_mul(mpas_mul(
+            dts2, a_tri[i]), rw_p[im])), alpha_tri[i]);
+    }
+    for (int k = nlev - 1; k >= 0; --k) {
+        const int i = C2(k, cell, ncells);
+        rw_p[i] = mpas_sub(rw_p[i], mpas_mul(
+            gamma_tri[i], rw_p[C2(k + 1, cell, ncells)]));
+    }
+}
+
+extern "C" __global__ void acoustic_column_post_w_v841(
+    const int nlev, const int ncells, const float dts,
+    const float *zz, const float *rho_zz,
+    const float *fzm, const float *fzp,
+    const float *dss, const float *w, const float *rw, const float *rw_save,
+    const float *ewp, float *rw_p, float *ww_avg)
+{
+    const int element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (element >= (nlev - 1) * ncells) return;
+    const int cell = element % ncells;
+    const int k = 1 + element / ncells;
+    const int i = C2(k, cell, ncells);
+    const int im = C2(k - 1, cell, ncells);
+    const float delta_saved = mpas_sub(rw_save[i], rw[i]);
+    const float zz_interface = mpas_add(
+        mpas_mul(fzm[k], zz[i]), mpas_mul(fzp[k], zz[im]));
+    const float rho_interface = mpas_add(
+        mpas_mul(fzm[k], rho_zz[i]), mpas_mul(fzp[k], rho_zz[im]));
+    float value = mpas_add(rw_p[i], delta_saved);
+    value = mpas_sub(value, mpas_mul(mpas_mul(mpas_mul(mpas_mul(
+        dts, dss[i]), zz_interface), rho_interface), w[i]));
+    value = mpas_div(value, mpas_add(1.0f, mpas_mul(dts, dss[i])));
+    rw_p[i] = mpas_sub(value, delta_saved);
+    ww_avg[i] = mpas_add(ww_avg[i], mpas_mul(ewp[k], rw_p[i]));
+}
+
+extern "C" __global__ void acoustic_column_post_rt_v841(
+    const int nlev, const int ncells, const float dts,
+    const float *rdzw, const float *rs, const float *ts,
+    const float *coftz, const float *cofrz, const float *ewp,
+    const float *rw_p, float *rho_pp, float *rtheta_pp)
+{
+    const int element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (element >= nlev * ncells) return;
+    const int cell = element % ncells;
+    const int k = element / ncells;
+    const int i = C2(k, cell, ncells);
+    rho_pp[i] = mpas_sub(rs[i], mpas_mul(mpas_mul(dts, cofrz[k]),
+        mpas_sub(mpas_mul(ewp[k + 1], rw_p[C2(k + 1, cell, ncells)]),
+            mpas_mul(ewp[k], rw_p[i]))));
+    rtheta_pp[i] = mpas_sub(ts[i], mpas_mul(mpas_mul(dts, rdzw[k]),
+        mpas_sub(mpas_mul(mpas_mul(ewp[k + 1],
+                coftz[C2(k + 1, cell, ncells)]),
+            rw_p[C2(k + 1, cell, ncells)]),
+            mpas_mul(mpas_mul(ewp[k], coftz[i]), rw_p[i]))));
+}
+
+#ifndef HEX_HOIST_CELL
+#define HEX_HOIST_CELL 10
+#endif
+/* Chunked, stencil-hoisted acoustic rs/ts: one thread per (level chunk,
+   cell); each cell's edges, endpoint cells and sign x dts x dvEdge (the same
+   two helper calls on the same operands, level-independent) sit in
+   registers, and each (level, cell) runs the element body unchanged. */
+extern "C" __global__ void acoustic_rs_ts_chunk_v841(
+    const int nlev, const int ncells, const int nedges, const int max_edges,
+    const float dts, const int *n_edges_on_cell, const int *edges_on_cell,
+    const int *cells_on_edge, const float *edge_sign_on_cell,
+    const float *dv_edge, const float *inv_area_cell,
+    const float *theta_m, const float *rdzw,
+    const float *cofrz, const float *coftz, const float *ewm,
+    const float *ru_p, const float *rw_p,
+    const float *rho_pp, const float *rtheta_pp,
+    const float *tend_rho, const float *tend_rt,
+    float *rs, float *ts, const int lpt)
+{
+    const int hex_chunks = (nlev + lpt - 1) / lpt;
+    const int hex_element = blockDim.x * blockIdx.x + threadIdx.x;
+    if (hex_element >= ncells * hex_chunks) return;
+    const int cell = hex_element % ncells;
+    const int hex_k0 = (hex_element / ncells) * lpt;
+    const int hex_k1 = min(nlev, hex_k0 + lpt);
+    const int count = n_edges_on_cell[cell];
+    const bool hoisted = count <= HEX_HOIST_CELL;
+    int ed[HEX_HOIST_CELL];
+    int ca[HEX_HOIST_CELL];
+    int cb[HEX_HOIST_CELL];
+    float sdd[HEX_HOIST_CELL];
+#pragma unroll
+    for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+        const bool live = hoisted && slot < count;
+        const int edge = live ? edges_on_cell[CES(cell, slot, max_edges)] : 0;
+        ed[slot] = edge;
+        ca[slot] = live ? cells_on_edge[2 * edge] : 0;
+        cb[slot] = live ? cells_on_edge[2 * edge + 1] : 0;
+        sdd[slot] = live ? mpas_mul(mpas_mul(
+            edge_sign_on_cell[CES(cell, slot, max_edges)], dts), dv_edge[edge]) : 0.0f;
+    }
+    const float inv_area = inv_area_cell[cell];
+    for (int k = hex_k0; k < hex_k1; ++k) {
+        const int index = C2(k, cell, ncells);
+        float r = 0.0f;
+        float t = 0.0f;
+        if (hoisted) {
+#pragma unroll
+            for (int slot = 0; slot < HEX_HOIST_CELL; ++slot) {
+                if (slot < count) {
+                    float flux = mpas_mul(sdd[slot], ru_p[E2(k, ed[slot], nedges)]);
+                    flux = mpas_mul(flux, inv_area);
+                    r = mpas_sub(r, flux);
+                    t = mpas_sub(t, mpas_mul(mpas_mul(flux, 0.5f), mpas_add(
+                        theta_m[C2(k, cb[slot], ncells)],
+                        theta_m[C2(k, ca[slot], ncells)])));
+                }
+            }
+        } else {
+            for (int slot = 0; slot < count; ++slot) {
+                const int edge = edges_on_cell[CES(cell, slot, max_edges)];
+                const int c0 = cells_on_edge[2 * edge];
+                const int c1 = cells_on_edge[2 * edge + 1];
+                float flux = mpas_mul(
+                    edge_sign_on_cell[CES(cell, slot, max_edges)], dts);
+                flux = mpas_mul(flux, dv_edge[edge]);
+                flux = mpas_mul(flux, ru_p[E2(k, edge, nedges)]);
+                flux = mpas_mul(flux, inv_area_cell[cell]);
+                r = mpas_sub(r, flux);
+                t = mpas_sub(t, mpas_mul(mpas_mul(flux, 0.5f), mpas_add(
+                    theta_m[C2(k, c1, ncells)],
+                    theta_m[C2(k, c0, ncells)])));
+            }
+        }
+        r = mpas_add(mpas_add(rho_pp[index], mpas_mul(dts, tend_rho[index])),
+            r);
+        r = mpas_sub(r, mpas_mul(mpas_mul(dts, cofrz[k]), mpas_sub(
+            mpas_mul(ewm[k + 1], rw_p[C2(k + 1, cell, ncells)]),
+            mpas_mul(ewm[k], rw_p[index]))));
+        t = mpas_add(mpas_add(rtheta_pp[index], mpas_mul(dts, tend_rt[index])),
+            t);
+        t = mpas_sub(t, mpas_mul(mpas_mul(dts, rdzw[k]), mpas_sub(
+            mpas_mul(mpas_mul(ewm[k + 1], coftz[C2(k + 1, cell, ncells)]),
+                rw_p[C2(k + 1, cell, ncells)]),
+            mpas_mul(mpas_mul(ewm[k], coftz[index]), rw_p[index]))));
+        rs[index] = r;
+        ts[index] = t;
+    }
+}
 """
 
 _CACHE: Any | None = None
-_KERNELS: dict[tuple[Any, str], Any] = {}
+_KERNELS: dict[tuple[Any, str] | tuple[Any, str, tuple], Any] = {}
+
+
+#: Coefficient fields that only ``acoustic_coefficients_v841`` reads.  The
+#: kernel writes b_tri and c_tri and reads them back to form alpha_tri and
+#: gamma_tri; no acoustic sub-step, regional sub-step or fused sub-step reads
+#: either one afterwards (the LTS lane builds its own coefficient set).
+KERNEL_ONLY_COEFFICIENTS: tuple[str, ...] = ("b_tri", "c_tri")
+
+
+def short_lifetimes_enabled() -> bool:
+    """Dycore RK/acoustic working arrays are released at their last reader.
+
+    Memory lane (2026-10-14).  Default on.  ``GPUWM_HEX_MEM_ACOUSTIC=0``
+    restores the earlier lifetimes for an A/B: the arithmetic kernels, their
+    order and their inputs' words are the same either way; only when a block
+    returns to the pool moves (and, on the closed single-card sub-step, the
+    divergence damping reads the acoustic state's own rtheta_pp_old instead
+    of a per-sub-step copy of the same words).  Covers the RK/acoustic arrays
+    named in ``CudaDryDycoreDriver._advance_dynamics_subcycle_v841`` and the
+    two kernel-only implicit coefficients above.
+    """
+
+    return os.environ.get("GPUWM_HEX_MEM_ACOUSTIC", "1") != "0"
 
 
 def _cupy() -> Any:
@@ -371,7 +651,7 @@ def _cupy() -> Any:
     return cp
 
 
-def _kernel(name: str, kernel_cache: Any | None = None) -> Any:
+def _kernel(name: str, kernel_cache: Any | None = None, dimensions=()) -> Any:
     global _CACHE
     from .cuda_backend import KernelCache, require_cuda
 
@@ -380,13 +660,15 @@ def _kernel(name: str, kernel_cache: Any | None = None) -> Any:
         if _CACHE is None:
             _CACHE = KernelCache(capability=require_cuda(min_compute=(12, 0)))
         selected = _CACHE
-    key = (selected, name)
+    key = (selected, name, dimensions) if dimensions else (selected, name)
     if key not in _KERNELS:
-        _KERNELS[key] = selected.raw_kernel(
-            name,
-            _CUDA_SOURCE,
-            module_key="hexcore.cuda_acoustic_v841",
-        )
+        if dimensions:
+            from .cuda_shape import resolve
+            _KERNELS[key] = resolve(selected, name, _CUDA_SOURCE,
+                                    "hexcore.cuda_acoustic_v841", dimensions)
+        else:
+            _KERNELS[key] = selected.raw_kernel(
+                name, _CUDA_SOURCE, module_key="hexcore.cuda_acoustic_v841")
     return _KERNELS[key]
 
 
@@ -507,6 +789,12 @@ def compute_vertical_implicit_coefficients_cuda_v841(
     )
     if owns_flag and int(cp_module.asnumpy(singular)[0]) != 0:
         raise FloatingPointError("singular v8.4.1 vertical acoustic system")
+    if short_lifetimes_enabled():
+        # b_tri and c_tri are dead once the kernel above has formed alpha_tri
+        # and gamma_tri from them, so their blocks go back to the pool here
+        # instead of riding the coefficient set through every acoustic
+        # sub-step of the subcycle (2 x nVertLevels x nCells float32).
+        result = replace(result, **{name: None for name in KERNEL_ONLY_COEFFICIENTS})
     return result
 
 
@@ -601,7 +889,12 @@ def advance_acoustic_step_cuda_v841(
         "gamma_tri": (nlev, ncells),
     }
     for name, shape in coefficient_shapes.items():
-        value = _float32(getattr(coefficients, name), f"coefficients.{name}")
+        raw = getattr(coefficients, name)
+        if raw is None and name in KERNEL_ONLY_COEFFICIENTS:
+            # Released after the coefficient kernel; this sub-step never
+            # reads it (see KERNEL_ONLY_COEFFICIENTS).
+            continue
+        value = _float32(raw, f"coefficients.{name}")
         if value.shape != shape:
             raise ValueError(f"coefficients.{name} shape {value.shape} != {shape}")
     cells_on_edge = _int32(_mesh_value(mesh, "cells_on_edge"), "cells_on_edge")
@@ -618,7 +911,7 @@ def advance_acoustic_step_cuda_v841(
             raise ValueError(f"{name} shape {value.shape} != ({nlev},)")
 
     _launch_1d(
-        _kernel("acoustic_ru_v841", kernel_cache),
+        _kernel("acoustic_ru_v841", kernel_cache, (("nlev", nlev), ("nedges", nedges), ("ncells", ncells))),
         nedges,
         (
             np.int32(nlev), np.int32(nedges), np.int32(ncells),
@@ -643,39 +936,112 @@ def advance_acoustic_step_cuda_v841(
     cp_module = _cupy()
     rs = cp_module.empty((nlev, ncells), dtype=cp_module.float32)
     ts = cp_module.empty_like(rs)
-    _launch_1d(
-        _kernel("acoustic_rs_ts_v841", kernel_cache),
-        ncells,
-        (
-            np.int32(nlev), np.int32(ncells), np.int32(nedges),
-            np.int32(max_edges), np.float32(dts), counts, edges_on_cell,
-            cells_on_edge, signs, dv_edge, context.inv_area_cell,
-            _float32(forcing.theta_m, "forcing.theta_m"), rdzw,
-            coefficients.cofrz, coefficients.coftz, context.ewm,
-            out.ru_p, out.rw_p, out.rho_pp, out.rtheta_pp,
-            _float32(forcing.tend_rho, "forcing.tend_rho"),
-            _float32(forcing.tend_rt, "forcing.tend_rt"), rs, ts,
-        ),
+    rs_ts_arguments = (
+        np.int32(nlev), np.int32(ncells), np.int32(nedges),
+        np.int32(max_edges), np.float32(dts), counts, edges_on_cell,
+        cells_on_edge, signs, dv_edge, context.inv_area_cell,
+        _float32(forcing.theta_m, "forcing.theta_m"), rdzw,
+        coefficients.cofrz, coefficients.coftz, context.ewm,
+        out.ru_p, out.rw_p, out.rho_pp, out.rtheta_pp,
+        _float32(forcing.tend_rho, "forcing.tend_rho"),
+        _float32(forcing.tend_rt, "forcing.tend_rt"),
     )
+    zz = _float32(forcing.zz, "forcing.zz")
+    rho_zz = _float32(forcing.rho_zz, "forcing.rho_zz")
+    dss = _float32(forcing.dss, "forcing.dss")
+    w = _float32(forcing.w, "forcing.w")
+    rw = _float32(forcing.rw, "forcing.rw")
+    rw_save = _float32(forcing.rw_save, "forcing.rw_save")
+    tend_rw = _float32(forcing.tend_rw, "forcing.tend_rw")
+    from . import cuda_edge_hoist
+    if not cuda_edge_hoist.enabled(nedges):
+        _launch_1d(_kernel("acoustic_rs_ts_v841", kernel_cache), ncells, (*rs_ts_arguments, rs, ts))
+        _launch_1d(
+            _kernel("acoustic_column_solve_v841", kernel_cache),
+            ncells,
+            (
+                np.int32(nlev), np.int32(ncells), np.float32(dts),
+                zz, rho_zz, fzm, fzp, rdzw, dss, w, rw, rw_save, tend_rw, rs, ts,
+                coefficients.cofwr, coefficients.cofwz, coefficients.coftz,
+                coefficients.cofwt, coefficients.cofrz, coefficients.a_tri,
+                coefficients.alpha_tri, coefficients.gamma_tri,
+                context.etp, context.etm, context.ewp, context.ewm,
+                out.rw_p, out.rho_pp, out.rtheta_pp, out.ww_avg,
+            ),
+        )
+        return out
+    check = cuda_edge_hoist.check_wanted("acoustic_column_elem_v841", cp_module)
+    if check:
+        # The element path updates the acoustic state in place; keep the
+        # entry state so the original kernels can run from the same inputs.
+        entry = {name: cp_module.array(getattr(out, name), copy=True)
+                 for name in ("rw_p", "rho_pp", "rtheta_pp", "ww_avg")}
+    lpt = cuda_edge_hoist.levels_per_thread(
+        "acoustic_rs_ts_chunk_v841", ncells, nlev, lambda value: _launch_1d(
+            _kernel("acoustic_rs_ts_chunk_v841", kernel_cache, (("nlev", nlev), ("ncells", ncells), ("nedges", nedges), ("max_edges", max_edges))),
+            ncells * cuda_edge_hoist.chunks(nlev, value), (*rs_ts_arguments, rs, ts, np.int32(value))),
+        cp_module)
+    _launch_1d(_kernel("acoustic_rs_ts_chunk_v841", kernel_cache, (("nlev", nlev), ("ncells", ncells), ("nedges", nedges), ("max_edges", max_edges))),
+               ncells * cuda_edge_hoist.chunks(nlev, lpt), (*rs_ts_arguments, rs, ts, np.int32(lpt)))
+    if check:
+        rs_element, ts_element = cp_module.empty_like(rs), cp_module.empty_like(ts)
+        _launch_1d(_kernel("acoustic_rs_ts_v841", kernel_cache), ncells,
+                   (*rs_ts_arguments, rs_element, ts_element))
+        cuda_edge_hoist.compare("acoustic_rs_ts_elem_v841 rs", rs, rs_element, cp_module)
+        cuda_edge_hoist.compare("acoustic_rs_ts_elem_v841 ts", ts, ts_element, cp_module)
     _launch_1d(
-        _kernel("acoustic_column_solve_v841", kernel_cache),
-        ncells,
+        _kernel("acoustic_column_pre_v841", kernel_cache),
+        (nlev - 1) * ncells,
         (
             np.int32(nlev), np.int32(ncells), np.float32(dts),
-            _float32(forcing.zz, "forcing.zz"),
-            _float32(forcing.rho_zz, "forcing.rho_zz"), fzm, fzp, rdzw,
-            _float32(forcing.dss, "forcing.dss"),
-            _float32(forcing.w, "forcing.w"),
-            _float32(forcing.rw, "forcing.rw"),
-            _float32(forcing.rw_save, "forcing.rw_save"),
-            _float32(forcing.tend_rw, "forcing.tend_rw"), rs, ts,
-            coefficients.cofwr, coefficients.cofwz, coefficients.coftz,
-            coefficients.cofwt, coefficients.cofrz, coefficients.a_tri,
-            coefficients.alpha_tri, coefficients.gamma_tri,
-            context.etp, context.etm, context.ewp, context.ewm,
+            zz, tend_rw, rs, ts, coefficients.cofwr, coefficients.cofwz,
+            coefficients.cofwt, context.etp, context.etm, context.ewm,
             out.rw_p, out.rho_pp, out.rtheta_pp, out.ww_avg,
         ),
     )
+    _launch_1d(
+        _kernel("acoustic_column_sweep_v841", kernel_cache),
+        ncells,
+        (
+            np.int32(nlev), np.int32(ncells), np.float32(dts),
+            coefficients.a_tri, coefficients.alpha_tri, coefficients.gamma_tri,
+            out.rw_p,
+        ),
+    )
+    _launch_1d(
+        _kernel("acoustic_column_post_w_v841", kernel_cache),
+        (nlev - 1) * ncells,
+        (
+            np.int32(nlev), np.int32(ncells), np.float32(dts),
+            zz, rho_zz, fzm, fzp, dss, w, rw, rw_save, context.ewp,
+            out.rw_p, out.ww_avg,
+        ),
+    )
+    _launch_1d(
+        _kernel("acoustic_column_post_rt_v841", kernel_cache),
+        nlev * ncells,
+        (
+            np.int32(nlev), np.int32(ncells), np.float32(dts),
+            rdzw, rs, ts, coefficients.coftz, coefficients.cofrz, context.ewp,
+            out.rw_p, out.rho_pp, out.rtheta_pp,
+        ),
+    )
+    if check:
+        _launch_1d(
+            _kernel("acoustic_column_solve_v841", kernel_cache),
+            ncells,
+            (
+                np.int32(nlev), np.int32(ncells), np.float32(dts),
+                zz, rho_zz, fzm, fzp, rdzw, dss, w, rw, rw_save, tend_rw, rs, ts,
+                coefficients.cofwr, coefficients.cofwz, coefficients.coftz,
+                coefficients.cofwt, coefficients.cofrz, coefficients.a_tri,
+                coefficients.alpha_tri, coefficients.gamma_tri,
+                context.etp, context.etm, context.ewp, context.ewm,
+                entry["rw_p"], entry["rho_pp"], entry["rtheta_pp"], entry["ww_avg"],
+            ),
+        )
+        for name in ("rw_p", "rho_pp", "rtheta_pp", "ww_avg"):
+            cuda_edge_hoist.compare(f"acoustic_column_elem_v841 {name}", getattr(out, name), entry[name], cp_module)
     return out
 
 

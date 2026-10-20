@@ -1,0 +1,1095 @@
+{
+  "schema": "rrfs-smoke-native-storage-v1",
+  "fields": {
+    "state.ssalt_mod.chem_opt_gocart": {
+      "expression": "state->ssalt_mod.chem_opt_gocart",
+      "type": "int",
+      "rank": 0
+    },
+    "state.ssalt_mod.chem_opt": {
+      "expression": "state->ssalt_mod.chem_opt",
+      "type": "int",
+      "rank": 0
+    },
+    "state.ssalt_mod.emission_scheme": {
+      "expression": "state->ssalt_mod.emission_scheme",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.epsilc": {
+      "expression": "state->mpas_smoke_config.epsilc",
+      "type": "float",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.pi": {
+      "expression": "state->mpas_smoke_config.pi",
+      "type": "float",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.seas_opt": {
+      "expression": "state->mpas_smoke_config.seas_opt",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.addsmoke_flag": {
+      "expression": "state->mpas_smoke_config.addsmoke_flag",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.n_dbg_lines": {
+      "expression": "state->mpas_smoke_config.n_dbg_lines",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.nfire_types": {
+      "expression": "state->mpas_smoke_config.nfire_types",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.dbg_opt": {
+      "expression": "state->mpas_smoke_config.dbg_opt",
+      "type": "bool",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.aero_ind_fdb": {
+      "expression": "state->mpas_smoke_config.aero_ind_fdb",
+      "type": "bool",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.chem_opt_gocart": {
+      "expression": "state->mpas_smoke_config.chem_opt_gocart",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.num_moist": {
+      "expression": "state->mpas_smoke_config.num_moist",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.num_emis_seas": {
+      "expression": "state->mpas_smoke_config.num_emis_seas",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.num_emis_dust": {
+      "expression": "state->mpas_smoke_config.num_emis_dust",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_dust_1": {
+      "expression": "state->mpas_smoke_config.p_dust_1",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_dust_2": {
+      "expression": "state->mpas_smoke_config.p_dust_2",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_dust_3": {
+      "expression": "state->mpas_smoke_config.p_dust_3",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_dust_4": {
+      "expression": "state->mpas_smoke_config.p_dust_4",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_dust_5": {
+      "expression": "state->mpas_smoke_config.p_dust_5",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_edust1": {
+      "expression": "state->mpas_smoke_config.p_edust1",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_edust2": {
+      "expression": "state->mpas_smoke_config.p_edust2",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_edust3": {
+      "expression": "state->mpas_smoke_config.p_edust3",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_edust4": {
+      "expression": "state->mpas_smoke_config.p_edust4",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.p_edust5": {
+      "expression": "state->mpas_smoke_config.p_edust5",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.ndvel": {
+      "expression": "state->mpas_smoke_config.ndvel",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_config.numgas": {
+      "expression": "state->mpas_smoke_config.numgas",
+      "type": "int",
+      "rank": 0
+    },
+    "state.rad_data_mod.sc_eff": {
+      "expression": "state->rad_data_mod.sc_eff",
+      "type": "float",
+      "rank": 1
+    },
+    "state.rad_data_mod.ab_eff": {
+      "expression": "state->rad_data_mod.ab_eff",
+      "type": "float",
+      "rank": 1
+    },
+    "state.seas_data_mod.number_ss_bins": {
+      "expression": "state->seas_data_mod.number_ss_bins",
+      "type": "int",
+      "rank": 0
+    },
+    "state.seas_data_mod.ra": {
+      "expression": "state->seas_data_mod.ra",
+      "type": "float",
+      "rank": 1
+    },
+    "state.seas_data_mod.rb": {
+      "expression": "state->seas_data_mod.rb",
+      "type": "float",
+      "rank": 1
+    },
+    "state.seas_data_mod.emission_scale": {
+      "expression": "state->seas_data_mod.emission_scale",
+      "type": "float",
+      "rank": 1
+    },
+    "state.seas_data_mod.den_seas": {
+      "expression": "state->seas_data_mod.den_seas",
+      "type": "float",
+      "rank": 1
+    },
+    "state.seas_data_mod.reff_seas": {
+      "expression": "state->seas_data_mod.reff_seas",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.ndust": {
+      "expression": "state->dust_data_mod.ndust",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.ndcls": {
+      "expression": "state->dust_data_mod.ndcls",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.ndsrc": {
+      "expression": "state->dust_data_mod.ndsrc",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.maxstypes": {
+      "expression": "state->dust_data_mod.maxstypes",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.nsalt": {
+      "expression": "state->dust_data_mod.nsalt",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.dyn_visc": {
+      "expression": "state->dust_data_mod.dyn_visc",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dust_data_mod.den_dust": {
+      "expression": "state->dust_data_mod.den_dust",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.reff_dust": {
+      "expression": "state->dust_data_mod.reff_dust",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.frac_s": {
+      "expression": "state->dust_data_mod.frac_s",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.lo_dust": {
+      "expression": "state->dust_data_mod.lo_dust",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.up_dust": {
+      "expression": "state->dust_data_mod.up_dust",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.fengsha_maxstypes": {
+      "expression": "state->dust_data_mod.fengsha_maxstypes",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.dust_uthres": {
+      "expression": "state->dust_data_mod.dust_uthres",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.dust_calcdrag": {
+      "expression": "state->dust_data_mod.dust_calcdrag",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.dust_moist_opt": {
+      "expression": "state->dust_data_mod.dust_moist_opt",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.spoint": {
+      "expression": "state->dust_data_mod.spoint",
+      "type": "int",
+      "rank": 1
+    },
+    "state.dust_data_mod.reff_salt": {
+      "expression": "state->dust_data_mod.reff_salt",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.den_salt": {
+      "expression": "state->dust_data_mod.den_salt",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.frac_salt": {
+      "expression": "state->dust_data_mod.frac_salt",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dust_data_mod.max_soiltyp": {
+      "expression": "state->dust_data_mod.max_soiltyp",
+      "type": "int",
+      "rank": 0
+    },
+    "state.dust_data_mod.maxsmc": {
+      "expression": "state->dust_data_mod.maxsmc",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dep_data_mod.max_dep_vel": {
+      "expression": "state->dep_data_mod.max_dep_vel",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.dep_ref_hgt": {
+      "expression": "state->dep_data_mod.dep_ref_hgt",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.pi": {
+      "expression": "state->dep_data_mod.pi",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.threepi": {
+      "expression": "state->dep_data_mod.threepi",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.gravity": {
+      "expression": "state->dep_data_mod.gravity",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.grav": {
+      "expression": "state->dep_data_mod.grav",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.boltzmann": {
+      "expression": "state->dep_data_mod.boltzmann",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.rgasuniv": {
+      "expression": "state->dep_data_mod.rgasuniv",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.avo": {
+      "expression": "state->dep_data_mod.avo",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.cb": {
+      "expression": "state->dep_data_mod.cb",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.cim": {
+      "expression": "state->dep_data_mod.cim",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.alpha": {
+      "expression": "state->dep_data_mod.alpha",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.cin": {
+      "expression": "state->dep_data_mod.cin",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.vv": {
+      "expression": "state->dep_data_mod.vv",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.a_for": {
+      "expression": "state->dep_data_mod.a_for",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.a_grs": {
+      "expression": "state->dep_data_mod.a_grs",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.a_wat": {
+      "expression": "state->dep_data_mod.a_wat",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.eps0_for": {
+      "expression": "state->dep_data_mod.eps0_for",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.eps0_grs": {
+      "expression": "state->dep_data_mod.eps0_grs",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.eps0_wat": {
+      "expression": "state->dep_data_mod.eps0_wat",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.one3": {
+      "expression": "state->dep_data_mod.one3",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.two3": {
+      "expression": "state->dep_data_mod.two3",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.sqrt2": {
+      "expression": "state->dep_data_mod.sqrt2",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.sqrtpi": {
+      "expression": "state->dep_data_mod.sqrtpi",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.karman": {
+      "expression": "state->dep_data_mod.karman",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.conmin": {
+      "expression": "state->dep_data_mod.conmin",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.pirs": {
+      "expression": "state->dep_data_mod.pirs",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.f6dpi": {
+      "expression": "state->dep_data_mod.f6dpi",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.f6dpim9": {
+      "expression": "state->dep_data_mod.f6dpim9",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.sigma1": {
+      "expression": "state->dep_data_mod.sigma1",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.mean_diameter1": {
+      "expression": "state->dep_data_mod.mean_diameter1",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.fact_wfa": {
+      "expression": "state->dep_data_mod.fact_wfa",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.dgmin": {
+      "expression": "state->dep_data_mod.dgmin",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.densmin": {
+      "expression": "state->dep_data_mod.densmin",
+      "type": "float",
+      "rank": 0
+    },
+    "state.dep_data_mod.aero_dens": {
+      "expression": "state->dep_data_mod.aero_dens",
+      "type": "float",
+      "rank": 1
+    },
+    "state.dep_data_mod.aero_diam": {
+      "expression": "state->dep_data_mod.aero_diam",
+      "type": "float",
+      "rank": 1
+    },
+    "state.mpas_smoke_init.p_smoke_fine": {
+      "expression": "state->mpas_smoke_init.p_smoke_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_smoke_coarse": {
+      "expression": "state->mpas_smoke_init.p_smoke_coarse",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_dust_fine": {
+      "expression": "state->mpas_smoke_init.p_dust_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_dust_coarse": {
+      "expression": "state->mpas_smoke_init.p_dust_coarse",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_polp_all": {
+      "expression": "state->mpas_smoke_init.p_polp_all",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_polp_tree": {
+      "expression": "state->mpas_smoke_init.p_polp_tree",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_polp_grass": {
+      "expression": "state->mpas_smoke_init.p_polp_grass",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_polp_weed": {
+      "expression": "state->mpas_smoke_init.p_polp_weed",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_pols_tree": {
+      "expression": "state->mpas_smoke_init.p_pols_tree",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_pols_grass": {
+      "expression": "state->mpas_smoke_init.p_pols_grass",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_pols_weed": {
+      "expression": "state->mpas_smoke_init.p_pols_weed",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_pols_all": {
+      "expression": "state->mpas_smoke_init.p_pols_all",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_unspc_fine": {
+      "expression": "state->mpas_smoke_init.p_unspc_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_unspc_coarse": {
+      "expression": "state->mpas_smoke_init.p_unspc_coarse",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_ssalt_fine": {
+      "expression": "state->mpas_smoke_init.p_ssalt_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_ssalt_coarse": {
+      "expression": "state->mpas_smoke_init.p_ssalt_coarse",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_no3_a_fine": {
+      "expression": "state->mpas_smoke_init.p_no3_a_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_so4_a_fine": {
+      "expression": "state->mpas_smoke_init.p_so4_a_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_nh4_a_fine": {
+      "expression": "state->mpas_smoke_init.p_nh4_a_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_so2": {
+      "expression": "state->mpas_smoke_init.p_so2",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_nh3": {
+      "expression": "state->mpas_smoke_init.p_nh3",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_ch4": {
+      "expression": "state->mpas_smoke_init.p_ch4",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_mold_fine": {
+      "expression": "state->mpas_smoke_init.p_mold_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_bact_fine": {
+      "expression": "state->mpas_smoke_init.p_bact_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_plastic_fine": {
+      "expression": "state->mpas_smoke_init.p_plastic_fine",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_smoke_init.p_dms": {
+      "expression": "state->mpas_smoke_init.p_dms",
+      "type": "int",
+      "rank": 0
+    },
+    "state.seas_ngac_mod.r80fac": {
+      "expression": "state->seas_ngac_mod.r80fac",
+      "type": "float",
+      "rank": 0
+    },
+    "state.seas_ngac_mod.rhop": {
+      "expression": "state->seas_ngac_mod.rhop",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.nkp": {
+      "expression": "state->module_zero_plumegen_coms.nkp",
+      "type": "int",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.ntime": {
+      "expression": "state->module_zero_plumegen_coms.ntime",
+      "type": "int",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms.present": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms",
+      "type": "pointer_present",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms.alias": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms",
+      "type": "pointer_alias",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%initialized": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->initialized",
+      "type": "bool",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%w": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->w",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%t": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->t",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qv": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qv",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qc": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qc",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qh": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qh",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qi": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qi",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%sc": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->sc",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vth": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vth",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vti": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vti",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%rho": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->rho",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%txs": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->txs",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%est": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->est",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qsat": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qsat",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%wc": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->wc",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%wt": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->wt",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%tt": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->tt",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qvt": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qvt",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qct": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qct",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qht": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qht",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qit": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qit",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%sct": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->sct",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%dzm": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->dzm",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%dzt": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->dzt",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%zm": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->zm",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%zt": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->zt",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vctr1": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vctr1",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vctr2": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vctr2",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vt3dc": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vt3dc",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vt3df": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vt3df",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vt3dk": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vt3dk",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vt3dg": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vt3dg",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%scr1": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->scr1",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%pke": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->pke",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%the": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->the",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%thve": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->thve",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%thee": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->thee",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%pe": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->pe",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%te": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->te",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%qvenv": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->qvenv",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%dne": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->dne",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%ucon": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->ucon",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vcon": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vcon",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%thtcon": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->thtcon",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%rvcon": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->rvcon",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%picon": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->picon",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%tmpcon": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->tmpcon",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%zcon": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->zcon",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%zzcon": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->zzcon",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%dz": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->dz",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%dqsdz": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->dqsdz",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%visc": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->visc",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%viscosity": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->viscosity",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%tstpf": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->tstpf",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%n": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->n",
+      "type": "int",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%nm1": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->nm1",
+      "type": "int",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%l": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->l",
+      "type": "int",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%cvh": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->cvh",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%cvi": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->cvi",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%adiabat": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->adiabat",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%wbar": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->wbar",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vhrel": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vhrel",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%virel": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->virel",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%zsurf": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->zsurf",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%ztop": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->ztop",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%area": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->area",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%rsurf": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->rsurf",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%alpha": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->alpha",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%radius": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->radius",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%heating": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->heating",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%fmoist": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->fmoist",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%bload": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->bload",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%dt": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->dt",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%time": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->time",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%tdur": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->tdur",
+      "type": "float",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%mintime": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->mintime",
+      "type": "int",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%mdur": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->mdur",
+      "type": "int",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%maxtime": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->maxtime",
+      "type": "int",
+      "rank": 0
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%upe": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->upe",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vpe": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vpe",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vel_e": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vel_e",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vel_p": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vel_p",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%rad_p": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->rad_p",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%vel_t": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->vel_t",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%rad_t": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->rad_t",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%ztop_": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->ztop_",
+      "type": "float",
+      "rank": 1
+    },
+    "state.module_zero_plumegen_coms.private_thread_coms%testval": {
+      "expression": "state->module_zero_plumegen_coms.private_thread_coms->testval",
+      "type": "int",
+      "rank": 0
+    },
+    "local.module_fire_emissions.diurnal_cycle.icall": {
+      "expression": "state->saved_diurnal_cycle_icall",
+      "type": "int",
+      "rank": 0
+    },
+    "local.module_add_emiss_burn.add_emis_burn.icall": {
+      "expression": "state->saved_add_emis_burn_icall",
+      "type": "int",
+      "rank": 0
+    },
+    "local.module_smoke_plumerise.makeplume.delz_thresold": {
+      "expression": "state->saved_makeplume_delz_thresold",
+      "type": "float",
+      "rank": 0
+    },
+    "local.module_smoke_plumerise.visc_w.printed": {
+      "expression": "state->saved_visc_w_printed",
+      "type": "bool",
+      "rank": 0
+    },
+    "local.dep_dry_mod_emerson.dry_dep_driver_emerson.icall": {
+      "expression": "state->saved_dry_dep_driver_emerson_icall",
+      "type": "int",
+      "rank": 0
+    },
+    "state.mpas_log.mpas_log_info%outputlog%isactive": {
+      "expression": "state->framework_log_active",
+      "type": "bool",
+      "rank": 0
+    },
+    "state.mpas_log.mpas_log_info%outputmessagecount": {
+      "expression": "state->framework_log_output_count",
+      "type": "int",
+      "rank": 0
+    }
+  }
+}

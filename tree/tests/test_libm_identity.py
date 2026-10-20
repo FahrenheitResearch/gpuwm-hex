@@ -165,26 +165,16 @@ def test_the_correctly_rounded_control_is_the_portable_one() -> None:
     )
 
 
-def test_the_artifact_path_still_uses_the_scalar_power_on_purpose() -> None:
-    """`edge_dc_squared_over_twelve` must keep reproducing the record.
+def test_mpas_integer_square_is_independent_of_the_scalar_power_libm() -> None:
+    """v8.4.2 cases.F:3425 uses an integer power compiled as one multiply.
 
-    Until re-registration is ruled on, this function's job is to
-    reproduce the artifact of record exactly -- which means the libm answer,
-    not the correctly-rounded one.  If someone "fixes" it to ``np.square``,
-    every registered vertical digest stops reproducing on the box that made
-    it, and this test is where they find that out.
+    Strict Fortran replay replaces the former numpy-artifact compatibility
+    guard for this helper. Existing archived artifacts keep their own pins.
     """
-
     x = scalar_pow_probe_inputs(1 << 15)
-    twos = np.full(x.shape, 2.0, dtype=x.dtype)
-    expected = (np.power(x, twos) / 12.0).astype(np.float32)
+    expected = (np.square(x) / np.float32(12.0)).astype(np.float32)
     got = edge_dc_squared_over_twelve(x, np.dtype(np.float32))
-    assert got.tobytes() == expected.tobytes(), (
-        "edge_dc_squared_over_twelve no longer reproduces numpy's scalar "
-        "power. Every registered vertical artifact digest was minted through "
-        "that path; changing it re-mints all of them and is a re-registration "
-        "decision, not a cleanup."
-    )
+    assert got.tobytes() == expected.tobytes()
 
 
 def test_the_probe_is_wide_enough_to_separate_the_measured_libms() -> None:

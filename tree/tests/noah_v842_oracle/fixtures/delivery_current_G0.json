@@ -1,0 +1,5 @@
+{
+  "schema": "p16-noah-delivery-receipt-pin-v1",
+  "receipt": "receipts/noah-delivery-current-G0.json",
+  "sha256": "9ba18995cac691e9baa7a0c598903b02a49f89c939ed944d106010c023e65e45"
+}

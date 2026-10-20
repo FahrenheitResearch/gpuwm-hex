@@ -103,6 +103,8 @@ def expected_round_sequence(
     acoustic_steps: Sequence[int] = (1, 3, 6),
     scalar_stages: int = 3,
     monotonic: bool = True,
+    regional: bool = False,
+    fct_parts: int = 1,
 ) -> tuple[str, ...]:
     """The exact per-step round string the exchanger must observe.
 
@@ -122,7 +124,16 @@ def expected_round_sequence(
     for stage in range(1, int(scalar_stages) + 1):
         sequence.append("D")
         if monotonic and stage == int(scalar_stages):
-            sequence.append("E")
+            # One E per monotonic-limiter species pass (fct_parts, hex memory
+            # census item 4); each part is its own schedule slot.
+            sequence.extend(["E"] * int(fct_parts))
+        if regional:
+            # atm_srk3 exchanges 'dynamics:scalars' between each stage's
+            # transport and atm_bdy_adjust_scalars, whose relaxation filter
+            # reads the stage output on neighbour cells (rrfs-h-h3-speed,
+            # 2026-10-05: without it public conus12km N2/N4/N8 differ from
+            # N1 at step 1, at seam cells inside the relaxation zone).
+            sequence.append("D")
     # the final publish round: the last stage's output scalars become owner
     # truth before phase-2 consumes the halo columns (see cuda_driver's site)
     sequence.append("D")
@@ -249,6 +260,7 @@ class HaloExchanger:
         )
         self._step: int | None = None
         self._observed: list[str] = []
+        self.fct_scale_parts = self._expected.count("E")
         self._send_cell = xp.asarray(tables.cell_send)
         self._send_edge = xp.asarray(tables.edge_send)
         self.stats: dict[str, dict[str, float]] = {
@@ -265,10 +277,16 @@ class HaloExchanger:
             )
         self._step = int(step)
         self._observed = []
+        self._fct_split = None
 
     def end_step(self) -> None:
         if self._step is None:
             raise ExecutorError("end_step without begin_step")
+        if getattr(self, "_fct_split", None) is not None:
+            part, parts = self._fct_split
+            raise ExecutorError(
+                f"step {self._step} ended with round E split at part {part} of {parts}"
+            )
         observed = tuple(self._observed)
         if observed != self._expected:
             raise ExecutorError(
@@ -396,13 +414,37 @@ class HaloExchanger:
 
         self._round("D", [("scalars", scalar_stage, _CELL)])
 
-    def round_fct_scale(self, scale_in: Any, scale_out: Any) -> None:
+    # Round E arrives in ``fct_scale_parts`` parts, one per monotonic-limiter
+    # species pass (cuda_transport_v841.limiter_species_per_pass, hex memory
+    # census item 4).  The count is the run of E slots in this exchanger's
+    # schedule (expected_round_sequence(fct_parts=...)), so every part is an
+    # ordinary schedule slot; the parts must come in order and the step cannot
+    # end with a split round open.  Each part carries its species' scale
+    # factors, so every rank receives the same owner-truth words as one
+    # all-species round.
+
+    def round_fct_scale(self, scale_in: Any, scale_out: Any, *, part: int = 0,
+                        parts: int = 1) -> None:
         """E: monotonic-limiter scale factors before the flux rescale."""
 
-        self._round(
-            "E",
-            [("scale_in", scale_in, _CELL), ("scale_out", scale_out, _CELL)],
-        )
+        part, parts = int(part), int(parts)
+        if not 0 <= part < parts:
+            raise ExecutorError(f"round E part {part} of {parts}")
+        split = getattr(self, "_fct_split", None)
+        fields = [("scale_in", scale_in, _CELL), ("scale_out", scale_out, _CELL)]
+        if part == 0:
+            if split is not None:
+                raise ExecutorError(
+                    f"step {self._step}: round E began again at part {split[0]} of {split[1]}"
+                )
+        else:
+            if split != (part, parts):
+                raise ExecutorError(
+                    f"step {self._step}: round E part {part} of {parts} out of order "
+                    f"(expected {split})"
+                )
+        self._round("E", fields)
+        self._fct_split = None if part + 1 == parts else (part + 1, parts)
 
     # -- receipts ----------------------------------------------------------
 

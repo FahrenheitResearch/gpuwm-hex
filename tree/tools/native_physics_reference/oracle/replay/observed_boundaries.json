@@ -1,0 +1,44 @@
+{
+  "rrfs-pbl-handoffs": {
+    "model_commit": "1d6e370e7b43a332074809f170532a216c2212fb",
+    "module": "mpas_atmphys_driver_pbl",
+    "source": "src/core_atmosphere/physics/mpas_atmphys_driver_pbl.F",
+    "source_sha256": "8fc75f442ccd390afcab603cdbf1f266266d377812bd9a8c069b066af9505389",
+    "state_module": "mpas_atmphys_vars",
+    "routines": {
+      "boundary__pbl_from_mpas": {
+        "routine": "pbl_from_mpas",
+        "arguments": [
+          "configs",
+          "state",
+          "mesh",
+          "sfc_input",
+          "diag_physics",
+          "tend_physics",
+          "its",
+          "ite"
+        ]
+      },
+      "boundary__pbl_to_mpas": {
+        "routine": "pbl_to_mpas",
+        "arguments": [
+          "configs",
+          "state",
+          "diag_physics",
+          "tend_physics",
+          "its",
+          "ite"
+        ]
+      }
+    },
+    "native_bank_schema": "r4.real-driver-bank/v1",
+    "metadata": {
+      "manifest.json": "06d86889a1270109b5b4fe595e1f08ca47c145a056a5e99e148d109ce1d2c89e",
+      "producer.json": "44d17bb8933da74dbd2a489d6215ce884ef08ebadb1e5c111772a8f7d45c0ad5",
+      "passivity.json": "d11129caae4ff903fd6c00ec9759d11ea4f413f6cd6c6458d0e6b985ef2e34fa",
+      "input-request.json": "4a01ccc691a7e9e81612b5bbf621a641ba69ed6b38a596977fff405da59e1387"
+    },
+    "capture_owner_commit": "e09de8494ad5da24bac85ab4ca0dc7c6dd692a83",
+    "scope": "Entire original packing/writeback routines at the stated native selector; full queried fields and captured scratch. Unqueried pool graphs, callbacks, other selectors and chemistry are not claimed."
+  }
+}

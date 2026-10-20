@@ -57,15 +57,19 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import re
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 import numpy as np
 from netCDF4 import Dataset
 from numpy.typing import NDArray
 
 from .errors import MeshValidationError
+from .host_parallel import run_blocks, threads
 
 
 _COUNTED_CONNECTIVITY = {
@@ -188,34 +192,83 @@ def _plain_attribute(value: Any) -> Any:
     return value
 
 
-def _read_netcdf(
-    path: Path,
-) -> tuple[
+_NetCDFData = tuple[
     dict[str, int],
     dict[str, Any],
     dict[str, NDArray[Any]],
     dict[str, tuple[str, ...]],
     dict[str, dict[str, Any]],
-]:
+]
+
+
+_NETCDF_COPY_MIN_BYTES = 1 << 20
+
+
+def _copy_netcdf_array(value: NDArray[Any]) -> NDArray[Any]:
+    return np.array(value, copy=True)
+
+
+def _read_netcdf(
+    path: Path,
+    *, exclude_variables: frozenset[str] = frozenset(),
+) -> _NetCDFData:
     dimensions: dict[str, int] = {}
     attributes: dict[str, Any] = {}
     arrays: dict[str, NDArray[Any]] = {}
     variable_dimensions: dict[str, tuple[str, ...]] = {}
     variable_attributes: dict[str, dict[str, Any]] = {}
 
-    with Dataset(path, mode="r") as dataset:
-        dataset.set_auto_mask(False)
-        dimensions.update({name: len(dim) for name, dim in dataset.dimensions.items()})
-        attributes.update(
-            {name: _plain_attribute(getattr(dataset, name)) for name in dataset.ncattrs()}
-        )
-        for name, variable in dataset.variables.items():
-            arrays[name] = np.array(variable[...], copy=True)
-            variable_dimensions[name] = tuple(variable.dimensions)
-            variable_attributes[name] = {
-                attr: _plain_attribute(getattr(variable, attr))
-                for attr in variable.ncattrs()
-            }
+    # netCDF-C calls stay on the caller. Only independent NumPy copies overlap
+    # the next variable read. One copy worker avoids bandwidth contention with
+    # decoding; at most two pending variables retain their read buffers.
+    parallel = threads() > 1
+    pending: deque[tuple[str, Future[NDArray[Any]]]] = deque()
+
+    def finish_one() -> None:
+        name, future = pending[0]
+        arrays[name] = future.result()
+        pending.popleft()
+
+    def finish_all() -> None:
+        while pending:
+            finish_one()
+
+    executor = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="hex-netcdf-copy")
+                if parallel else nullcontext(None))
+    with executor as pool:
+        with Dataset(path, mode="r") as dataset:
+            try:
+                dataset.set_auto_mask(False)
+                dimensions.update({name: len(dim) for name, dim in dataset.dimensions.items()})
+                attributes.update(
+                    {name: _plain_attribute(getattr(dataset, name)) for name in dataset.ncattrs()}
+                )
+                for name, variable in dataset.variables.items():
+                    if name in exclude_variables:
+                        continue
+                    if len(pending) >= 2:
+                        finish_one()
+                    source = variable[...]
+                    if (pool is not None and source.nbytes >= _NETCDF_COPY_MIN_BYTES
+                            and not source.dtype.hasobject):
+                        # Reserve the original insertion order until the owned
+                        # copy is ready. The source never escapes this function.
+                        arrays[name] = source
+                        pending.append((name, pool.submit(_copy_netcdf_array, source)))
+                    else:
+                        arrays[name] = _copy_netcdf_array(source)
+                    variable_dimensions[name] = tuple(variable.dimensions)
+                    variable_attributes[name] = {
+                        attr: _plain_attribute(getattr(variable, attr))
+                        for attr in variable.ncattrs()
+                    }
+            except BaseException:
+                # An earlier copy failure wins over a later read/attribute
+                # failure. Drain before Dataset.__exit__, retaining its normal
+                # close behavior even when a read or copy failed.
+                finish_all()
+                raise
+            finish_all()
 
     return dimensions, attributes, arrays, variable_dimensions, variable_attributes
 
@@ -246,7 +299,18 @@ def _canonicalize_connectivity(arrays: dict[str, NDArray[Any]]) -> tuple[str, ..
     for name, source in tuple(arrays.items()):
         if not _looks_like_connectivity(name, source):
             continue
-        arrays[name] = np.asarray(source, dtype=np.int64) - 1
+        target = np.empty_like(source, dtype=np.int64)
+
+        def convert(block: slice) -> None:
+            # Cast before subtracting, including unsigned stored indices.
+            np.subtract(source[block], 1, out=target[block], dtype=np.int64,
+                        casting="unsafe")
+
+        if source.ndim:
+            run_blocks(convert, source.shape[0], elements=source.size, worker_limit=4)
+        else:
+            target[...] = np.asarray(source, dtype=np.int64) - 1
+        arrays[name] = target
         converted.append(name)
 
     for name, count_name in _COUNTED_CONNECTIVITY.items():
@@ -256,10 +320,86 @@ def _canonicalize_connectivity(arrays: dict[str, NDArray[Any]]) -> tuple[str, ..
         counts = np.asarray(arrays[count_name], dtype=np.int64)
         if array.ndim != 2 or counts.shape != (array.shape[0],):
             continue
-        padding = np.arange(array.shape[1])[None, :] >= counts[:, None]
-        array[padding] = -1
+        slots = np.arange(array.shape[1])[None, :]
+
+        def pad(block: slice) -> None:
+            padding = slots >= counts[block, None]
+            array[block][padding] = -1
+
+        run_blocks(pad, array.shape[0], elements=array.size, worker_limit=4)
 
     return tuple(sorted(converted))
+
+
+def _spherical_arc_lengths(
+    coordinates: NDArray[np.float64], endpoints: NDArray[np.int64],
+    radius: float, *, clip_missing: bool = False,
+) -> NDArray[np.float64]:
+    """Keep each row's original NumPy arithmetic, with bounded worker gathers.
+
+    The cold mesh loader checks millions of edges. Gathering both full
+    coordinate tables before computing cross products serializes that work
+    and allocates several full-size temporaries. Blocks contain whole rows,
+    so the three-component sums retain their order and validation tolerances.
+    """
+    result = np.empty(endpoints.shape[0], dtype=np.float64)
+
+    def measure(block: slice) -> None:
+        pairs = endpoints[block]
+        if clip_missing:
+            pairs = np.clip(pairs, 0, None)
+        first = coordinates[pairs[:, 0]]
+        second = coordinates[pairs[:, 1]]
+        result[block] = radius * np.arctan2(
+            np.linalg.norm(np.cross(first, second), axis=1),
+            np.sum(first * second, axis=1),
+        )
+
+    run_blocks(measure, len(endpoints), elements=endpoints.shape[0] * 6)
+    return result
+
+
+def _spherical_coordinate_checks(
+    xyz: NDArray[np.float64], latitude: NDArray[np.float64],
+    longitude: NDArray[np.float64], radius: float, metric_rtol: float,
+    suffix: str,
+) -> tuple[NDArray[np.float64] | None, list[str]]:
+    """Validate complete coordinate rows without serial whole-mesh trig.
+
+    Norms reduce only the original three components within each row. Each
+    coordinate and trig expression keeps its original operation order.
+    Boolean conjunction across blocks preserves the original error order,
+    including the non-finite check's precedence over geometric checks.
+    """
+    normalized = np.empty_like(xyz)
+    outcomes: list[tuple[bool, bool, bool]] = []
+
+    def check(block: slice) -> None:
+        points, lat, lon = xyz[block], latitude[block], longitude[block]
+        if not np.all(np.isfinite(points)) or not np.all(np.isfinite(lat + lon)):
+            outcomes.append((False, False, False))
+            return
+        norms = np.linalg.norm(points, axis=1)
+        on_radius = bool(np.allclose(norms, radius, rtol=metric_rtol, atol=0.0))
+        expected = radius * np.stack(
+            (np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)),
+            axis=1,
+        )
+        consistent = bool(np.allclose(
+            points, expected, rtol=metric_rtol, atol=radius * metric_rtol,
+        ))
+        normalized[block] = points / norms[:, None]
+        outcomes.append((True, on_radius, consistent))
+
+    run_blocks(check, len(xyz), elements=len(xyz) * 12)
+    if not all(result[0] for result in outcomes):
+        return None, [f"{suffix} coordinates contain non-finite values"]
+    errors = []
+    if not all(result[1] for result in outcomes):
+        errors.append(f"{suffix} Cartesian coordinates are not on sphere_radius")
+    if not all(result[2] for result in outcomes):
+        errors.append(f"{suffix} Cartesian and lat/lon coordinates disagree")
+    return normalized, errors
 
 
 def _bad_examples(indices: NDArray[Any], limit: int = 5) -> str:
@@ -268,11 +408,11 @@ def _bad_examples(indices: NDArray[Any], limit: int = 5) -> str:
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    # The real SHA-256, computed once per file version (hexcore.file_digest):
+    # the 15 km grid and static were hashed again on every mesh load
+    # (4.7 s of a warm host preparation, 8-card RTX PRO 6000 host 2026-10-10).
+    from .file_digest import sha256_file as file_version_sha256
+    return file_version_sha256(path)
 
 
 def _sha256_array(value: Any) -> str:
@@ -284,8 +424,42 @@ def _sha256_array(value: Any) -> str:
     digest.update(b"\0")
     digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode())
     digest.update(b"\0")
-    digest.update(array.tobytes(order="C"))
+    # Stable mesh carriers need no additional whole-payload bytes allocation.
+    # Keep the historical representation for object arrays, which cannot be
+    # viewed as uint8; mesh coordinate admission permits binary64 only.
+    payload = (array.tobytes(order="C") if array.dtype.hasobject else
+               memoryview(array.reshape(-1).view(np.uint8)))
+    digest.update(payload)
     return digest.hexdigest()
+
+
+_PARALLEL_ARRAY_DIGEST_BYTES = 16 * 1024 * 1024
+
+
+@contextmanager
+def _array_digest_items(values: Mapping[str, np.ndarray]) -> Iterator[Iterator[tuple[str, str]]]:
+    """Hash independent stable carriers, retaining each complete SHA stream.
+
+    Reuse the bounded authority-fingerprint approach from cuda_driver. Ordered
+    results preserve first-refusal order, including comparisons between hashes.
+    Exiting the context joins every worker before a caller can roll back arrays.
+    Four workers bound memory-bandwidth contention with the input file hashes.
+    """
+    workers = min(4, len(values), threads())
+    large = sum(value.nbytes for value in values.values()) >= _PARALLEL_ARRAY_DIGEST_BYTES
+    error_policy = np.geterr()
+
+    def record(item: tuple[str, np.ndarray]) -> tuple[str, str]:
+        name, value = item
+        with np.errstate(**error_policy):
+            return name, _sha256_array(value)
+
+    if workers <= 1 or not large:
+        yield map(record, values.items())
+    else:
+        with ThreadPoolExecutor(max_workers=workers,
+                                thread_name_prefix="hex-mesh-array-digest") as pool:
+            yield pool.map(record, values.items())
 
 
 def regional_boundary_mask_digest(masks: Mapping[str, Any]) -> str:
@@ -549,6 +723,259 @@ def spherical_arc_tolerance(
     return min(float(metric_rtol), _SPHERICAL_ARC_MAX_RTOL), 2.0 * math.sqrt(3.0) * spacing
 
 
+#: The two orderings of ``verticesOnCell`` against ``edgesOnCell`` that
+#: published MPAS meshes carry.  ``edge-start``: vertex ``j`` opens edge
+#: ``j``, so edge ``j`` joins vertices ``j`` and ``j+1`` (MPAS-Tools, NCAR's
+#: x1 meshes, RRFS v2's conus12km, and the rw-mpas generator).
+#: ``edge-end``: vertex ``j`` closes edge ``j``, so edge ``j`` joins vertices
+#: ``j-1`` and ``j`` (RRFS v2's public conus3km, every one of its 2,341,818
+#: cells, measured 2026-10-05).  Both are the same counter-clockwise ring;
+#: they differ only in which slot the ring starts at.
+VERTEX_SLOT_CONVENTIONS = ("edge-start", "edge-end")
+
+#: Closure identities of a binary64 producer cannot be more precise than the
+#: arcs it builds its areas from.  An arc taken from a dot product (acos)
+#: carries a relative error of about ``u / theta**2`` for an arc of
+#: ``theta`` radians, ``u`` the binary64 unit roundoff.  A kite is built from
+#: half arcs (cell centre to edge midpoint, edge midpoint to vertex), which
+#: quarters ``theta**2``, its area takes two of them, and a closure compares
+#: two such areas: 4 * 2 * 2 = 16.
+_CLOSURE_CONDITIONING_FACTOR = 16.0
+
+#: The binary32 closure bound the validator has always held for metrics
+#: stored at binary32 precision.  Unchanged here: the measured binary32
+#: statics (conus12km, conus3km) close at 1.4e-7, inside it.
+_BINARY32_METRIC_RTOL = 2.0e-5
+
+
+def vertex_slot_convention(
+    counts: Any,
+    edges_on_cell: Any,
+    vertices_on_cell: Any,
+    vertices_on_edge: Any,
+) -> dict[str, Any]:
+    """Detect which slot ordering a mesh stores ``verticesOnCell`` in.
+
+    MPAS consumes ``verticesOnCell`` in its stored order and pairs vertex
+    ``j`` with edge ``j`` nowhere in the time integration: every sum over a
+    cell's vertices (``pv_cell``, the kinetic-energy vertex correction) goes
+    through ``kiteForCell``, which finds the kite by searching
+    ``cellsOnVertex`` and so holds under either ordering.  The convention is
+    therefore a property to DETECT and check reciprocity under, not one to
+    rewrite: nothing here reorders the stored array.
+
+    Returns the per-mesh verdict, the per-cell counts, the first cells that
+    satisfy neither ordering, and ``view``: the stored rows re-indexed so the
+    edge-start reciprocity check (vertices ``j`` and ``j+1`` bound edge
+    ``j``) holds exactly when the mesh is consistent under its own detected
+    convention.  ``view`` is a validation index map only; it never reaches
+    the dycore.
+    """
+
+    counts = np.asarray(counts, dtype=np.int64)
+    edges = np.asarray(edges_on_cell, dtype=np.int64)
+    vertices = np.asarray(vertices_on_cell, dtype=np.int64)
+    endpoints = np.asarray(vertices_on_edge, dtype=np.int64)
+    n_cells, max_edges = edges.shape
+    slots = np.arange(max_edges)[None, :]
+    start_cells = np.empty(n_cells, dtype=bool)
+    end_cells = np.empty(n_cells, dtype=bool)
+
+    def check(block: slice) -> None:
+        local_counts = counts[block, None]
+        local_vertices = vertices[block]
+        used = slots < local_counts
+        rows = np.arange(len(local_vertices))[:, None]
+        following = np.where(slots + 1 < local_counts, slots + 1, 0)
+        preceding = np.where(slots >= 1, slots - 1, local_counts - 1)
+        safe_edges = np.where(used, edges[block], 0)
+        first = endpoints[safe_edges, 0]
+        second = endpoints[safe_edges, 1]
+
+        def bounds(candidate: NDArray[np.int64]) -> NDArray[np.bool_]:
+            return (candidate == first) | (candidate == second)
+
+        own = bounds(local_vertices)
+        start_cells[block] = (
+            (own & bounds(local_vertices[rows, following])) | ~used
+        ).all(axis=1)
+        end_cells[block] = (
+            (own & bounds(local_vertices[rows, preceding])) | ~used
+        ).all(axis=1)
+
+    # Complete rows are independent. Global counts and first bad-cell indices
+    # are still derived in stored order after every worker has finished.
+    run_blocks(check, n_cells, elements=edges.size)
+    n_start = int(np.count_nonzero(start_cells))
+    n_end = int(np.count_nonzero(end_cells))
+    neither = np.flatnonzero(~start_cells & ~end_cells)
+    if n_start == n_cells:
+        convention = "edge-start"
+    elif n_end == n_cells:
+        convention = "edge-end"
+    elif n_start and n_end:
+        convention = "mixed"
+    else:
+        convention = "none"
+    # The view follows the ordering most cells hold, so a reciprocity check
+    # run on it names only the cells that break that ordering instead of
+    # every cell of a consistently edge-end mesh.
+    if n_end > n_start:
+        view = np.empty(vertices.shape, dtype=vertices.dtype)
+
+        def rotate(block: slice) -> None:
+            local_counts = counts[block, None]
+            local_vertices = vertices[block]
+            rows = np.arange(len(local_vertices))[:, None]
+            preceding = np.where(slots >= 1, slots - 1, local_counts - 1)
+            view[block] = np.where(
+                slots < local_counts, local_vertices[rows, preceding], -1,
+            )
+
+        run_blocks(rotate, n_cells, elements=vertices.size)
+    else:
+        view = vertices
+    return {
+        "convention": convention,
+        "edge_start_cells": n_start,
+        "edge_end_cells": n_end,
+        "neither_cells": int(neither.size),
+        "first_neither_cells": [int(cell) for cell in neither[:5]],
+        "view": view,
+    }
+
+
+def _edge_weight_errors(
+    weights: NDArray[Any], counts: NDArray[np.int64], *, check_padding: bool,
+) -> list[str]:
+    """Check finite weights and zero padding without a whole-mesh mask.
+
+    Each complete edge row retains the original NumPy predicates. Only
+    boolean failure flags cross blocks, so neither weight words nor the
+    finite-before-padding refusal order depends on the worker schedule.
+    Invalid stencil counts still suppress the padding check at the caller.
+    """
+    slots = np.arange(weights.shape[1])[None, :]
+    nonfinite: list[bool] = []
+    nonzero_padding: list[bool] = []
+
+    def check(block: slice) -> None:
+        values = weights[block]
+        if not np.all(np.isfinite(values)):
+            nonfinite.append(True)
+        if check_padding:
+            padding = slots >= counts[block, None]
+            if np.any(values[padding] != 0):
+                nonzero_padding.append(True)
+
+    run_blocks(check, weights.shape[0], elements=weights.size)
+    errors = []
+    if nonfinite:
+        errors.append("weightsOnEdge contains non-finite values")
+    if nonzero_padding:
+        errors.append("weightsOnEdge padding is not zero")
+    return errors
+
+
+def _stored_significant_bits(array: Any) -> int:
+    """Significand bits the stored VALUES carry, measured, not read off dtype.
+
+    A binary64 array whose every value is exactly a binary32 number stores
+    binary32 precision whatever its dtype says; a writer that widened
+    binary32 metrics on output leaves exactly that.  Returns 24 for such an
+    array (and for a binary32 array), 53 otherwise.
+    """
+
+    values = np.asarray(array)
+    if values.dtype.itemsize <= 4:
+        return 24
+    widened = values.astype(np.float64, copy=False)
+    finite = widened[np.isfinite(widened)]
+    if finite.size and np.array_equal(
+        finite.astype(np.float32).astype(np.float64), finite
+    ):
+        return 24
+    return 53
+
+
+def closure_tolerance(
+    metric_arrays: Mapping[str, Any],
+    *,
+    radius: float | None,
+    edge_lengths: Any | None,
+) -> dict[str, Any]:
+    """The area-closure tolerance this file's stored precision admits.
+
+    Two measured quantities set it.  The STORAGE precision is the fewest
+    significand bits any metric array actually carries
+    (:func:`_stored_significant_bits`): binary32-precision metrics keep the
+    long-standing binary32 bound.  For binary64 storage the bound is set by
+    how precisely a binary64 producer CAN compute a small element's area:
+    ``16 * u / theta_min**2`` with ``theta_min`` the mesh's shortest
+    ``dcEdge``/``dvEdge`` in radians (see
+    :data:`_CLOSURE_CONDITIONING_FACTOR`).  On RRFS v2's conus3km grid
+    (``theta_min`` 1.97e-4, its shortest edge 1,254 m) that is 4.6e-8,
+    and the file measures 8.1e-10 (triangles) and 5.9e-10 (cells); its
+    stored ``areaTriangle`` disagrees
+    with the binary64 spherical area of its own cell-centre triangle by up to
+    4.2e-10, the same ``u / theta**2`` scale, while every arc length agrees
+    to 8e-13.  The previous fixed 5e-10 remains the binary64 bound wherever
+    this term is smaller -- coarse meshes are not loosened, because nothing
+    measured says they need it.
+
+    This returns the MESH-WIDE summary (the loosest element, set by the
+    shortest edge) for receipts and refusal text; :meth:`Mesh.validate`
+    holds each triangle and cell to the same formula with its OWN shortest
+    edge, so a graded mesh's coarse elements keep their tight bound.
+    """
+
+    bits = min(
+        (_stored_significant_bits(array) for array in metric_arrays.values()),
+        default=53,
+    )
+    unit_roundoff = float(np.ldexp(1.0, -bits))
+    theta_min = None
+    conditioning = 0.0
+    if bits <= 24:
+        rtol = _BINARY32_METRIC_RTOL
+        basis = "binary32 storage bound"
+    else:
+        if radius is not None and edge_lengths is not None and radius > 0:
+            lengths = np.asarray(edge_lengths, dtype=np.float64)
+            lengths = lengths[np.isfinite(lengths) & (lengths > 0)]
+            if lengths.size:
+                theta_min = float(lengths.min() / radius)
+                conditioning = (
+                    _CLOSURE_CONDITIONING_FACTOR
+                    * float(np.ldexp(1.0, -53))
+                    / (theta_min * theta_min)
+                )
+        rtol = max(_BINARY64_MESH_RTOL, conditioning)
+        basis = (
+            "binary64 producer conditioning 16*u/theta_min**2"
+            if conditioning > _BINARY64_MESH_RTOL
+            else "binary64 bound (conditioning term below it)"
+        )
+    return {
+        "stored_significant_bits": bits,
+        "unit_roundoff": unit_roundoff,
+        "theta_min_radians": theta_min,
+        "conditioning_rtol": conditioning,
+        "rtol": float(rtol),
+        "basis": basis,
+    }
+
+
+def _closure_statement(tolerance: Mapping[str, Any]) -> str:
+    theta = tolerance["theta_min_radians"]
+    theta_text = "n/a" if theta is None else f"{theta:.3e} rad"
+    return (
+        f"bound {tolerance['rtol']:.3e} ({tolerance['basis']}; stored metrics "
+        f"carry {tolerance['stored_significant_bits']} significand bits, "
+        f"shortest edge {theta_text})"
+    )
+
+
 def _wrapped_angle_delta(left: Any, right: Any) -> NDArray[np.float64]:
     first = np.asarray(left, dtype=np.float64)
     second = np.asarray(right, dtype=np.float64)
@@ -560,17 +987,57 @@ def _maximum_ulp_error(actual: Any, expected: Any) -> float:
     authority = np.asarray(expected, dtype=np.float64)
     if candidate.shape != authority.shape:
         return float("inf")
-    gaps = np.abs(candidate - authority)
-    spacing = np.abs(np.spacing(authority))
-    with np.errstate(over="ignore", invalid="ignore"):
-        ratios = np.divide(
-            gaps,
-            spacing,
-            out=np.full(gaps.shape, np.inf, dtype=np.float64),
-            where=spacing > 0.0,
-        )
-    ratios[gaps == 0.0] = 0.0
-    return float(np.max(ratios, initial=0.0))
+    axis = int(np.argmax(candidate.shape)) if candidate.ndim else 0
+    maxima: list[float] = []
+    policy = np.geterr()
+
+    def check(block: slice) -> None:
+        index = [slice(None)] * candidate.ndim
+        if index:
+            index[axis] = block
+        with np.errstate(**policy):
+            gaps = np.abs(candidate[tuple(index)] - authority[tuple(index)])
+            spacing = np.abs(np.spacing(authority[tuple(index)]))
+            with np.errstate(over="ignore", invalid="ignore"):
+                ratios = np.divide(
+                    gaps,
+                    spacing,
+                    out=np.full(gaps.shape, np.inf, dtype=np.float64),
+                    where=spacing > 0.0,
+                )
+            ratios[gaps == 0.0] = 0.0
+            maxima.append(float(np.max(ratios, initial=0.0)))
+
+    # Maxima preserve NaN propagation and do not reassociate floating sums.
+    # Callback/log policies belong to the caller's thread-local error handler.
+    if any(value in ("call", "log") for value in policy.values()):
+        check(slice(0, candidate.shape[axis] if candidate.ndim else 1))
+    else:
+        run_blocks(check, candidate.shape[axis] if candidate.ndim else 1,
+                   elements=candidate.size * 8, worker_limit=4)
+    return float(np.max(maxima, initial=0.0))
+
+
+def _latitude_longitude_xyz(
+    latitude: NDArray[np.float64], longitude: NDArray[np.float64], radius: float,
+) -> NDArray[np.float64]:
+    """Build independent Cartesian rows with the original ufunc order."""
+    xyz = np.empty((latitude.size, 3), dtype=np.float64)
+    policy = np.geterr()
+
+    def construct(block: slice) -> None:
+        lat, lon = latitude[block], longitude[block]
+        with np.errstate(**policy):
+            xyz[block] = radius * np.stack(
+                (np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)),
+                axis=1,
+            )
+
+    if any(value in ("call", "log") for value in policy.values()):
+        construct(slice(0, latitude.size))
+    else:
+        run_blocks(construct, latitude.size, elements=latitude.size * 12, worker_limit=4)
+    return xyz
 
 
 def _grid_rotate_convert_xl_longitude(
@@ -583,6 +1050,25 @@ def _grid_rotate_convert_xl_longitude(
     copies of the resulting pi error each literal quadrant branch introduces.
     """
 
+    policy = np.geterr()
+    if x.ndim != 1 or any(value in ("call", "log") for value in policy.values()):
+        return _grid_rotate_convert_xl_longitude_block(x, y)
+    longitude = np.empty(x.shape, dtype=np.float64)
+    multiplicity = np.empty(x.shape, dtype=np.float64)
+
+    def construct(block: slice) -> None:
+        with np.errstate(**policy):
+            longitude[block], multiplicity[block] = _grid_rotate_convert_xl_longitude_block(
+                x[block], y[block]
+            )
+
+    run_blocks(construct, x.size, elements=x.size * 16, worker_limit=4)
+    return longitude, multiplicity
+
+
+def _grid_rotate_convert_xl_longitude_block(
+    x: NDArray[np.float64], y: NDArray[np.float64],
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     longitude = np.zeros(x.shape, dtype=np.float64)
     multiplicity = np.zeros(x.shape, dtype=np.float64)
     x_active = np.abs(x) > GRID_ROTATE_CONVERT_XL_EPS
@@ -629,19 +1115,40 @@ def validate_longitude_normalization(
 
     original = np.asarray(source, dtype=np.float64)
     candidate = np.asarray(normalized, dtype=np.float64)
-    if (
-        original.shape != candidate.shape
-        or not np.all(np.isfinite(original))
-        or not np.all(np.isfinite(candidate))
-    ):
+    if original.shape != candidate.shape:
         raise ValueError("longitude normalization requires same-shaped finite arrays")
-    expected = (original + np.pi) % (2.0 * np.pi) - np.pi
-    if not np.array_equal(candidate, expected):
+
+    # Each element uses the original NumPy expression. Only boolean AND and
+    # finite nonnegative maxima cross block boundaries, so the exact receipt
+    # scalars and error precedence are independent of the worker schedule.
+    outcomes: list[tuple[bool, bool, bool, float, float]] = []
+    axis = int(np.argmax(original.shape)) if original.ndim else 0
+
+    def check(block: slice) -> None:
+        index = [slice(None)] * original.ndim
+        if index:
+            index[axis] = block
+        before, after = original[tuple(index)], candidate[tuple(index)]
+        if not np.all(np.isfinite(before)) or not np.all(np.isfinite(after)):
+            outcomes.append((False, False, False, 0.0, 0.0))
+            return
+        expected = (before + np.pi) % (2.0 * np.pi) - np.pi
+        mapped = bool(np.array_equal(after, expected))
+        in_range = not bool(np.any(after < -np.pi) or np.any(after >= np.pi))
+        sin_error = float(np.max(np.abs(np.sin(after) - np.sin(before)), initial=0.0))
+        cos_error = float(np.max(np.abs(np.cos(after) - np.cos(before)), initial=0.0))
+        outcomes.append((True, mapped, in_range, sin_error, cos_error))
+
+    run_blocks(check, original.shape[axis] if original.ndim else 1,
+               elements=original.size * 12)
+    if not all(row[0] for row in outcomes):
+        raise ValueError("longitude normalization requires same-shaped finite arrays")
+    if not all(row[1] for row in outcomes):
         raise ValueError("longitude normalization is not the exact modulo mapping")
-    if np.any(candidate < -np.pi) or np.any(candidate >= np.pi):
+    if not all(row[2] for row in outcomes):
         raise ValueError("normalized longitude lies outside [-pi, pi)")
-    sin_gap = float(np.max(np.abs(np.sin(candidate) - np.sin(original)), initial=0.0))
-    cos_gap = float(np.max(np.abs(np.cos(candidate) - np.cos(original)), initial=0.0))
+    sin_gap = max(row[3] for row in outcomes)
+    cos_gap = max(row[4] for row in outcomes)
     if (
         sin_gap > LONGITUDE_TRIG_EQUIVALENCE_ATOL
         or cos_gap > LONGITUDE_TRIG_EQUIVALENCE_ATOL
@@ -672,6 +1179,14 @@ class Mesh:
     or snake case (``cells_on_edge``).  The same applies to dimensions and
     global attributes.
     """
+
+    #: Fields that record only where the mesh bytes were read from.  The
+    #: host-preparation cache (hexcore.prep_cache) leaves them out of its key,
+    #: because every array read from those files is hashed already, so the
+    #: same mesh at another path (a moved case, a cache baked into an image)
+    #: is served.  A cached function whose reachable code names one of them
+    #: is keyed on it after all.
+    prep_cache_provenance = ("grid_path", "static_path", "provenance")
 
     def __init__(
         self,
@@ -721,6 +1236,9 @@ class Mesh:
         static_path: str | Path | None = None,
         *,
         validate: bool = True,
+        native_parent_chain: bool = False,
+        exclude_variables: frozenset[str] = frozenset(),
+        _grid_reader: Callable[[Path], _NetCDFData] | None = None,
     ) -> "Mesh":
         """Load an official MPAS grid and optionally overlay a static file.
 
@@ -731,6 +1249,11 @@ class Mesh:
         fields such as ``ter``, ``landmask``, and ``coeffs_reconstruct``.
         Per-file attributes and per-variable source labels remain available in
         :attr:`provenance`.
+
+        ``exclude_variables`` skips named payloads in both files before reading
+        them. The native physics route uses this for separately loaded state
+        fields. Dimensions, global attributes and retained variable metadata
+        still follow the same overlay and validation rules.
         """
 
         grid = Path(grid_path).expanduser().resolve(strict=True)
@@ -740,7 +1263,16 @@ class Mesh:
             arrays,
             variable_dimensions,
             variable_attrs,
-        ) = _read_netcdf(grid)
+        ) = ((_read_netcdf(grid, exclude_variables=exclude_variables)
+              if exclude_variables else _read_netcdf(grid))
+             if _grid_reader is None else _grid_reader(grid))
+        if _grid_reader is not None and exclude_variables:
+            # A shared reader result may serve several loads; filter copies of
+            # its tables instead of mutating them.
+            arrays, variable_dimensions, variable_attrs = (
+                {name: value for name, value in table.items()
+                 if name not in exclude_variables}
+                for table in (arrays, variable_dimensions, variable_attrs))
         sources = {name: "grid" for name in arrays}
         effective_attrs = dict(grid_attrs)
         static_attrs: dict[str, Any] = {}
@@ -754,7 +1286,8 @@ class Mesh:
                 static_arrays,
                 static_variable_dimensions,
                 static_variable_attrs,
-            ) = _read_netcdf(static)
+            ) = (_read_netcdf(static, exclude_variables=exclude_variables)
+                 if exclude_variables else _read_netcdf(static))
 
             incompatible = {
                 name: (dimensions[name], size)
@@ -768,7 +1301,11 @@ class Mesh:
 
             grid_id = str(grid_attrs.get("file_id", "")).strip()
             parent_id = str(static_attrs.get("parent_id", "")).strip()
-            if grid_id and parent_id and grid_id != parent_id:
+            # MPAS-Model-rrfs/src/framework/mpas_bootstrapping.F:320-330
+            # at 1d6e370e appends inherited IDs with NEW_LINE('A').
+            # Only the explicitly selected fork accepts this native lineage.
+            parents = parent_id.splitlines() if native_parent_chain else [parent_id]
+            if grid_id and parent_id and grid_id not in parents:
                 raise MeshValidationError(
                     "static parent_id does not match grid file_id: "
                     f"{parent_id!r} != {grid_id!r}"
@@ -1322,154 +1859,44 @@ class Mesh:
             and not any("used entries outside" in error for error in errors)
         )
         if topology_ranges_valid:
-            bad_cell_rows: list[int] = []
-            for cell in range(n_cells):
-                count = int(n_edges_on_cell[cell])
-                row_edges = edges_on_cell[cell, :count]
-                row_cells = cells_on_cell[cell, :count]
-                row_vertices = vertices_on_cell[cell, :count]
-                # On a regional ring-7 cell several neighbour slots hold the
-                # -1 sentinel; uniqueness applies to the present ones.  On a
-                # global mesh every used slot is present (range-checked
-                # above), so this is the original exact check.
-                present_cells = row_cells[row_cells >= 0]
-                if (
-                    np.unique(row_edges).size != count
-                    or np.unique(present_cells).size != present_cells.size
-                    or np.unique(row_vertices).size != count
-                ):
-                    bad_cell_rows.append(cell)
-                    continue
-                for slot, edge in enumerate(row_edges):
-                    edge_cells = cells_on_edge[edge]
-                    if cell not in edge_cells:
-                        bad_cell_rows.append(cell)
-                        break
-                    other = edge_cells[1] if edge_cells[0] == cell else edge_cells[0]
-                    if row_cells[slot] != other:
-                        bad_cell_rows.append(cell)
-                        break
-                    endpoints = vertices_on_edge[edge]
-                    next_slot = (slot + 1) % count
-                    if row_vertices[slot] not in endpoints or row_vertices[next_slot] not in endpoints:
-                        bad_cell_rows.append(cell)
-                        break
-            if bad_cell_rows:
-                errors.append(
-                    "cell edge/neighbor/vertex slot reciprocity fails at cells "
-                    + ", ".join(str(cell) for cell in bad_cell_rows[:5])
-                )
+            from .rust_hostprep import topology_errors
 
-            bad_edges: list[int] = []
-            for edge in range(n_edges):
-                edge_cells = cells_on_edge[edge]
-                endpoints = vertices_on_edge[edge]
-                if edge_cells[0] == edge_cells[1] or endpoints[0] == endpoints[1]:
-                    bad_edges.append(edge)
-                    continue
-                # A regional ring-7 edge may have one absent cell (-1); the
-                # reciprocity a missing cell cannot express is exempt, the
-                # present side is still required to list the edge.
-                if any(
-                    edge not in edges_on_cell[cell, : n_edges_on_cell[cell]]
-                    for cell in edge_cells
-                    if cell >= 0
-                ):
-                    bad_edges.append(edge)
-                    continue
-                if any(edge not in edges_on_vertex[vertex] for vertex in endpoints):
-                    bad_edges.append(edge)
-            if bad_edges:
+            # The slot pairing of verticesOnCell with edgesOnCell is a
+            # per-file convention (VERTEX_SLOT_CONVENTIONS), detected here
+            # and checked under the convention the file holds.  THE BREAKAGE
+            # THE OLD FIXED PAIRING CAUSED (measured 2026-10-05): RRFS v2's
+            # public conus3km grid stores every cell edge-end, so a check
+            # that assumed edge-start refused a mesh whose rings are
+            # complete and reciprocal, at cells 0..4.  The stored array is
+            # not modified; the Rust check reads an index map of it.
+            slot_convention = vertex_slot_convention(
+                n_edges_on_cell, edges_on_cell, vertices_on_cell, vertices_on_edge
+            )
+            if slot_convention["convention"] == "mixed":
                 errors.append(
-                    "edge-to-cell/vertex reciprocity fails at edges "
-                    + ", ".join(str(edge) for edge in bad_edges[:5])
+                    "verticesOnCell mixes slot conventions: "
+                    f"{slot_convention['edge_start_cells']} cells put vertex j "
+                    "at the start of edge j and "
+                    f"{slot_convention['edge_end_cells']} at its end.  No "
+                    "producer writes a mixed file; a row rotated by a "
+                    "corrupting writer looks exactly like this, and accepting "
+                    "it per cell would let that corruption pass as a convention"
                 )
+            errors.extend(topology_errors(
+                n_vertices=n_vertices, max_edges2=max_edges2,
+                vertex_degree=vertex_degree, regional=regional,
+                counts=n_edges_on_cell, edges=edges_on_cell,
+                cells_on_cell=cells_on_cell,
+                vertices_on_cell=slot_convention["view"],
+                cells_on_edge=cells_on_edge, vertices_on_edge=vertices_on_edge,
+                cells_on_vertex=cells_on_vertex, edges_on_vertex=edges_on_vertex,
+                edge_counts=n_edges_on_edge, edges_on_edge=edges_on_edge,
+            ))
 
-            bad_vertices: list[int] = []
-            for vertex in range(n_vertices):
-                row_cells = cells_on_vertex[vertex]
-                row_edges = edges_on_vertex[vertex]
-                # Regional ring-7 vertices hold -1 for culled cells/edges;
-                # uniqueness and reciprocity apply to the present entries.
-                # Global rows are fully present, so this is the original
-                # exact check there.
-                present_cells = row_cells[row_cells >= 0]
-                present_edges = row_edges[row_edges >= 0]
-                if (
-                    np.unique(present_cells).size != present_cells.size
-                    or np.unique(present_edges).size != present_edges.size
-                ):
-                    bad_vertices.append(vertex)
-                    continue
-                if any(
-                    vertex
-                    not in vertices_on_cell[cell, : n_edges_on_cell[cell]]
-                    for cell in present_cells
-                ) or any(vertex not in vertices_on_edge[edge] for edge in present_edges):
-                    bad_vertices.append(vertex)
-            if bad_vertices:
-                errors.append(
-                    "vertex-to-cell/edge reciprocity fails at vertices "
-                    + ", ".join(str(vertex) for vertex in bad_vertices[:5])
-                )
-
-            bad_stencils: list[int] = []
-            for edge in range(n_edges):
-                actual = edges_on_edge[edge, : n_edges_on_edge[edge]]
-                if regional and (
-                    np.any(actual == -1) or np.any(cells_on_edge[edge] == -1)
-                ):
-                    # A ring-7 edge bordering the cut: its parent stencil
-                    # reached culled edges (now -1 inside the unshrunk row)
-                    # and possibly retained edges of the culled cell, so the
-                    # exact-set identity is undefined.  What stays required:
-                    # no self-reference and no duplicate present entry.
-                    present = actual[actual >= 0]
-                    if edge in present or np.unique(present).size != present.size:
-                        bad_stencils.append(edge)
-                    continue
-                expected: set[int] = set()
-                for cell in cells_on_edge[edge]:
-                    expected.update(
-                        int(value)
-                        for value in edges_on_cell[cell, : n_edges_on_cell[cell]]
-                    )
-                expected.discard(edge)
-                if (
-                    edge in actual
-                    or np.unique(actual).size != actual.size
-                    or set(int(value) for value in actual) != expected
-                ):
-                    bad_stencils.append(edge)
-            if bad_stencils:
-                errors.append(
-                    "edgesOnEdge tangential stencil is invalid at edges "
-                    + ", ".join(str(edge) for edge in bad_stencils[:5])
-                )
-
-            visited = np.zeros(n_cells, dtype=bool)
-            stack = [0]
-            visited[0] = True
-            while stack:
-                cell = stack.pop()
-                for neighbor in cells_on_cell[cell, : n_edges_on_cell[cell]]:
-                    # The >= 0 guard is the same wrap family as the kite fix
-                    # below: visited[-1] silently reads/marks the LAST cell.
-                    if neighbor >= 0 and not visited[neighbor]:
-                        visited[neighbor] = True
-                        stack.append(int(neighbor))
-            if not np.all(visited):
-                errors.append(
-                    f"cell graph is disconnected ({np.count_nonzero(~visited)} unvisited cells)"
-                )
-
-        weights = np.asarray(self.weightsOnEdge)
-        if not np.all(np.isfinite(weights)):
-            errors.append("weightsOnEdge contains non-finite values")
-        if not bad_stencil_counts.size:
-            padding = np.arange(max_edges2)[None, :] >= n_edges_on_edge[:, None]
-            if np.any(weights[padding] != 0):
-                errors.append("weightsOnEdge padding is not zero")
+        errors.extend(_edge_weight_errors(
+            np.asarray(self.weightsOnEdge), n_edges_on_edge,
+            check_padding=not bad_stencil_counts.size,
+        ))
 
         positive_metrics = (
             "dcEdge",
@@ -1501,16 +1928,91 @@ class Mesh:
             for name in positive_metrics
             if name in self.arrays
         ]
-        has_float32 = any(array.dtype.itemsize <= 4 for array in metric_arrays)
-        metric_rtol = 2.0e-5 if has_float32 else 5.0e-10
+        # Storage precision is MEASURED from the values, not read off the
+        # dtype: binary64 arrays holding only binary32 numbers carry binary32
+        # precision and get the binary32 bound.
+        has_float32 = any(
+            _stored_significant_bits(array) <= 24 for array in metric_arrays
+        )
+        metric_rtol = _BINARY32_METRIC_RTOL if has_float32 else _BINARY64_MESH_RTOL
+        try:
+            closure_radius: float | None = float(self.attrs["sphere_radius"])
+        except (KeyError, TypeError, ValueError):
+            closure_radius = None
+        closure = closure_tolerance(
+            {name: self.arrays[name] for name in ("areaCell", "areaTriangle", "kiteAreasOnVertex")},
+            radius=closure_radius,
+            edge_lengths=np.concatenate(
+                (
+                    np.asarray(self.dcEdge, dtype=np.float64).ravel(),
+                    np.asarray(self.dvEdge, dtype=np.float64).ravel(),
+                )
+            ),
+        )
+        closure_rtol = closure["rtol"]
 
         area_cell = np.asarray(self.areaCell, dtype=np.float64)
         area_triangle = np.asarray(self.areaTriangle, dtype=np.float64)
         kite_areas = np.asarray(self.kiteAreasOnVertex, dtype=np.float64)
-        if not np.allclose(
-            kite_areas.sum(axis=1), area_triangle, rtol=metric_rtol, atol=0.0
+
+        # The conditioning term is per ELEMENT: each triangle and cell is
+        # held to 16 u / theta**2 for its OWN shortest edge, so the coarse
+        # part of a graded mesh is not loosened by its finest element.
+        # Without usable edge indices the mesh-wide bound stands in.
+        rtol_vertex: Any = closure_rtol
+        rtol_cell: Any = closure_rtol
+        if (
+            closure["stored_significant_bits"] > 24
+            and closure["theta_min_radians"] is not None
+            and topology_ranges_valid
         ):
-            errors.append("kiteAreasOnVertex rows do not sum to areaTriangle")
+            edge_theta = np.minimum(
+                np.asarray(self.dcEdge, dtype=np.float64),
+                np.asarray(self.dvEdge, dtype=np.float64),
+            ) / float(closure_radius)
+            edge_theta = np.where(
+                np.isfinite(edge_theta) & (edge_theta > 0), edge_theta, np.inf
+            )
+
+            def element_rtol(edges: NDArray[np.int64], used: NDArray[np.bool_]) -> NDArray[np.float64]:
+                theta = np.where(used, edge_theta[np.clip(edges, 0, None)], np.inf).min(axis=1)
+                conditioning = (
+                    _CLOSURE_CONDITIONING_FACTOR * float(np.ldexp(1.0, -53))
+                    / np.where(np.isfinite(theta), theta * theta, np.inf)
+                )
+                return np.maximum(_BINARY64_MESH_RTOL, conditioning)
+
+            rtol_vertex = element_rtol(edges_on_vertex, edges_on_vertex >= 0)
+            rtol_cell = element_rtol(
+                edges_on_cell,
+                (np.arange(max_edges)[None, :] < n_edges_on_cell[:, None])
+                & (edges_on_cell >= 0),
+            )
+
+        def closure_fails(total: NDArray[np.float64], area: NDArray[np.float64], rtol: Any) -> bool:
+            return not bool(np.all(np.abs(total - area) <= rtol * np.abs(area)))
+
+        def closure_gap(total: NDArray[np.float64], area: NDArray[np.float64], rtol: Any) -> str:
+            relative = np.abs(total - area) / np.maximum(np.abs(area), np.finfo(np.float64).tiny)
+            bound = np.broadcast_to(np.asarray(rtol, dtype=np.float64), relative.shape)
+            ratio = np.where(np.isfinite(relative), relative / bound, np.inf)
+            worst = int(np.argmax(ratio)) if ratio.size else 0
+            observed = float(relative[worst]) if relative.size else 0.0
+            return (
+                f"worst relative gap {observed:.3e} at index {worst} exceeds its "
+                f"element bound {float(bound[worst]):.3e}; mesh-wide "
+                + _closure_statement(closure)
+            )
+
+        triangle_sum = kite_areas.sum(axis=1)
+        if closure_fails(triangle_sum, area_triangle, rtol_vertex):
+            errors.append(
+                "kiteAreasOnVertex rows do not sum to areaTriangle: "
+                + closure_gap(triangle_sum, area_triangle, rtol_vertex)
+                + ".  The vertex vorticity is divided by areaTriangle and "
+                "carried to cells by these kites, so kites that do not tile "
+                "the triangle move circulation between cells"
+            )
         if fixed_valid:
             cell_kite_sum = np.zeros(n_cells, dtype=np.float64)
             # np.add.at WRAPS a negative index: a -1 sentinel folds the
@@ -1526,10 +2028,14 @@ class Mesh:
             np.add.at(
                 cell_kite_sum, flat_cells[present_slots], flat_kites[present_slots]
             )
-            if not np.allclose(
-                cell_kite_sum, area_cell, rtol=metric_rtol, atol=0.0
-            ):
-                errors.append("kites belonging to each cell do not sum to areaCell")
+            if closure_fails(cell_kite_sum, area_cell, rtol_cell):
+                errors.append(
+                    "kites belonging to each cell do not sum to areaCell: "
+                    + closure_gap(cell_kite_sum, area_cell, rtol_cell)
+                    + ".  areaCell divides every flux divergence, so a cell "
+                    "whose kites do not tile it gains or loses mass the "
+                    "fluxes did not carry"
+                )
 
         # ---- a DECLARED coordinate frame must be the one the file holds ---
         #
@@ -1567,11 +2073,11 @@ class Mesh:
                 # local kite/area identities above and the arc-length checks
                 # below still bind every regional element.
                 if not np.isclose(
-                    area_cell.sum(), 4.0 * np.pi * radius * radius, rtol=metric_rtol
+                    area_cell.sum(), 4.0 * np.pi * radius * radius, rtol=closure_rtol
                 ):
                     errors.append("sum(areaCell) does not equal 4*pi*sphere_radius**2")
                 elif not np.isclose(
-                    area_triangle.sum(), 4.0 * np.pi * radius * radius, rtol=metric_rtol
+                    area_triangle.sum(), 4.0 * np.pi * radius * radius, rtol=closure_rtol
                 ):
                     errors.append("sum(areaTriangle) does not equal 4*pi*sphere_radius**2")
 
@@ -1602,33 +2108,16 @@ class Mesh:
                     if xyz.shape != (count, 3) or lat.shape != (count,) or lon.shape != (count,):
                         errors.append(f"{suffix} spherical coordinate shapes are invalid")
                         continue
-                    if not np.all(np.isfinite(xyz)) or not np.all(np.isfinite(lat + lon)):
-                        errors.append(f"{suffix} coordinates contain non-finite values")
-                        continue
-                    norms = np.linalg.norm(xyz, axis=1)
-                    if not np.allclose(norms, radius, rtol=metric_rtol, atol=0.0):
-                        errors.append(f"{suffix} Cartesian coordinates are not on sphere_radius")
-                    expected_xyz = radius * np.stack(
-                        (
-                            np.cos(lat) * np.cos(lon),
-                            np.cos(lat) * np.sin(lon),
-                            np.sin(lat),
-                        ),
-                        axis=1,
+                    normalized, coordinate_errors = _spherical_coordinate_checks(
+                        xyz, lat, lon, radius, metric_rtol, suffix,
                     )
-                    if not np.allclose(xyz, expected_xyz, rtol=metric_rtol, atol=radius * metric_rtol):
-                        errors.append(f"{suffix} Cartesian and lat/lon coordinates disagree")
-                    coordinates[suffix] = xyz / norms[:, None]
+                    errors.extend(coordinate_errors)
+                    if normalized is not None:
+                        coordinates[suffix] = normalized
 
                 if topology_ranges_valid and all(
                     suffix in coordinates for suffix in ("Cell", "Vertex")
                 ):
-                    def arc_distance(first: NDArray[np.float64], second: NDArray[np.float64]) -> NDArray[np.float64]:
-                        return radius * np.arctan2(
-                            np.linalg.norm(np.cross(first, second), axis=1),
-                            np.sum(first * second, axis=1),
-                        )
-
                     # Indexing coordinates with a regional -1 sentinel would
                     # WRAP to the last cell and fabricate an arc-length
                     # disagreement on every cut-adjacent edge.  The culled
@@ -1636,13 +2125,11 @@ class Mesh:
                     # dcEdge (copied from the parent) is unverifiable here
                     # and exempt; both dv endpoints are always present.
                     dc_verifiable = (cells_on_edge >= 0).all(axis=1)
-                    expected_dc = arc_distance(
-                        coordinates["Cell"][np.clip(cells_on_edge[:, 0], 0, None)],
-                        coordinates["Cell"][np.clip(cells_on_edge[:, 1], 0, None)],
+                    expected_dc = _spherical_arc_lengths(
+                        coordinates["Cell"], cells_on_edge, radius, clip_missing=True,
                     )
-                    expected_dv = arc_distance(
-                        coordinates["Vertex"][vertices_on_edge[:, 0]],
-                        coordinates["Vertex"][vertices_on_edge[:, 1]],
+                    expected_dv = _spherical_arc_lengths(
+                        coordinates["Vertex"], vertices_on_edge, radius,
                     )
                     # The floor comes from the dtype the COORDINATES are
                     # stored in, not from the metric arrays: the quantization
@@ -1696,7 +2183,9 @@ class Mesh:
         return self
 
 
-def reconcile_grid_rotate_longitudes(mesh: Mesh) -> dict[str, Any]:
+def reconcile_grid_rotate_longitudes(
+    mesh: Mesh, *, _file_digest: Callable[[Path], str] | None = None,
+) -> dict[str, Any]:
     """Reconcile only the proven MPAS-Tools ``grid_rotate`` pi defect.
 
     A mesh that is already Cartesian/lat-lon consistent is only mapped to the
@@ -1777,14 +2266,7 @@ def reconcile_grid_rotate_longitudes(mesh: Mesh) -> dict[str, Any]:
         producer_latitude = np.arcsin(z / norms)
         latitude_ulp_error = _maximum_ulp_error(latitude, producer_latitude)
         authoritative_longitude = np.arctan2(y, x)
-        expected_pre = radius * np.stack(
-            (
-                np.cos(latitude) * np.cos(longitude),
-                np.cos(latitude) * np.sin(longitude),
-                np.sin(latitude),
-            ),
-            axis=1,
-        )
+        expected_pre = _latitude_longitude_xyz(latitude, longitude, radius)
         pre_max_xyz_gap = float(np.max(np.abs(xyz - expected_pre), initial=0.0))
         cartesian_consistent = bool(
             np.allclose(
@@ -1856,14 +2338,7 @@ def reconcile_grid_rotate_longitudes(mesh: Mesh) -> dict[str, Any]:
         canonicalization = validate_longitude_normalization(
             corrected_unwrapped, candidate
         )
-        expected_post = radius * np.stack(
-            (
-                np.cos(latitude) * np.cos(candidate),
-                np.cos(latitude) * np.sin(candidate),
-                np.sin(latitude),
-            ),
-            axis=1,
-        )
+        expected_post = _latitude_longitude_xyz(latitude, candidate, radius)
         post_max_xyz_gap = float(np.max(np.abs(xyz - expected_post), initial=0.0))
         post_atan2_gap = float(
             np.max(
@@ -1871,7 +2346,8 @@ def reconcile_grid_rotate_longitudes(mesh: Mesh) -> dict[str, Any]:
                 initial=0.0,
             )
         )
-        pre_hashes = {name: _sha256_array(values[name]) for name in required}
+        with _array_digest_items(dict(values, normalizedLongitude=candidate)) as results:
+            pre_hashes = dict(results)
         staged[longitude_name] = np.ascontiguousarray(candidate)
         originals[longitude_name] = mesh.arrays[longitude_name]
         original_sources[longitude_name] = mesh.variable_sources.get(longitude_name)
@@ -1897,7 +2373,7 @@ def reconcile_grid_rotate_longitudes(mesh: Mesh) -> dict[str, Any]:
             ),
             "post_max_atan2_angular_gap_radians": post_atan2_gap,
             "longitude_sha256_pre": pre_hashes[longitude_name],
-            "longitude_sha256_post": _sha256_array(candidate),
+            "longitude_sha256_post": pre_hashes["normalizedLongitude"],
             "latitude_sha256_pre": pre_hashes[latitude_name],
             "latitude_sha256_post": pre_hashes[latitude_name],
             "cartesian_sha256_pre": {
@@ -1924,20 +2400,19 @@ def reconcile_grid_rotate_longitudes(mesh: Mesh) -> dict[str, Any]:
                 else "grid_binary64_equivalent_longitude_range"
             )
         mesh.validate()
+        unchanged = {}
         for entity, details in entity_evidence.items():
             for name, expected_hash in details["cartesian_sha256_pre"].items():
-                if _sha256_array(mesh.arrays[name]) != expected_hash:
-                    raise RuntimeError(
-                        f"longitude reconciliation changed Cartesian field {name}"
-                    )
+                unchanged[name] = (expected_hash, "Cartesian")
             latitude_name = f"lat{entity}"
-            if (
-                _sha256_array(mesh.arrays[latitude_name])
-                != details["latitude_sha256_pre"]
-            ):
-                raise RuntimeError(
-                    f"longitude reconciliation changed latitude field {latitude_name}"
-                )
+            unchanged[latitude_name] = (details["latitude_sha256_pre"], "latitude")
+        with _array_digest_items({name: mesh.arrays[name] for name in unchanged}) as results:
+            for name, actual in results:
+                expected, category = unchanged[name]
+                if actual != expected:
+                    raise RuntimeError(
+                        f"longitude reconciliation changed {category} field {name}"
+                    )
     except Exception:
         for name, original in originals.items():
             mesh.arrays[name] = original
@@ -1955,7 +2430,8 @@ def reconcile_grid_rotate_longitudes(mesh: Mesh) -> dict[str, Any]:
         "in_memory_only": True,
         "input_grid_name": None if grid_path is None else grid_path.name,
         "input_grid_sha256": (
-            None if grid_path is None or not grid_path.is_file() else _sha256_file(grid_path)
+            None if grid_path is None or not grid_path.is_file()
+            else (_sha256_file if _file_digest is None else _file_digest)(grid_path)
         ),
         "producer_authority": {
             "repository": "MPAS-Dev/MPAS-Tools",
@@ -1987,6 +2463,45 @@ def load_precision_preserving_mesh_pair(
     grid_path: str | Path,
     static_path: str | Path,
 ) -> tuple[Mesh, Mesh, dict[str, Any]]:
+    """Build the precision pair while independent input hashes run beside it.
+
+    Hash workers read plain files only. All netCDF calls and mesh admission
+    stay on the caller thread. Each file retains its original SHA-256 stream;
+    a changed file version is hashed again at the original consumption point.
+    """
+    from .file_digest import MIN_CACHED_BYTES, _version
+
+    grid = Path(grid_path).expanduser().resolve(strict=True)
+    static = Path(static_path).expanduser().resolve(strict=True)
+    workers = min(2, threads())
+    if workers == 1 or max(grid.stat().st_size, static.stat().st_size) < MIN_CACHED_BYTES:
+        return _load_precision_preserving_mesh_pair(grid, static)
+
+    def fingerprint(path: Path) -> tuple[str, str, str]:
+        before = _version(path.stat())
+        value = _sha256_file(path)
+        return before, _version(path.stat()), value
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hex-mesh-digest") as pool:
+        pending = {path: pool.submit(fingerprint, path) for path in dict.fromkeys((grid, static))}
+
+        def digest(path: Path) -> str:
+            try:
+                before, after, value = pending[path].result()
+                if before == after == _version(path.stat()):
+                    return value
+            except OSError:
+                # Retry at the old call site, retaining admission/error order.
+                pass
+            return _sha256_file(path)
+
+        return _load_precision_preserving_mesh_pair(grid, static, _file_digest=digest)
+
+
+def _load_precision_preserving_mesh_pair(
+    grid_path: str | Path, static_path: str | Path, *,
+    _file_digest: Callable[[Path], str] | None = None,
+) -> tuple[Mesh, Mesh, dict[str, Any]]:
     """Merge static fields while retaining binary64 official grid geometry.
 
     The returned dynamics mesh uses the static file's Earth radius, metrics,
@@ -1996,11 +2511,45 @@ def load_precision_preserving_mesh_pair(
     longitude representation.  No mesh-validation tolerance is changed.
     """
 
+    if _file_digest is None:
+        _file_digest = _sha256_file
     grid = Path(grid_path).expanduser().resolve(strict=True)
     static = Path(static_path).expanduser().resolve(strict=True)
-    output_mesh = Mesh.from_netcdf(grid, validate=False)
-    longitude_reconciliation = reconcile_grid_rotate_longitudes(output_mesh)
-    dynamics_mesh = Mesh.from_netcdf(grid, static, validate=False)
+    grid_data: _NetCDFData | None = None
+
+    def read_grid_once(path: Path) -> _NetCDFData:
+        nonlocal grid_data
+        if grid_data is None:
+            data = _read_netcdf(path)
+            # Canonicalization and longitude reconciliation replace dictionary
+            # entries, leaving the original stored arrays intact for the overlay.
+            grid_data = (dict(data[0]), dict(data[1]), dict(data[2]),
+                         dict(data[3]), dict(data[4]))
+            return data
+        dimensions, attrs, arrays, variable_dimensions, variable_attrs = grid_data
+        grid_data = None
+        # The two carriers have always owned independent arrays. Copy their
+        # stored words instead of decoding the entire grid a second time.
+        # Bound bandwidth contention, and retain C/F order and attribute types.
+        workers = min(4, threads())
+        if workers == 1:
+            copies = {name: value.copy(order="K") for name, value in arrays.items()}
+        else:
+            with ThreadPoolExecutor(max_workers=workers,
+                                    thread_name_prefix="hex-grid-copy") as pool:
+                copies = dict(zip(arrays, pool.map(lambda a: a.copy(order="K"), arrays.values())))
+        return (
+            dict(dimensions),
+            {name: _plain_attribute(value) for name, value in attrs.items()},
+            copies,
+            dict(variable_dimensions),
+            {name: {key: _plain_attribute(value) for key, value in values.items()}
+             for name, values in variable_attrs.items()},
+        )
+
+    output_mesh = Mesh.from_netcdf(grid, validate=False, _grid_reader=read_grid_once)
+    longitude_reconciliation = reconcile_grid_rotate_longitudes(output_mesh, _file_digest=_file_digest)
+    dynamics_mesh = Mesh.from_netcdf(grid, static, validate=False, _grid_reader=read_grid_once)
 
     raw_overlay: dict[str, Any]
     try:
@@ -2057,13 +2606,15 @@ def load_precision_preserving_mesh_pair(
         ]
 
     dynamics_mesh.validate()
-    output_mesh.validate()
+    # Longitude reconciliation already strictly validated output_mesh.  Since
+    # then its only replacements are byte-identical latitude/longitude copies;
+    # all scaled geometry and static overlays belong to dynamics_mesh instead.
     evidence = {
         "schema": "mpas-port.precision-preserving-mesh-pair/v1",
         "grid_name": grid.name,
         "grid_sha256": longitude_reconciliation["input_grid_sha256"],
         "static_name": static.name,
-        "static_sha256": _sha256_file(static),
+        "static_sha256": _file_digest(static),
         "raw_static_overlay": raw_overlay,
         "topology_grid_static_bit_identical": True,
         "grid_sphere_radius": grid_radius,
@@ -2085,6 +2636,9 @@ def load_precision_preserving_mesh_pair(
 
 
 __all__ = [
+    "VERTEX_SLOT_CONVENTIONS",
+    "closure_tolerance",
+    "vertex_slot_convention",
     "GRID_ROTATE_CONVERT_XL_EPS",
     "GRID_ROTATE_CORRECTED_ATAN2_ATOL",
     "GRID_ROTATE_DEFAULT_REAL_PI",

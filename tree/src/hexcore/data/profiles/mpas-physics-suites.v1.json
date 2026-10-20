@@ -1,0 +1,5148 @@
+{
+  "schema": "gpuwm-hex.mpas-physics-suites/v1",
+  "about": "The physics a hex forecast runs, as table rows. A named suite is a row of MPAS selector values (config_microp_scheme and the eight others) plus WOOF generation selectors; the options table says, per MPAS option value, what the hex column seam does with it or the breakage that refuses it. hexcore.physics_suites reads this table for names and WOOF's own physics registry for what exists: a row here is an MPAS spelling (an alias onto the engine's selectors) or a named suite, never the list of schemes hex can run. Any option the engine's registry implements is selectable by its registry id or selector value with no row here. The dycore never reads it. Physics is WOOF's own and is graded against observations (MRMS, ASOS); a suite shaped after an outside configuration lists every known difference from it.",
+  "selector_keys": [
+    "config_microp_scheme",
+    "config_convection_scheme",
+    "config_pbl_scheme",
+    "config_sfclayer_scheme",
+    "config_lsm_scheme",
+    "config_gwdo_scheme",
+    "config_radt_lw_scheme",
+    "config_radt_sw_scheme",
+    "config_radt_cld_scheme"
+  ],
+  "engine_selectors": {
+    "about": "Where each hex selector lands in WOOF's own physics registry (gpuwm/physics_registry_v2.json, read from the run's engine tree at resolve time by hexcore.engine_registry). A value with no row under options is resolved there: a registry option id (kessler-mp1) or the selector's own number (1). The same nine keys are also accepted by WOOF's spelling (aliases), and any other key of the registry's parameters block is accepted as an engine setting, typed and bounded by its registry row. Nothing here lists a scheme.",
+    "selectors": {
+      "config_microp_scheme": {
+        "component": "microphysics",
+        "selector": "mp_physics"
+      },
+      "config_convection_scheme": {
+        "component": "cumulus",
+        "selector": "cu_physics"
+      },
+      "config_pbl_scheme": {
+        "component": "pbl",
+        "selector": "bl_pbl_physics"
+      },
+      "config_sfclayer_scheme": {
+        "component": "surface_layer",
+        "selector": "sf_sfclay_physics"
+      },
+      "config_lsm_scheme": {
+        "component": "land_surface",
+        "selector": "sf_surface_physics"
+      },
+      "config_gwdo_scheme": {
+        "parameter": "gwd_opt"
+      },
+      "config_radt_lw_scheme": {
+        "component": "radiation",
+        "selector": "ra_lw_physics"
+      },
+      "config_radt_sw_scheme": {
+        "component": "radiation",
+        "selector": "ra_sw_physics"
+      },
+      "config_radt_cld_scheme": {
+        "parameter": "icloud"
+      }
+    },
+    "seam_owned": [
+      "nx",
+      "ny",
+      "nz",
+      "dx",
+      "dy",
+      "ztop",
+      "dt",
+      "run_seconds",
+      "moist",
+      "radt",
+      "radt_minutes",
+      "bldt",
+      "cudt_minutes"
+    ],
+    "seam_owned_reason": "the column seam sets these from the mesh bind and the run's cadences; a second value would desynchronise the step counters it keeps",
+    "dycore_owned": {
+      "about": "WOOF settings that its own ARW dycore, grid and nesting read. Hex integrates with the MPAS-A dycore and hands the engine one column-physics call, so none of that code runs. The registry row of each parameter names the module that reads it (consuming_read); a parameter read by one of these modules, or a selector of one of these components, is refused. Nothing here names a scheme or a parameter.",
+      "consuming_reads": [
+        "gpuwm/core/dycore.py",
+        "gpuwm/core/acoustic.py",
+        "gpuwm/core/grid.py",
+        "gpuwm/core/moist.py",
+        "gpuwm/core/ieva.py",
+        "gpuwm/core/model.py",
+        "gpuwm/core/nest.py",
+        "gpuwm/core/nest_interp.py",
+        "gpuwm/ensemble/batch_mixing.py"
+      ],
+      "components": [],
+      "components_note": "km_opt (the turbulence component) is not listed: WOOF's own validator reads it to judge a PBL pairing (SASE is admitted only at km_opt=0), so it stays WOOF's call",
+      "reason": "WOOF's ARW dycore reads it and hex runs the MPAS-A dycore, so the value would be recorded in the receipt and never read",
+      "follow_up": "hex's own dycore flags (gpuwm-hex forecast --help: --horiz-mixing, --monotonic, the damping and time-integration flags)"
+    },
+    "statics": [
+      {
+        "about": "The YSU orographic drag's ten statistics (WOOF gwd_opt=1), which every MPAS static file carries per cell.",
+        "file": "static",
+        "file_suffix": ".nc",
+        "dimension": "nCells",
+        "variables": {
+          "VAR": "var2d",
+          "CON": "con",
+          "OA1": "oa1",
+          "OA2": "oa2",
+          "OA3": "oa3",
+          "OA4": "oa4",
+          "OL1": "ol1",
+          "OL2": "ol2",
+          "OL3": "ol3",
+          "OL4": "ol4"
+        }
+      }
+    ],
+    "species_history_names": {
+      "qv": "QVAPOR",
+      "qc": "QCLOUD",
+      "qr": "QRAIN",
+      "qi": "QICE",
+      "qs": "QSNOW",
+      "qg": "QGRAUP",
+      "qh": "QHAIL",
+      "ni": "QNICE",
+      "nr": "QNRAIN",
+      "nc": "QNCLOUD",
+      "ns": "QNSNOW",
+      "ng": "QNGRAUPEL",
+      "nh": "QNHAIL",
+      "nwfa": "QNWFA",
+      "nifa": "QNIFA",
+      "volg": "VOLG",
+      "qir": "QIR",
+      "qib": "QIB"
+    }
+  },
+  "options": {
+    "config_microp_scheme": {
+      "mp_wsm6": {
+        "carried": {
+          "microphysics": "wsm6",
+          "frozen_row": "wsm6_column"
+        },
+        "engine": {
+          "mp_physics": 6
+        }
+      },
+      "mp_thompson_aerosols": {
+        "carried": {
+          "microphysics": "thompson_aero",
+          "frozen_row": "thompson_aero_column"
+        },
+        "note": "WRF mp=28 port; its water- and ice-friendly aerosol numbers start from the engine's synthetic profile, not a climatology",
+        "engine": {
+          "mp_physics": 28
+        }
+      },
+      "mp_tempo": {
+        "carried": {
+          "microphysics": "tempo",
+          "requires_aerosol_climatology": true,
+          "frozen_backend": null,
+          "generation_defaults": {
+            "tempo_surface_emission_before": true
+          }
+        },
+        "note": "TEMPO v3.0.3, thirteen transported scalars including graupel number and volume; column-suite seam only",
+        "engine": {
+          "mp_physics": 900
+        }
+      },
+      "mp_thompson": {
+        "engine": {
+          "mp_physics": 8
+        },
+        "note": "WRF mp=8, non-aerosol Thompson"
+      },
+      "mp_p3": {
+        "engine": {
+          "mp_physics": 50
+        },
+        "note": "P3, one ice category"
+      },
+      "mp_kessler": {
+        "engine": {
+          "mp_physics": 1
+        },
+        "note": "Kessler warm rain"
+      },
+      "mp_nssl2m": {
+        "engine": {
+          "mp_physics": 18
+        },
+        "note": "NSSL two-moment"
+      },
+      "off": {
+        "engine": {
+          "mp_physics": 0
+        },
+        "note": "no microphysics; WOOF's own validators judge what may run with it"
+      }
+    },
+    "config_convection_scheme": {
+      "auto": {
+        "carried": {
+          "convection": "auto"
+        },
+        "note": "hexcore extension, not an MPAS name: the resolution rule of hexcore.convection_admission (off below 3 km, Grell-Freitas to 20 km, New Tiedtke at 20 km and coarser), decided at the mesh bind"
+      },
+      "off": {
+        "carried": {
+          "convection": "off"
+        },
+        "engine": {
+          "cu_physics": 0
+        }
+      },
+      "cu_grell_freitas": {
+        "carried": {
+          "convection": "gf"
+        },
+        "engine": {
+          "cu_physics": 3
+        }
+      },
+      "cu_ntiedtke": {
+        "carried": {
+          "convection": "ntiedtke"
+        },
+        "engine": {
+          "cu_physics": 16
+        }
+      },
+      "cu_kain_fritsch": {
+        "engine": {
+          "cu_physics": 1
+        },
+        "note": "Kain-Fritsch; its cadence is the run's own cumulus hold, judged by WOOF's validator"
+      },
+      "cu_tiedtke": {
+        "engine": {
+          "cu_physics": 6
+        },
+        "note": "the original Tiedtke (WRF cu_physics=6)"
+      },
+      "cu_gf_monan": {
+        "refused": "MONAN's Grell-Freitas generation is not the engine's (WRF v4.6.1 GF); running it under this name would be another scheme",
+        "follow_up": "a MONAN GF generation in gpuwm/physics_registry_v2.json"
+      }
+    },
+    "config_pbl_scheme": {
+      "bl_ysu": {
+        "carried": {
+          "pbl_scheme": "ysu"
+        },
+        "engine": {
+          "bl_pbl_physics": 1
+        }
+      },
+      "bl_mynn": {
+        "carried": {
+          "pbl_scheme": "mynn"
+        },
+        "engine": {
+          "bl_pbl_physics": 5
+        }
+      },
+      "bl_mynnedmf": {
+        "carried": {
+          "pbl_scheme": "mynn"
+        },
+        "note": "the GSL/NOAA fork's spelling of MYNN-EDMF (RRFS v2 hrrrv5); the engine's MYNN-EDMF at the selected bl_mynn_version",
+        "engine": {
+          "bl_pbl_physics": 5
+        }
+      },
+      "bl_myj": {
+        "engine": {
+          "bl_pbl_physics": 2
+        },
+        "note": "Mellor-Yamada-Janjic; WOOF pairs it with the Eta surface layer"
+      },
+      "off": {
+        "engine": {
+          "bl_pbl_physics": 0
+        },
+        "note": "no boundary layer scheme"
+      }
+    },
+    "config_sfclayer_scheme": {
+      "sf_monin_obukhov_rev": {
+        "carried": {
+          "surface_layer_scheme": "revised_mm5"
+        },
+        "engine": {
+          "sf_sfclay_physics": 1
+        }
+      },
+      "sf_mynn": {
+        "carried": {
+          "surface_layer_scheme": "mynn"
+        },
+        "engine": {
+          "sf_sfclay_physics": 5
+        }
+      },
+      "sf_mynnsfclay": {
+        "carried": {
+          "surface_layer_scheme": "mynn"
+        },
+        "note": "the GSL/NOAA fork's spelling of the MYNN surface layer",
+        "engine": {
+          "sf_sfclay_physics": 5
+        }
+      },
+      "sf_monin_obukhov": {
+        "engine": {
+          "sf_sfclay_physics": 91
+        },
+        "note": "the classic MM5 layer (WOOF sf_sfclay_physics=91)"
+      },
+      "off": {
+        "engine": {
+          "sf_sfclay_physics": 0
+        },
+        "note": "no surface layer scheme"
+      }
+    },
+    "config_lsm_scheme": {
+      "sf_noahmp": {
+        "carried": {
+          "land_surface_scheme": "noahmp",
+          "n_soil_levels": 4,
+          "soil_level_depths_m": [
+            0.05,
+            0.25,
+            0.70000005,
+            1.5
+          ]
+        },
+        "note": "Noah-MP's four layers, whose centres init_atmosphere writes as zs: a single-precision running sum of dzs (0.1, 0.3, 0.6, 1.0 m), so the third lands on 0.70000005, not 0.7 (read from NOAA's MPAS fork init on conus12km, 2026-10-07); behind the column-suite seam the init's zs is checked against them at float32",
+        "engine": {
+          "sf_surface_physics": 4
+        }
+      },
+      "sf_ruc": {
+        "carried": {
+          "land_surface_scheme": "ruc",
+          "n_soil_levels": 9,
+          "soil_level_depths_m": [
+            0.0,
+            0.01,
+            0.04,
+            0.1,
+            0.3,
+            0.6,
+            1.0,
+            1.6,
+            3.0
+          ]
+        },
+        "note": "RUC on nine soil levels at WRF's own depths; the init must carry them (init_atmosphere with config_nsoillevels = 9)",
+        "engine": {
+          "sf_surface_physics": 3,
+          "num_soil_layers": 9
+        }
+      },
+      "sf_noah": {
+        "engine": {
+          "sf_surface_physics": 2
+        },
+        "n_soil_levels": 4,
+        "soil_level_depths_m": [
+          0.05,
+          0.25,
+          0.70000005,
+          1.5
+        ],
+        "note": "Noah on four layers at the depths init_atmosphere writes for it (the same centres as Noah-MP's)"
+      },
+      "off": {
+        "engine": {
+          "sf_surface_physics": 0
+        },
+        "note": "no land surface scheme"
+      }
+    },
+    "config_gwdo_scheme": {
+      "bl_ysu_gwdo": {
+        "carried": {
+          "drag": "hex_ysu_gwdo"
+        },
+        "note": "hex's own CUDA kernel (hexcore.cuda_gwdo_v841) on the mesh's var2d/con/oa/ol statistics, composed before the held tendency coupling",
+        "engine": {
+          "gwd_opt": 1
+        }
+      },
+      "bl_ugwp_gwdo": {
+        "carried": {
+          "drag": "engine_gsl"
+        },
+        "note": "WRF gwd_opt=3 (module_bl_gwdo_gsl.F) in the engine's PBL slot on the mesh's ugwp_oro_data.nc statistics; UGWP's non-stationary part is off, as RRFS v2 runs it (config_ngw_scheme false)",
+        "engine": {
+          "gwd_opt": 3
+        }
+      },
+      "off": {
+        "carried": {
+          "drag": "off"
+        },
+        "engine": {
+          "gwd_opt": 0
+        }
+      }
+    },
+    "config_radt_lw_scheme": {
+      "rrtmg_lw": {
+        "carried": {
+          "radiation_scheme": "rrtmg_legacy"
+        },
+        "engine": {
+          "ra_physics": 4,
+          "ra_rrtmg_variant": "rrtmg_legacy"
+        }
+      },
+      "rrtmgp_lw": {
+        "engine": {
+          "ra_lw_physics": 4,
+          "ra_rrtmg_variant": "rte-rrtmgp"
+        },
+        "note": "RTE+RRTMGP; needs the engine's RRTMGP coefficient assets"
+      },
+      "cam_lw": {
+        "refused": "WOOF's physics registry declares no CAM radiation, so a run selecting it would run another scheme, or none, under its name",
+        "follow_up": "a CAM radiation option in gpuwm/physics_registry_v2.json"
+      },
+      "off": {
+        "engine": {
+          "ra_lw_physics": 0
+        },
+        "note": "no radiation in this band"
+      }
+    },
+    "config_radt_sw_scheme": {
+      "rrtmg_sw": {
+        "carried": {
+          "radiation_scheme": "rrtmg_legacy"
+        },
+        "engine": {
+          "ra_physics": 4,
+          "ra_rrtmg_variant": "rrtmg_legacy"
+        }
+      },
+      "rrtmgp_sw": {
+        "engine": {
+          "ra_sw_physics": 4,
+          "ra_rrtmg_variant": "rte-rrtmgp"
+        },
+        "note": "RTE+RRTMGP; needs the engine's RRTMGP coefficient assets"
+      },
+      "cam_sw": {
+        "refused": "WOOF's physics registry declares no CAM radiation, so a run selecting it would run another scheme, or none, under its name",
+        "follow_up": "a CAM radiation option in gpuwm/physics_registry_v2.json"
+      },
+      "off": {
+        "engine": {
+          "ra_sw_physics": 0
+        },
+        "note": "no radiation in this band"
+      }
+    },
+    "config_radt_cld_scheme": {
+      "cld_fraction": {
+        "carried": {
+          "cloud": "xu_randall"
+        },
+        "note": "the radiation cloud fraction of the YSU lanes (WRF icloud=1)",
+        "engine": {
+          "icloud": 1
+        }
+      },
+      "cld_fraction_mynn": {
+        "carried": {
+          "cloud": "mynn_subgrid"
+        },
+        "note": "MYNN's subgrid cloud merged into radiation's cloud (WRF icloud_bl=1, part of the engine's MYNN option identity)",
+        "engine": {
+          "icloud": 1,
+          "icloud_bl": 1
+        }
+      },
+      "cld_fraction_thompson": {
+        "refused": "WOOF's radiation admits icloud 0 or 1 (gpuwm/config.py validate_run_config); Thompson's cloud-fraction scheme (WRF icloud=3) is not in the engine, so the run would use another cloud fraction under this name",
+        "follow_up": "icloud=3 in the engine"
+      },
+      "cld_incidence": {
+        "engine": {
+          "icloud": 0
+        },
+        "note": "WOOF icloud=0"
+      },
+      "off": {
+        "engine": {
+          "icloud": 0
+        },
+        "note": "WOOF icloud=0: radiation sees no cloud"
+      }
+    }
+  },
+  "pairings": [
+    {
+      "if": {
+        "config_pbl_scheme": [
+          "bl_mynn",
+          "bl_mynnedmf"
+        ]
+      },
+      "then": {
+        "config_radt_cld_scheme": [
+          "cld_fraction_mynn"
+        ]
+      },
+      "reason": "the engine's MYNN always hands its subgrid cloud to radiation (icloud_bl=1 is part of its option identity), so a MYNN run recorded as another cloud scheme would run cld_fraction_mynn under that name"
+    },
+    {
+      "if": {
+        "config_radt_cld_scheme": [
+          "cld_fraction_mynn"
+        ]
+      },
+      "then": {
+        "config_pbl_scheme": [
+          "bl_mynn",
+          "bl_mynnedmf"
+        ]
+      },
+      "reason": "cld_fraction_mynn reads MYNN's subgrid cloud, which no other boundary layer produces"
+    },
+    {
+      "if": {
+        "config_pbl_scheme": [
+          "bl_ysu"
+        ]
+      },
+      "then": {
+        "config_sfclayer_scheme": [
+          "sf_monin_obukhov_rev"
+        ]
+      },
+      "reason": "the column-suite seam pairs YSU with the revised MM5 layer only; any other surface layer under YSU is WOOF's to judge, on the generic column seam (WOOF runs YSU over the classic MM5 layer too and refuses it over MYNN's)",
+      "judge": "engine"
+    },
+    {
+      "if": {
+        "config_sfclayer_scheme": [
+          "sf_mynn",
+          "sf_mynnsfclay"
+        ]
+      },
+      "then": {
+        "config_pbl_scheme": [
+          "bl_mynn",
+          "bl_mynnedmf"
+        ]
+      },
+      "reason": "the column-suite seam pairs the MYNN surface layer with the MYNN boundary layer only; another boundary layer over it is WOOF's to judge, on the generic column seam",
+      "judge": "engine"
+    }
+  ],
+  "frozen_seam": {
+    "about": "The four slots gpuwm.core.mpas_column_batch hard-wires (gpuwm.core.mpas_column_suite FROZEN_SELECTION) and the drag the forecast door composes with them. A selection equal to this, with a microphysics the frozen batch carries and no generation selector, runs on the frozen batch row its microphysics names. Anything else it cannot express is not refused: it runs on the engine's generic column seam.",
+    "selection": {
+      "radiation_scheme": "rrtmg_legacy",
+      "surface_layer_scheme": "revised_mm5",
+      "land_surface_scheme": "noahmp",
+      "pbl_scheme": "ysu"
+    },
+    "cloud": "xu_randall",
+    "drag": "hex_ysu_gwdo"
+  },
+  "column_suite_seam": {
+    "about": "gpuwm.core.mpas_column_suite's slot-named entry behind hexcore.cuda_suite_physics_v841: the anchored selections (MYNN, RUC, the GSL drag). What it carries; a selection outside it is not refused, it runs on the same module's generic entry (run_mpas_column_physics).",
+    "convection": [
+      "off",
+      "gf",
+      "ntiedtke"
+    ],
+    "drag": {
+      "off": "off",
+      "engine_gsl": "gsl"
+    }
+  },
+  "generation_selectors": {
+    "thompson_version": {
+      "values": [
+        "wrf_461",
+        "wrf_39_noaa"
+      ],
+      "slot": "microphysics",
+      "schemes": [
+        "thompson_aero"
+      ]
+    },
+    "thompson_fork_snow_fall": {
+      "values": [
+        "blend",
+        "wrf_39_noaa"
+      ],
+      "slot": "microphysics",
+      "schemes": [
+        "thompson_aero"
+      ]
+    },
+    "bl_mynn_version": {
+      "values": [
+        "wrf_461",
+        "gsd_41"
+      ],
+      "slot": "pbl_scheme",
+      "schemes": [
+        "mynn"
+      ]
+    },
+    "bl_mynn_mixlength": {
+      "values": [
+        1,
+        2
+      ],
+      "slot": "pbl_scheme",
+      "schemes": [
+        "mynn"
+      ]
+    },
+    "mynn_sfclay_variant": {
+      "values": [
+        "wrf_461",
+        "gsl_wrf39"
+      ],
+      "slot": "surface_layer_scheme",
+      "schemes": [
+        "mynn"
+      ]
+    },
+    "rrtmg_cloud_optics_form": {
+      "values": [
+        "wrf_461",
+        "noaa_wrf39"
+      ],
+      "slot": "radiation_scheme",
+      "schemes": [
+        "rrtmg_legacy"
+      ]
+    },
+    "tempo_ml_for_bl_nc": {
+      "values": [
+        false,
+        true
+      ],
+      "slot": "microphysics",
+      "schemes": [
+        "tempo"
+      ]
+    },
+    "tempo_surface_emission_before": {
+      "values": [
+        false,
+        true
+      ],
+      "slot": "microphysics",
+      "schemes": [
+        "tempo"
+      ]
+    },
+    "aer_opt": {
+      "values": [
+        0,
+        3
+      ],
+      "slot": "radiation_scheme",
+      "schemes": [
+        "rrtmg_legacy"
+      ]
+    },
+    "rrtmg_aer3_type_source": {
+      "values": [
+        "rural",
+        "landmask"
+      ],
+      "slot": "radiation_scheme",
+      "schemes": [
+        "rrtmg_legacy"
+      ]
+    },
+    "bl_mynn_mixaerosols": {
+      "values": [
+        0,
+        1
+      ],
+      "slot": "pbl_scheme",
+      "schemes": [
+        "mynn"
+      ]
+    },
+    "bl_mynn_mixnumcon": {
+      "values": [
+        0,
+        1
+      ],
+      "slot": "pbl_scheme",
+      "schemes": [
+        "mynn"
+      ]
+    }
+  },
+  "namelist": {
+    "about": "How a namelist.atmosphere's physics groups are read. Every option in &physics and its scheme sub-groups is admitted, ignored as MPAS ignores it, or refused by name; a group that is not physics is left to the dycore door or named as outside this importer.",
+    "physics_groups": [
+      "physics",
+      "physics_mp_tempo",
+      "physics_mp_thompson",
+      "nam_stochy"
+    ],
+    "dycore_groups": [
+      "nhyd_model",
+      "damping",
+      "limited_area",
+      "IAU"
+    ],
+    "dycore_ignored": {
+      "config_epssm": "MPAS-A v8.4.1 reads and ignores it with its own warning (hexcore.config_v841.LegacyEpssmIgnored); the &damping config_epssm_* options set the off-centering, and hex's v8.4.1 step is bitwise identical for any real value (tests/test_epssm_v841.py)"
+    },
+    "outside_groups": {
+      "io": "I/O tasks and streams are the run's, not the physics'",
+      "decomposition": "the partition is the run's (hex partitions by its own layouts)",
+      "restart": "restart and DA cycling are the run's",
+      "printout": "log verbosity",
+      "soundings": "sounding output",
+      "assimilation": "the analysis is the cycling system's, not the forecast physics'"
+    },
+    "options": {
+      "config_physics_suite": {
+        "kind": "suite"
+      },
+      "config_microp_scheme": {
+        "kind": "selector"
+      },
+      "config_convection_scheme": {
+        "kind": "selector"
+      },
+      "config_pbl_scheme": {
+        "kind": "selector"
+      },
+      "config_sfclayer_scheme": {
+        "kind": "selector"
+      },
+      "config_lsm_scheme": {
+        "kind": "selector"
+      },
+      "config_gwdo_scheme": {
+        "kind": "selector"
+      },
+      "config_radt_lw_scheme": {
+        "kind": "selector"
+      },
+      "config_radt_sw_scheme": {
+        "kind": "selector"
+      },
+      "config_radt_cld_scheme": {
+        "kind": "selector"
+      },
+      "num_soil_layers": {
+        "kind": "soil_levels"
+      },
+      "config_frac_seaice": {
+        "kind": "frac_seaice"
+      },
+      "config_radtlw_interval": {
+        "kind": "radiation_interval"
+      },
+      "config_radtsw_interval": {
+        "kind": "radiation_interval"
+      },
+      "config_sst_update": {
+        "kind": "surface_update",
+        "values": [
+          false,
+          true
+        ]
+      },
+      "config_sstdiurn_update": {
+        "kind": "surface_update",
+        "values": [
+          false,
+          true
+        ]
+      },
+      "config_gvf_update": {
+        "kind": "surface_update",
+        "values": [
+          false,
+          true
+        ]
+      },
+      "config_deepsoiltemp_update": {
+        "kind": "surface_update",
+        "values": [
+          false,
+          true
+        ]
+      },
+      "config_bucket_update": {
+        "kind": "must_equal",
+        "value": "none",
+        "reason": "hex keeps its precipitation accumulators unbucketed",
+        "follow_up": "bucketed accumulators in the history writer"
+      },
+      "config_microp_re": {
+        "kind": "must_equal",
+        "value": true,
+        "reason": "the engine hands radiation the microphysics' effective radii always",
+        "follow_up": "none planned"
+      },
+      "config_o3climatology": {
+        "kind": "must_equal",
+        "value": true,
+        "reason": "the engine's radiation always reads its ozone climatology",
+        "follow_up": "none planned"
+      },
+      "config_mynn_mixscalars": {
+        "kind": "must_equal",
+        "value": 0,
+        "reason": "in the NOAA MPAS fork this key mixes MYNN-EDMF's generic scalar array (NCAR/MYNN-EDMF c942418 module_bl_mynnedmf.F90:1229, mynn_mix_scalars), not the number species; the hex column seam carries no such array, so 1 would be recorded and never performed. Number species and aerosols mix through config_mynn_mixnumcon and config_mynn_mixaerosols",
+        "follow_up": "a generic scalar array on the column seam",
+        "only_with": {
+          "config_pbl_scheme": [
+            "bl_mynn",
+            "bl_mynnedmf"
+          ]
+        }
+      },
+      "config_mynn_mixaerosols": {
+        "kind": "scheme_option",
+        "slot": "config_pbl_scheme",
+        "scheme": [
+          "bl_mynn",
+          "bl_mynnedmf"
+        ],
+        "selector": "bl_mynn_mixaerosols",
+        "default": 0,
+        "values": [
+          0,
+          1
+        ],
+        "reason": "MYNN mixes the water- and ice-friendly aerosol numbers when the microphysics carries them (aerosol-aware Thompson, TEMPO); the rates reach hex through the column seam's scalar_rates",
+        "follow_up": "0 or 1"
+      },
+      "config_mynn_mixnumcon": {
+        "kind": "scheme_option",
+        "slot": "config_pbl_scheme",
+        "scheme": [
+          "bl_mynn",
+          "bl_mynnedmf"
+        ],
+        "selector": "bl_mynn_mixnumcon",
+        "default": 0,
+        "values": [
+          0,
+          1
+        ],
+        "reason": "MYNN mixes the cloud water and cloud ice numbers when the microphysics carries the whole number family (aerosol-aware Thompson, TEMPO); the rates reach hex through the column seam's scalar_rates",
+        "follow_up": "0 or 1"
+      },
+      "config_tempo_aerosolaware": {
+        "kind": "scheme_option",
+        "value": true,
+        "reason": "The TEMPO column adapter carries only this value. Accepting another value would record an option the runtime does not execute.",
+        "follow_up": "Implement and verify the corresponding TEMPO interface before changing this value.",
+        "scheme": "mp_tempo"
+      },
+      "config_tempo_hailaware": {
+        "kind": "scheme_option",
+        "value": true,
+        "reason": "The TEMPO column adapter carries only this value. Accepting another value would record an option the runtime does not execute.",
+        "follow_up": "Implement and verify the corresponding TEMPO interface before changing this value.",
+        "scheme": "mp_tempo"
+      },
+      "config_tempo_ml_for_bl_nc": {
+        "kind": "scheme_option",
+        "scheme": "mp_tempo",
+        "selector": "tempo_ml_for_bl_nc",
+        "values": [
+          false,
+          true
+        ],
+        "reason": "The TEMPO ML flag is logical and consumes supplied PBL cloud mass and fraction.",
+        "follow_up": "Supply the logical native switch and PBL cloud fields."
+      },
+      "config_tempo_cldfra": {
+        "kind": "scheme_option",
+        "value": false,
+        "reason": "The TEMPO column adapter carries only this value. Accepting another value would record an option the runtime does not execute.",
+        "follow_up": "Implement and verify the corresponding TEMPO interface before changing this value.",
+        "scheme": "mp_tempo"
+      },
+      "do_sppt": {
+        "kind": "stochastic",
+        "value": false,
+        "reason": "GPU spherical-harmonic patterns and held physics forcing"
+      },
+      "do_skeb": {
+        "kind": "stochastic",
+        "value": false,
+        "reason": "GPU spherical-harmonic patterns and held physics forcing"
+      },
+      "config_stochini": {
+        "kind": "stochastic",
+        "value": false,
+        "reason": "GPU spherical-harmonic patterns and held physics forcing"
+      }
+    },
+    "stochastic_parameters": [
+      "config_spptint",
+      "config_sppt_1",
+      "config_sppt_2",
+      "config_sppt_3",
+      "config_sppt_4",
+      "config_sppt_5",
+      "config_sppt_tau_1",
+      "config_sppt_tau_2",
+      "config_sppt_tau_3",
+      "config_sppt_tau_4",
+      "config_sppt_tau_5",
+      "config_sppt_lscale_1",
+      "config_sppt_lscale_2",
+      "config_sppt_lscale_3",
+      "config_sppt_lscale_4",
+      "config_sppt_lscale_5",
+      "config_sppt_logit",
+      "config_sppt_sfclimit",
+      "config_iseed_sppt1",
+      "config_iseed_sppt2",
+      "config_iseed_sppt3",
+      "config_iseed_sppt4",
+      "config_iseed_sppt5",
+      "config_sppt_hgt_top1",
+      "config_sppt_hgt_top2"
+    ],
+    "registry_defaults": {
+      "about": "What MPAS runs for an option a namelist leaves out: the Registry's default_value. The importer reads an absent option at its default exactly as if the namelist had written it, so a namelist naming no suite is MPAS's mesoscale_reference (refused or carried by its rows), not hex's default, and an absent radiation interval is MPAS's 30 min, not hex's 600 s. The defaults are those of the Registry the namelist's suite belongs to (by_suite; any other MPAS suite, or none, reads default_registry). A namelist naming a hex suite reads no registry: the hex suite's own row decides, as it does at every other door. Options the importer does not read (scheme sub-group knobs) have no row here, because an absent one is ignored as MPAS ignores it.",
+      "default_registry": "mpas-a-v8.4.2",
+      "by_suite": {
+        "hrrrv5": "rrfsx-mpas-1d6e370e"
+      },
+      "registries": {
+        "mpas-a-v8.4.2": {
+          "source": "MPAS-Dev/MPAS-Model v8.4.2 src/core_atmosphere/Registry.xml (sha256 c2eff7d95ec3867af69a945908955076d5f97dfe943f2d25ad756d98b94d86b3), lines 2227-2503",
+          "values": {
+            "config_physics_suite": "mesoscale_reference",
+            "config_frac_seaice": true,
+            "config_radtlw_interval": "00:30:00",
+            "config_radtsw_interval": "00:30:00",
+            "num_soil_layers": 4,
+            "config_sst_update": false,
+            "config_sstdiurn_update": false,
+            "config_deepsoiltemp_update": false,
+            "config_bucket_update": "none",
+            "config_microp_re": false,
+            "config_o3climatology": true,
+            "config_mynn_mixscalars": 1
+          }
+        },
+        "rrfsx-mpas-1d6e370e": {
+          "source": "RRFSx/MPAS-Model 1d6e370e src/core_atmosphere/Registry.xml (sha256 dc6a801a054bdc39d2c0faaf9eab91ea2a404bddb49ad8070c4f3cb8c2b30b9b), lines 2594-2920",
+          "values": {
+            "config_physics_suite": "mesoscale_reference",
+            "config_frac_seaice": true,
+            "config_radtlw_interval": "00:30:00",
+            "config_radtsw_interval": "00:30:00",
+            "num_soil_layers": 4,
+            "config_sst_update": false,
+            "config_sstdiurn_update": false,
+            "config_gvf_update": true,
+            "config_deepsoiltemp_update": false,
+            "config_bucket_update": "none",
+            "config_microp_re": true,
+            "config_o3climatology": true,
+            "config_mynn_mixscalars": 0,
+            "config_mynn_mixaerosols": 1,
+            "config_mynn_mixnumcon": 1
+          }
+        }
+      }
+    }
+  },
+  "mpas_suites": {
+    "about": "MPAS's own config_physics_suite tables, so a namelist option left at 'suite' resolves as MPAS resolves it. Source: RRFSx/MPAS-Model 1d6e370e src/core_atmosphere/physics/mpas_atmphys_control.F:132-180 (mesoscale_reference and convection_permitting are also MPAS-A v8.4.1's).",
+    "suites": {
+      "mesoscale_reference": {
+        "config_microp_scheme": "mp_wsm6",
+        "config_convection_scheme": "cu_ntiedtke",
+        "config_pbl_scheme": "bl_ysu",
+        "config_gwdo_scheme": "bl_ysu_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev",
+        "config_lsm_scheme": "sf_noah"
+      },
+      "convection_permitting": {
+        "config_microp_scheme": "mp_thompson",
+        "config_convection_scheme": "cu_grell_freitas",
+        "config_pbl_scheme": "bl_mynn",
+        "config_gwdo_scheme": "bl_ysu_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction",
+        "config_sfclayer_scheme": "sf_mynn",
+        "config_lsm_scheme": "sf_noah"
+      },
+      "hrrrv5": {
+        "config_microp_scheme": "mp_tempo",
+        "config_convection_scheme": "off",
+        "config_pbl_scheme": "bl_mynnedmf",
+        "config_gwdo_scheme": "bl_ugwp_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction_mynn",
+        "config_sfclayer_scheme": "sf_mynnsfclay",
+        "config_lsm_scheme": "sf_ruc"
+      },
+      "none": {
+        "config_microp_scheme": "off",
+        "config_convection_scheme": "off",
+        "config_pbl_scheme": "off",
+        "config_gwdo_scheme": "off",
+        "config_radt_lw_scheme": "off",
+        "config_radt_sw_scheme": "off",
+        "config_radt_cld_scheme": "off",
+        "config_sfclayer_scheme": "off",
+        "config_lsm_scheme": "off"
+      }
+    }
+  },
+  "suites": [
+    {
+      "name": "arwen_mpas_column",
+      "default": true,
+      "describes": "The proven hex column suite: WSM6, the hex convection rule by mesh spacing, YSU over the revised MM5 surface layer, Noah-MP on four soil layers, hex's YSU gravity-wave drag, legacy RRTMG with the Xu-Randall cloud fraction. Every hex anchor and receipt before named suites ran this.",
+      "selectors": {
+        "config_microp_scheme": "mp_wsm6",
+        "config_convection_scheme": "auto",
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev",
+        "config_lsm_scheme": "sf_noahmp",
+        "config_gwdo_scheme": "bl_ysu_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "generation": {},
+      "shaped_after": null,
+      "differences_from_shaped_after": []
+    },
+    {
+      "name": "arwen_thompson_column",
+      "describes": "arwen_mpas_column with aerosol-aware Thompson (WRF mp=28) in place of WSM6, on the same frozen column batch and pin (backend row thompson_aero_column).",
+      "selectors": {
+        "config_microp_scheme": "mp_thompson_aerosols",
+        "config_convection_scheme": "auto",
+        "config_pbl_scheme": "bl_ysu",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev",
+        "config_lsm_scheme": "sf_noahmp",
+        "config_gwdo_scheme": "bl_ysu_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction"
+      },
+      "generation": {},
+      "shaped_after": null,
+      "differences_from_shaped_after": []
+    },
+    {
+      "name": "rrfs_v2_dev",
+      "describes": "Shaped after RRFS v2 as GSL runs it in real time (rrfs-workflow rrfs-mpas-jedi, config_physics_suite 'hrrrv5'): aerosol-aware Thompson, no cumulus at 3 km and New Tiedtke on the 12 km meshes, MYNN-EDMF over the MYNN surface layer, RUC on nine soil levels, the GSL orographic drag, legacy RRTMG with MYNN's subgrid cloud. The physics is WOOF's, graded against MRMS and ASOS; every known difference from RRFS v2 is listed.",
+      "selectors": {
+        "config_microp_scheme": "mp_thompson_aerosols",
+        "config_convection_scheme": "off",
+        "config_pbl_scheme": "bl_mynnedmf",
+        "config_sfclayer_scheme": "sf_mynnsfclay",
+        "config_lsm_scheme": "sf_ruc",
+        "config_gwdo_scheme": "bl_ugwp_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction_mynn"
+      },
+      "selectors_by_mesh": {
+        "conus12km": {
+          "config_convection_scheme": "cu_ntiedtke"
+        },
+        "na12km": {
+          "config_convection_scheme": "cu_ntiedtke"
+        }
+      },
+      "selectors_by_mesh_source": "rrfs-workflow 8c2d53d scripts/exrrfs_fcst.sh:62-67 adds cu_ntiedtke for the meshes config.meshdep marks FCST_CONVECTION_SCHEME (conus12km, na12km); conus3km keeps the suite's off",
+      "frac_seaice": true,
+      "generation": {},
+      "shaped_after": "rrfs-v2",
+      "shaped_after_source": "NOAA-EMC/rrfs-workflow rrfs-mpas-jedi 8c2d53d65a28 (v2.1.4) parm/hrrrv5/namelist.atmosphere and RRFSx/MPAS-Model 1d6e370e mpas_atmphys_control.F:158-168",
+      "differences_from_shaped_after": [
+        "microphysics: aerosol-aware Thompson (WRF mp=28 port, wrf_461 generation) instead of TEMPO v3.0.3 with hail awareness and the ML boundary-layer droplet number",
+        "aerosols: the engine's synthetic nwfa/nifa profile instead of the GOCART-derived QNWFA_QNIFA_SIGMA_MONTHLY climatology, and no aerosol direct effect in RRTMG shortwave (RRFS v2 runs aer_opt=3)",
+        "MYNN-EDMF at the engine's wrf_461 identity instead of NCAR/MYNN-EDMF c942418 (6.0.0-pre); aerosol mixing off in this row (RRFS v2 sets config_mynn_mixaerosols=1): the engine carries it as the generation selector bl_mynn_mixaerosols=1, which rrfs_v2_tempo_candidate and an imported RRFS namelist select, and selecting it here moves this row off its anchored mynn_ruc_gsl_column backend onto a synthesized one; qke is not advected (RRFS advects it)",
+        "MYNN surface layer at the engine's wrf_461 variant instead of NCAR/MYNN-SFC v6.0.0",
+        "RUC at the engine's WRF soil properties and snow instead of NOAA-GSL/RUCLSM 8c9f1a8; monthly LAI and albedo off",
+        "drag: WRF's GSL drag suite (module_bl_gwdo_gsl.F, gwd_opt=3) instead of UGWP MPAS_20241223; scale awareness from one nominal dx per mesh, not len_disp/meshDensity**0.25 per cell; kpblmax from a standard-atmosphere coordinate of the nominal column",
+        "radiation: legacy RRTMG as WOOF ports it; its cadence is the run's --radiation-seconds (RRFS v2: 15 min at 3 km, 30 min at 12 km)",
+        "12 km meshes: RRFS v2 runs New Tiedtke there; the suite selects the engine's New Tiedtke (cu_physics=16) on those meshes, whose source and coupling are WOOF's, not the workflow-pinned implementation",
+        "stochastic physics: deterministic forecasts default off; GPU spherical-harmonic SPPT/SKEB are per-member options, default on for ensembles with fewer than ten source members",
+        "dycore: MPAS-A v8.4.1 instead of the workflow-pinned 8.3.1-noaa fork; the dycore settings are the run's, not the suite's"
+      ]
+    },
+    {
+      "name": "rrfs_v2_tempo_candidate",
+      "describes": "Experimental MPAS hex configuration with the delivered TEMPO v3.0.3 adapter and the existing selectable physics suite. Source and coupling differences are explicit.",
+      "selectors": {
+        "config_microp_scheme": "mp_tempo",
+        "config_convection_scheme": "off",
+        "config_pbl_scheme": "bl_mynnedmf",
+        "config_sfclayer_scheme": "sf_mynnsfclay",
+        "config_lsm_scheme": "sf_ruc",
+        "config_gwdo_scheme": "bl_ugwp_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction_mynn"
+      },
+      "selectors_by_mesh": {
+        "conus12km": {
+          "config_convection_scheme": "cu_ntiedtke"
+        },
+        "na12km": {
+          "config_convection_scheme": "cu_ntiedtke"
+        }
+      },
+      "selectors_by_mesh_source": "rrfs-workflow 8c2d53d scripts/exrrfs_fcst.sh:62-67 adds cu_ntiedtke for the meshes config.meshdep marks FCST_CONVECTION_SCHEME (conus12km, na12km); conus3km keeps the suite's off",
+      "frac_seaice": true,
+      "generation": {
+        "tempo_ml_for_bl_nc": true,
+        "tempo_surface_emission_before": true,
+        "aer_opt": 3,
+        "rrtmg_aer3_type_source": "landmask",
+        "bl_mynn_mixaerosols": 1
+      },
+      "shaped_after": "rrfs-v2",
+      "shaped_after_source": "NOAA-EMC/rrfs-workflow rrfs-mpas-jedi 8c2d53d65a28 (v2.1.4) parm/hrrrv5/namelist.atmosphere and RRFSx/MPAS-Model 1d6e370e mpas_atmphys_control.F:158-168",
+      "differences_from_shaped_after": [
+        "TEMPO includes native optional ML subgrid cloud radii and pre-physics aerosol surface emissions. The float32 column storage, initial radius background and component coupling remain declared differences from native MPAS.",
+        "MYNN mixes nwfa and nifa as RRFS v2 sets it (config_mynn_mixaerosols=1, mixnumcon=0, mixscalars=0) and the rates reach hex through the column seam. The solves are the engine's wrf_461 ones: NCAR/MYNN-EDMF c942418 additionally clips the mixed aerosol numbers at zero and bounds them to the wfa/ifa height profiles (module_bl_mynnedmf.F90:5154 and :5224-5232 for nwfa, :5244 and :5313-5321 for nifa), part of the pinned MYNN-EDMF generation difference below.",
+        "MYNN, surface layer, RUC and drag retain the inherited engine generations and interfaces, rather than the workflow-pinned component revisions.",
+        "Hex dycore source is upstream v8.4.1, while the reference uses 8.3.1-noaa. Acoustic and deformation operation order differ.",
+        "The 12 km candidate calls the existing New Tiedtke engine slot on its own cadence; its source and coupling are not qualified as the workflow-pinned implementation.",
+        "aer_opt=3 shortwave optics take NOAA MPAS's land/water aerosol type (rural over land, maritime over water; mpas_atmphys_driver_radiation_sw.F:583-586 at 1d6e370e), held word for word to that fork's Fortran on a column deck (tests/test_rrtmg_aer3_landmask_type.py). The aerosol numbers they read come from the candidate's TEMPO and MYNN coupling, whose differences are listed above."
+      ]
+    }
+  ],
+  "mpasphys_v842": {
+    "schema": "mpas-port.physics-driver-v842/v1",
+    "source": "MPAS-Model-v8.4.2 mpas_atmphys_control.F:92-332; Registry.xml:2215-2545",
+    "backend_row": "mpasphys_v842",
+    "suite_routes": {
+      "mesoscale_reference": "mpasphys_v842",
+      "convection_permitting": "mpasphys_v842",
+      "none": "mpasphys_v842"
+    },
+    "default_backend": "hex-cuda",
+    "backends": [
+      "off",
+      "native-cpu",
+      "hex-cuda"
+    ],
+    "slots": {
+      "microphysics": {
+        "selector": "config_microp_scheme",
+        "schemes": [
+          "off",
+          "mp_kessler",
+          "mp_thompson",
+          "mp_thompson_aerosols",
+          "mp_wsm6"
+        ],
+        "native_entries": {
+          "mp_kessler": "driver_microphysics",
+          "mp_thompson": "driver_microphysics",
+          "mp_thompson_aerosols": "driver_microphysics",
+          "mp_wsm6": "driver_microphysics"
+        },
+        "backend_selector": "config_microp_backend",
+        "cuda_entries": {
+          "mp_thompson_aerosols": {
+            "module": "thompson_aero_v842",
+            "call": "run_slot",
+            "bind": "bind_native_pools",
+            "constant_aliases": {
+              "R_d": "r_d",
+              "R_v": "r_v",
+              "P0": "p0"
+            },
+            "resources": {
+              "module": "thompson_aero_v842",
+              "call": "load_resources",
+              "attribute": "thompson_v842_resources"
+            }
+          },
+          "mp_thompson": {
+            "module": "thompson_v842",
+            "call": "run_slot",
+            "corrections": [
+              "WB3"
+            ],
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "table_resources_v842",
+              "call": "load_thompson_resources",
+              "attribute": "thompson_v842_resources"
+            }
+          },
+          "mp_kessler": {
+            "module": "kessler_v842",
+            "call": "run_slot",
+            "corrections": [
+              "WB3"
+            ],
+            "bind": "bind_native_pools"
+          },
+          "mp_wsm6": {
+            "module": "wsm6_v842",
+            "call": "cuda_entry",
+            "corrections": [
+              "WB3",
+              "WB5"
+            ],
+            "bind": "bind_native"
+          }
+        }
+      },
+      "convection": {
+        "selector": "config_convection_scheme",
+        "schemes": [
+          "off",
+          "cu_grell_freitas",
+          "cu_kain_fritsch",
+          "cu_tiedtke",
+          "cu_ntiedtke"
+        ],
+        "native_entries": {
+          "cu_grell_freitas": "driver_convection",
+          "cu_kain_fritsch": "driver_convection",
+          "cu_tiedtke": "driver_convection",
+          "cu_ntiedtke": "driver_convection"
+        },
+        "backend_selector": "config_convection_backend",
+        "cuda_entries": {
+          "cu_kain_fritsch": {
+            "module": "kain_fritsch_v842",
+            "call": "launch",
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "kain_fritsch_v842",
+              "call": "load_native_arguments",
+              "attribute": "kain_fritsch_native_arguments"
+            }
+          },
+          "cu_tiedtke": {
+            "module": "tiedtke_v842",
+            "call": "run_slot",
+            "bind": "bind_native_pools"
+          },
+          "cu_ntiedtke": {
+            "module": "ntiedtke_v842",
+            "call": "run_slot",
+            "bind": "bind_native_pools"
+          },
+          "cu_grell_freitas": {
+            "module": "gf_mpas_v842",
+            "call": "run_slot",
+            "bind": "bind_native_pools"
+          }
+        }
+      },
+      "pbl": {
+        "selector": "config_pbl_scheme",
+        "schemes": [
+          "off",
+          "bl_mynn",
+          "bl_ysu"
+        ],
+        "native_entries": {
+          "bl_mynn": "driver_pbl",
+          "bl_ysu": "driver_pbl"
+        },
+        "backend_selector": "config_pbl_backend",
+        "cuda_entries": {
+          "bl_mynn": {
+            "module": "bl_mynn_v842",
+            "call": "run_slot",
+            "corrections": [
+              "RP1"
+            ],
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "bl_mynn_v842",
+              "call": "load_mynn_resources",
+              "attribute": "mynn_v842_resources"
+            }
+          },
+          "bl_ysu": {
+            "module": "ysu_v842",
+            "call": "launch_slot"
+          }
+        }
+      },
+      "surface_layer": {
+        "selector": "config_sfclayer_scheme",
+        "schemes": [
+          "off",
+          "sf_mynn",
+          "sf_monin_obukhov",
+          "sf_monin_obukhov_rev"
+        ],
+        "native_entries": {
+          "sf_mynn": "driver_sfclayer",
+          "sf_monin_obukhov": "driver_sfclayer",
+          "sf_monin_obukhov_rev": "driver_sfclayer"
+        },
+        "backend_selector": "config_sfclayer_backend",
+        "cuda_entries": {
+          "sf_mynn": {
+            "module": "sf_mynn_v842",
+            "call": "launch_slot",
+            "corrections": ["RP3"],
+            "profiles": {
+              "u3d": "u_p",
+              "v3d": "v_p",
+              "t3d": "t_p",
+              "qv3d": "qv_p",
+              "qc3d": "qc_p",
+              "p3d": "pres_hyd_p",
+              "rho3d": "rho_p",
+              "dz8w": "dz_p"
+            },
+            "constant_aliases": {
+              "g": "gravity",
+              "rovcp": "rcp",
+              "r": "R_d",
+              "ep1": "ep_1",
+              "ep2": "ep_2"
+            }
+          },
+          "sf_monin_obukhov": {
+            "module": "sfclay_mm5_v842",
+            "corrections": ["RP3"],
+            "call": "run_slot",
+            "bind": "bind_native_pools",
+            "post_lsm_diagnostics": "run_native_diagnostics"
+          },
+          "sf_monin_obukhov_rev": {
+            "module": "sfclay_mm5_v842",
+            "corrections": ["RP3"],
+            "call": "run_slot",
+            "bind": "bind_native_pools",
+            "post_lsm_diagnostics": "run_native_diagnostics"
+          }
+        }
+      },
+      "land_surface": {
+        "selector": "config_lsm_scheme",
+        "schemes": [
+          "off",
+          "sf_noah",
+          "sf_noahmp"
+        ],
+        "native_entries": {
+          "sf_noah": "driver_lsm",
+          "sf_noahmp": "driver_lsm_noahmp"
+        },
+        "backend_selector": "config_lsm_backend",
+        "cuda_entries": {
+          "sf_noah": {
+            "module": "noah_v842",
+            "call": "run_slot",
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "noah_v842",
+              "call": "load_native_resources",
+              "attribute": "noah_v842_resources"
+            }
+          },
+          "sf_noahmp": {
+            "module": "noahmp_v842",
+            "bind": "bind_forecast",
+            "call": "forecast_callback",
+            "corrections": ["RP6"],
+            "resources": {
+              "module": "noahmp_v842",
+              "call": "load_cuda_resources",
+              "attribute": "noahmp_v842_resources"
+            }
+          }
+        }
+      },
+      "seaice": {
+        "selector": null,
+        "derived_from": "land_surface",
+        "schemes": [
+          "off",
+          "sf_noah",
+          "sf_noahmp"
+        ],
+        "native_entries": {
+          "sf_noah": "driver_seaice",
+          "sf_noahmp": "driver_seaice"
+        },
+        "backend_selector": "config_seaice_backend",
+        "source": "mpas_atmphys_driver.F:285-321; mpas_atmphys_driver_seaice.F:479-551",
+        "threshold_option": "config_frac_seaice",
+        "cuda_entries": {
+          "sf_noah": {
+            "module": "seaice_v842",
+            "call": "launch_slot",
+            "profile_pools": {
+              "seaice_shared": {
+                "t3d": "t_p",
+                "qv3d": "qv_p",
+                "p8w3d": "pres2_hyd_p",
+                "dz8w": "dz_p",
+                "cpm_sea": "cpm_sea",
+                "chs_sea": "chs_sea",
+                "chs2_sea": "chs2_sea",
+                "cqs2_sea": "cqs2_sea",
+                "hfx_sea": "hfx_sea",
+                "lh_sea": "lh_sea",
+                "qfx_sea": "qfx_sea",
+                "qgh_sea": "qgh_sea",
+                "qsfc_sea": "qsfc_sea"
+              }
+            }
+          },
+          "sf_noahmp": {
+            "module": "seaice_v842",
+            "call": "launch_slot",
+            "profile_pools": {
+              "seaice_shared": {
+                "t3d": "t_p",
+                "qv3d": "qv_p",
+                "p8w3d": "pres2_hyd_p",
+                "dz8w": "dz_p",
+                "cpm_sea": "cpm_sea",
+                "chs_sea": "chs_sea",
+                "chs2_sea": "chs2_sea",
+                "cqs2_sea": "cqs2_sea",
+                "hfx_sea": "hfx_sea",
+                "lh_sea": "lh_sea",
+                "qfx_sea": "qfx_sea",
+                "qgh_sea": "qgh_sea",
+                "qsfc_sea": "qsfc_sea"
+              }
+            }
+          }
+        }
+      },
+      "gwdo": {
+        "selector": "config_gwdo_scheme",
+        "schemes": [
+          "off",
+          "bl_ysu_gwdo",
+          "bl_ugwp_gwdo"
+        ],
+        "native_entries": {
+          "bl_ysu_gwdo": "driver_gwdo",
+          "bl_ugwp_gwdo": "driver_gwdo"
+        },
+        "backend_selector": "config_gwdo_backend",
+        "cuda_entries": {
+          "bl_ugwp_gwdo": {
+            "module": "ugwp_oro_v842",
+            "bind": "bind_native_pools",
+            "call": "run_slot"
+          },
+          "bl_ysu_gwdo": {
+            "module": "ysu_gwdo_v842",
+            "call": "forecast_callback",
+            "bind": "bind_forecast"
+          }
+        }
+      },
+      "ngw": {
+        "selector": "config_ngw_scheme",
+        "option_values": {
+          "off": false,
+          "ugwp_ngw": true
+        },
+        "schemes": [
+          "off",
+          "ugwp_ngw"
+        ],
+        "requires_selection": {
+          "gwdo": "bl_ugwp_gwdo"
+        },
+        "native_entries": {
+          "ugwp_ngw": "driver_ngw"
+        },
+        "embedded_in": "gwdo",
+        "backend_selector": "config_ngw_backend",
+        "source": "mpas_atmphys_driver_gwdo.F:692-834",
+        "cuda_entries": {
+          "ugwp_ngw": {
+            "module": "ugwp_ngw_v842",
+            "call": "launch_slot",
+            "bind": "bind_native_pools"
+          }
+        }
+      },
+      "radiation_lw": {
+        "selector": "config_radt_lw_scheme",
+        "schemes": [
+          "off",
+          "cam_lw",
+          "rrtmg_lw"
+        ],
+        "native_entries": {
+          "cam_lw": "driver_radiation_lw",
+          "rrtmg_lw": "driver_radiation_lw"
+        },
+        "backend_selector": "config_radt_lw_backend",
+        "cuda_entries": {
+          "rrtmg_lw": {
+            "module": "rrtmg_lw_v842",
+            "call": "radiation_lw_slot",
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "rrtmg_lw_v842",
+              "call": "load_native_lw_resources",
+              "attribute": "rrtmg_lw_tables"
+            }
+          }
+        }
+      },
+      "radiation_sw": {
+        "selector": "config_radt_sw_scheme",
+        "schemes": [
+          "off",
+          "cam_sw",
+          "rrtmg_sw"
+        ],
+        "native_entries": {
+          "cam_sw": "driver_radiation_sw",
+          "rrtmg_sw": "driver_radiation_sw"
+        },
+        "backend_selector": "config_radt_sw_backend",
+        "cuda_entries": {
+          "rrtmg_sw": {
+            "module": "rrtmg_sw_v842",
+            "call": "shortwave_slot",
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "rrtmg_sw_v842",
+              "call": "load_shortwave_resources",
+              "attribute": "rrtmg_sw_v842_resources"
+            }
+          }
+        }
+      },
+      "cloudiness": {
+        "selector": "config_radt_cld_scheme",
+        "schemes": [
+          "off",
+          "cld_incidence",
+          "cld_fraction",
+          "cld_fraction_thompson"
+        ],
+        "native_entries": {
+          "cld_incidence": "driver_cloudiness",
+          "cld_fraction": "driver_cloudiness",
+          "cld_fraction_thompson": "driver_cloudiness"
+        },
+        "backend_selector": "config_radt_cld_backend",
+        "cuda_entries": {
+          "cld_incidence": {
+            "module": "radshared_v842",
+            "call": "cloudiness_slot",
+            "bind": "bind_native_pools"
+          },
+          "cld_fraction": {
+            "module": "radshared_v842",
+            "call": "cloudiness_slot",
+            "bind": "bind_native_pools"
+          },
+          "cld_fraction_thompson": {
+            "module": "radshared_v842",
+            "call": "cloudiness_slot",
+            "bind": "bind_native_pools"
+          }
+        }
+      },
+      "oml": {
+        "selector": "config_oml1d",
+        "schemes": [
+          "off",
+          "oml1d"
+        ],
+        "option_values": {
+          "off": false,
+          "oml1d": true
+        },
+        "native_entries": {
+          "oml1d": "driver_oml1d"
+        },
+        "backend_selector": "config_oml_backend",
+        "cuda_entries": {
+          "oml1d": {
+            "module": "oml_v842",
+            "call": "launch_slot",
+            "constant_aliases": {}
+          }
+        }
+      }
+    },
+    "registry_defaults": {
+      "input_soil_data": {
+        "type": "character",
+        "value": "STAS"
+      },
+      "input_soil_temperature_lag": {
+        "type": "integer",
+        "value": 140
+      },
+      "num_soil_layers": {
+        "type": "integer",
+        "value": 4
+      },
+      "months": {
+        "type": "integer",
+        "value": 12
+      },
+      "noznlev": {
+        "type": "integer",
+        "value": 59
+      },
+      "naerlev": {
+        "type": "integer",
+        "value": 29
+      },
+      "camdim1": {
+        "type": "integer",
+        "value": 4
+      },
+      "config_frac_seaice": {
+        "type": "logical",
+        "value": true
+      },
+      "config_sfc_albedo": {
+        "type": "logical",
+        "value": true
+      },
+      "config_sfc_snowalbedo": {
+        "type": "logical",
+        "value": true
+      },
+      "config_sst_update": {
+        "type": "logical",
+        "value": false
+      },
+      "config_sstdiurn_update": {
+        "type": "logical",
+        "value": false
+      },
+      "config_deepsoiltemp_update": {
+        "type": "logical",
+        "value": false
+      },
+      "config_o3climatology": {
+        "type": "logical",
+        "value": true
+      },
+      "config_microp_re": {
+        "type": "logical",
+        "value": false
+      },
+      "config_ysu_pblmix": {
+        "type": "logical",
+        "value": false
+      },
+      "config_urban_physics": {
+        "type": "logical",
+        "value": false
+      },
+      "config_n_microp": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_microphysics_top": {
+        "type": "real",
+        "value": 45000.0
+      },
+      "config_radtlw_interval": {
+        "type": "character",
+        "value": "00:30:00"
+      },
+      "config_radtsw_interval": {
+        "type": "character",
+        "value": "00:30:00"
+      },
+      "config_conv_interval": {
+        "type": "character",
+        "value": "none"
+      },
+      "config_pbl_interval": {
+        "type": "character",
+        "value": "none"
+      },
+      "config_camrad_abs_update": {
+        "type": "character",
+        "value": "06:00:00"
+      },
+      "config_greeness_update": {
+        "type": "character",
+        "value": "24:00:00"
+      },
+      "config_bucket_update": {
+        "type": "character",
+        "value": "none"
+      },
+      "config_physics_suite": {
+        "type": "character",
+        "value": "mesoscale_reference"
+      },
+      "config_microp_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_convection_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_lsm_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_pbl_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_gwdo_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_ngw_scheme": {
+        "type": "logical",
+        "value": false
+      },
+      "config_knob_ugwp_tauamp": {
+        "type": "real",
+        "value": 0.00013
+      },
+      "config_ugwp_diags": {
+        "type": "logical",
+        "value": false
+      },
+      "config_radt_cld_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_radt_lw_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_radt_sw_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_sfclayer_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_radt_cld_overlap": {
+        "type": "character",
+        "value": "maximum_random"
+      },
+      "config_radt_cld_dcorrlen": {
+        "type": "character",
+        "value": "constant"
+      },
+      "config_gfconv_closure_deep": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_gfconv_closure_shallow": {
+        "type": "integer",
+        "value": 8
+      },
+      "config_mynn_tkeadvect": {
+        "type": "logical",
+        "value": false
+      },
+      "config_mynn_tkebudget": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_closure": {
+        "type": "real",
+        "value": 2.5
+      },
+      "config_mynn_cloudpdf": {
+        "type": "integer",
+        "value": 2
+      },
+      "config_mynn_mixlength": {
+        "type": "integer",
+        "value": 2
+      },
+      "config_mynn_stfunc": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_topdown": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_scaleaware": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_dheat_opt": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_edmf": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_edmf_dd": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_edmf_mom": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_edmf_tke": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_edmf_output": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_mixscalars": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_mixclouds": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_mixqt": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_bucket_radt": {
+        "type": "real",
+        "value": 1000000000.0
+      },
+      "config_bucket_rainc": {
+        "type": "real",
+        "value": 100.0
+      },
+      "config_bucket_rainnc": {
+        "type": "real",
+        "value": 100.0
+      },
+      "config_oml1d": {
+        "type": "logical",
+        "value": false
+      },
+      "config_oml_hml0": {
+        "type": "real",
+        "value": 30.0
+      },
+      "config_oml_gamma": {
+        "type": "real",
+        "value": 0.14
+      },
+      "config_oml_relaxation_time": {
+        "type": "real",
+        "value": 864000.0
+      }
+    },
+    "backend_namelist_group": "hex_mpasphys",
+    "services": {
+      "surface_update": {
+        "backend_selector": "config_surface_update_backend",
+        "default_backend": "native-cpu",
+        "backends": [
+          "native-cpu",
+          "hex-cuda"
+        ],
+        "module": "hexcore.mpasphys.surface_update_v842",
+        "operations": [
+          "physics_update_surface",
+          "physics_update_sst",
+          "physics_update_sstskin",
+          "physics_update_deepsoiltemp",
+          "update_radiation_diagnostics",
+          "update_convection_step2"
+        ]
+      }
+    }
+  },
+  "mpasphys_rrfs": {
+    "schema": "mpas-port.physics-driver-rrfs/v1",
+    "source": "MPAS-Model-rrfs@1d6e370e src/core_atmosphere/physics/mpas_atmphys_control.F:87-391",
+    "backend_row": "mpasphys_rrfs",
+    "suite_routes": {
+      "hrrrv5": "hrrrv5",
+      "rrfs_mesoscale_reference": "mesoscale_reference",
+      "rrfs_convection_permitting": "convection_permitting",
+      "rrfs_none": "none"
+    },
+    "default_backend": "hex-cuda",
+    "backends": [
+      "off",
+      "native-cpu",
+      "hex-cuda"
+    ],
+    "slots": {
+      "microphysics": {
+        "selector": "config_microp_scheme",
+        "schemes": [
+          "off",
+          "mp_kessler",
+          "mp_thompson",
+          "mp_thompson_aerosols",
+          "mp_wsm6",
+          "mp_tempo",
+          "mp_nssl2m"
+        ],
+        "native_entries": {
+          "mp_kessler": "driver_microphysics",
+          "mp_thompson": "driver_microphysics",
+          "mp_thompson_aerosols": "driver_microphysics",
+          "mp_wsm6": "driver_microphysics",
+          "mp_tempo": "driver_microphysics",
+          "mp_nssl2m": "driver_microphysics"
+        },
+        "backend_selector": "config_microp_backend",
+        "cuda_entries": {
+          "mp_tempo": {
+            "module": "rrfs.tempo_v303",
+            "call": "run_slot",
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "rrfs.tempo_v303",
+              "call": "load_resources",
+              "attribute": "tempo_v303_resources"
+            }
+          }
+        }
+      },
+      "convection": {
+        "selector": "config_convection_scheme",
+        "schemes": [
+          "off",
+          "cu_grell_freitas",
+          "cu_kain_fritsch",
+          "cu_tiedtke",
+          "cu_ntiedtke",
+          "cu_grell_freitas_li"
+        ],
+        "native_entries": {
+          "cu_grell_freitas": "driver_convection",
+          "cu_kain_fritsch": "driver_convection",
+          "cu_tiedtke": "driver_convection",
+          "cu_ntiedtke": "driver_convection",
+          "cu_grell_freitas_li": "driver_convection"
+        },
+        "backend_selector": "config_convection_backend",
+        "cuda_entries": {
+          "cu_grell_freitas_li": {
+            "module": "rrfs.cu_gfl_bf6a4b0",
+            "call": "run_slot",
+            "bind": "bind_native_pools",
+            "halo_groups": [
+              {
+                "name": "physics:sub3d_cuten",
+                "time_level": 1,
+                "halo_layers": [
+                  2
+                ],
+                "fields": [
+                  "sigma_deep",
+                  "sigma_deep_far",
+                  "sub3d_rucuten",
+                  "sub3d_rvcuten",
+                  "sub3d_rthcuten",
+                  "sub3d_rqvcuten"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "pbl": {
+        "selector": "config_pbl_scheme",
+        "schemes": [
+          "off",
+          "bl_mynn",
+          "bl_ysu",
+          "bl_mynnedmf",
+          "bl_myj"
+        ],
+        "native_entries": {
+          "bl_mynn": "driver_pbl",
+          "bl_ysu": "driver_pbl",
+          "bl_mynnedmf": "driver_pbl",
+          "bl_myj": "driver_pbl"
+        },
+        "backend_selector": "config_pbl_backend",
+        "cuda_entries": {
+          "bl_mynnedmf": {
+            "module": "rrfs.bl_mynnedmf_c942418",
+            "call": "run_slot",
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "rrfs.bl_mynnedmf_c942418",
+              "call": "load_cuda_packet",
+              "attribute": "_rrfs_mynnedmf_image"
+            }
+          },
+          "bl_myj": {
+            "module": "rrfs.myj",
+            "bind": "bind_native_pools",
+            "call": "run_slot"
+          }
+        }
+      },
+      "surface_layer": {
+        "selector": "config_sfclayer_scheme",
+        "schemes": [
+          "off",
+          "sf_mynn",
+          "sf_monin_obukhov",
+          "sf_monin_obukhov_rev",
+          "sf_mynnsfclay",
+          "sf_myj"
+        ],
+        "native_entries": {
+          "sf_mynn": "driver_sfclayer",
+          "sf_monin_obukhov": "driver_sfclayer",
+          "sf_monin_obukhov_rev": "driver_sfclayer",
+          "sf_mynnsfclay": "driver_sfclayer",
+          "sf_myj": "driver_sfclayer"
+        },
+        "backend_selector": "config_sfclayer_backend",
+        "cuda_entries": {
+          "sf_mynnsfclay": {
+            "module": "rrfs.sf_mynnsfc_v600",
+            "call": "launch_slot",
+            "profiles": {
+              "u3d": "u_p",
+              "v3d": "v_p",
+              "t3d": "t_p",
+              "qv3d": "qv_p",
+              "p3d": "pres_hyd_p",
+              "dz8w": "dz_p",
+              "th3d": "th_p",
+              "rho3d": "rho_p",
+              "psfcpa": "psfc_p"
+            }
+          },
+          "sf_mynn": {
+            "module": "rrfs.sf_mynn_rrfs",
+            "call": "launch_slot",
+            "profiles": {
+              "u3d": "u_p",
+              "v3d": "v_p",
+              "t3d": "t_p",
+              "qv3d": "qv_p",
+              "qc3d": "qc_p",
+              "p3d": "pres_hyd_p",
+              "rho3d": "rho_p",
+              "dz8w": "dz_p",
+              "psfcpa": "psfc_p"
+            },
+            "constant_aliases": {
+              "g": "gravity",
+              "rovcp": "rcp",
+              "r": "R_d",
+              "ep1": "ep_1",
+              "ep2": "ep_2"
+            }
+          },
+          "sf_myj": {
+            "module": "rrfs.myj",
+            "bind": "bind_native_pools",
+            "call": "run_slot"
+          }
+        }
+      },
+      "land_surface": {
+        "selector": "config_lsm_scheme",
+        "schemes": [
+          "off",
+          "sf_noah",
+          "sf_noahmp",
+          "sf_ruc"
+        ],
+        "native_entries": {
+          "sf_noah": "driver_lsm",
+          "sf_noahmp": "driver_lsm_noahmp",
+          "sf_ruc": "driver_lsm"
+        },
+        "backend_selector": "config_lsm_backend",
+        "cuda_entries": {
+          "sf_ruc": {
+            "module": "rrfs.ruc_lsm_8c9f1a8",
+            "call": "run_slot",
+            "bind": "bind_native_pools",
+            "post_lsm_diagnostics": "run_native_diagnostics"
+          },
+          "sf_noahmp": {
+            "module": "rrfs.noahmp",
+            "bind": "bind_forecast",
+            "call": "forecast_callback",
+            "resources": {
+              "module": "rrfs.noahmp",
+              "call": "load_cuda_resources",
+              "attribute": "rrfs_noahmp_resources"
+            }
+          }
+        }
+      },
+      "seaice": {
+        "selector": null,
+        "derived_from": "land_surface",
+        "schemes": [
+          "off",
+          "sf_noah",
+          "sf_noahmp",
+          "sf_ruc"
+        ],
+        "native_entries": {
+          "sf_noah": "driver_seaice",
+          "sf_noahmp": "driver_seaice",
+          "sf_ruc": "driver_seaice"
+        },
+        "backend_selector": "config_seaice_backend",
+        "source": "mpas_atmphys_driver.F:285-321; mpas_atmphys_driver_seaice.F:479-551",
+        "threshold_option": "config_frac_seaice",
+        "cuda_entries": {
+          "sf_ruc": {
+            "module": "rrfs.ruc_lsm_8c9f1a8",
+            "call": "run_slot",
+            "bind": "bind_native_pools"
+          }
+        }
+      },
+      "gwdo": {
+        "selector": "config_gwdo_scheme",
+        "schemes": [
+          "off",
+          "bl_ysu_gwdo",
+          "bl_ugwp_gwdo"
+        ],
+        "native_entries": {
+          "bl_ysu_gwdo": "driver_gwdo",
+          "bl_ugwp_gwdo": "driver_gwdo"
+        },
+        "backend_selector": "config_gwdo_backend"
+      },
+      "ngw": {
+        "selector": "config_ngw_scheme",
+        "selector_type": "logical",
+        "schemes": [
+          "off",
+          "on"
+        ],
+        "native_entries": {
+          "on": "driver_ngw"
+        },
+        "backend_selector": "config_ngw_backend",
+        "native_parent": "gwdo",
+        "parent_schemes": [
+          "bl_ugwp_gwdo"
+        ]
+      },
+      "radiation_lw": {
+        "selector": "config_radt_lw_scheme",
+        "schemes": [
+          "off",
+          "cam_lw",
+          "rrtmg_lw"
+        ],
+        "native_entries": {
+          "cam_lw": "driver_radiation_lw",
+          "rrtmg_lw": "driver_radiation_lw"
+        },
+        "backend_selector": "config_radt_lw_backend",
+        "cuda_entries": {
+          "rrtmg_lw": {
+            "module": "rrfs.radiation_rrfs",
+            "call": "longwave_slot",
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "rrfs.radiation_rrfs",
+              "call": "load_longwave_resources",
+              "attribute": "rrtmg_lw_rrfs_resources"
+            }
+          }
+        }
+      },
+      "radiation_sw": {
+        "selector": "config_radt_sw_scheme",
+        "schemes": [
+          "off",
+          "cam_sw",
+          "rrtmg_sw"
+        ],
+        "native_entries": {
+          "cam_sw": "driver_radiation_sw",
+          "rrtmg_sw": "driver_radiation_sw"
+        },
+        "backend_selector": "config_radt_sw_backend",
+        "cuda_entries": {
+          "rrtmg_sw": {
+            "module": "rrfs.radiation_rrfs",
+            "call": "shortwave_slot",
+            "bind": "bind_native_pools",
+            "resources": {
+              "module": "rrfs.radiation_rrfs",
+              "call": "load_shortwave_resources",
+              "attribute": "rrtmg_sw_rrfs_resources"
+            }
+          }
+        }
+      },
+      "cloudiness": {
+        "selector": "config_radt_cld_scheme",
+        "schemes": [
+          "off",
+          "cld_incidence",
+          "cld_fraction",
+          "cld_fraction_thompson",
+          "cld_fraction_mynn"
+        ],
+        "native_entries": {
+          "cld_incidence": "driver_cloudiness",
+          "cld_fraction": "driver_cloudiness",
+          "cld_fraction_thompson": "driver_cloudiness",
+          "cld_fraction_mynn": "driver_cloudiness",
+          "cld_tempo": "driver_cloudiness"
+        },
+        "backend_selector": "config_radt_cld_backend",
+        "internal_schemes": [
+          "cld_tempo"
+        ],
+        "cuda_entries": {
+          "cld_incidence": {
+            "module": "rrfs.radiation_rrfs",
+            "call": "cloudiness_slot",
+            "bind": "bind_native_pools"
+          },
+          "cld_fraction": {
+            "module": "rrfs.radiation_rrfs",
+            "call": "cloudiness_slot",
+            "bind": "bind_native_pools"
+          },
+          "cld_fraction_thompson": {
+            "module": "rrfs.radiation_rrfs",
+            "call": "cloudiness_slot",
+            "bind": "bind_native_pools"
+          },
+          "cld_fraction_mynn": {
+            "module": "rrfs.radiation_rrfs",
+            "call": "cloudiness_slot",
+            "bind": "bind_native_pools"
+          },
+          "cld_tempo": {
+            "module": "rrfs.radiation_rrfs",
+            "call": "cloudiness_slot",
+            "bind": "bind_native_pools"
+          }
+        }
+      },
+      "oml": {
+        "selector": "config_oml1d",
+        "selector_type": "logical",
+        "schemes": [
+          "off",
+          "on"
+        ],
+        "native_entries": {
+          "on": "driver_oml1d"
+        },
+        "backend_selector": "config_oml_backend"
+      },
+      "smoke": {
+        "selector": "config_smoke_scheme",
+        "schemes": [
+          "off",
+          "on"
+        ],
+        "native_entries": {
+          "on": "driver_smoke"
+        },
+        "backend_selector": "config_smoke_backend",
+        "activation": [
+          {
+            "config_smoke_scheme": "on"
+          },
+          {
+            "config_dust_scheme": "on"
+          },
+          {
+            "config_anthro_scheme": {
+              "not": "off"
+            }
+          }
+        ]
+      }
+    },
+    "registry_defaults": {
+      "input_soil_data": {
+        "type": "character",
+        "value": "STAS"
+      },
+      "input_soil_temperature_lag": {
+        "type": "integer",
+        "value": 140
+      },
+      "num_soil_layers": {
+        "type": "integer",
+        "value": 4
+      },
+      "months": {
+        "type": "integer",
+        "value": 12
+      },
+      "noznlev": {
+        "type": "integer",
+        "value": 59
+      },
+      "naerlev": {
+        "type": "integer",
+        "value": 29
+      },
+      "camdim1": {
+        "type": "integer",
+        "value": 4
+      },
+      "config_frac_seaice": {
+        "type": "logical",
+        "value": true
+      },
+      "config_sfc_albedo": {
+        "type": "logical",
+        "value": true
+      },
+      "config_sfc_snowalbedo": {
+        "type": "logical",
+        "value": true
+      },
+      "config_sst_update": {
+        "type": "logical",
+        "value": false
+      },
+      "config_gvf_update": {
+        "type": "logical",
+        "value": true
+      },
+      "config_sstdiurn_update": {
+        "type": "logical",
+        "value": false
+      },
+      "config_deepsoiltemp_update": {
+        "type": "logical",
+        "value": false
+      },
+      "config_o3climatology": {
+        "type": "logical",
+        "value": true
+      },
+      "config_microp_re": {
+        "type": "logical",
+        "value": true
+      },
+      "config_ysu_pblmix": {
+        "type": "logical",
+        "value": false
+      },
+      "config_urban_physics": {
+        "type": "logical",
+        "value": false
+      },
+      "config_n_microp": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_radtlw_interval": {
+        "type": "character",
+        "value": "00:30:00"
+      },
+      "config_radtsw_interval": {
+        "type": "character",
+        "value": "00:30:00"
+      },
+      "config_conv_interval": {
+        "type": "character",
+        "value": "none"
+      },
+      "config_pbl_interval": {
+        "type": "character",
+        "value": "none"
+      },
+      "config_camrad_abs_update": {
+        "type": "character",
+        "value": "06:00:00"
+      },
+      "config_greeness_update": {
+        "type": "character",
+        "value": "24:00:00"
+      },
+      "config_bucket_update": {
+        "type": "character",
+        "value": "none"
+      },
+      "config_physics_suite": {
+        "type": "character",
+        "value": "mesoscale_reference"
+      },
+      "config_microp_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_tempo_cldfra": {
+        "type": "logical",
+        "value": false
+      },
+      "config_tempo_ml_nc": {
+        "type": "logical",
+        "value": false
+      },
+      "config_tempo_ml_nr": {
+        "type": "logical",
+        "value": false
+      },
+      "config_nssl_moments": {
+        "type": "character",
+        "value": "nssl2m"
+      },
+      "config_convection_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_gfl_sub3d": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_lsm_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_lakemodel": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_pbl_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_gwdo_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_ngw_scheme": {
+        "type": "logical",
+        "value": false
+      },
+      "config_knob_ugwp_tauamp": {
+        "type": "real",
+        "value": 0.00013
+      },
+      "config_ugwp_diags": {
+        "type": "logical",
+        "value": false
+      },
+      "config_radt_cld_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_radt_lw_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_radt_sw_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_sfclayer_scheme": {
+        "type": "character",
+        "value": "suite"
+      },
+      "config_mynn_sfcflux_land": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_sfcflux_water": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_radt_cld_overlap": {
+        "type": "character",
+        "value": "maximum_random"
+      },
+      "config_radt_cld_dcorrlen": {
+        "type": "character",
+        "value": "constant"
+      },
+      "config_gfconv_closure_deep": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_gfconv_closure_shallow": {
+        "type": "integer",
+        "value": 8
+      },
+      "config_mynn_tkeadvect": {
+        "type": "logical",
+        "value": false
+      },
+      "config_mynn_tkebudget": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_closure": {
+        "type": "real",
+        "value": 2.6
+      },
+      "config_mynn_cloudpdf": {
+        "type": "integer",
+        "value": 2
+      },
+      "config_mynn_mixlength": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_stfunc": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_topdown": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_scaleaware": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_dheat_opt": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_edmf": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_edmf_dd": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_edmf_mom": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_edmf_tke": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_edmf_output": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_mixscalars": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_mixaerosols": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_mixnumcon": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_mixclouds": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_mynn_mixqt": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_mynn_ess": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_icloud_bl": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_spp_pbl": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_bucket_radt": {
+        "type": "real",
+        "value": 1000000000.0
+      },
+      "config_bucket_rainc": {
+        "type": "real",
+        "value": 100.0
+      },
+      "config_bucket_rainnc": {
+        "type": "real",
+        "value": 100.0
+      },
+      "config_oml1d": {
+        "type": "logical",
+        "value": false
+      },
+      "config_oml_hml0": {
+        "type": "real",
+        "value": 30.0
+      },
+      "config_oml_gamma": {
+        "type": "real",
+        "value": 0.14
+      },
+      "config_oml_relaxation_time": {
+        "type": "real",
+        "value": 864000.0
+      },
+      "config_noahmp_iopt_dveg": {
+        "type": "integer",
+        "value": 4
+      },
+      "config_noahmp_iopt_crs": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_btr": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_runsrf": {
+        "type": "integer",
+        "value": 3
+      },
+      "config_noahmp_iopt_runsub": {
+        "type": "integer",
+        "value": 3
+      },
+      "config_noahmp_iopt_sfc": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_frz": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_inf": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_rad": {
+        "type": "integer",
+        "value": 3
+      },
+      "config_noahmp_iopt_alb": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_snf": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_tksno": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_tbot": {
+        "type": "integer",
+        "value": 2
+      },
+      "config_noahmp_iopt_stc": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_gla": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_rsf": {
+        "type": "integer",
+        "value": 4
+      },
+      "config_noahmp_iopt_soil": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_pedo": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_crop": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_noahmp_iopt_irr": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_noahmp_iopt_irrm": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_noahmp_iopt_infdv": {
+        "type": "integer",
+        "value": 1
+      },
+      "config_noahmp_iopt_tdrn": {
+        "type": "integer",
+        "value": 0
+      },
+      "config_tempo_aerosolaware": {
+        "type": "logical",
+        "value": true
+      },
+      "config_tempo_hailaware": {
+        "type": "logical",
+        "value": true
+      },
+      "config_tempo_ml_for_bl_nc": {
+        "type": "logical",
+        "value": false
+      },
+      "config_tempo_refl10cm_from_melting": {
+        "type": "logical",
+        "value": false
+      },
+      "config_smoke_scheme": {
+        "type": "character",
+        "value": "off"
+      },
+      "config_dust_scheme": {
+        "type": "character",
+        "value": "off"
+      },
+      "config_anthro_scheme": {
+        "type": "character",
+        "value": "off"
+      },
+      "config_rwc_scheme": {
+        "type": "character",
+        "value": "off"
+      },
+      "rwc_emis_scale_factor": {
+        "type": "real",
+        "value": 1.0
+      },
+      "num_chem": {
+        "type": "integer",
+        "value": 0
+      },
+      "kanthro": {
+        "type": "integer",
+        "value": 1
+      },
+      "kwildfire": {
+        "type": "integer",
+        "value": 1
+      },
+      "kbiogenic": {
+        "type": "integer",
+        "value": 1
+      },
+      "kvolcanic": {
+        "type": "integer",
+        "value": 1
+      },
+      "kreswoodcomb": {
+        "type": "integer",
+        "value": 1
+      },
+      "hwp_method": {
+        "type": "integer",
+        "value": 1
+      },
+      "hwp_alpha": {
+        "type": "real",
+        "value": 1.0
+      },
+      "bb_input_prevh": {
+        "type": "integer",
+        "value": 24
+      },
+      "bb_beta": {
+        "type": "integer",
+        "value": 1
+      },
+      "wetdep_ls_opt": {
+        "type": "integer",
+        "value": 0
+      },
+      "wetdep_ls_alpha": {
+        "type": "real",
+        "value": 0.0
+      },
+      "plumerise_opt": {
+        "type": "integer",
+        "value": 0
+      },
+      "plume_wind_eff": {
+        "type": "integer",
+        "value": 0
+      },
+      "plume_alpha": {
+        "type": "real",
+        "value": 0.0
+      },
+      "bb_qv_scale_factor": {
+        "type": "real",
+        "value": 1.0
+      },
+      "ebb_dcycle": {
+        "type": "integer",
+        "value": 0
+      },
+      "add_fire_heat_flux": {
+        "type": "logical",
+        "value": false
+      },
+      "add_fire_moist_flux": {
+        "type": "logical",
+        "value": false
+      },
+      "calc_bb_emis_online": {
+        "type": "logical",
+        "value": false
+      },
+      "bb_emis_scale_factor": {
+        "type": "real",
+        "value": 1.0
+      },
+      "drydep_opt": {
+        "type": "integer",
+        "value": 0
+      },
+      "pm_settling": {
+        "type": "integer",
+        "value": 0
+      },
+      "dust_alpha": {
+        "type": "real",
+        "value": 1.0
+      },
+      "dust_gamma": {
+        "type": "real",
+        "value": 1.0
+      },
+      "dust_moist_correction": {
+        "type": "real",
+        "value": 1.0
+      },
+      "dust_drylimit_factor": {
+        "type": "real",
+        "value": 1.0
+      },
+      "plumerisefire_frq": {
+        "type": "integer",
+        "value": 60
+      },
+      "aero_dir_rad_fdb": {
+        "type": "logical",
+        "value": false
+      },
+      "config_mynn_enh_mix": {
+        "type": "logical",
+        "value": false
+      }
+    },
+    "backend_namelist_group": "hex_mpasphys",
+    "backend": "mpasphys",
+    "driver_module": "hexcore.mpasphys.rrfs.driver_rrfs",
+    "native_core_module": "hexcore.mpasphys.rrfs.driver_rrfs",
+    "dycore_path": "v8.3.1-noaa",
+    "pin_set": "rrfs",
+    "model_commit": "1d6e370e7b43a332074809f170532a216c2212fb",
+    "workflow_commit": "08eee4ceee301898d3cb837e03699a8da0d1cb32",
+    "dycore": {
+      "variant": "mpas-v8.3.1-noaa"
+    },
+    "submodule_pins": {
+      "MMM-physics": "a4baf7f3243d1db0dbc5f63473f895bdbdc05c30",
+      "UGWP": "c1c893edcf171af5639af60e3a3a528816f6cc2b",
+      "TEMPO": "9adf9ef2827104640125f0c322e1218fce74e94c",
+      "MYNN-EDMF": "c942418a47a29dee09b51b377286da6bb25160e3",
+      "MYNN-SFC": "b66187f54a0c169e36592552634867474e603ac0",
+      "RUCLSM": "8c9f1a8bb2cfb5fb8d115440fced566361fe0f20",
+      "GFL": "bf6a4b0d58f112322fbf9b11d43ed2027aeb56fa",
+      "SMOKE": "9652bbf152f8b946bf04f72a2b48ff67e15d7973"
+    },
+    "suites": {
+      "mesoscale_reference": {
+        "config_microp_scheme": "mp_wsm6",
+        "config_convection_scheme": "cu_ntiedtke",
+        "config_pbl_scheme": "bl_ysu",
+        "config_gwdo_scheme": "bl_ysu_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction",
+        "config_sfclayer_scheme": "sf_monin_obukhov_rev",
+        "config_lsm_scheme": "sf_noah"
+      },
+      "convection_permitting": {
+        "config_microp_scheme": "mp_thompson",
+        "config_convection_scheme": "cu_grell_freitas",
+        "config_pbl_scheme": "bl_mynn",
+        "config_gwdo_scheme": "bl_ysu_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction",
+        "config_sfclayer_scheme": "sf_mynn",
+        "config_lsm_scheme": "sf_noah"
+      },
+      "hrrrv5": {
+        "config_microp_scheme": "mp_tempo",
+        "config_convection_scheme": "off",
+        "config_pbl_scheme": "bl_mynnedmf",
+        "config_sfclayer_scheme": "sf_mynnsfclay",
+        "config_lsm_scheme": "sf_ruc",
+        "config_gwdo_scheme": "bl_ugwp_gwdo",
+        "config_radt_lw_scheme": "rrtmg_lw",
+        "config_radt_sw_scheme": "rrtmg_sw",
+        "config_radt_cld_scheme": "cld_fraction_mynn"
+      },
+      "none": {
+        "config_microp_scheme": "off",
+        "config_convection_scheme": "off",
+        "config_pbl_scheme": "off",
+        "config_gwdo_scheme": "off",
+        "config_radt_lw_scheme": "off",
+        "config_radt_sw_scheme": "off",
+        "config_radt_cld_scheme": "off",
+        "config_sfclayer_scheme": "off",
+        "config_lsm_scheme": "off"
+      }
+    },
+    "registry_groups": {
+      "physics": [
+        "input_soil_data",
+        "input_soil_temperature_lag",
+        "num_soil_layers",
+        "months",
+        "noznlev",
+        "naerlev",
+        "camdim1",
+        "config_frac_seaice",
+        "config_sfc_albedo",
+        "config_sfc_snowalbedo",
+        "config_sst_update",
+        "config_gvf_update",
+        "config_sstdiurn_update",
+        "config_deepsoiltemp_update",
+        "config_o3climatology",
+        "config_microp_re",
+        "config_ysu_pblmix",
+        "config_urban_physics",
+        "config_n_microp",
+        "config_radtlw_interval",
+        "config_radtsw_interval",
+        "config_conv_interval",
+        "config_pbl_interval",
+        "config_camrad_abs_update",
+        "config_greeness_update",
+        "config_bucket_update",
+        "config_physics_suite",
+        "config_microp_scheme",
+        "config_tempo_cldfra",
+        "config_tempo_ml_nc",
+        "config_tempo_ml_nr",
+        "config_nssl_moments",
+        "config_convection_scheme",
+        "config_gfl_sub3d",
+        "config_lsm_scheme",
+        "config_lakemodel",
+        "config_pbl_scheme",
+        "config_gwdo_scheme",
+        "config_ngw_scheme",
+        "config_knob_ugwp_tauamp",
+        "config_ugwp_diags",
+        "config_radt_cld_scheme",
+        "config_radt_lw_scheme",
+        "config_radt_sw_scheme",
+        "config_sfclayer_scheme",
+        "config_mynn_sfcflux_land",
+        "config_mynn_sfcflux_water",
+        "config_radt_cld_overlap",
+        "config_radt_cld_dcorrlen",
+        "config_gfconv_closure_deep",
+        "config_gfconv_closure_shallow",
+        "config_mynn_tkeadvect",
+        "config_mynn_tkebudget",
+        "config_mynn_closure",
+        "config_mynn_cloudpdf",
+        "config_mynn_mixlength",
+        "config_mynn_stfunc",
+        "config_mynn_topdown",
+        "config_mynn_scaleaware",
+        "config_mynn_dheat_opt",
+        "config_mynn_edmf",
+        "config_mynn_edmf_dd",
+        "config_mynn_edmf_mom",
+        "config_mynn_edmf_tke",
+        "config_mynn_edmf_output",
+        "config_mynn_mixscalars",
+        "config_mynn_mixaerosols",
+        "config_mynn_mixnumcon",
+        "config_mynn_mixclouds",
+        "config_mynn_mixqt",
+        "config_mynn_ess",
+        "config_icloud_bl",
+        "config_spp_pbl",
+        "config_bucket_radt",
+        "config_bucket_rainc",
+        "config_bucket_rainnc",
+        "config_oml1d",
+        "config_oml_hml0",
+        "config_oml_gamma",
+        "config_oml_relaxation_time"
+      ],
+      "physics_lsm_noahmp": [
+        "config_noahmp_iopt_dveg",
+        "config_noahmp_iopt_crs",
+        "config_noahmp_iopt_btr",
+        "config_noahmp_iopt_runsrf",
+        "config_noahmp_iopt_runsub",
+        "config_noahmp_iopt_sfc",
+        "config_noahmp_iopt_frz",
+        "config_noahmp_iopt_inf",
+        "config_noahmp_iopt_rad",
+        "config_noahmp_iopt_alb",
+        "config_noahmp_iopt_snf",
+        "config_noahmp_iopt_tksno",
+        "config_noahmp_iopt_tbot",
+        "config_noahmp_iopt_stc",
+        "config_noahmp_iopt_gla",
+        "config_noahmp_iopt_rsf",
+        "config_noahmp_iopt_soil",
+        "config_noahmp_iopt_pedo",
+        "config_noahmp_iopt_crop",
+        "config_noahmp_iopt_irr",
+        "config_noahmp_iopt_irrm",
+        "config_noahmp_iopt_infdv",
+        "config_noahmp_iopt_tdrn"
+      ],
+      "physics_mp_tempo": [
+        "config_tempo_aerosolaware",
+        "config_tempo_hailaware",
+        "config_tempo_ml_for_bl_nc",
+        "config_tempo_refl10cm_from_melting"
+      ],
+      "chemistry": [
+        "config_smoke_scheme",
+        "config_dust_scheme",
+        "config_anthro_scheme",
+        "config_rwc_scheme",
+        "rwc_emis_scale_factor",
+        "num_chem",
+        "kanthro",
+        "kwildfire",
+        "kbiogenic",
+        "kvolcanic",
+        "kreswoodcomb",
+        "hwp_method",
+        "hwp_alpha",
+        "bb_input_prevh",
+        "bb_beta",
+        "wetdep_ls_opt",
+        "wetdep_ls_alpha",
+        "plumerise_opt",
+        "plume_wind_eff",
+        "plume_alpha",
+        "bb_qv_scale_factor",
+        "ebb_dcycle",
+        "add_fire_heat_flux",
+        "add_fire_moist_flux",
+        "calc_bb_emis_online",
+        "bb_emis_scale_factor",
+        "drydep_opt",
+        "pm_settling",
+        "dust_alpha",
+        "dust_gamma",
+        "dust_moist_correction",
+        "dust_drylimit_factor",
+        "plumerisefire_frq",
+        "aero_dir_rad_fdb",
+        "config_mynn_enh_mix"
+      ]
+    },
+    "matched_extensions": {
+      "woof": false,
+      "arwen_physics": false,
+      "moving_domains": false,
+      "regional_extras": false
+    },
+    "package_rules": {
+      "mp_kessler_in": [
+        {
+          "config_microp_scheme": "mp_kessler"
+        }
+      ],
+      "mp_thompson_in": [
+        {
+          "config_microp_scheme": "mp_thompson"
+        }
+      ],
+      "mp_thompson_aers_in": [
+        {
+          "config_microp_scheme": "mp_thompson_aerosols"
+        }
+      ],
+      "mp_tempo_in": [
+        {
+          "config_microp_scheme": "mp_tempo"
+        }
+      ],
+      "mp_wsm6_in": [
+        {
+          "config_microp_scheme": "mp_wsm6"
+        }
+      ],
+      "mp_nssl2m_in": [
+        {
+          "config_microp_scheme": "mp_nssl2m"
+        }
+      ],
+      "tempo_aerosolaware_in": [
+        {
+          "config_microp_scheme": "mp_tempo",
+          "config_tempo_aerosolaware": true
+        }
+      ],
+      "tempo_hailaware_in": [
+        {
+          "config_microp_scheme": "mp_tempo",
+          "config_tempo_hailaware": true
+        }
+      ],
+      "nssl3m_in": [
+        {
+          "config_microp_scheme": "mp_nssl2m",
+          "config_nssl_moments": "nssl3m"
+        }
+      ],
+      "cu_grell_freitas_in": [
+        {
+          "config_convection_scheme": "cu_grell_freitas"
+        }
+      ],
+      "cu_grell_freitas_li_in": [
+        {
+          "config_convection_scheme": "cu_grell_freitas_li"
+        }
+      ],
+      "cu_kain_fritsch_in": [
+        {
+          "config_convection_scheme": "cu_kain_fritsch"
+        }
+      ],
+      "cu_ntiedtke_in": [
+        {
+          "config_convection_scheme": "cu_ntiedtke"
+        },
+        {
+          "config_convection_scheme": "cu_tiedtke"
+        }
+      ],
+      "bl_ysu_in": [
+        {
+          "config_pbl_scheme": "bl_ysu"
+        }
+      ],
+      "bl_mynn_in": [
+        {
+          "config_pbl_scheme": "bl_mynn"
+        }
+      ],
+      "bl_mynnedmf_in": [
+        {
+          "config_pbl_scheme": "bl_mynnedmf"
+        }
+      ],
+      "bl_myj_in": [
+        {
+          "config_pbl_scheme": "bl_myj"
+        }
+      ],
+      "lsm_noah_in": [
+        {
+          "config_lsm_scheme": "sf_noah"
+        }
+      ],
+      "lsm_ruc_in": [
+        {
+          "config_lsm_scheme": "sf_ruc"
+        }
+      ],
+      "sf_noahmp_in": [
+        {
+          "config_lsm_scheme": "sf_noahmp"
+        }
+      ],
+      "mpas_smoke_fine": [
+        {
+          "config_smoke_scheme": {
+            "not": "off"
+          }
+        },
+        {
+          "config_rwc_scheme": {
+            "not": "off"
+          }
+        }
+      ],
+      "mpas_smoke_in": [
+        {
+          "config_smoke_scheme": {
+            "not": "off"
+          }
+        }
+      ],
+      "mpas_dust_in": [
+        {
+          "config_dust_scheme": {
+            "not": "off"
+          }
+        }
+      ],
+      "mpas_anthro_in": [
+        {
+          "config_anthro_scheme": {
+            "not": "off"
+          }
+        },
+        {
+          "config_rwc_scheme": {
+            "not": "off"
+          }
+        }
+      ],
+      "mpas_anthro_aero_in": [
+        {
+          "config_anthro_scheme": "simple_aero"
+        },
+        {
+          "config_anthro_scheme": "simple_gasaero"
+        },
+        {
+          "config_anthro_scheme": "acomp_gasaero"
+        }
+      ],
+      "mpas_rwc_in": [
+        {
+          "config_rwc_scheme": {
+            "not": "off"
+          }
+        }
+      ]
+    },
+    "scalar_registry": [
+      {
+        "name": "qv",
+        "array_group": "moist",
+        "units": "kg kg^{-1}",
+        "description": "Water vapor mixing ratio"
+      },
+      {
+        "name": "qc",
+        "array_group": "moist",
+        "units": "kg kg^{-1}",
+        "description": "Cloud water mixing ratio",
+        "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in;cu_ntiedtke_in;mp_kessler_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+      },
+      {
+        "name": "qr",
+        "array_group": "moist",
+        "units": "kg kg^{-1}",
+        "description": "Rain water mixing ratio",
+        "packages": "mp_kessler_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+      },
+      {
+        "name": "qi",
+        "array_group": "moist",
+        "units": "kg kg^{-1}",
+        "description": "Ice mixing ratio",
+        "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in;cu_ntiedtke_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+      },
+      {
+        "name": "qs",
+        "array_group": "moist",
+        "units": "kg kg^{-1}",
+        "description": "Snow mixing ratio",
+        "packages": "bl_mynn_in;bl_mynnedmf_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+      },
+      {
+        "name": "qg",
+        "array_group": "moist",
+        "units": "kg kg^{-1}",
+        "description": "Graupel mixing ratio",
+        "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+      },
+      {
+        "name": "qh",
+        "array_group": "moist",
+        "units": "kg kg^{-1}",
+        "description": "Hail mixing ratio",
+        "packages": "mp_nssl2m_in"
+      },
+      {
+        "name": "ni",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Cloud ice number concentration",
+        "packages": "bl_mynn_in;bl_mynnedmf_in;mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_tempo_in"
+      },
+      {
+        "name": "nr",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Rain number concentration",
+        "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_tempo_in"
+      },
+      {
+        "name": "ns",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Snow number concentration",
+        "packages": "mp_nssl2m_in"
+      },
+      {
+        "name": "ng",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Graupel number concentration",
+        "packages": "mp_nssl2m_in;tempo_hailaware_in"
+      },
+      {
+        "name": "nh",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Hail number concentration",
+        "packages": "mp_nssl2m_in"
+      },
+      {
+        "name": "nccn",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Cloud condensation nuclei concentration",
+        "packages": "mp_nssl2m_in"
+      },
+      {
+        "name": "volg",
+        "array_group": "volume",
+        "units": "m^{3} kg^{-1}",
+        "description": "Graupel particle volume",
+        "packages": "mp_nssl2m_in;tempo_hailaware_in"
+      },
+      {
+        "name": "volh",
+        "array_group": "volume",
+        "units": "m^{3} kg^{-1}",
+        "description": "Hail particle volume",
+        "packages": "mp_nssl2m_in"
+      },
+      {
+        "name": "zrw",
+        "array_group": "reflectivity",
+        "units": "nb kg^{-1}",
+        "description": "Rain reflectivity moment",
+        "packages": "nssl3m_in"
+      },
+      {
+        "name": "zgw",
+        "array_group": "reflectivity",
+        "units": "nb kg^{-1}",
+        "description": "Graupel reflectivity moment",
+        "packages": "nssl3m_in"
+      },
+      {
+        "name": "zhw",
+        "array_group": "reflectivity",
+        "units": "nb kg^{-1}",
+        "description": "Hail reflectivity moment",
+        "packages": "nssl3m_in"
+      },
+      {
+        "name": "nc",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Cloud water number concentration",
+        "packages": "mp_thompson_aers_in;tempo_aerosolaware_in;mp_nssl2m_in"
+      },
+      {
+        "name": "nifa",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Ice-friendly aerosol number concentration",
+        "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+      },
+      {
+        "name": "nwfa",
+        "array_group": "number",
+        "units": "nb kg^{-1}",
+        "description": "Water-friendly aerosol number concentration",
+        "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+      }
+    ],
+    "persistent_pools": {
+      "state": {
+        "time_levs": "2",
+        "fields": [
+          {
+            "name": "scalars",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "constituents": [
+              {
+                "name": "qv"
+              },
+              {
+                "name": "qc",
+                "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in;cu_ntiedtke_in;mp_kessler_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+              },
+              {
+                "name": "qr",
+                "packages": "mp_kessler_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+              },
+              {
+                "name": "qi",
+                "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in;cu_ntiedtke_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+              },
+              {
+                "name": "qs",
+                "packages": "bl_mynn_in;bl_mynnedmf_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+              },
+              {
+                "name": "qg",
+                "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+              },
+              {
+                "name": "qh",
+                "packages": "mp_nssl2m_in"
+              },
+              {
+                "name": "ni",
+                "packages": "bl_mynn_in;bl_mynnedmf_in;mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_tempo_in"
+              },
+              {
+                "name": "nr",
+                "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_tempo_in"
+              },
+              {
+                "name": "ns",
+                "packages": "mp_nssl2m_in"
+              },
+              {
+                "name": "ng",
+                "packages": "mp_nssl2m_in;tempo_hailaware_in"
+              },
+              {
+                "name": "nh",
+                "packages": "mp_nssl2m_in"
+              },
+              {
+                "name": "nccn",
+                "packages": "mp_nssl2m_in"
+              },
+              {
+                "name": "volg",
+                "packages": "mp_nssl2m_in;tempo_hailaware_in"
+              },
+              {
+                "name": "volh",
+                "packages": "mp_nssl2m_in"
+              },
+              {
+                "name": "zrw",
+                "packages": "nssl3m_in"
+              },
+              {
+                "name": "zgw",
+                "packages": "nssl3m_in"
+              },
+              {
+                "name": "zhw",
+                "packages": "nssl3m_in"
+              },
+              {
+                "name": "nc",
+                "packages": "mp_thompson_aers_in;tempo_aerosolaware_in;mp_nssl2m_in"
+              },
+              {
+                "name": "nifa",
+                "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+              },
+              {
+                "name": "nwfa",
+                "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+              }
+            ]
+          },
+          {
+            "name": "scalars",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "constituents": [
+              {
+                "name": "smoke_fine",
+                "packages": "mpas_smoke_fine"
+              },
+              {
+                "name": "dust_fine",
+                "packages": "mpas_dust_in"
+              },
+              {
+                "name": "dust_coarse",
+                "packages": "mpas_dust_in"
+              },
+              {
+                "name": "unspc_fine",
+                "packages": "mpas_anthro_aero_in"
+              }
+            ]
+          }
+        ]
+      },
+      "diag_physics": {
+        "time_levs": "1",
+        "fields": [
+          {
+            "name": "max_hail_diameter_sfc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_tempo_in"
+          },
+          {
+            "name": "max_hail_diameter_column",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_tempo_in"
+          },
+          {
+            "name": "max_hail_diameter_sfc_acc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_tempo_in"
+          },
+          {
+            "name": "max_hail_diameter_column_acc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_tempo_in"
+          },
+          {
+            "name": "do_diag_dbz",
+            "type": "integer",
+            "dimensions": ""
+          },
+          {
+            "name": "refl10cm_max",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "refl10cm_1km",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "refl10cm_1km_max",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "refl10cm",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "i_rainnc",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "mp_kessler_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "rainncv",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_kessler_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "snowncv",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;lsm_ruc_in;mp_tempo_in"
+          },
+          {
+            "name": "graupelncv",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;lsm_ruc_in;mp_tempo_in"
+          },
+          {
+            "name": "rainnc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_kessler_in;mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "frainnc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_tempo_in"
+          },
+          {
+            "name": "snownc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "graupelnc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "rainprod",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "evapprod",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "re_cloud",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "re_ice",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "re_snow",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_wsm6_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "nwfa2d",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+          },
+          {
+            "name": "nifa2d",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+          },
+          {
+            "name": "i_rainc",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "cuprec",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "rainc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "raincv",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "k22_shallow",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in"
+          },
+          {
+            "name": "kbcon_shallow",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in"
+          },
+          {
+            "name": "ktop_shallow",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in"
+          },
+          {
+            "name": "ktop_deep",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in"
+          },
+          {
+            "name": "xmb_total",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in"
+          },
+          {
+            "name": "xmb_shallow",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in"
+          },
+          {
+            "name": "qc_cu",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in"
+          },
+          {
+            "name": "qi_cu",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in"
+          },
+          {
+            "name": "cldfrac_cu",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_li_in"
+          },
+          {
+            "name": "refl10cm_cu",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_li_in"
+          },
+          {
+            "name": "vcpool",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_li_in"
+          },
+          {
+            "name": "sigma_deep",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_li_in"
+          },
+          {
+            "name": "sigma_deep_far",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_li_in"
+          },
+          {
+            "name": "cubot",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in"
+          },
+          {
+            "name": "cutop",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in"
+          },
+          {
+            "name": "kpbl",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "hpbl",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "kzh",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "kzm",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "kzq",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "delta",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "wstar",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "cldfrac_bl",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qc_bl",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qi_bl",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "cov",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "el_pbl",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_myj_in"
+          },
+          {
+            "name": "qke",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qke_adv",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qsq",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "tsq",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "tke_pbl",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_myj_in"
+          },
+          {
+            "name": "dqke",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qbuoy",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qdiss",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qshear",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qwt",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "edmf_a",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "edmf_w",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "edmf_qt",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "edmf_qc",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "edmf_thl",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "edmf_ent",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "sub_thl",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "sub_qv",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "det_thl",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "det_qv",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "maxmf",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynnedmf_in"
+          },
+          {
+            "name": "maxwidth",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynnedmf_in"
+          },
+          {
+            "name": "ztop_plume",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynnedmf_in"
+          },
+          {
+            "name": "excess_h",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynnedmf_in"
+          },
+          {
+            "name": "excess_q",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynnedmf_in"
+          },
+          {
+            "name": "chlowq",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "mixht",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "hfx",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "mavail",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in;lsm_ruc_in"
+          },
+          {
+            "name": "mol",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "qfx",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "qsfc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "ust",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "ustm",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "zol",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "br",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "cd",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "cda",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "chs",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "chs2",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "cqs2",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "cqs",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynnedmf_in;lsm_ruc_in"
+          },
+          {
+            "name": "ck",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "cka",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "cpm",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "flhc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in;lsm_ruc_in"
+          },
+          {
+            "name": "flqc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in;lsm_ruc_in"
+          },
+          {
+            "name": "gz1oz0",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "lh",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "psim",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "psih",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "qgh",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "regime",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "rmol",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "wspd",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "fh",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_ysu_in"
+          },
+          {
+            "name": "fm",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_ysu_in"
+          },
+          {
+            "name": "ch",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qcg",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;lsm_ruc_in"
+          },
+          {
+            "name": "sh3d",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "sm3d",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "qz0",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "thz0",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "uz0",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "vz0",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "lowlyr",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "akhs",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "akms",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "ct",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "th10",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "q10",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "tshltr",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "pshltr",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "qshltr",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_myj_in"
+          },
+          {
+            "name": "u10",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "v10",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "q2",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "t2m",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "th2m",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "taod5502d",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+          },
+          {
+            "name": "taod5503d",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+          },
+          {
+            "name": "rhosnf",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "precipfr",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "qsg",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "qvg",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "dew",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "soilt1",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "tsnav",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "acrunoff",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "snowfallac",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "smfr3d",
+            "type": "real",
+            "dimensions": "nSoilLevels nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "spp_lsm_loc",
+            "type": "integer",
+            "dimensions": "",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "mosaic_lu",
+            "type": "integer",
+            "dimensions": "",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "mosaic_soil",
+            "type": "integer",
+            "dimensions": "",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "keepfr3d",
+            "type": "real",
+            "dimensions": "nSoilLevels nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "sfcexc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "sfcevp",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "e_bb_out",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mpas_smoke_in",
+            "constituents": [
+              {
+                "name": "e_bb_out_smoke_fine",
+                "packages": "mpas_smoke_in"
+              }
+            ]
+          },
+          {
+            "name": "e_ant_out",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mpas_anthro_in",
+            "constituents": [
+              {
+                "name": "e_ant_out_unspc_fine",
+                "packages": "mpas_anthro_aero_in"
+              },
+              {
+                "name": "e_ant_out_unspc_coarse",
+                "packages": "mpas_anthro_aero_in"
+              }
+            ]
+          },
+          {
+            "name": "e_dust_out",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "constituents": [
+              {
+                "name": "e_dust_out_dust_fine",
+                "packages": "mpas_dust_in"
+              },
+              {
+                "name": "e_dust_out_dust_coarse",
+                "packages": "mpas_dust_in"
+              }
+            ]
+          },
+          {
+            "name": "vis",
+            "type": "real",
+            "dimensions": "nCells Time"
+          },
+          {
+            "name": "frac_grid_burned",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "hfx_bb",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "qfx_bb",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "flam_frac",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "min_bb_plume",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "max_bb_plume",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "fire_type",
+            "type": "integer",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "fire_peak_hr",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "fire_hist",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "coef_bb_dc",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "frp_in",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "frp_out",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "fre_in",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "fre_out",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "aero_emis_for_enhmix",
+            "type": "real",
+            "dimensions": "nCells Time"
+          },
+          {
+            "name": "hwp",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "hwp_prev24",
+            "type": "real",
+            "dimensions": "nCells TWENTYFOUR",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "frp_prev24",
+            "type": "real",
+            "dimensions": "nCells TWENTYFOUR",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "fre_prev24",
+            "type": "real",
+            "dimensions": "nCells TWENTYFOUR",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "fmc_prev24",
+            "type": "real",
+            "dimensions": "nCells TWENTYFOUR",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "totprcp_prev24",
+            "type": "real",
+            "dimensions": "nCells TWENTYFOUR",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "fire_end_hr",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_smoke_in"
+          },
+          {
+            "name": "ddvel",
+            "type": "real",
+            "dimensions": "nChem nCells Time"
+          },
+          {
+            "name": "drydep_flux",
+            "type": "real",
+            "dimensions": "nChem nCells Time"
+          },
+          {
+            "name": "wetdep_resolved",
+            "type": "real",
+            "dimensions": "nChem nCells Time"
+          },
+          {
+            "name": "PM2_5",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time"
+          },
+          {
+            "name": "PM10",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time"
+          },
+          {
+            "name": "feff",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "albedo_drag",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "uthres_in",
+            "type": "real",
+            "dimensions": "nCells",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "uthres_sg_in",
+            "type": "real",
+            "dimensions": "nCells",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "sandfrac_in",
+            "type": "real",
+            "dimensions": "nCells",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "clayfrac_in",
+            "type": "real",
+            "dimensions": "nCells",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "albedo_drag_m_in",
+            "type": "real",
+            "dimensions": "nMonths nCells",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "feff_m_in",
+            "type": "real",
+            "dimensions": "nMonths nCells",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "sep_in",
+            "type": "real",
+            "dimensions": "nCells",
+            "packages": "mpas_dust_in"
+          },
+          {
+            "name": "aod3d_smoke",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time"
+          },
+          {
+            "name": "aod3d",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time"
+          },
+          {
+            "name": "aod550",
+            "type": "real",
+            "dimensions": "nCells Time"
+          },
+          {
+            "name": "RWC_annual_sum",
+            "type": "real",
+            "dimensions": "nkreswoodcomb nCells Time",
+            "packages": "mpas_rwc_in"
+          },
+          {
+            "name": "RWC_annual_sum_smoke_fine",
+            "type": "real",
+            "dimensions": "nkreswoodcomb nCells Time",
+            "packages": "mpas_rwc_in"
+          },
+          {
+            "name": "RWC_annual_sum_smoke_coarse",
+            "type": "real",
+            "dimensions": "nkreswoodcomb nCells Time",
+            "packages": "mpas_rwc_in"
+          },
+          {
+            "name": "RWC_annual_sum_unspc_fine",
+            "type": "real",
+            "dimensions": "nkreswoodcomb nCells Time",
+            "packages": "mpas_rwc_in"
+          },
+          {
+            "name": "RWC_annual_sum_unspc_coarse",
+            "type": "real",
+            "dimensions": "nkreswoodcomb nCells Time",
+            "packages": "mpas_rwc_in"
+          },
+          {
+            "name": "RWC_denominator",
+            "type": "real",
+            "dimensions": "nCells Time",
+            "packages": "mpas_rwc_in"
+          }
+        ]
+      },
+      "tend_physics": {
+        "time_levs": "1",
+        "fields": [
+          {
+            "name": "rthmpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_wsm6_in;mp_tempo_in"
+          },
+          {
+            "name": "rqvmpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_wsm6_in;mp_tempo_in"
+          },
+          {
+            "name": "rqcmpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_wsm6_in;mp_tempo_in"
+          },
+          {
+            "name": "rqrmpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_wsm6_in;mp_tempo_in"
+          },
+          {
+            "name": "rqimpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_wsm6_in;mp_tempo_in"
+          },
+          {
+            "name": "rqsmpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_wsm6_in;mp_tempo_in"
+          },
+          {
+            "name": "rqgmpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_wsm6_in;mp_tempo_in"
+          },
+          {
+            "name": "rnimpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "rnrmpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_in;mp_thompson_aers_in;mp_nssl2m_in;mp_tempo_in"
+          },
+          {
+            "name": "rncmpten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_aers_in;tempo_aerosolaware_in;mp_nssl2m_in"
+          },
+          {
+            "name": "rnifampten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+          },
+          {
+            "name": "rnwfampten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "mp_thompson_aers_in;tempo_aerosolaware_in"
+          },
+          {
+            "name": "rthcuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "rqvcuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "rqccuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "rqicuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_kain_fritsch_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "rqvdynten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "rucuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "rvcuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_in;cu_grell_freitas_li_in;cu_ntiedtke_in"
+          },
+          {
+            "name": "sub3d_rthcuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_li_in;gfl_sub3d"
+          },
+          {
+            "name": "sub3d_rqvcuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_li_in;gfl_sub3d"
+          },
+          {
+            "name": "sub3d_rucuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_li_in;gfl_sub3d"
+          },
+          {
+            "name": "sub3d_rvcuten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "cu_grell_freitas_li_in;gfl_sub3d"
+          },
+          {
+            "name": "rublten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "rvblten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "rthblten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "rqvblten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "rqcblten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "rqiblten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in;bl_ysu_in;bl_myj_in"
+          },
+          {
+            "name": "rqsblten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "rncblten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "rniblten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "rnifablten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "rnwfablten",
+            "type": "real",
+            "dimensions": "nVertLevels nCells Time",
+            "packages": "bl_mynn_in;bl_mynnedmf_in"
+          },
+          {
+            "name": "tend_chem_settle",
+            "type": "real",
+            "dimensions": "nChem nVertLevels nCells Time"
+          }
+        ]
+      },
+      "atm_input": {
+        "time_levs": "1",
+        "fields": []
+      },
+      "ngw_input": {
+        "time_levs": "1",
+        "fields": []
+      },
+      "sfc_input": {
+        "time_levs": "1",
+        "fields": [
+          {
+            "name": "soilf",
+            "type": "real",
+            "dimensions": "nscat nCells",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "landusef",
+            "type": "real",
+            "dimensions": "nlcat nCells",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "lai12m",
+            "type": "real",
+            "dimensions": "nMonths nCells",
+            "packages": "lsm_ruc_in"
+          },
+          {
+            "name": "zs",
+            "type": "real",
+            "dimensions": "nSoilLevels nCells Time"
+          }
+        ]
+      },
+      "emission_input": {
+        "time_levs": "1",
+        "fields": [
+          {
+            "name": "e_bb_in",
+            "type": "real",
+            "dimensions": "nkwildfire nCells Time",
+            "packages": "mpas_smoke_in",
+            "constituents": [
+              {
+                "name": "e_bb_in_smoke_fine",
+                "packages": "mpas_smoke_in"
+              }
+            ]
+          },
+          {
+            "name": "e_ant_in",
+            "type": "real",
+            "dimensions": "nkanthro nCells Time",
+            "packages": "mpas_anthro_in",
+            "constituents": [
+              {
+                "name": "e_ant_in_unspc_fine",
+                "packages": "mpas_anthro_aero_in"
+              },
+              {
+                "name": "e_ant_in_unspc_coarse",
+                "packages": "mpas_anthro_aero_in"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "diagnostic_resets": [
+      "refl10cm_1km_max",
+      "max_hail_diameter_sfc_acc",
+      "max_hail_diameter_column_acc"
+    ],
+    "source_files": {
+      "src/core_atmosphere/Registry.xml": "dc6a801a054bdc39d2c0faaf9eab91ea2a404bddb49ad8070c4f3cb8c2b30b9b",
+      "src/core_atmosphere/physics/Registry_tempo.xml": "c9c60dfa73951c654a4a71adb1171e58c8e04053235885c57b283d47bc555e6b",
+      "src/core_atmosphere/physics/Registry_noahmp.xml": "09f89cc5b712c923b26f7337472a77aea8422d8afe6bcaa4a08de00039635f09",
+      "src/core_atmosphere/physics/registry.chemistry.xml": "899ca8417d9c48e9dbdf92bbbe1ea69c20eaa7fe4dfc1aaaa3565f3732099a98",
+      "src/core_atmosphere/mpas_atm_core.F": "fab39a87fa427ac3b8467d9ed2d061ebc79a07560e9db33330ac3c50c027de88",
+      "src/core_atmosphere/mpas_atm_halos.F": "bee970e1124926584835dca531d46111f38a4ac9c5645e1d292547fb657f88e0",
+      "src/core_atmosphere/physics/mpas_atmphys_init.F": "9a4f3bb50c77cb310d6732916cf3aef008fe09e49ab4bde2dad578350cd9a93b",
+      "src/core_atmosphere/physics/mpas_atmphys_date_time.F": "aab6f0a97ed3f9efb1a3b30e2b971ecbdca56f8aefe059dcbba26253689c44b5",
+      "src/core_atmosphere/physics/mpas_atmphys_driver.F": "3268485f9c8ac6d6794f1b7919d76ec91927282b06b93798ab471f63a08bf3ce",
+      "src/core_atmosphere/physics/mpas_atmphys_lsm_rucinit.F": "ca11e461c222ac16b53a91a5dd8c9234b56df5cbf76794bff143283584ae569f",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_lw.F": "436d7853bd50143656a732dbde43ce8e83b4cae4a9a41c9a4ba6f63508fb572c",
+      "src/core_atmosphere/physics/mpas_atmphys_utilities.F": "f3cef4d60a0f2e2dd568a4f70f522d7567c17e24f89259a2715f48060cdf406e",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_lsm_noahmp.F": "1957f7da184ce94556d60c131cfe04c6b1bc6285c51421bf43d68f7d250089d3",
+      "src/core_atmosphere/physics/mpas_atmphys_todynamics.F": "50e17b3983f679d8a6565043c18f754387655386fd2efe10f06a714ecce094f7",
+      "src/core_atmosphere/physics/mpas_atmphys_init_microphysics.F": "15eb6f8b7a663ed2255ee0cf70c82092c55e92ea68019ccf7b7bbcbb6126a22e",
+      "src/core_atmosphere/physics/mpas_atmphys_interface.F": "c20419e88221cd7379d867314fda5cfc30fbc541260126e26c83b71cd56e1b87",
+      "src/core_atmosphere/physics/mpas_atmphys_control.F": "45ba9079055ae8da19bae9fb40f79264e0e3fb5d37bc8ec057667f1b553ab8f7",
+      "src/core_atmosphere/physics/mpas_atmphys_initialize_real.F": "cd6348de7a703db814b7045940a53e73f109abe22b7df74c4061dc32fe347e77",
+      "src/core_atmosphere/physics/mpas_atmphys_update.F": "3a5f37954f30cc0860fd2d2e5fcd18e83eea41950fb6180a43d2a561779495c6",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_pbl.F": "8fc75f442ccd390afcab603cdbf1f266266d377812bd9a8c069b066af9505389",
+      "src/core_atmosphere/physics/mpas_atmphys_lsm_noahmpfinalize.F": "09f3cca130ee5fa604cdec3a1c3bf000f5f5c6f3f6eb7e3317ca9851df64886e",
+      "src/core_atmosphere/physics/mpas_atmphys_finalize.F": "7199b7bded10b6c34088b11e004eb470c1bbeb38f39db8c9a5a5379bcb653296",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_lsm.F": "aaa9a0bf83c22cdecb941b92e5a741e8e283a4174b560712407b7e42285ac226",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_convection.F": "46b356413aa850ed8b906962d81f0d68ce1050528fc24265097cfe401c002cd5",
+      "src/core_atmosphere/physics/mpas_atmphys_constants.F": "3a5d94b8afbc5ca039343a30c98afa25b976e443819ee5ab6cfc924ad1aca76a",
+      "src/core_atmosphere/physics/mpas_atmphys_update_surface.F": "af8c64d7083be8b5e4a689f94b3d74252e2471964bcacc378853f87b0201d5f6",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_smoke.F": "30c381d3098709d78e78a3eb514ab4822686b6015b112c49e68c7efbc3095a6a",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_sfclayer.F": "db09279b1e6c68a818213b6387bb4ae72573461208547a9d537640dc7e5d8eae",
+      "src/core_atmosphere/physics/mpas_atmphys_functions.F": "2cf3763c2781468ed59134acecfeb04a903859356ab30c18d48e595e5688e37e",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_radiation_sw.F": "cf27cfa597771c3184c0b46fd4b7d7edcedcedbd966a3ed2dd82bc326ee5aa56",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_oml.F": "3bdbb195fe336d94d85bdda0deff7b3e25f44f9cb194f8db4e0736048d3e61d4",
+      "src/core_atmosphere/physics/mpas_atmphys_manager.F": "fd368ef989de2f836c14517ee1ec6fd8412ed84568b98602ab6a5e3c4d519895",
+      "src/core_atmosphere/physics/mpas_atmphys_init_tempo.F": "130b28b1782043706dcc361876d6132592640ab5e090c61d905141d03e314a75",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_cloudiness.F": "e4a018480f3b43e413e16ab60a9194866c3d3e4fd4cf6cd83c15f2d76c214faf",
+      "src/core_atmosphere/physics/mpas_atmphys_rrtmg_lwinit.F": "91154d3a568c18d2b25e6e7828fee36846619288da4b429ea9ca141e50dab527",
+      "src/core_atmosphere/physics/mpas_atmphys_lsm_noahmpinit.F": "aee3325d6bb482036029e967be557e7049055ad7faeba6b3749370e5df389147",
+      "src/core_atmosphere/physics/mpas_atmphys_landuse.F": "88443f0d789d20b450a820814afe3780b0d8f43148a251e043840d576837cf9b",
+      "src/core_atmosphere/physics/mpas_atmphys_lsm_shared.F": "b517f8286eebeac121b128f61eaa83fa056fffe10cb7e22865393c3598afdaf2",
+      "src/core_atmosphere/physics/mpas_atmphys_camrad_init.F": "5897c836e61b26ec4a59727c8c2992f734198cdffd815ffea221d0152b951d75",
+      "src/core_atmosphere/physics/mpas_atmphys_vars.F": "2ba656a9b7ad669b6445f9f366dd1072ae48ac5bf072ab84d23ae53d981dc16d",
+      "src/core_atmosphere/physics/mpas_atmphys_sfc_diagnostics.F": "09214215981ce836826cb8737b12a46372cc3729f4ee246358a703b050ec55fd",
+      "src/core_atmosphere/physics/mpas_atmphys_rrtmg_swinit.F": "c3c83eac6671f95ce281543a7b77141c3bb9f4c2e068a86aed407c2099693e3d",
+      "src/core_atmosphere/physics/mpas_atmphys_packages.F": "e310d513d113f41a2b5749115ddbaf24f3ecd67c9182ca4b2ce699d07b471dfb",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_microphysics.F": "3ac2279b1b76ebe45bb621f3a75a81b97f212cc2dbc34544c075e401ce22e462",
+      "src/core_atmosphere/physics/mpas_atmphys_lsm_noahinit.F": "9d74dc9882e28a574638039a01c70e99b37f2c7f4f3cd5e4ddca5da9355bfeb7",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_gwdo.F": "ec76abad1cd841b3a15cb63df494060488cea1026c532a628e61e1d71871fb54",
+      "src/core_atmosphere/physics/mpas_atmphys_o3climatology.F": "adbd1e35946cdb99c9b4da7c4be608a10b8bd45cff68e4bc1373f3afcf16c80c",
+      "src/core_atmosphere/physics/mpas_atmphys_driver_seaice.F": "d3c4d279aff5e2ec15770f9dfb8532a5beb0d3e0ae3cb22a543838e4dedbd31d"
+    },
+    "streams_parser": "hexcore.mpasphys.rrfs.driver_rrfs:stream_tree",
+    "native_registry_prepare": "hexcore.mpasphys.rrfs.driver_rrfs:prepare_native_registry",
+    "native_layout_prepare": "hexcore.mpasphys.rrfs.driver_rrfs:prepare_native_layout",
+    "native_table_selector": "hexcore.mpasphys.rrfs.driver_rrfs:native_table_inputs",
+    "native_table_override_keyword": "override_roots",
+    "native_table_stream_selector": "hexcore.mpasphys.rrfs.driver_rrfs:native_table_stream_inputs",
+    "native_initialization_namelist": "hexcore.mpasphys.rrfs.driver_rrfs:stage_native_initialization_namelist",
+    "native_table_streams": [
+      {
+        "stream": "ugwp_ngw_in",
+        "filename": "ugwp_limb_tau.nc",
+        "option": "config_ngw_scheme",
+        "value": true
+      }
+    ],
+    "native_table_names": [
+      "ccn_activate.bin",
+      "qr_acr_qg_data_tempo_v3",
+      "qr_acr_qs_data_tempo_v3",
+      "freeze_water_data_tempo_v3",
+      "QNWFA_QNIFA_SIGMA_MONTHLY.dat",
+      "ugwp_limb_tau.nc"
+    ],
+    "native_table_authority": {
+      "TEMPO": "TEMPO@9adf9ef src/module_mp_tempo_cfgs.F90:37-40",
+      "initialization": "MPAS-Model-rrfs@1d6e370e src/core_atmosphere/physics/mpas_atmphys_init.F:396-470"
+    },
+    "correct_mode_inventory": {
+      "finding": "RRFS-CORRECTION-INVENTORY",
+      "slot": "driver",
+      "scheme": null,
+      "backend": null,
+      "reason": "fork native-defect correction inventory has not been qualified",
+      "owner": "RRFS integrator and fork scheme owners",
+      "breakage": "Applying v8.4.2 corrections without fork source and replay qualification would change the pinned v8.3.1/GSL behavior."
+    }
+  }
+}

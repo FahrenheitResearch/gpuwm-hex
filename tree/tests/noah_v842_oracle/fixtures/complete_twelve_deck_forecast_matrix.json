@@ -1,0 +1,14 @@
+{
+  "schema": "p16-noah-complete-twelve-deck-forecast-matrix-v1",
+  "receipt": "receipts/noah-headroom-complete-twelve-deck-matrix.json",
+  "sha256": "ac3c0e3cfc6c0dcdd47faa415d2a84a6269e308930459af42dc1aeda3f004bef",
+  "accepted_decks": 12,
+  "process_count": 1,
+  "duration_hours": 24,
+  "computed_words": 6040554924,
+  "stored_words": 6040631532,
+  "differing_words": 0,
+  "stored_differing_words": 0,
+  "all_native_fields_bitwise": false,
+  "production_sha256": "6b4e9299215dbbac03b7e4197151d2ca435b4b6c62242a2186d2d6a3d314654f"
+}

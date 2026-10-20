@@ -1,0 +1,144 @@
+--- a/tree/src/hexcore/mpasphys/pool_v842.py
++++ b/tree/src/hexcore/mpasphys/pool_v842.py
+@@ -337,7 +337,8 @@
+ 
+ 
+ def decode_registry_pools(reader: Path, source: Path, config: DriverConfig,
+-                          namelist: str, sources: list[Path], output: Path) -> RegistryLayout:
++                          namelist: str, sources: list[Path], output: Path, *,
++                          stream_seek: Mapping[str, tuple[Path, str]] | None = None) -> RegistryLayout:
+     """Rust I/O followed by native allocation; mpas_io_streams.F:925-1023."""
+     abi = subprocess.check_output([str(reader), "--abi"], text=True).strip()
+     if abi != "gpuwm-rw-mpas-physics-pool-v1":
+@@ -349,6 +350,35 @@
+     layout = RegistryLayout(source, config, namelist, dimensions)
+     output.mkdir(parents=True, exist_ok=True)
+     request = output / "request.json"
+-    request.write_text(json.dumps(layout.request(sources), indent=2) + "\n")
++    transport = layout.request(sources)
++    # MPAS mpas_atm_core.F:222-233; mpas_io_streams.F:153-339.
++    definitions = {s.get("name"): s for s in layout.root.findall("./streams/stream")}
++    selections = []
++    for name, (path, whence) in (stream_seek or {}).items():
++        stream = definitions[name]
++        if not layout.enabled(stream):
++            continue
++        if "input" not in stream.get("type", "").split(";"):
++            raise ValueError(f"{name}: cannot seek a non-input stream")
++        from ..restart_v842 import seek_stream
++        source_path = str(path.resolve())
++        if source_path not in transport["sources"]:
++            raise ValueError(f"{name}: selected source absent from pool inputs")
++        target = layout.configs["config_start_time"]
++        record, stamp = seek_stream(path, valid_time=target, whence=whence,
++                                    scratch=output / "stream-seek")
++        records = transport.setdefault("source_records", {})
++        if source_path in records and records[source_path] != record:
++            raise ValueError("input streams select different records from one source")
++        records[source_path] = record
++        selections.append(dict(stream=name, source=source_path, target=target,
++                               whence=whence, record=record, selected_time=stamp))
++    transport["source_seek_witness"] = selections
++    request.write_text(json.dumps(transport, indent=2) + "\n")
+     subprocess.run([str(reader), str(request), str(output)], check=True)
++    # An older v1 reader silently ignores source_records; detect that defect.
++    if selections:
++        actual = json.loads((output / "manifest.json").read_text()).get("source_records", {})
++        if any(actual.get(path) != record for path, record in transport["source_records"].items()):
++            raise ValueError("Rust pool reader did not witness the selected input records")
+     return layout
+--- a/tree/src/hexcore/mpasphys/forecast_v842.py
++++ b/tree/src/hexcore/mpasphys/forecast_v842.py
+@@ -166,9 +166,12 @@
+     sources = [Path(v).resolve() for k in ('grid','static','init','orographic_statistics')
+                if (v:=getattr(arguments,k,None)) is not None]
+     bindings = stream_input_bindings(getattr(arguments,'stream_input',None))
++    from ..iau_v842 import IAU_STREAM_ID, IAU_STREAM_WHENCE
++    stream_seek = {IAU_STREAM_ID: (bindings[IAU_STREAM_ID], IAU_STREAM_WHENCE)} \
++                  if IAU_STREAM_ID in bindings else {}
+     sources = list(dict.fromkeys((*sources,*bindings.values())))
+     layout = decode_registry_pools(Path(reader).resolve(),Path(source).resolve(),config,text,sources,
+-                                   scratch/'native-pools')
++                                   scratch/'native-pools', stream_seek=stream_seek)
+     streams=read_streams(streams_path,layout,getattr(arguments,'stream_list_directory',None))
+     defaults = {'input':Path(arguments.init).resolve()}
+     if getattr(arguments,'orographic_statistics',None):
+--- a/tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_physics_pool.rs
++++ b/tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_physics_pool.rs
+@@ -56,6 +56,7 @@
+ struct File {
+     id: c_int,
+     path: String,
++    record: usize,
+ }
+ impl File {
+     fn open(path: &str) -> Result<Self, String> {
+@@ -70,6 +71,7 @@
+         Ok(Self {
+             id,
+             path: path.into(),
++            record: 0,
+         })
+     }
+ }
+@@ -84,6 +86,8 @@
+ struct Request {
+     schema: String,
+     sources: Vec<String>,
++    #[serde(default)]
++    source_records: std::collections::BTreeMap<String, usize>,
+     fields: Vec<Field>,
+ }
+ #[derive(Deserialize)]
+@@ -105,6 +109,7 @@
+ #[derive(Serialize)]
+ struct Receipt {
+     schema: &'static str,
++    source_records: std::collections::BTreeMap<String, usize>,
+     fields: Vec<Record>,
+ }
+ #[derive(Serialize)]
+@@ -160,11 +165,15 @@
+             );
+             counts.push(len);
+         }
+-        let starts = vec![0; counts.len()];
++        let mut starts = vec![0; counts.len()];
+         if dims.first().map(String::as_str) == Some("Time") {
+             if counts[0] == 0 {
+                 return Err(format!("{name}: empty Time"));
+             }
++            if f.record >= counts[0] {
++                return Err(format!("{name}: Time record {} exceeds {}", f.record, counts[0]));
++            }
++            starts[0] = f.record;
+             counts[0] = 1;
+         }
+         let len: usize = counts.iter().product();
+@@ -289,10 +298,17 @@
+     if r.schema != "mpas-native-pool-request-v1" {
+         return Err("unsupported request".into());
+     }
++    if r.source_records.keys().any(|p| !r.sources.contains(p)) {
++        return Err("selected record source absent from request sources".into());
++    }
+     let files: Vec<File> = r
+         .sources
+         .iter()
+-        .map(|p| File::open(p))
++        .map(|p| {
++            let mut file = File::open(p)?;
++            file.record = r.source_records.get(p).copied().unwrap_or(0);
++            Ok::<File, String>(file)
++        })
+         .collect::<Result<_, _>>()?;
+     fs::create_dir_all(out).map_err(|e| e.to_string())?;
+     let mut records = Vec::new();
+@@ -399,6 +415,7 @@
+     }
+     let receipt = Receipt {
+         schema: "mpas-native-pool-payload-v1",
++        source_records: files.iter().map(|f| (f.path.clone(), f.record)).collect(),
+         fields: records,
+     };
+     fs::write(
