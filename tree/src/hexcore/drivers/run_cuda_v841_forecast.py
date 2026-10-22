@@ -1258,6 +1258,12 @@ def select_initial_scalar_names(
     missing_source = [name for name in SOURCE_SCALAR_NAMES if name not in variables]
     if missing_source:
         raise ValueError(f"init is missing required source species {missing_source}")
+    from hexcore.species_row import AEROSOL_MASS, species_row_for_names
+    row = species_row_for_names(names)
+    aerosol_names = tuple(d.name for d in row.species if d.species_class == AEROSOL_MASS)
+    if aerosol_names and not any(name in variables for name in aerosol_names):
+        atmospheric = tuple(name for name in names if name not in aerosol_names)
+        return select_initial_scalar_names(variables, atmospheric)
     carried = [name for name in names[len(SOURCE_SCALAR_NAMES):] if name in variables]
     if not carried:
         return tuple(SOURCE_SCALAR_NAMES)
@@ -1294,7 +1300,7 @@ def prepare_initial_scalar_block(
         }
     if names == tuple(proof.SCALAR_NAMES):
         return proof.augment_exact_wsm6_scalars(state)
-    return proof.augment_cold_scalars(state, names)
+    return proof.augment_cold_scalars(state, names, source_names=source)
 
 
 def supplied_undriven_scalars(
@@ -1853,6 +1859,11 @@ def build_forecast_constructor_values(
 #: (samehost_forecast_v841.installed): the ranks join the prepared-input
 #: fingerprint after they are built, instead of main() joining it first.
 DEFER_PREPARED_FINGERPRINT = False
+
+#: Set by the resident-member roster (hexcore.multi_member) on each member's private module: the forecast
+#: copies its final-identity carriers to the host and returns with its host-only tail (history drain,
+#: identity hash) as ``_deferred_tail``, so the roster can release the card first (hexcore.card_handoff).
+DEFER_TAIL = False
 
 
 def join_prepared_fingerprint(host: Mapping[str, Any]) -> None:
@@ -3286,6 +3297,8 @@ def execute_forecast(
         physics_rollback_snapshot=bool(stop_on_refusal),
         stochastic_restart=stochastic_restart,
     )
+    from hexcore.chem_transport import attach as attach_chemistry
+    attach_chemistry(stack["backend"], host, stack["driver"])
     from hexcore.arwen_surface_update import attach_host
     surface_receipt = attach_host(stack["backend"], host, schedule, output_root, dt=float(DT_SECONDS))
     if surface_receipt is not None:
@@ -3933,33 +3946,43 @@ def execute_forecast(
                 pending.result()
         finally:
             capture_pool.shutdown(wait=True)
-    history_receipt = None
-    if history is not None:
-        mark = time.perf_counter()
-        time_ledger.emit("forecast.output.wait", "begin")
-        try:
-            for key in list(snapshot_files):
-                snapshot_files[key] = history.result(snapshot_files[key])
-                if product_ready is not None:
-                    step = int(key)
-                    product_ready.submit(snapshot_files[key], step=step, label=labels[step],
-                                         valid_time=schedule["valid_times"][step])
-        finally:
-            history.close()
-            time_ledger.emit("forecast.output.wait", "end")
-        write_wait_seconds = time.perf_counter() - mark
-        history_receipt = history.receipt()
-    product_ready_receipt = None
-    if product_ready is not None:
-        mark = time.perf_counter()
-        product_ready.close()
-        product_ready_receipt = product_ready.receipt()
-        product_ready_receipt["final_drain_seconds"] = time.perf_counter() - mark
+    def drain_output(write_wait_seconds=write_wait_seconds):
+        history_receipt = None
+        if history is not None:
+            mark = time.perf_counter()
+            time_ledger.emit("forecast.output.wait", "begin")
+            try:
+                for key in list(snapshot_files):
+                    snapshot_files[key] = history.result(snapshot_files[key])
+                    if product_ready is not None:
+                        step = int(key)
+                        product_ready.submit(snapshot_files[key], step=step, label=labels[step],
+                                             valid_time=schedule["valid_times"][step])
+            finally:
+                history.close()
+                time_ledger.emit("forecast.output.wait", "end")
+            write_wait_seconds = time.perf_counter() - mark
+            history_receipt = history.receipt()
+        product_ready_receipt = None
+        if product_ready is not None:
+            mark = time.perf_counter()
+            product_ready.close()
+            product_ready_receipt = product_ready.receipt()
+            product_ready_receipt["final_drain_seconds"] = time.perf_counter() - mark
+        return history_receipt, write_wait_seconds, product_ready_receipt
+
+    deferred = bool(DEFER_TAIL)
+    history_receipt = product_ready_receipt = None
+    if not deferred:
+        history_receipt, write_wait_seconds, product_ready_receipt = drain_output()
 
     proof._write_exclusive_json(
         output_root / "snapshot-hashes.json",
         {"projection": snapshot_projection, "q2": snapshot_q2},
     )
+
+    if hasattr(stack["backend"], "write_ledger"):
+        stack["backend"].write_ledger(output_root)
 
     evolution = None
     if 0 in capture_steps and steps in capture_steps:
@@ -3971,12 +3994,19 @@ def execute_forecast(
         }
     from hexcore.cuda_backend.arch_admission import architecture_status
 
-    from hexcore.final_identity import final_digest
-    with time_ledger.stage("post.forecast.identity"):
-        final_state_digest = None if retired_physics is not None else final_digest(
-            stack, gf_dynamics_tendencies, host["surface_accumulators"],
-            None if executed_steps == 0 else result.committed.surface_updates,
-        )
+    from hexcore.final_identity import final_carriers, final_digest_of
+    identity_carriers = None
+    if retired_physics is None:
+        with time_ledger.stage("post.forecast.identity.copy" if deferred else "post.forecast.identity"):
+            identity_carriers = final_carriers(
+                stack, gf_dynamics_tendencies, host["surface_accumulators"],
+                None if executed_steps == 0 else result.committed.surface_updates,
+                to_host=deferred,
+            )
+    final_state_digest = None
+    if not deferred:
+        with time_ledger.stage("post.forecast.identity"):
+            final_state_digest = None if identity_carriers is None else final_digest_of(identity_carriers)
 
     iau_record = None
     if iau_forcing is not None:
@@ -3984,7 +4014,7 @@ def execute_forecast(
         if (executed_steps * DT_SECONDS >= float(iau.get("window_start_seconds") or 0.0) + float(iau["window_seconds"])
                 and not iau_record.get("complete")):
             raise RuntimeError(f"IAU window not fully applied: {iau_record}")
-    return {
+    returned = {
         "stochastic": (None if getattr(stack["driver"], "stochastic", None) is None
                        else stack["driver"].stochastic.receipt()),
         **({"iau": iau_record} if iau_record is not None else {}),
@@ -4176,6 +4206,27 @@ def execute_forecast(
             }
         ),
     }
+    if deferred:
+        def deferred_tail():
+            """The host-only tail, run by the roster after the card is handed on: the history drain and
+            the identity hash overlap (one waits on the writer, the other hashes host copies)."""
+            from concurrent.futures import ThreadPoolExecutor as _Pool
+
+            def identity():
+                with time_ledger.stage("post.forecast.identity"):
+                    return None if identity_carriers is None else final_digest_of(identity_carriers)
+
+            with _Pool(max_workers=1, thread_name_prefix="hex-identity") as pool:
+                digest = pool.submit(copy_context().run, identity)
+                history_receipt, wait_seconds, product_ready_receipt = drain_output()
+                returned["final_state_digest"] = digest.result()
+            returned["walls"]["history_write_wait_after_loop_seconds"] = wait_seconds
+            returned["walls"]["history_writer"] = history_receipt
+            if product_ready_receipt is not None:
+                returned["walls"]["history_product_ready"] = product_ready_receipt
+
+        returned["_deferred_tail"] = deferred_tail
+    return returned
 
 
 # --------------------------------------------------------------------------
@@ -4422,6 +4473,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "the default is the frozen lane"
         ),
     )
+    parser.add_argument("--chemistry-config", type=Path, default=None)
     parser.add_argument(
         "--source-table",
         type=Path,
@@ -4885,6 +4937,10 @@ def resolve_physics_backend_row(args: argparse.Namespace):
 
     from hexcore.physics_backend_admission import DEFAULT_BACKEND, resolve_backend
 
+    if getattr(args, "chemistry_config", None) is not None:
+        from hexcore.chem_transport import configure, admit_arguments
+        admit_arguments(args)
+        args.physics_backend = configure(args.chemistry_config).name
     row = resolve_backend(str(args.physics_backend))
     table = getattr(args, "source_table", None)
     if table is not None and not Path(table).is_file():
@@ -4922,6 +4978,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     # profile row names registers its synthesized backend row here.
     physics = resolve_driver_physics(args)
     physics_backend = resolve_physics_backend_row(args)
+    proof.CHEMISTRY_CONFIG = (str(args.chemistry_config.resolve())
+                              if args.chemistry_config is not None else None)
+    proof.CHEMISTRY_CONFIG_SHA256 = (hashlib.sha256(args.chemistry_config.read_bytes()).hexdigest()
+                                    if args.chemistry_config is not None else None)
 
     # This port's own sources and the engine's seam files are hashed and
     # RECORDED here, with whether each matches the x4 proof's pins; neither

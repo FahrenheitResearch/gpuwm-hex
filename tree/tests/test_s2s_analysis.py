@@ -14,7 +14,7 @@ from hexcore.s2s_door import S2SError
 def test_lagged_forecast_init_fetches_an_analysis_instead_of_reusing_it(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from hexcore import global_ensemble, s2s_analysis
-    value = {"paths": {"work": str(tmp_path)}, "start_time": "2026-10-17_00:00:00",
+    value = {"paths": {"work": str(tmp_path)}, "start_time": "2026-10-17_00:00:00", "days": 30,
              "source": "gfs", "members": [{"init": str(tmp_path / "lag6.nc"),
                  "start_time": "2026-10-17_00:00:00", "lead_hours": 6}],
              "commands": {"init": ["init-source", "--source", "gfs", "--cycle", "2026-10-17T00",

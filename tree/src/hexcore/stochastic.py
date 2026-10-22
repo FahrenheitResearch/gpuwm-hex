@@ -312,10 +312,11 @@ class SphericalPattern:
         self.last_time, self.draw = seconds, self.draw+1
         return self.pattern
 
-    def snapshot(self):
+    def snapshot(self, *, device=False):
         import cupy as cp
         return dict(schema=SCHEMA, config=self.config.state_json(), time=self.last_time,
-                    draw=self.draw, coefficients=cp.asnumpy(self.coefficients))
+                    draw=self.draw, coefficients=(self.coefficients.copy() if device
+                                                 else cp.asnumpy(self.coefficients)))
 
     def restore(self, value):
         import cupy as cp
@@ -327,9 +328,12 @@ class SphericalPattern:
                 or (clock is not None and (not math.isfinite(clock) or clock < 0 or draw == 0))):
             raise ValueError('invalid stochastic checkpoint clock or draw counter')
         a = value['coefficients']
-        if a.shape != self.coefficients.shape or a.dtype != np.float32 or not np.isfinite(a).all():
+        if a.shape != self.coefficients.shape or a.dtype != np.float32:
             raise ValueError('stochastic checkpoint coefficient layout or values differ')
-        self.coefficients[...] = cp.asarray(a)
+        a = cp.asarray(a)
+        if not bool(cp.isfinite(a).all()):
+            raise ValueError('stochastic checkpoint coefficient layout or values differ')
+        self.coefficients[...] = a
         self.last_time, self.draw = clock, draw
         cp.matmul(self.resource.basis, self.coefficients, out=self.pattern)
 
@@ -364,9 +368,9 @@ class ForcingPatterns:
             sppt = self.config.amplitude*base[:, 0]
         return sppt, base[:, 1], base[:, 2]
 
-    def snapshot(self):
-        return dict(schema=SCHEMA, config=self.config.state_json(), base=self.base.snapshot(),
-                    scales=[process.snapshot() for _, process in self.scales])
+    def snapshot(self, *, device=False):
+        return dict(schema=SCHEMA, config=self.config.state_json(), base=self.base.snapshot(device=device),
+                    scales=[process.snapshot(device=device) for _, process in self.scales])
 
     def restore(self, value):
         if value['schema'] != SCHEMA or value['config'] != self.config.state_json():
@@ -503,6 +507,181 @@ class StochasticPhysics:
                     dissipation='positive kinetic-energy sink of unperturbed physics momentum sources',
                     backscatter_normalization='integrated AR(1) covariance: 2/h*tanh(h/(2*time_s)), h=max(dt,interval_s)',
                     scientific_status='spread-skill qualification required')
+
+
+class LtsStochasticPhysics:
+    """One GPU spectral process and global budget for all classes of a member.
+
+    Fine-first LTS visits class clocks out of order. Patterns are therefore
+    evaluated once at a synchronized macro start and held over that macro.
+    Unperturbed owned-edge sinks are integrated over each class's own dt,
+    converted to area-weighted owned-cell dissipation at the macro endpoint,
+    and used by every class in the next macro. The first macro has zero SKEB
+    budget. This explicit one-macro lag avoids an order-dependent reduction.
+    """
+    schema = 'gpuwm-hex.lts-stochastic/v1'
+
+    def __init__(self, mesh, vertical, config, layouts):
+        import cupy as cp
+        # Harmonic caches must not attach GPU basis arrays to the host mesh
+        # serialized by moving checkpoints. Keep its read-only array owners,
+        # but put runtime-only cache attributes on a private shallow view.
+        import copy
+        runtime_mesh = copy.copy(mesh)
+        runtime_mesh.__dict__.pop('_stochastic_harmonics', None)
+        self.global_physics = StochasticPhysics(runtime_mesh, vertical, config)
+        self.config = self.global_physics.config
+        self.resource = self.global_physics.resource
+        self.process = self.global_physics.process
+        self.levels = int(vertical.n_vert_levels)
+        self.layouts = []
+        for layout in layouts:
+            cells = cp.asarray(layout.cell_l2g, dtype=cp.int32)
+            edges = cp.asarray(layout.edge_l2g, dtype=cp.int32)
+            self.layouts.append(dict(cells=cells, edges=edges,
+                owned_edges=int(layout.n_owned_edges)))
+        self.eoc = cp.ascontiguousarray(cp.asarray(mesh.arrays['edgesOnCell'], dtype=cp.int32))
+        self.nec = cp.ascontiguousarray(cp.asarray(mesh.arrays['nEdgesOnCell'], dtype=cp.int32))
+        self.sink_integral = cp.zeros((self.levels, mesh.n_edges), dtype=cp.float32)
+        self.cell_sink = cp.empty((self.levels, mesh.n_cells), dtype=cp.float32)
+        self.dissipation = cp.zeros((self.levels, 1), dtype=cp.float32)
+        self.boundary_seconds = None
+        self.macro = None
+        self.calls = [0] * len(layouts)
+        self.macro_calls = 0
+
+    def begin_macro(self, seconds, duration):
+        import cupy as cp
+        if (self.macro is not None or not math.isfinite(seconds) or seconds < 0
+                or not math.isfinite(duration) or duration <= 0):
+            raise ValueError('invalid or overlapping stochastic macro interval')
+        if self.boundary_seconds is not None and seconds != self.boundary_seconds:
+            raise ValueError('stochastic macro does not start at its carried boundary')
+        self.macro = (float(seconds), float(duration))
+        self.class_elapsed = [0.0] * len(self.layouts)
+        r, c, g = self.resource, self.config, self.global_physics
+        sppt, streamfunction, temperature = self.process.advance(float(seconds))
+        self.sppt = cp.ascontiguousarray(sppt)
+        self.psi = cp.ascontiguousarray(cp.clip(streamfunction[r.cells:], -c.clip, c.clip))
+        curl = r.orientation * (self.psi[r.voe[:, 1]] - self.psi[r.voe[:, 0]]) / r.dv
+        self.norm = cp.sqrt(cp.sum(curl * curl * r.edge_weight))
+        thermal = temperature[:r.cells].copy()
+        thermal -= cp.sum(thermal * r.area)
+        thermal /= cp.maximum(cp.sqrt(cp.sum(thermal * thermal * r.area)), cp.float32(1e-30))
+        self.local_fields = [(
+            cp.ascontiguousarray(g.taper[:, row['cells']]),
+            cp.ascontiguousarray(self.sppt[row['cells']]),
+            cp.ascontiguousarray(thermal[row['cells']])) for row in self.layouts]
+        self.sink_integral.fill(0)
+
+    def apply(self, index, held, *, state, rho_edge, normal_velocity, time_seconds, dt, names):
+        import cupy as cp
+        if self.macro is None:
+            raise ValueError('stochastic class step is outside a synchronized macro')
+        start, duration = self.macro
+        if (not math.isfinite(dt) or dt <= 0 or time_seconds < start
+                or time_seconds + dt > start + duration + 1e-8
+                or abs(time_seconds - (start + self.class_elapsed[index])) > 1e-8):
+            raise ValueError('stochastic class step straddles its macro interval')
+        row, r, c = self.layouts[index], self.resource, self.config
+        nc, ne = int(row['cells'].size), int(row['edges'].size)
+        theta, momentum = held.rho_theta[:, :nc], held.rho_u[:, :ne]
+        density, edge_density = state.rho[:, :nc], rho_edge[:, :ne]
+        # Only edge owners contribute. Halo copies receive identical global
+        # patterns but never duplicate the member's dissipation reduction.
+        owned = row['owned_edges']
+        if c.skeb:
+            sink = cp.maximum(-normal_velocity[:, :owned] * momentum[:, :owned]
+                              / edge_density[:, :owned], 0)
+            self.sink_integral[:, row['edges'][:owned]] += sink * cp.float32(dt)
+        taper, sppt, thermal = self.local_fields[index]
+        has_qv = c.sppt and 'qv' in names
+        qv = held.scalars[names.index('qv'), :, :nc] if has_qv else theta
+        ts = _field_strides(theta, self.levels, nc, 'theta tendency')
+        qs = _field_strides(qv, self.levels, nc, 'qv tendency')
+        rs = _field_strides(density, self.levels, nc, 'cell density')
+        ms = _field_strides(momentum, self.levels, ne, 'momentum tendency')
+        es = _field_strides(edge_density, self.levels, ne, 'edge density')
+        scale = backscatter_rate_scale(duration, c.time_s, c.interval_s)
+        _kernel('force_cells')(((self.levels * nc + 127) // 128,), (128,),
+            (theta, qv, density, taper, sppt, thermal, self.dissipation,
+             *ts, *qs, *rs, np.int32(nc), np.int32(self.levels),
+             np.int32(c.sppt), np.int32(c.skeb), np.int32(has_qv),
+             np.int32(c.logit), np.float32(c.clip),
+             np.float32(scale * c.thermal_fraction * 300 / 1004)))
+        # Every local edge, including halos, reads the ORIGINAL global dual
+        # vertices and cell tapers. No truncated class topology enters curl.
+        _kernel('force_lts_edges')(((self.levels * ne + 127) // 128,), (128,),
+            (momentum, edge_density, self.global_physics.taper,
+             self.global_physics.vertex_taper, self.sppt, self.psi,
+             self.dissipation, self.norm, r.coe, r.voe, r.orientation, r.dv, row['edges'],
+             *ms, *es, np.int32(r.cells), np.int32(self.global_physics.vertex_taper.shape[1]),
+             np.int32(ne), np.int32(self.levels), np.int32(c.sppt), np.int32(c.skeb),
+             np.int32(c.logit), np.float32(c.clip), np.float32(scale * c.skeb_fraction)))
+        self.calls[index] += 1
+        self.class_elapsed[index] += dt
+        return held
+
+    def end_macro(self):
+        import cupy as cp
+        if self.macro is None:
+            raise ValueError('no stochastic macro to finish')
+        start, duration = self.macro
+        if any(abs(value - duration) > 1e-8 for value in self.class_elapsed):
+            raise ValueError('stochastic macro is missing an owned class interval')
+        if self.config.skeb:
+            r = self.resource
+            _kernel('lts_sink_cells')(((self.levels * r.cells + 127) // 128,), (128,),
+                (self.sink_integral, self.cell_sink, self.eoc, self.nec, r.edge_weight,
+                 np.int32(r.cells), np.int32(r.edges), np.int32(self.eoc.shape[1]),
+                 np.int32(self.levels), np.float32(duration)))
+            self.dissipation[...] = cp.sum(self.cell_sink * r.area[None, :], axis=1, keepdims=True)
+        self.boundary_seconds = start + duration
+        self.macro = None
+        self.local_fields = []
+        self.macro_calls += 1
+
+    def snapshot(self, *, device=True):
+        import cupy as cp
+        if self.macro is not None:
+            raise ValueError('stochastic checkpoint requires a completed macro boundary')
+        return dict(schema=self.schema, config=self.config.state_json(),
+            process=self.process.snapshot(device=device), boundary_seconds=self.boundary_seconds,
+            dissipation=(self.dissipation.copy() if device else cp.asnumpy(self.dissipation)),
+            macro_calls=self.macro_calls)
+
+    def restore(self, value):
+        import cupy as cp
+        if value['schema'] != self.schema or value['config'] != self.config.state_json():
+            raise ValueError('LTS stochastic checkpoint configuration differs')
+        if self.macro is not None:
+            raise ValueError('cannot restore a stochastic process inside an active macro')
+        budget = cp.asarray(value['dissipation'])
+        boundary = value['boundary_seconds']
+        macro_calls = value['macro_calls']
+        if (type(macro_calls) is not int or macro_calls < 0
+                or (boundary is None) != (macro_calls == 0)):
+            raise ValueError('invalid LTS stochastic checkpoint macro counter')
+        if (budget.shape != self.dissipation.shape or budget.dtype != cp.float32
+                or not bool(cp.all(cp.isfinite(budget) & (budget >= 0)))
+                or (boundary is not None and (not math.isfinite(boundary) or boundary < 0))):
+            raise ValueError('invalid LTS stochastic checkpoint budget or boundary')
+        self.process.restore(value['process'])
+        if boundary is not None and not 0 <= self.process.base.last_time < boundary:
+            raise ValueError('stochastic process clock is outside its carried macro boundary')
+        self.dissipation[...] = budget
+        self.boundary_seconds = boundary
+        self.macro_calls = macro_calls
+
+    def receipt(self):
+        return dict(schema=self.schema, config=asdict(self.config), device='GPU',
+            spectral_processes=1, pattern_clock='one global draw at each macro start',
+            draws=self.process.base.draw, macro_calls=self.macro_calls, calls_by_class=self.calls,
+            budget='area-weighted global owned-cell mean of time-integrated owned-edge sinks',
+            budget_lag_macros=1, startup_budget='zero before the first accepted macro',
+            curl='global dual-vertex field, gathered by global edge ID including halos',
+            checkpoint='mesh-independent spectral coefficients, counters and per-level dissipation',
+            basis=self.resource.receipt, scientific_status='spread-skill qualification required')
 
 
 def resolve_options(value=None, namelist=None):

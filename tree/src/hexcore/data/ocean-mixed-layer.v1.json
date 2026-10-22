@@ -1,0 +1,24 @@
+{
+  "schema": "hex.ocean-mixed-layer/v1",
+  "identity": "wind-mixed-layer-zero-layer-seaice-f64-v2",
+  "defaults": {
+    "depth_m": 50.0,
+    "max_depth_m": 200.0,
+    "stratification_k_m": 0.14,
+    "initial_ice_thickness_m": 1.0,
+    "new_ice_thickness_m": 0.1,
+    "salinity_psu": 35.0,
+    "basal_exchange": 0.006,
+    "water_density": 1000.0,
+    "water_heat_capacity": 4200.0,
+    "ice_density": 917.0,
+    "latent_heat": 333500.0,
+    "ice_conductivity": 2.2,
+    "snow_conductivity": 0.31,
+    "snow_density": 330.0,
+    "water_albedo": 0.08,
+    "ice_albedo": 0.65,
+    "snow_albedo": 0.80,
+    "emissivity": 0.98
+  }
+}

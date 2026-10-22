@@ -456,15 +456,15 @@
       }
     },
     {
-      "id": "era5",
+      "id": "era5-cds",
       "aliases": [
         "era5-pl",
         "ecmwf-era5"
       ],
       "engine_source_id": "era5",
-      "display_name": "ECMWF ERA5 reanalysis 0.25 degree (Copernicus CDS)",
+      "display_name": "ECMWF ERA5 reanalysis 0.25 degree (Copernicus CDS, account key)",
       "role": "reanalysis",
-      "license": "Copernicus licence (CDS account required)",
+      "license": "Licence to Use Copernicus Products: free, worldwide, commercial use permitted with attribution (https://cds.climate.copernicus.eu/licences/licence-to-use-copernicus-products); CDS account and key required",
       "grid": {
         "family": "regular_latlon",
         "resolution_deg": 0.25,
@@ -608,7 +608,8 @@
           "vtable": "vtables/Vtable.ERA5-surface",
           "map_source": "ecmwf"
         }
-      }
+      },
+      "attribution": "Contains modified Copernicus Climate Change Service information [year]. Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains."
     },
     {
       "id": "icon",
@@ -1275,6 +1276,366 @@
           }
         }
       }
+    },
+    {
+      "id": "era5",
+      "engine_source_id": "era5",
+      "display_name": "ECMWF ERA5 reanalysis 0.25 degree (keyless Google ARCO, default)",
+      "role": "reanalysis",
+      "license": "Licence to Use Copernicus Products: free, worldwide, commercial use permitted with attribution (https://cds.climate.copernicus.eu/licences/licence-to-use-copernicus-products); no CDS account or key required",
+      "grid": {
+        "family": "regular_latlon",
+        "resolution_deg": 0.25,
+        "winds": "earth-relative, unstaggered (A grid)"
+      },
+      "decode": {
+        "vtable": "vtables/Vtable.ERA5.rw",
+        "map_source": "ecmwf",
+        "mapping": "rw-wps-era5-arco-netcdf-donor.mapping.json",
+        "composition": {
+          "schema": "gpuwm-mapped-composition-v2",
+          "name": "era5-arco-primary",
+          "mapping_binding": "input_manifest_sha256",
+          "supplements": {
+            "terrain_height": {
+              "data_role": "primary_surface",
+              "provenance_role": "primary_surface_provenance",
+              "format": "netcdf",
+              "field": "terrain_height",
+              "selector_authority": "mapping_field_exact",
+              "grid_alignment": "exact_coordinate_subset",
+              "time_alignment": "valid_time_exact",
+              "require_invariant_across_time": true
+            }
+          },
+          "field_sources": {},
+          "soil_layers": {
+            "temperature_field": "soil_temperature",
+            "moisture_field": "volumetric_soil_moisture",
+            "depth_units": "m",
+            "source_layers": [
+              {
+                "top": 0.0,
+                "bottom": 0.07,
+                "selectors": {
+                  "soil_temperature": {
+                    "format": "netcdf",
+                    "name": [
+                      "ST000007"
+                    ]
+                  },
+                  "volumetric_soil_moisture": {
+                    "format": "netcdf",
+                    "name": [
+                      "SM000007"
+                    ]
+                  }
+                }
+              },
+              {
+                "top": 0.07,
+                "bottom": 0.28,
+                "selectors": {
+                  "soil_temperature": {
+                    "format": "netcdf",
+                    "name": [
+                      "ST007028"
+                    ]
+                  },
+                  "volumetric_soil_moisture": {
+                    "format": "netcdf",
+                    "name": [
+                      "SM007028"
+                    ]
+                  }
+                }
+              },
+              {
+                "top": 0.28,
+                "bottom": 1.0,
+                "selectors": {
+                  "soil_temperature": {
+                    "format": "netcdf",
+                    "name": [
+                      "ST028100"
+                    ]
+                  },
+                  "volumetric_soil_moisture": {
+                    "format": "netcdf",
+                    "name": [
+                      "SM028100"
+                    ]
+                  }
+                }
+              },
+              {
+                "top": 1.0,
+                "bottom": 2.89,
+                "selectors": {
+                  "soil_temperature": {
+                    "format": "netcdf",
+                    "name": [
+                      "ST100289"
+                    ]
+                  },
+                  "volumetric_soil_moisture": {
+                    "format": "netcdf",
+                    "name": [
+                      "SM100289"
+                    ]
+                  }
+                }
+              }
+            ],
+            "target_layers": [
+              {
+                "top": 0.0,
+                "bottom": 0.1
+              },
+              {
+                "top": 0.1,
+                "bottom": 0.4
+              },
+              {
+                "top": 0.4,
+                "bottom": 1.0
+              },
+              {
+                "top": 1.0,
+                "bottom": 2.0
+              }
+            ],
+            "remap": {
+              "kind": "conservative_layer_means",
+              "source_value_location": "layer_mean",
+              "target_value_location": "layer_mean",
+              "coverage": "require_complete"
+            },
+            "missing": {
+              "land": "reject",
+              "ocean": {
+                "stage": "after_horizontal_interpolation",
+                "temperature": "skin_temperature",
+                "moisture": 1.0
+              }
+            }
+          }
+        },
+        "workers": 8,
+        "in_band_supplements": {
+          "primary_surface": "primary_surface_provenance"
+        },
+        "mapping_fields": {
+          "air_pressure_at_mean_sea_level": {
+            "selectors": [
+              {
+                "format": "netcdf",
+                "name": [
+                  "PMSL"
+                ]
+              }
+            ],
+            "units": {
+              "source": "Pa",
+              "target": "Pa"
+            },
+            "source_axes": [
+              "time",
+              "y",
+              "x"
+            ],
+            "target_axes": [
+              "y",
+              "x"
+            ],
+            "location": "surface",
+            "staggering": "none",
+            "missing": {
+              "kind": "reject"
+            }
+          }
+        }
+      },
+      "vertical": {
+        "coordinate": "isobaric",
+        "humidity": "specific humidity is authoritative; use_spechumd=yes",
+        "height": "geopotential -> HGT (GEOPT / 9.81)"
+      },
+      "first_guess": {
+        "nfglevels": 38,
+        "nfgsoillevels": 4,
+        "use_spechumd": "yes"
+      },
+      "surface": {
+        "land_sea": "lsm, flagged by the ecmwf rule",
+        "terrain": "SOILGEO surface geopotential -> SOILHGT",
+        "soil": "4 ERA5 layers 0-7, 7-28, 28-100, 100-289 cm, exported with their native bounds",
+        "snow": "snow water equivalent from native SNOW_EC; no invented snow density",
+        "sea_ice": "ci fraction",
+        "two_metre_humidity": "dewpoint; RH derived"
+      },
+      "aliases": [
+        "era5-arco",
+        "arco-era5"
+      ],
+      "products": [
+        {
+          "role": "primary",
+          "transport": "engine-fetch",
+          "filename": "era5-combined.nc",
+          "streams": 8,
+          "fetch_args": [
+            "--source",
+            "era5",
+            "--era5-provider",
+            "arco",
+            "--retrieve",
+            "--cycle",
+            "{yyyy}-{mm}-{dd}T{hh}",
+            "--hours",
+            "0",
+            "--area=-90,0,90,360"
+          ]
+        }
+      ],
+      "surface_series": {
+        "interval_hours": 1,
+        "products": [
+          {
+            "role": "surface",
+            "transport": "zarr",
+            "filename": "surface-{yyyymmddhh}.nc",
+            "request": {
+              "store": "https://storage.googleapis.com/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
+              "area": [
+                -90,
+                0,
+                90,
+                360
+              ],
+              "expected_levels_hpa": [
+                1,
+                2,
+                3,
+                5,
+                7,
+                10,
+                20,
+                30,
+                50,
+                70,
+                100,
+                125,
+                150,
+                175,
+                200,
+                225,
+                250,
+                300,
+                350,
+                400,
+                450,
+                500,
+                550,
+                600,
+                650,
+                700,
+                750,
+                775,
+                800,
+                825,
+                850,
+                875,
+                900,
+                925,
+                950,
+                975,
+                1000
+              ],
+              "fields": [
+                {
+                  "source": "sea_surface_temperature",
+                  "output": "SST",
+                  "units": "K",
+                  "pressure": false
+                },
+                {
+                  "source": "sea_ice_cover",
+                  "output": "SEAICE",
+                  "units": "1",
+                  "pressure": false
+                },
+                {
+                  "source": "land_sea_mask",
+                  "output": "LANDSEA",
+                  "units": "1",
+                  "pressure": false
+                }
+              ]
+            }
+          }
+        ],
+        "decode": {
+          "format": "regular-netcdf",
+          "fields": [
+            {
+              "name": "SST",
+              "field": "SST",
+              "units": "K"
+            },
+            {
+              "name": "SEAICE",
+              "field": "SEAICE",
+              "units": "1"
+            },
+            {
+              "name": "LANDSEA",
+              "field": "LANDSEA",
+              "units": "1"
+            }
+          ]
+        }
+      },
+      "limits": [
+        "Default ERA5 route (ruling of 2026-10-20): keyless; the Copernicus licence permits commercial use with attribution, which every receipt carries. The CDS route stays selectable as era5-cds.",
+        "Google public ARCO store coverage and preliminary ERA5T availability bound the requested UTC hour.",
+        "All 37 pressure levels and native quarter-degree global fields are fetched through the engine Rust Zarr path."
+      ],
+      "attribution": "Contains modified Copernicus Climate Change Service information [year]. Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains."
+    },
+    {
+      "id": "hrrr",
+      "aliases": [
+        "hrrr-conus",
+        "ncep-hrrr"
+      ],
+      "engine_source_id": "hrrr",
+      "display_name": "NCEP HRRR 3 km CONUS (native hybrid wrfnat + soil)",
+      "role": "deterministic",
+      "license": "US government work, public domain",
+      "coverage": "limited_area",
+      "grid": {
+        "family": "lambert_conformal",
+        "resolution_m": 3000,
+        "winds": "grid-relative on the source grid; rotated to earth-relative by the intermediate door"
+      },
+      "intermediate": {
+        "row": "hrrr",
+        "about": "A projected source does not travel the Vtable path: the intermediate door (hexcore.hrrr_intermediate.SOURCE_ROWS) decodes it with the engine's own decoder, resamples it onto a regular lat-lon box over the cull and writes the WPS records the init and boundary engines read. Missing hours are fetched by the row's fetch transport."
+      },
+      "vertical": {
+        "coordinate": "native hybrid (50 levels) carried as level-indexed slabs with 3-D PRESSURE",
+        "humidity": "SPECHUMD",
+        "height": "GHT"
+      },
+      "first_guess": {
+        "nfglevels": 51,
+        "nfgsoillevels": 4,
+        "use_spechumd": "yes"
+      },
+      "limits": [
+        "Covers the CONUS HRRR domain only, so it initialises a limited-area cull (gpuwm-hex regional), never a global mesh: a global init from it would have no meteorology outside that domain."
+      ]
     }
   ]
 }

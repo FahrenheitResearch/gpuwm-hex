@@ -120,3 +120,55 @@ extern "C" __global__ void force_edges(
     }
     momentum[m]=value;
 }
+
+// Class-local storage, global connectivity. Halo edges evaluate exactly the
+// same dual vertices and taper as their owner, even across LTS rate classes.
+extern "C" __global__ void force_lts_edges(
+    float *momentum, const float *rho, const float *taper,
+    const float *vertex_taper, const float *pattern, const float *psi,
+    const float *dissipation, const float *norm, const int *coe, const int *voe,
+    const float *orientation, const float *dv, const int *edge_l2g,
+    long long ms0, long long ms1, long long rs0, long long rs1,
+    int cells, int vertices, int edges, int levels,
+    int sppt, int skeb, int logit, float clip, float kinetic_scale) {
+    int i=blockDim.x*blockIdx.x+threadIdx.x;
+    if (i>=edges*levels) return;
+    int k=i/edges, e=i%edges, g=edge_l2g[e];
+    long long m=k*ms0+e*ms1;
+    float value=momentum[m];
+    if (sppt) {
+        int a=coe[2*g], b=coe[2*g+1];
+        float fa=sppt_factor(pattern[a],taper[k*cells+a],clip,logit);
+        float fb=sppt_factor(pattern[b],taper[k*cells+b],clip,logit);
+        value*=1.0f+0.5f*(fa+fb);
+    }
+    if (skeb) {
+        int a=voe[2*g], b=voe[2*g+1];
+        float rotational=orientation[g]*(vertex_taper[k*vertices+b]*psi[b]
+                         -vertex_taper[k*vertices+a]*psi[a])/dv[g];
+        float denominator=norm[0];
+        if (denominator<1e-30f) denominator=1e-30f;
+        value+=rho[k*rs0+e*rs1]*(rotational/denominator)
+               *sqrtf(kinetic_scale*dissipation[k]);
+    }
+    momentum[m]=value;
+}
+
+// Edge sinks have already been integrated once by their unique owners. Each
+// global cell contributes once to the area reduction, without class halos.
+extern "C" __global__ void lts_sink_cells(
+    const float *integral, float *sink, const int *eoc, const int *nec,
+    const float *edge_weight, int cells, int edges, int max_edges, int levels,
+    float duration) {
+    int i=blockDim.x*blockIdx.x+threadIdx.x;
+    if (i>=cells*levels) return;
+    int k=i/cells, c=i%cells;
+    float value=0, weight=0;
+    for (int j=0; j<nec[c]; ++j) {
+        int e=eoc[c*max_edges+j];
+        if (e<0 || e>=edges) continue;
+        value+=integral[k*edges+e]*edge_weight[e];
+        weight+=edge_weight[e];
+    }
+    sink[i]=(weight>0) ? value/(weight*duration) : 0;
+}

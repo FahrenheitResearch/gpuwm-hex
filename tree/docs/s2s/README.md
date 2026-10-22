@@ -1,7 +1,15 @@
 # Global S2S ensembles
 
-`gpuwm-hex s2s` plans and runs a 30 to 90 day ensemble on the 120 km or 60 km
-whole globe. The default is fast numerics, daily history, surface updates
+`gpuwm-hex s2s` plans and runs a multi-week ensemble (7 days or longer, for
+example 10, 30 or 90 days) on the 120 km or 60 km whole globe. The seven-day
+minimum is the week-1 product window; verification covers the first ten days,
+or the whole run when it is shorter. Short experiment windows use the same
+surface updates, checkpoint recovery and complete-window products as longer
+runs. They do not establish seasonal-skill qualification.
+`--members COUNT` is the total output member count (1 to 1000, default 4),
+balanced across `--lagged` offsets. Native-member ranges such as `1-4` belong
+to the `global` door and are not S2S counts.
+The default is fast numerics, daily history, surface updates
 and checkpoints every five days. SPPT and SKEB follow the stochastic lane
 policy: on for ensembles with more than one output member and fewer than ten
 native source members, off otherwise. Lagged deterministic ensembles enable
@@ -34,8 +42,19 @@ inputs. `--stage mesh|static|init|surface|forecast|products|verify` runs one
 stage. `--history-hours 6` requests six-hourly history. `--prepared-init
 YYYY-MM-DDTHH[:MEMBER]=PATH` reuses a prepared init and validates its source
 receipt. Keep one prepared input copy per host, under `/workspace/shared-prepared`.
+Device indices in `--devices` refer to the inherited `CUDA_VISIBLE_DEVICES`
+allocation. For example, `--devices 0` selects the first GPU granted by a pool,
+including when the pool identifies it by UUID. Forecasts, products and
+verification retain that allocation; a selection outside it is refused.
 
-Sources are `gefs`, `ifs-ens`, `gfs`, `era5`, and the surface lane's `cfs` row.
+Sources come from the init-source table, including `gefs`, `ifs-ens`, `gfs`,
+`era5` (keyless: public ARCO analyses through the engine Rust fetcher, no CDS account or
+key; `era5-arco` is its alias and `era5-cds` the keyed CDS route), `cfs`, and compatible
+Earth-2 generated forecast rows. ERA5 is under the Licence to Use Copernicus Products,
+which permits commercial use with attribution; the attribution is in every receipt. See
+[generated initialization](../init-sources.md#generated-earth-2-forecasts)
+for model licences and forecast clocks. Research rows require the exact
+`--accept-licence` value recorded in their table entry.
 `--members` is the total ensemble count. `--lagged 0,24,48` balances that count
 across initialization offsets in hours. Native member numbers restart at 1
 for each lag. GFS and CFS default to offsets `0,6,12,...`. A lag selects
@@ -44,9 +63,25 @@ for each lag. GFS and CFS default to offsets `0,6,12,...`. A lag selects
 every S2S member then starts at the common valid time, without model warm-up.
 Source cycle, source member, lead, lag and valid time are recorded in each
 member manifest. The source table validates published cycles and forecast leads.
-ERA5 publishes analyses, so its default shares one common init with independent
-stochastic seeds. An explicit `--lagged 0` selects this behavior for any source.
+ERA5 publishes hourly analyses. Its default lags are `0,6,12,...`, with each
+analysis fetched at source lead zero and its actual valid time. The model
+integrates each earlier analysis through the lag before writing history on
+the common forecast window. Member `valid_time` and `start_time` describe the
+analysis; provenance `window_start` describes the common window, and
+`spinup_hours` records the integration between them. Run length and checkpoint
+offsets include that integration. Hourly lags such as `--lagged 0,1,2,3` are
+also accepted. Surface forcing covers the earliest analysis through the common
+end. Source forecast rows retain the common-clock behavior described above.
+An explicit `--lagged 0` shares one init with independent stochastic seeds.
 Member provenance also records seed, mesh, physics, surface series and every restart.
+
+The short-range global door also accepts generated stochastic identities on a
+deterministic source, for example `global --source era5 --members 1-8`. It builds
+one input per source cycle and lead, then binds that input, its provenance and
+an independent stochastic identity to each member. Combining `--members` and
+`--lagged` takes their Cartesian product. Disabling both SPPT and SKEB refuses
+multiple unperturbed members of the same input because they would repeat one
+forecast and understate spread.
 
 Surface forcing defaults to the CFS forecast cycle 48 hours before the earliest
 member init. The Rust producer fetches six-hourly SST and sea-ice records through
@@ -80,7 +115,7 @@ Temporal reductions, pressure interpolation, MSLP diagnostics, remapping and
 ensemble reductions run on the GPU. Rust reads and writes NetCDF and renders
 all weather maps. Wheel builds include the S2S renderer in `hexcore/libexec`.
 `tools/build_engine_bridges.sh ENGINE_SOURCE OUT_DIR` builds it with the other
-bridges, applies both renderer patches in a private source copy, and records
+bridges, applies the current renderer extension in a private source copy, and records
 their hashes and the binary hash. The engine source stays read-only. A source
 wheel build can also use `GPUWM_HEX_ENGINE_SOURCE=PATH`; no runtime renderer
 environment override is needed for the resulting wheel. The accompanying
@@ -108,16 +143,14 @@ Each window file also retains every member's reduced field as `FIELD_members`,
 with the roster order in `s2s_member_ids`. The small JSON receipt records finite
 counts and ranges of each mean, spread, anomaly and probability plane.
 
-The default downloads the four required fields from the public
-[WeatherBench2 ERA5 1990-2019 smoothed six-hour climatology](https://weatherbench2.readthedocs.io/en/latest/data-guide.html).
-It fetches and decodes intersecting Zarr chunks concurrently, then computes
-window means and nearest-grid remapping on the GPU. The source grid is 1.5 degrees;
-remapping does not add resolution. Selection uses the archive's Gregorian
-day-of-year and UTC-hour convention. Temperature, height and pressure use
-six-hour endpoint trapezoids; precipitation sums the six-hour accumulations
-ending inside the window. Chunk URLs, hashes, sizes, calendar, thread count,
-GPU work and artifact hash are recorded in `era5-climatology-receipt.json`.
-Raw chunks stay in memory and are released after reduction.
+By default the builder acquires the
+required fields from the public WeatherBench2 ERA5 analysis archive and builds
+matching calendar window means across 1990-2019, excluding the target year.
+Rust decodes Zarr chunks concurrently; CUDA computes window distributions,
+linear empirical terciles and nearest-grid remapping. The source grid is
+1.5 degrees; remapping does not add resolution. The receipt records source
+URLs, hashes, baseline years, calendar, thread count and artifact hash. Raw
+chunks stay in memory and are released after each source/year reduction.
 
 Temperature anomalies put the ERA5 normal on the model terrain before subtraction:
 `normal_on_model = normal_ERA5 - 0.0065 * (model_height - ERA5_height)`,
@@ -135,14 +168,13 @@ and does not repair forecast temperature drift, including over sea ice.
 `GPUWM_HEX_S2S_ERA5_CLIMATOLOGY_URL` to fetch a precomputed window artifact. It must declare
 `s2s_climatology_source=ERA5`, `s2s_climatology_start_mmdd=MM-DD`,
 matching `XLAT`/`XLONG` coordinates and field units, and hold one product-grid plane per window and
-field, for example `weeks_1_2_temperature2`, in K, mm/day, m and hPa.
+field, for example `weeks_1_2_temperature2`, in K, mm/day, m, hPa and m/s.
+It must include matching UTC start hour and historical tercile thresholds, as
+detailed below.
 It must also contain finite `orography(south_north,west_east)` in metres,
 representing the terrain of its temperature normal. Missing or invalid terrain
 refuses ERA5 anomaly products. If automatic ERA5 acquisition is unavailable,
-the door uses the explicitly labelled ensemble-relative baseline requested by
-the S2S contract. Its mean anomaly is zero by construction and its probability
-is above the ensemble mean, not a historical normal. No terrain adjustment is
-needed for that baseline. Each ERA5 product retains
+the door refuses historical anomalies and terciles. Each ERA5 product retains
 `model_orography`, `climatology_orography`, the adjusted `temperature2_baseline`
 and the correction convention. Temperature anomaly probabilities use that same
 adjusted baseline. An uncorrected old temperature-anomaly map is not a shipping
@@ -417,3 +449,57 @@ Receipt: `evidence/surface-audit-cli/retained/evidence/proof.json`. Fixture raw
 files were consumed and the lease released. This qualifies the CLI transport,
 reordering, summaries and rejection paths on synthetic files. An audit of
 original native forecast history and sea-ice energy balance remains open.
+
+## Weekly wind, historical terciles and regional views
+
+The part A product builder includes earth-relative eastward and northward wind
+at 925, 850 and 200 hPa. It reads `u_zonal`/`v_meridional` (or native
+`uReconstructZonal`/`uReconstructMeridional`) from full histories and interpolates
+in log pressure on CUDA. Targets outside the column's mass-level support are
+masked. Each component has window mean, ensemble population spread, anomaly
+and probability products. Missing wind histories refuse the product.
+
+Automatic ERA5 baselines now use actual matching calendar windows in each year
+1990 through 2019, excluding the target year. The baseline is the mean of those
+historical window means. Its lower/upper tercile thresholds are linear empirical
+quantiles at 1/3 and 2/3 over the same historical window means. They are not
+quantiles of instantaneous states or a smoothed hourly normal. Temperature
+normals and both thresholds receive the same exact model-terrain adjustment.
+Precipitation uses six-hour accumulations ending strictly after the initial
+endpoint; other fields use endpoint trapezoids. February 29 initialization uses
+February 28 in non-leap baseline years; other dates retain their month/day/hour.
+The receipt records the actual baseline years and source grid.
+
+Categories are below (`x < q1`), near (`q1 <= x <= q2`) and above (`x > q2`).
+Ties belong to near, including dry climatologies with coincident thresholds.
+Every probability uses the fixed complete ensemble roster. Any missing member
+or unsupported historical threshold masks all three probabilities at that point.
+These are uncalibrated fractions, not a seasonal forecast skill claim.
+
+`--product-region NAME:SOUTH,NORTH,WEST,EAST` adds regional maps alongside the
+global maps. Repeat the option for additional views. West greater than east
+crosses the date line. Crops preserve the global reduced values and reorder
+crossing longitudes onto a continuous axis. All maps run through
+`gpuwm.rustwx.run_ensemble_product_renderer` and `rw_wrfbatch`/`rw_ensbatch`.
+Build the added renderer capability with `tools/build_s2s_renderer.sh`; the
+builder requires its `s2s-wind-terciles` ABI marker before writing maps.
+
+The public archive's own `datasets/era5/LICENSE` names the **Licence to Use
+Copernicus Products**, which permits commercial use with attribution, so
+automatic acquisition is the default. Acquisition and generated products carry
+the licence and its attribution. A supplied `--climatology` must
+contain `s2s_climatology_start_hour` in addition to month/day, coordinates,
+orography and field units, and `<window>_<field>_tercile_lower` and
+`<window>_<field>_tercile_upper` for every field. An unavailable historical
+baseline refuses anomalies and terciles. It does not substitute an ensemble
+relative normal.
+
+Zarr decompression runs through the small `rust/s2s-zarr` library and the
+BSD-3-Clause c-blosc codec. The wheel builds and includes this library on Linux.
+For a source checkout, set `GPUWM_HEX_S2S_ZARR_LIBRARY` to its release `.so`.
+The codec is resolved from system libblosc or the netCDF4 wheel's bundled
+library; `GPUWM_HEX_S2S_BLOSC_LIBRARY` selects an explicit codec library. NumPy
+only wraps its unchanged decoded transport buffer. All climatological window
+reductions, empirical quantiles and remapping run on CUDA; NetCDF transport
+uses the Rust bridges. Compressed/decoded source chunks remain in bounded
+memory. Source URLs, hashes, calendar, grid and parallelism are retained.

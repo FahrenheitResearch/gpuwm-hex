@@ -3,6 +3,17 @@ from types import SimpleNamespace
 import pytest
 from hexcore import moving_run
 
+@pytest.mark.parametrize('offsets,passed', [([9.9, 86.469241315], False),
+                                        ([9.9, None], False), ([9.9, 40], True)])
+def test_completed_forecast_requires_every_fix_inside_fine_interior(offsets, passed):
+    state = dict(t=21600, hours=6, wall_seconds=1500, moves=[],
+                 fixes_source='run-time tracker on model state',
+                 frames=[dict(offset_km=offset, fix=dict(ok=True)) for offset in offsets],
+                 segments=[dict(rc=0, integration_seconds=1000, wall_seconds=1400)])
+    summary = moving_run.summarize(state, 82)
+    assert (summary['status'] == 'passed') == passed
+    assert summary['a2_storm_inside_interior_every_frame'] == passed
+
 @pytest.mark.parametrize('error',[KeyboardInterrupt,RuntimeError,SystemExit])
 def test_failed_controller_stops_all_owned_child_groups(monkeypatch,error):
     prep,forecast=object(),object()
@@ -87,3 +98,70 @@ def test_anticipation_chain_stops_at_forecast_end():
 def test_zero_anticipated_moves_does_not_prepare_next_member():
     controller = SimpleNamespace(a=SimpleNamespace(anticipate_moves=0))
     assert moving_run.Controller.anticipate_chain(controller, None, None) == []
+
+
+def test_decided_move_waits_for_current_centre_not_next_anticipated_move(tmp_path):
+    from hexcore.storm_tracker import Fix, Decision
+    controller = object.__new__(moving_run.Controller)
+    current = [24.4, -83.0]
+    chosen = [24.75, -83.0]  # emergency move39km is below the usual41km minimum
+    future = [25.25, -83.0]  # ready but outside the fix's safe core radius
+    fix = Fix(seconds=7200, ok=True, lat=24.733039782250614, lon=-83.00713393179386)
+    decision = Decision(7200, True, chosen, 10800, 60, 'current region unsafe')
+    controller.state = dict(current='start', members={
+        'start': dict(status='ready', center_deg=current),
+        'future': dict(status='ready', center_deg=future)}, frames=[], segments=[{}])
+    controller.interior_km = 82
+    controller.session = SimpleNamespace(
+        policy=SimpleNamespace(c=SimpleNamespace(safe_km=lambda: 82-27.333333333333332)),
+        decide=lambda *args, **kwargs: decision)
+    controller.a = SimpleNamespace(hold_for_member_seconds=1800)
+    controller.observe = lambda *args: (fix, 0.1)
+    controller.anticipate_chain = lambda *args: [dict(centre=future, at_seconds=9000)]
+    requested = []
+    def request(centre, why):
+        requested.append(centre)
+        controller.state['members']['chosen'] = dict(status='prepared', center_deg=centre)
+        return 'chosen'
+    controller.request_member = request
+    def poll():
+        if 'chosen' in controller.state['members']:
+            controller.state['members']['chosen']['status'] = 'ready'
+    controller.poll_background = poll
+    controller.event = lambda *args, **kwargs: None
+    controller.save = lambda: None
+    controller.log = lambda message: None
+    (tmp_path/'await-verdict.json').write_text('{}')
+    verdict = controller.on_frame(7200, 'history.nc', tmp_path)
+    assert requested == [chosen]
+    assert verdict == dict(stop=True, target='chosen', reason=decision.reason)
+    assert controller.state['pending_move']['target'] == 'chosen'
+
+
+def test_resume_redraws_products_that_died_with_the_controller(tmp_path):
+    def segment(name, products_tail, rc=0):
+        root = tmp_path / name
+        fc = root / 'fc'
+        (fc / 'products.products-scratch' / 'render-global').mkdir(parents=True)
+        (fc / 'products.log').write_text('PRODUCTS view=global window=global\n' + products_tail)
+        (root / 'forecast.log').write_text(
+            'x\nPRODUCTS $ gpuwm-hex products --forecast ' + str(fc) + ' --out ' + str(fc / 'products') + '\n')
+        return dict(path=str(root), rc=rc)
+    killed = segment('segment-000', 'DOOR rendered=84 skipped=2 failed=0 out=x\n')
+    finished = segment('segment-001', 'PRODUCTS done maps=307 point_pictures=1 failed_views=none manifest=m\n')
+    failed = segment('segment-002', '', rc=2)
+    started, logged = [], []
+
+    def popen(argv, **kw):
+        started.append((argv, kw['env']['CUDA_VISIBLE_DEVICES']))
+        return SimpleNamespace(pid=7)
+    redrawn = moving_run.restart_dead_products([killed, finished, failed], logged.append,
+                                               popen=popen, alive=lambda fc: False)
+    fc = tmp_path / 'segment-000' / 'fc'
+    assert redrawn == [str(fc)]
+    assert started == [([moving_run.sys.executable, '-m', 'hexcore.cli', 'products', '--forecast', str(fc),
+                         '--out', str(fc / 'products')], '')]
+    assert not (fc / 'products.products-scratch').exists()
+    assert (tmp_path / 'segment-001' / 'fc' / 'products.products-scratch').exists()
+    assert moving_run.restart_dead_products([killed], logged.append, popen=popen,
+                                            alive=lambda fc: True) == []

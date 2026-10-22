@@ -27,6 +27,9 @@ def prepare_plan(args):
     # Balance the requested total over lags, preserving native members first.
     per_cycle = (args.members + len(lags) - 1) // len(lags)
     expanded = expand_lags(row, Cycle.parse(args.source_cycle), numbers[:per_cycle], lags, args.source_hour)
+    if any(p.get("spinup_hours", 0) for p in expanded):
+        raise EnsembleRefusal("earlier analyses require model integration to the common window; "
+                              "use global --lagged or s2s --lagged, whose member rosters carry spinup clocks")
     if len(expanded) < args.members:
         raise EnsembleRefusal(f"source members and lags supply {len(expanded)} distinct inputs, requested {args.members}")
     quota, remainder = divmod(args.members, len(lags))

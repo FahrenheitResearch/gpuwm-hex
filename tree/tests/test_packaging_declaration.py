@@ -37,10 +37,10 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.4.1", (
-        "0.4.1 is the current release candidate. Changing this pin requires "
-        "a release decision; passing this source check does not qualify "
-        "the candidate for publication."
+    assert declared == "0.4.2", (
+        "0.4.2 is the release cut beside gpuwm 2.9.4 (2026-10-21): the 0.4.1 line plus "
+        "the capability landings, the improvement-sweep fixes and the regional door; "
+        "moving it is a release decision, not an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")

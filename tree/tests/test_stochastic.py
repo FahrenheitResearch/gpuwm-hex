@@ -242,6 +242,7 @@ def test_actual_cuda_forcing_invariants_and_strided_writes(tmp_path):
     assert row['max_relative_divergence'] < 3e-7
     assert row['max_thermal_invariant_error'] < 3e-7
     assert row['padding_unchanged'] and row['zero_dissipation_unchanged']
+    assert row['lts_global_halo_words_equal'] and row['lts_cell_budget_pass']
 
 
 def test_actual_pattern_snapshot_resume_and_cadence_on_host(tmp_path, monkeypatch):
@@ -417,16 +418,17 @@ def test_forcing_layout_accepts_padded_and_reversed_float32_fields():
             _field_strides(invalid,3,4,'test')
 
 
-def test_partition_and_multiclass_controls_name_the_unimplemented_forcing_before_cuda():
+def test_partition_refuses_and_one_card_multiclass_admits_global_forcing_before_cuda():
     from hexcore.drivers import samehost_forecast_v841 as samehost
     from hexcore.drivers import fullstep_lts_forecast_v841 as lts
     config = StochasticConfig(sppt=True, skeb=True).json()
     request = SimpleNamespace(stochastic=config)
     with pytest.raises(ValueError, match='halo-aware streamfunction curl'):
         samehost.admit_request(request, {}, {'devices': (0, 1)}, SimpleNamespace())
-    with pytest.raises(ValueError, match='shared spectral clock'):
-        lts._refuse_unsupported(host={'stochastic': config}, cycling=None,
-                               park_physics_tier=False, local_timestep_classing_path=None)
+    lts._refuse_unsupported(host={'stochastic': config, 'config': SimpleNamespace()}, cycling=None,
+                           park_physics_tier=False, local_timestep_classing_path=None)
+    with pytest.raises(ValueError, match='degree'):
+        lts.require_stochastic_support({'sppt': True, 'degree': 0})
 
 
 @pytest.mark.parametrize('value', [dict(time_s=0), dict(length_m=float('nan')),

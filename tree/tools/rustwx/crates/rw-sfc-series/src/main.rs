@@ -259,6 +259,7 @@ fn acquire(
     d: NaiveDateTime,
     path: &Path,
     staged: Option<&Path>,
+    zarr_engine: Option<&str>,
 ) -> Result<Value> {
     if let Some(file) = staged
         .map(|p| p.join(path.file_name().unwrap()))
@@ -267,6 +268,33 @@ fn acquire(
         let bytes = fs::read(&file)?;
         fs::write(path, &bytes)?;
         return Ok(json!({"staged":file,"bytes":bytes.len(),"sha256":digest(&bytes)}));
+    }
+    if product["transport"] == "zarr" {
+        let engine = zarr_engine.ok_or("zarr transport requires --zarr-engine")?;
+        let mut request = product["request"].clone();
+        request["times"] = json!([d.format("%Y-%m-%dT%H:%M:%SZ").to_string()]);
+        let request_bytes = serde_json::to_vec(&request)?;
+        let request_path = path.with_extension("request.json");
+        fs::write(&request_path, &request_bytes)?;
+        let output = Command::new(engine)
+            .arg("extract")
+            .arg(&request_path)
+            .arg(path)
+            .env("GPUWM_RW_ZARR_WORKERS", "3")
+            .output()?;
+        let log = path.with_extension("zarr.log");
+        fs::write(&log, [&output.stdout[..], &output.stderr[..]].concat())?;
+        if !output.status.success() {
+            return Err(format!("native Zarr extraction failed: {}", log.display()).into());
+        }
+        let native: Value = serde_json::from_slice(&output.stdout)?;
+        if native["schema"] != "arwen.regular-forcing.v1" {
+            return Err("unexpected native Zarr schema".into());
+        }
+        let bytes = fs::read(path)?;
+        return Ok(json!({"transport":"zarr", "store":request["store"],
+            "request_sha256":digest(&request_bytes), "engine_sha256":digest(&fs::read(engine)?),
+            "bytes":bytes.len(), "sha256":digest(&bytes)}));
     }
     if product["transport"] == "cds" {
         let (bytes, provenance) = cds(client, product, d)?;
@@ -413,7 +441,9 @@ fn run() -> Result<()> {
         return intermediate::run(argv[1..].to_vec()).map_err(Into::into);
     }
     if argv == ["--abi"] {
-        println!("rw-sfc-series/v1 native-netcdf xtime sst xice snowh provenance forecast-cycle");
+        println!(
+            "rw-sfc-series/v1 native-netcdf xtime sst xice snowh provenance forecast-cycle regular-netcdf zarr"
+        );
         return Ok(());
     }
     if argv == ["--help"] {
@@ -438,6 +468,7 @@ fn run() -> Result<()> {
         "--threads",
         "--interval-hours",
         "--staged",
+        "--zarr-engine",
         "--forecast-cycle",
     ];
     let mut seen = std::collections::BTreeSet::new();
@@ -486,10 +517,17 @@ fn run() -> Result<()> {
                     .is_some_and(|a| a.iter().any(|v| v == source))
         })
         .ok_or("source not in table")?;
-    let forecast_cycle = args.get("--forecast-cycle").map(|text| date(text)).transpose()?;
+    let forecast_cycle = args
+        .get("--forecast-cycle")
+        .map(|text| date(text))
+        .transpose()?;
     let series = if forecast_cycle.is_some() {
-        row["surface_series"].get("forecast").ok_or("source has no surface forecast row")?
-    } else { &row["surface_series"] };
+        row["surface_series"]
+            .get("forecast")
+            .ok_or("source has no surface forecast row")?
+    } else {
+        &row["surface_series"]
+    };
     let decode = series.get("decode").unwrap_or(&row["decode"]);
     let interval: i64 = args
         .get("--interval-hours")
@@ -507,7 +545,12 @@ fn run() -> Result<()> {
     let start = date(required("--cycle")?)?;
     if let Some(cycle) = forecast_cycle {
         let last_lead = (start-cycle).num_hours() + hours;
-        if cycle > start || last_lead > series["max_hours"].as_i64().ok_or("surface forecast maximum lead")? {
+        if cycle > start
+            || last_lead
+                > series["max_hours"]
+                    .as_i64()
+                    .ok_or("surface forecast maximum lead")?
+        {
             return Err("surface forecast does not cover the requested window".into());
         }
     }
@@ -560,7 +603,7 @@ fn run() -> Result<()> {
                 let prov=if let Some(file)=staged_file.filter(|p|p.is_file()) {
                     let bytes=fs::read(&file)?;fs::write(&path,&bytes)?;
                     json!({"staged":file,"bytes":bytes.len(),"sha256":digest(&bytes)})
-                } else {acquire(&client,product,*d,&path,None)?};
+                } else {acquire(&client,product,*d,&path,None,args.get("--zarr-engine").copied())?};
                 provenance.push(prov);files.push(path);
             }
             let source_cycle = forecast_cycle.unwrap_or(*d);
@@ -573,11 +616,18 @@ fn run() -> Result<()> {
         let decode_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(decode_workers)
             .build()?;
+        let regular = decode["format"] == "regular-netcdf";
         let decoded = decode_pool.install(|| {
             plans
                 .par_iter()
                 .enumerate()
                 .map(|(i, (d, files, prov))| -> Result<_> {
+                    if regular {
+                        if files.len() != 1 {
+                            return Err("regular NetCDF needs one product per record".into());
+                        }
+                        return Ok((*d, files[0].clone(), prov.clone()));
+                    }
                     let met = scratch.join(format!("SFC:{i}"));
                     let log = scratch.join(format!("decode-{i}.log"));
                     let vtable = Path::new(required("--vtable-root")?)
@@ -628,7 +678,14 @@ fn run() -> Result<()> {
             let before = Instant::now();
             let fields = batch
                 .par_iter()
-                .map(|(_, path, _)| remap::remap(path, &lat, &lon, &land).map_err(Into::into))
+                .map(|(d, path, _)| -> Result<_> {
+                    if regular {
+                        let slabs = surface_met::read_regular_netcdf(path, *d, &decode["fields"])?;
+                        Ok(remap::remap_slabs(&slabs, &lat, &lon, &land)?)
+                    } else {
+                        Ok(remap::remap(path, &lat, &lon, &land)?)
+                    }
+                })
                 .collect::<Result<Vec<_>>>()?;
             remap_seconds += before.elapsed().as_secs_f64();
             let before = Instant::now();
@@ -738,6 +795,57 @@ mod tests {
         assert_eq!(decode_budget(24, 2), vec![12, 12]);
         assert_eq!(decode_budget(24, 121), vec![1; 24]);
         assert_eq!(decode_budget(5, 3), vec![2, 2, 1]);
+    }
+    #[test]
+    fn regular_netcdf_checks_clock_units_and_descending_latitude() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("surface-regular-{}.nc", std::process::id()));
+        let date = date("2019-10-01T00")?;
+        let dims = vec![
+            NcDim::fixed("time", 1),
+            NcDim::fixed("latitude", 2),
+            NcDim::fixed("longitude", 3),
+        ];
+        let specs = json!([{"name":"SST","field":"SST","units":"K"},
+            {"name":"LANDSEA","field":"LANDSEA","units":"1"}]);
+        let vars = vec![
+            NcVarDef::new("time", NcType::Double, vec![0]).with_attrs(vec![NcAttr::text(
+                "units",
+                "seconds since 1970-01-01 00:00:00",
+            )]),
+            NcVarDef::new("latitude", NcType::Double, vec![1])
+                .with_attrs(vec![NcAttr::text("units", "degrees_north")]),
+            NcVarDef::new("longitude", NcType::Double, vec![2])
+                .with_attrs(vec![NcAttr::text("units", "degrees_east")]),
+            NcVarDef::new("SST", NcType::Double, vec![0, 1, 2])
+                .with_attrs(vec![NcAttr::text("units", "K")]),
+            NcVarDef::new("LANDSEA", NcType::Double, vec![0, 1, 2])
+                .with_attrs(vec![NcAttr::text("units", "1")]),
+        ];
+        let mut w = NcClassicWriter::create(&path, NcFormat::Data64, dims, vec![], vars, 0)?;
+        w.put(
+            "time",
+            NcData::Doubles(&[date.and_utc().timestamp() as f64]),
+        )?;
+        w.put("latitude", NcData::Doubles(&[90., -90.]))?;
+        w.put("longitude", NcData::Doubles(&[-0.25, 119.75, 239.75]))?;
+        w.put(
+            "SST",
+            NcData::Doubles(&[280., 281., 282., 283., f64::NAN, 285.]),
+        )?;
+        w.put("LANDSEA", NcData::Doubles(&[0., 0.49, 0.5, 1., 0., 0.]))?;
+        w.finish()?;
+        let slabs = surface_met::read_regular_netcdf(&path, date, &specs)?;
+        assert_eq!(slabs[0].met.delta_lat, -180.);
+        assert_eq!(slabs[0].met.values[4], -1e30);
+        assert_eq!(slabs[1].met.values, vec![0., 0., 1., 1., 0., 0.]);
+        assert!(
+            surface_met::read_regular_netcdf(&path, date + Duration::hours(6), &specs).is_err()
+        );
+        let mut wrong = specs.clone();
+        wrong[0]["units"] = json!("C");
+        assert!(surface_met::read_regular_netcdf(&path, date, &wrong).is_err());
+        fs::remove_file(path)?;
+        Ok(())
     }
     #[test]
     fn record_round_trip() -> Result<()> {

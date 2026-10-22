@@ -95,6 +95,17 @@ def test_resident_history_keeps_boundary_guard_and_public_restart(monkeypatch):
         diagnostic_export(seam, ("q2",), resident=True)
 
 
+def test_engine_held_olr_reaches_resident_history(monkeypatch):
+    seam = Seam()
+    seam.arrays['diag/olr'] = np.full((1, 3), 240., dtype=np.float32)
+    monkeypatch.delenv('GPUWM_HEX_SELECTIVE_DIAGNOSTICS', raising=False)
+    payload, inventory = diagnostic_export(seam, ('q2', 'olr'), resident=True)
+    assert set(payload['arrays']) == {'fields/q2', 'diag/olr'}
+    assert payload['arrays']['diag/olr'] is seam.arrays['diag/olr']
+    assert inventory == tuple(seam.arrays)
+    assert not seam.copies
+
+
 @pytest.mark.parametrize("failure", [None, "before", "after"])
 def test_complete_export_queues_all_fields_and_drains_on_refusal(monkeypatch, failure):
     from hexcore import snapshot_transfer

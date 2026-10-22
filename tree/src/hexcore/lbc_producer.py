@@ -107,3 +107,90 @@ def run_stream(arguments, engine):
         atomic_json(output / "lbc-failed.json", {"error": str(error)})
         raise
     return 0
+
+
+def source_endpoint_commands(*, source, cycle, hours, out_dir, staged=(), member=None, table=None):
+    """Plan source-table endpoints, including the first endpoint beyond the run."""
+    import math
+    from .init_sources import load_table, resolve_source, Cycle, plan_products
+    from .errors import MpasPortError
+    table = load_table(table)
+    row = resolve_source(table, source)
+    if not math.isfinite(hours) or hours <= 0:
+        raise MpasPortError("limited-area hours must be finite and positive")
+    cadence = row.get("forecast", {}).get("interval_hours", 1)
+    count = math.ceil(hours / cadence)
+    start = Cycle.parse(cycle)
+    commands = []
+    for index in range(count + 1):
+        lead = index * cadence
+        source_cycle = start if row.get("forecast") else Cycle(start.when + timedelta(hours=lead))
+        source_lead = lead if row.get("forecast") else 0
+        # Validate cadence, member, and product templates before any transfer.
+        plan_products(row, source_cycle, member, source_lead)
+        argv = ["init-source", "--source", row["id"], "--cycle", source_cycle.when.strftime("%Y-%m-%dT%H"),
+                "--lead-hours", str(source_lead), "--stop-after", "decode",
+                "--out-dir", str(Path(out_dir) / f"endpoint-{lead:04d}")]
+        if table.get("_path"):
+            argv += ["--table", table["_path"]]
+        if member is not None:
+            argv += ["--member", str(member)]
+        for path in staged:
+            argv += ["--staged", str(path)]
+        commands.append({"valid_time": (start.when + timedelta(hours=lead)).strftime(FORMAT), "argv": argv})
+    return commands
+
+
+def produce_source_endpoints(commands, met_dir, *, workers=2, runner=None):
+    """Acquire/decode endpoints concurrently; only Rust touches field data."""
+    from concurrent.futures import ThreadPoolExecutor
+    from .errors import MpasPortError
+    from .init_sources import load_table
+    if workers < 1:
+        raise MpasPortError("boundary endpoint workers must be positive")
+    if runner is None:
+        from .cli import main
+        runner = main
+    met_dir = Path(met_dir)
+    met_dir.mkdir(parents=True, exist_ok=True)
+    def produce(item):
+        argv = item["argv"]
+        root = Path(argv[argv.index("--out-dir") + 1])
+        receipt = root / "init-source-receipt.json"
+        data = None
+        if receipt.is_file():
+            candidate = json.loads(receipt.read_text())
+            expected_cycle = argv[argv.index("--cycle") + 1].replace("T", "_") + ":00:00"
+            expected_member = int(argv[argv.index("--member") + 1]) if "--member" in argv else None
+            expected_lead = int(argv[argv.index("--lead-hours") + 1])
+            expected_table = load_table(Path(argv[argv.index("--table") + 1]) if "--table" in argv else None)
+            met = Path(candidate.get("decode", {}).get("met", ""))
+            if (candidate.get("table", {}).get("sha256") == expected_table["_sha256"]
+                    and candidate.get("source") == argv[argv.index("--source") + 1]
+                    and candidate.get("source_cycle") == expected_cycle
+                    and candidate.get("lead_hours") == expected_lead
+                    and candidate.get("member") == expected_member
+                    and met.is_file() and sha256(met) == candidate["decode"].get("met_sha256")):
+                data = candidate
+        if data is None:
+            rc = runner(argv)
+            if rc:
+                raise MpasPortError(f"boundary source endpoint {item['valid_time']} exited {rc}")
+            data = json.loads(receipt.read_text())
+        if data["valid_time"] != item["valid_time"]:
+            raise MpasPortError(f"boundary endpoint clock differs: {receipt}")
+        source = Path(data["decode"]["met"])
+        if sha256(source) != data["decode"]["met_sha256"]:
+            raise MpasPortError(f"boundary intermediate digest differs: {source}")
+        dest = met_dir / ("MET:" + item["valid_time"][:13])
+        if dest.is_symlink():
+            dest.unlink()
+        elif dest.exists():
+            raise MpasPortError(f"boundary destination already exists: {dest}")
+        dest.symlink_to(source)
+        return {"valid_time": item["valid_time"], "receipt": str(receipt), "met": str(dest)}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        result = list(pool.map(produce, commands))
+    atomic_json(met_dir / "source-endpoints.json", {"schema": "gpuwm-hex.source-endpoints/v1",
+                "workers": workers, "endpoints": result})
+    return result

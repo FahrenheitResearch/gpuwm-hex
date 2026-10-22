@@ -1,0 +1,8 @@
+{
+  "schema": "gpuwm-hex.moving-ensemble-roster/v1",
+  "description": "Equal-weight analysis branches with GPU SPPT/SKEB and two microphysics choices.",
+  "physics": [
+    {"id": "wsm6", "forecast_flags": ["--physics", "config_microp_scheme=mp_wsm6"]},
+    {"id": "thompson", "forecast_flags": ["--physics", "config_microp_scheme=mp_thompson"]}
+  ]
+}

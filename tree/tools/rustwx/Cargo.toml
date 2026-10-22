@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rw-surface"]
+members = ["crates/rw-surface", "crates/rw-s2s"]
 exclude = ["crates/rw-sfc-series"]
 resolver = "2"
 

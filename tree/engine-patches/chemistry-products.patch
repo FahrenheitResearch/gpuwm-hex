@@ -1,0 +1,139 @@
+--- a/tools/rustwx/crates/rw-mpas/src/history.rs
++++ b/tools/rustwx/crates/rw-mpas/src/history.rs
+@@ -7,6 +7,16 @@
+ use crate::fieldmap::{FIELD_MAP, FieldMapping, FieldSource, native_history_name};
+ use crate::weights::MeshCoordinates;
+ use rw_store::netcdf_classic::{NcAttr, NcAttrValue};
++
++/// Aerosol products have one metadata vocabulary for any species name.
++/// No chemistry mass is inferred from meteorological steering fields.
++pub fn chemistry_product_units(name: &str) -> Option<&'static str> {
++    if name == "aod550" || name.ends_with("_aod550") { Some("1") }
++    else if name.ends_with("_surface_concentration") { Some("ug m-3") }
++    else if ["_column_mass", "_dry_deposition", "_settled_mass"].iter().any(|s| name.ends_with(s)) {
++        Some("kg m-2")
++    } else { None }
++}
+ 
+ /// Physics identity is copied only when the native history actually declares it.
+ /// A renderer conversion cannot infer a microphysics scheme from field names.
+@@ -17,6 +27,7 @@
+     "WOOF_PHYSICS_BACKEND",
+     "WOOF_SCALAR_NAMES",
+     "RADAR_MIXING_RATIO_BASIS",
++    "CHEMISTRY",
+     "MORR_RIMED_ICE",
+     "morr_rimed_ice",
+ ];
+@@ -694,6 +705,27 @@
+             (_, None) => absent.push(wrf_name.to_string()),
+         }
+     }
++    // Header admission is serial; independent chemistry fields are read in parallel.
++    let chem_names: Vec<String> = file.variables()?.iter()
++        .filter_map(|v| chemistry_product_units(v.name()).map(|_| v.name().to_string()))
++        .collect();
++    let chem: Vec<MpasResult<(String, (Vec<f32>, usize))>> = {
++        use rayon::prelude::*;
++        chem_names.par_iter().map(|name| {
++            let var = file.variable(name).expect("header-selected chemistry field");
++            let want = chemistry_product_units(name).expect("selected product");
++            if var.attribute("units").and_then(|a| a.as_string()) != Some(want) {
++                return Err(MpasError::Refusal(format!("chemistry field {name} must declare units {want}")));
++            }
++            let values = read_cell_field(&file, name, n_cells)?
++                .ok_or_else(|| MpasError::Refusal(format!("chemistry field {name} is absent")))?;
++            if values.1 != 1 || values.0.iter().any(|v| !v.is_finite() || *v < 0.) {
++                return Err(MpasError::Refusal(format!("chemistry field {name} must be finite nonnegative surface mass, concentration or AOD")));
++            }
++            Ok((name.clone(), values))
++        }).collect()
++    };
++    for result in chem { let (name, value) = result?; fields.insert(name, value); }
+     drop(diag);
+     drop(file);
+ 
+@@ -1165,3 +1197,18 @@
+         assert_eq!(next_month.seconds_since(&origin), 22 * 86_400);
+     }
+ }
++
++
++#[cfg(test)]
++mod chemistry_product_tests {
++    use super::chemistry_product_units;
++    #[test]
++    fn arbitrary_species_product_metadata() {
++        assert_eq!(chemistry_product_units("custom_bin_17_column_mass"), Some("kg m-2"));
++        assert_eq!(chemistry_product_units("smoke_surface_concentration"), Some("ug m-3"));
++        assert_eq!(chemistry_product_units("sea_salt_3_settled_mass"), Some("kg m-2"));
++        assert_eq!(chemistry_product_units("dust_1_aod550"), Some("1"));
++        assert_eq!(chemistry_product_units("aod550"), Some("1"));
++        assert_eq!(chemistry_product_units("theta"), None);
++    }
++}
+--- a/tools/rustwx/crates/rw-mpas/src/convert.rs
++++ b/tools/rustwx/crates/rw-mpas/src/convert.rs
+@@ -709,8 +709,8 @@
+     // Resolved once so the writer gets the whole schema up front, then walked
+     // a second time to push the data. `plan` holds what each variable is; the
+     // values are produced on the second pass so no frame is held twice.
+-    struct Planned {
+-        name: &'static str,
++    struct Planned<'a> {
++        name: &'a str,
+         dims: Vec<usize>,
+         mapping: Option<usize>,
+         stagger: &'static str,
+@@ -775,6 +775,16 @@
+             units: mapping.units,
+             description: mapping.description,
+         });
++    }
++
++    for name in frame.fields.keys() {
++        if let Some(units) = crate::history::chemistry_product_units(name) {
++            plan.push(Planned {
++                name, dims: vec![dimid("Time"), dimid("south_north"), dimid("west_east")],
++                mapping: None, stagger: "", rank_is_3d: false, units,
++                description: "Prognostic aerosol product; species and optical assumptions in source history",
++            });
++        }
+     }
+ 
+     let mut vars: Vec<NcVarDef> = vec![
+@@ -982,7 +992,21 @@
+         }
+ 
+         for planned in &plan {
+-            let mapping = &FIELD_MAP[planned.mapping.expect("every planned entry maps")];
++            if planned.mapping.is_none() {
++                let (source, levels) = &frame.fields[planned.name];
++                if *levels != 1 { return Err(MpasError::Refusal(format!("{} is not a surface product", planned.name))); }
++                let values = match composite {
++                    Some(gather) => gather.gather(planned.name, 1, ny * nx)?.0,
++                    None => match remap {
++                        Some(r) => r.gather(remap_class(planned.name), source, 1)?,
++                        None => weights.gather(source, 1)?,
++                    },
++                };
++                writer.put_record(planned.name, 0, NcData::Floats(&values))?;
++                written.push(planned.name.to_string());
++                continue;
++            }
++            let mapping = &FIELD_MAP[planned.mapping.expect("standard mapped entry")];
+             let levels = expected_levels(mapping, frame).ok_or_else(|| {
+                 MpasError::Refusal(format!(
+                     "{} has no level count on this frame",
+--- a/tools/rustwx/crates/rw-mpas/src/fieldmap.rs
++++ b/tools/rustwx/crates/rw-mpas/src/fieldmap.rs
+@@ -194,7 +194,8 @@
+ pub static NEAREST_FIELDS: &[&str] = &["LANDMASK", "LU_INDEX", "TSLB", "SMOIS"];
+ 
+ pub fn remap_class(wrf_name: &str) -> RemapClass {
+-    if CONSERVATIVE_FIELDS.contains(&wrf_name) {
++    if CONSERVATIVE_FIELDS.contains(&wrf_name)
++        || ["_column_mass", "_dry_deposition", "_settled_mass"].iter().any(|s| wrf_name.ends_with(s)) {
+         RemapClass::Conservative
+     } else if NEAREST_FIELDS.contains(&wrf_name) {
+         RemapClass::Nearest

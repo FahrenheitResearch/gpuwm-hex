@@ -6,7 +6,9 @@ import os
 import subprocess
 from pathlib import Path
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+import copy
+import math
 
 from .errors import MpasPortError
 
@@ -14,6 +16,7 @@ DATA = Path(__file__).with_name("data")
 TABLE = DATA / "countries.v1.json"
 SCHEMA = "gpuwm-hex.countries/v1"
 STAGES = ("prepare", "forecast", "products", "score")
+REGIONS = DATA / "regions.v1.json"
 
 
 def load_row(name, table=TABLE):
@@ -35,18 +38,169 @@ def load_row(name, table=TABLE):
     return row, data["product_sets"][row["product_set"]], table.parent
 
 
+
+def region_request(args):
+    """Geometry, views and resolution are table data; no event branching."""
+    region = getattr(args, "region", None)
+    point = getattr(args, "point", None)
+    polygon = getattr(args, "polygon", None)
+    if not (region or point or polygon):
+        return load_row(args.row, args.table)
+    table = REGIONS if args.table == TABLE else args.table
+    if region:
+        args.row = region
+        return load_row(region, table)
+    data = json.loads(Path(table).read_text())
+    if data.get("schema") != SCHEMA:
+        raise MpasPortError("region table schema differs; geometry defaults cannot be interpreted")
+    row = copy.deepcopy(data["defaults"])
+    if point:
+        try:
+            lat, lon = [float(v) for v in point.split(",")]
+        except (ValueError, TypeError) as error:
+            raise MpasPortError("point must be LAT,LON") from error
+        radius = getattr(args, "radius_km", None)
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180 and radius and math.isfinite(radius) and 0 < radius < 10000):
+            raise MpasPortError("point latitude/longitude or radius is outside the finite geographic range")
+        geometry = {"kind": "cap", "center_deg": [lat, lon], "radius_km": radius}
+        half = math.degrees(radius / 6371.229)
+        south, north = max(-90, lat-half), min(90, lat+half)
+        longitude_half = (180.0 if south == -90 or north == 90 else
+                          math.degrees(math.asin(min(1.0, math.sin(math.radians(half)) / math.cos(math.radians(lat))))))
+        bounds = {"west": lon-longitude_half, "east": lon+longitude_half,
+                  "south": south, "north": north}
+        view = [lat, lon, radius*2, radius*2]
+    else:
+        geometry = json.loads(polygon.read_text())
+        points = geometry.get("vertices_deg", [])
+        if geometry.get("kind") != "polygon" or len(points) < 3 or any(len(p) != 2 or not (-90 <= p[0] <= 90 and -180 <= p[1] <= 180) for p in points):
+            raise MpasPortError("polygon needs at least three finite LAT,LON vertices")
+        lats, lons = zip(*points)
+        # Remove the largest empty longitude arc. A polygon around the date
+        # line must not select a view centred on the opposite hemisphere.
+        circular = sorted(set(value % 360 for value in lons))
+        gaps = [(circular[(i+1) % len(circular)] + (360 if i == len(circular)-1 else 0) - value, i)
+                for i, value in enumerate(circular)]
+        gap, index = max(gaps)
+        west = circular[(index+1) % len(circular)]
+        east = west + 360-gap
+        lat, lon = (min(lats)+max(lats))/2, ((west+east)/2+180) % 360-180
+        west += lon-(west+east)/2
+        east = west+360-gap
+        bounds = dict(west=west, east=east, south=min(lats), north=max(lats))
+        view = [lat, lon, max(100, (east-west)*111*math.cos(math.radians(lat))), max(100, (max(lats)-min(lats))*111)]
+    import hashlib
+    identity = "region-" + hashlib.sha256(json.dumps(geometry, sort_keys=True).encode()).hexdigest()[:12]
+    row.update(id=identity, geometry=geometry)
+    row["mesh"].update(id=identity, point_deg=[lat, lon])
+    row["scorecard"]["region"] = {**bounds, "step_degrees": 0.25}
+    args.row = identity
+    products = ["--no-global", "--no-mesh-view", "--region", "region=region:" + ",".join(map(str, view)), "--jobs", "2", "--frame-jobs", "1"]
+    return row, products, Path(table).parent
+
+
+def region_specification(row):
+    """Use the generator's admitted halving ladder for table resolution."""
+    from .mesh_point import ladder_spec, ladder_rungs
+    mesh = row["mesh"]
+    if row["geometry"]["kind"] == "cap":
+        return ladder_spec(tuple(row["geometry"]["center_deg"]), fine_dx_m=mesh["fine_dx_m"],
+            radius_km=row["geometry"]["radius_km"], background_km=mesh["background_km"], name=row["id"])
+    ladder_rungs(mesh["background_km"], mesh["fine_dx_m"])
+    return {"name": row["id"], "background_km": mesh["background_km"],
+        "regions": [{"shape": row["geometry"], "spacing_km": mesh["fine_dx_m"]/1000,
+                     "transition_km": mesh["transition_km"]}]}
+
+
+def _prepare_region(args, value, status):
+    from .cli import main
+    from . import mesh_rows
+    from .mesh_point import admit_pair
+    from .engines import resolve, ENGINES
+    from .prep_store import run_or_fetch
+    from .lbc_producer import produce_source_endpoints
+    if args.endpoint_workers < 1:
+        raise MpasPortError("endpoint workers must be positive")
+    root = args.work_dir.resolve()
+    parent = root / "parent"
+    parent.mkdir(exist_ok=True)
+    from .lbc_producer import atomic_json
+    timings = {"schema": "gpuwm-hex.region-preparation/v1", "stages": {},
+        "parallelism": {"endpoint_workers": args.endpoint_workers,
+                        "rayon_threads": os.environ.get("RAYON_NUM_THREADS", "engine default")}}
+    def measured(name, action):
+        started = time.monotonic()
+        status.note(name)
+        stage = timings["stages"][name] = {}
+        try:
+            result = action()
+            if isinstance(result, int):
+                stage["returncode"] = result
+            return result
+        except Exception as error:
+            stage["error"] = str(error)
+            raise
+        finally:
+            stage["seconds"] = time.monotonic() - started
+            atomic_json(root / "region-preparation-receipt.json", timings)
+    row, mesh = value["row"], value["row"]["mesh"]
+    spec = Path(value["paths"]["spec"])
+    specification = region_specification(row)
+    spec.write_text(json.dumps(specification))
+    (root / "region.json").write_text(json.dumps(row["geometry"]))
+    def engine(name):
+        return str(resolve(next(e for e in ENGINES if e.name == name)))
+    grid, static = parent / "mesh.grid.nc", parent / "mesh.static.nc"
+    # A file at the destination is not evidence for this request. The store
+    # keys the current geometry/engine and grid/geography before reusing bytes.
+    measured("mesh", lambda: run_or_fetch([engine("rw_mpas_mesh"), "--spec", str(spec), "--out", str(grid),
+                      "--receipt", str(parent / "mesh-receipt.json"), "--clobber"]))
+    measured("static", lambda: run_or_fetch([engine("rw_mpas_static"), "--grid", str(grid),
+                      *(["--geog", str(args.geog)] if args.geog else []), "--out", str(static),
+                      "--receipt", str(parent / "static-receipt.json"), "--clobber"]))
+    status.note("initializing the global parent from the selected source")
+    rc = measured("init", lambda: main(value["commands"]["init"]))
+    if rc:
+        return rc
+    rc = measured("cull", lambda: main(value["commands"]["cull"]))
+    if rc:
+        return rc
+    admission = measured("parent-admission", lambda: admit_pair(grid, static, fine_dx_m=mesh["fine_dx_m"]))
+    registered = mesh_rows.describe_generated(name=mesh["id"] + "-parent", grid=grid, static=static,
+        spec_path=spec, generator_receipt=parent / "mesh-receipt.json", static_receipt=parent / "static-receipt.json",
+        point_deg=tuple(mesh["point_deg"]), fine_dx_m=mesh["fine_dx_m"], core_radius_km=mesh["core_radius_km"],
+        background_km=mesh["background_km"], dt_seconds=mesh["dt_seconds"], n_levels=mesh["n_levels"], admission=admission)
+    cut_admission = measured("regional-admission", lambda: admit_pair(root / "mesh.grid.nc", root / "mesh.static.nc", fine_dx_m=mesh["fine_dx_m"]))
+    cut = mesh_rows.describe_cull(name=mesh["id"], parent=registered, grid=root / "mesh.grid.nc", static=root / "mesh.static.nc",
+        cull_receipt=root / "mesh.cull.json", cull_region=row["geometry"], cull_pad_scale=1.0,
+        lbc_source=f"{row['init_source']} source table endpoints in {root / 'lbc'}", admission=cut_admission,
+        dt_seconds=mesh["dt_seconds"])
+    mesh_rows.write_rows(root / "mesh-rows.json", [registered, cut])
+    measured("boundary-endpoints", lambda: produce_source_endpoints(
+        value["boundary_endpoints"], root / "boundary-met", workers=args.endpoint_workers))
+    return measured("lbc", lambda: main(value["commands"]["lbc"]))
+
 def plan(args):
     try:
         datetime.strptime(args.cycle, "%Y-%m-%dT%H")
     except ValueError as error:
         raise MpasPortError("country cycle must be YYYY-MM-DDTHH; it determines the init's valid time") from error
-    row, products, data_dir = load_row(args.row, args.table)
+    row, products, data_dir = region_request(args)
+    from .init_sources import load_table, resolve_source
+    if "geometry" in row:
+        region_specification(row)  # Reject invalid table resolution before acquisition.
+        if args.grid or args.static or args.init:
+            raise MpasPortError("region geometry prepares its own parent and cull; grid/static/init overrides cannot identify that chain")
+    source_table = load_table(getattr(args, "source_table", None))
+    source = resolve_source(source_table, getattr(args, "source", None) or row["init_source"])
+    row = copy.deepcopy(row)
+    row["init_source"] = source["id"]
     root = args.work_dir.resolve()
     mesh = row["mesh"]
     grid = args.grid or root / "mesh.grid.nc"
     static = args.static or root / "mesh.static.nc"
     init = args.init or root / "init" / "init.nc"
-    spec = (data_dir / mesh["spec"]).resolve()
+    spec = (root / "region-mesh.spec.json" if "geometry" in row else (data_dir / mesh["spec"]).resolve())
     vertical = (data_dir / row["vertical_spec"]).resolve()
     start = args.cycle.replace("T", "_") + ":00:00"
     common = ["--grid", str(grid), "--static", str(static)]
@@ -54,6 +208,10 @@ def plan(args):
                       "--out-dir", str(root / "init"), *common, "--vertical-spec", str(vertical)]
     for staged in args.staged:
         initialization += ["--staged", str(staged)]
+    if getattr(args, "source_table", None):
+        initialization += ["--table", str(args.source_table)]
+    if getattr(args, "member", None) is not None:
+        initialization += ["--member", str(args.member)]
     forecast = ["forecast", "--mesh", mesh["id"], *common, "--init", str(init),
                 "--start-time", start, "--init-source", f"{row['init_source']} {args.cycle}; country row {args.row}",
                 "--hours", str(args.hours), "--dt", str(mesh["dt_seconds"]),
@@ -68,20 +226,53 @@ def plan(args):
         if getattr(args, key, None) is not None:
             forecast += ["--" + key.replace("_", "-"), str(getattr(args, key))]
     product_argv = ["products", str(root / "forecast"), "--out", str(root / "products"), *products]
+    # Explicit regional views do not discover a refined-core centre in the
+    # products door. Bind point products to this row instead of global cities.
+    if "--points" not in products and "--no-points" not in products:
+        points = row.get("product_points", [{"name": row["id"], "point_deg": mesh["point_deg"]}])
+        product_argv += ["--points", ";".join(
+            f"{point['name']}@{point['point_deg'][0]},{point['point_deg'][1]}" for point in points)]
     config = dict(row["scorecard"])
     if args.observation_config:
         config.update(json.loads(args.observation_config.read_text(encoding="utf-8")))
     # Region belongs to the country row; observation file metadata does not move it.
     config["region"] = row["scorecard"]["region"]
     score = ["score", str(root / "forecast"), "--config", str(root / "observation-scorecard.config.json")]
+    extra = {}
+    if "geometry" in row:
+        from .lbc_producer import source_endpoint_commands
+        endpoints = source_endpoint_commands(source=source["id"], cycle=args.cycle, hours=args.hours,
+            out_dir=root / "boundary-source", staged=args.staged, member=getattr(args, "member", None),
+            table=getattr(args, "source_table", None))
+        parent = root / "parent"
+        endpoints[0]["argv"][endpoints[0]["argv"].index("--out-dir") + 1] = str(parent / "init")
+        initialization[initialization.index("--grid") + 1] = str(parent / "mesh.grid.nc")
+        initialization[initialization.index("--static") + 1] = str(parent / "mesh.static.nc")
+        initialization[initialization.index("--out-dir") + 1] = str(parent / "init")
+        forecast += ["--lbc-dir", str(root / "lbc")]
+        cut = ["cull", "--parent-grid", str(parent / "mesh.grid.nc"), "--parent-static", str(parent / "mesh.static.nc"),
+               "--parent-init", str(parent / "init/init.nc"), "--region", str(root / "region.json"),
+               "--out-dir", str(root), "--name", "mesh", "--clobber"]
+        fg, switches = source["first_guess"], source_table["run_switches"]
+        boundary = ["lbc", "--grid", str(root / "mesh.init.nc"), "--met-dir", str(root / "boundary-met"),
+                    "--out-dir", str(root / "lbc"), "--start-time", start, "--stop-time", endpoints[-1]["valid_time"],
+                    "--nfglevels", str(fg["nfglevels"]), "--use-spechumd", fg["use_spechumd"],
+                    "--extrap-airtemp", switches["extrap_airtemp"], "--theta-adv-order", str(switches["theta_adv_order"]),
+                    "--coef-3rd-order", str(switches["coef_3rd_order"]), "--oned-underflow", switches["oned_underflow"]]
+        forecast[forecast.index("--init") + 1] = str(root / "mesh.init.nc")
+        init = root / "mesh.init.nc"
+        extra = {"cull": cut, "lbc": boundary}
     return {"schema": "gpuwm-hex.country-plan/v1", "row": row, "cycle": args.cycle,
             "paths": {"grid": str(grid), "static": str(static), "init": str(init), "spec": str(spec)},
-            "commands": {"init": initialization, "forecast": forecast, "products": product_argv, "score": score},
+            "commands": {"init": initialization, "forecast": forecast, "products": product_argv, "score": score, **extra},
+            **({"boundary_endpoints": endpoints} if "geometry" in row else {}),
             "scorecard": config}
 
 
 def _prepare(args, value, status):
     from .cli import main
+    if "geometry" in value["row"]:
+        return _prepare_region(args, value, status)
     root = args.work_dir.resolve()
     rows = root / "mesh-rows.json"
     from . import mesh_rows
@@ -126,7 +317,6 @@ def _prepare(args, value, status):
 
 
 def _run_stage(name, args, value, status):
-    from .cli import main
     if name == "prepare":
         return {"returncode": _prepare(args, value, status)}
     root = args.work_dir.resolve()
@@ -142,7 +332,9 @@ def _run_stage(name, args, value, status):
             print(json.dumps(joined), flush=True)
             return {**joined, "returncode": 0}
     status.note("gpuwm-hex " + " ".join(value["commands"][name]))
-    rc = int(main(value["commands"][name]))
+    # The forecast runs in its own process, so its device memory ends with it (cli.DEVICE_COMMANDS).
+    from . import cli
+    rc = cli.run_stage(value["commands"][name])
     if name == "score" and rc == 3:
         completed = completed_scorecard(root / "forecast", config)
         if completed is not None:
@@ -207,7 +399,16 @@ def run_country(args):
 
 def add_country_parser(commands):
     parser = commands.add_parser("country", help="compose operational doors from a country row")
-    parser.add_argument("--row", required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--row")
+    selection.add_argument("--region", help="registered limited-area row")
+    selection.add_argument("--point", help="LAT,LON for an arbitrary limited-area cap")
+    selection.add_argument("--polygon", type=Path, help="Shape polygon JSON, vertices in latitude,longitude order")
+    parser.add_argument("--radius-km", type=float)
+    parser.add_argument("--source", help="init-source row override, used for init and every boundary endpoint")
+    parser.add_argument("--source-table", type=Path)
+    parser.add_argument("--member", type=int)
+    parser.add_argument("--endpoint-workers", type=int, default=2)
     parser.add_argument("--table", type=Path, default=TABLE)
     parser.add_argument("--cycle", required=True, help="YYYY-MM-DDTHH, the init cycle")
     parser.add_argument("--work-dir", type=Path, required=True)

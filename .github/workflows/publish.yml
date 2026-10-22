@@ -2,8 +2,9 @@ name: publish
 
 # The publish half ci.yml deliberately left unwritten, written now that a cut
 # is authorised.  It is still not a standing pre-authorisation: the only
-# trigger that uploads is `release: published`, and publishing a GitHub
-# release is a human act performed deliberately on a specific tag.  A manual
+# trigger that uploads is `release: published` for a version tag (`v*`).
+# Pinned-asset releases skip every job.  Publishing a GitHub release is a
+# human act performed deliberately on a specific tag.  A manual
 # `workflow_dispatch` run builds and checks the artefacts exactly as a release
 # would and uploads nothing: it is the dry run before the tag.
 #
@@ -53,6 +54,10 @@ env:
 
 jobs:
   build:
+    # Skip asset releases before any checkout, build or artifact upload.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v'))
     runs-on: ubuntu-24.04
     container:
       # Pinned by digest (pulled 2026-10-14, image built 2026-10-09), so the
@@ -87,9 +92,17 @@ jobs:
           ref: ${{ steps.engine.outputs.tag }}
           persist-credentials: false
           path: engine-src
+          # gpuwm 2.9.4's rustwx crates embed files from outside tools/rustwx (include_str!/include_bytes!):
+          # rustwx-models reads gpuwm/authorities/rw-wps-archive-layouts.v1.json, rw-wrfbatch the hub-wind
+          # tables in gpuwm/data, static-fields the SFIRE authorities and tools/sfire_wrf471_oracle debug
+          # fixtures. Without them the scorer build stops at "couldn't read .../gpuwm/authorities/..."
+          # (measured on the 0.4.2 build against the 2.9.4 engine, 2026-10-22).
           sparse-checkout: |
             tools/rustwx
             tools/grib1_bridge/vendor
+            gpuwm/authorities
+            gpuwm/data
+            tools/sfire_wrf471_oracle/fixtures/debug
 
       - name: a static classic-only netCDF-C for the template copier
         # gpuwm-hex-netcdf-copy (the init door's CDF-5 vertical template
@@ -153,6 +166,9 @@ jobs:
         working-directory: hex/tree
         run: |
           bash tools/build_netcdf4_static.sh /opt/netcdf4-static
+          # The workspace also holds rw-s2s (chrono, which no earlier step caches); an offline build resolves
+          # every member, so fetch this workspace's locked crates first ("no matching package named chrono").
+          cargo fetch --locked --manifest-path tools/rustwx/Cargo.toml
           RUSTFLAGS="-L native=/opt/netcdf4-static/lib" LIBRARY_PATH=/opt/netcdf4-static/lib \
             cargo build --release --locked --offline --manifest-path tools/rustwx/Cargo.toml \
               -p rw-surface --features static-netcdf
@@ -253,8 +269,8 @@ jobs:
 
   publish:
     needs: build
-    # A release uploads.  A manual run stops after the checks above.
-    if: github.event_name == 'release'
+    # Only a version release uploads.  A manual run stops after the checks.
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-24.04
 
     # Both halves are required by the trusted-publisher registration:
@@ -314,7 +330,7 @@ jobs:
 
   release-assets:
     needs: [build, publish]
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write

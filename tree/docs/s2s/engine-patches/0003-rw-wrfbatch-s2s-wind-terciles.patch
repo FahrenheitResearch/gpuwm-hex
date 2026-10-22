@@ -1,0 +1,48 @@
+--- a/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
++++ b/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
+@@ -10,7 +10,7 @@
+ use rustwx_render::{ContourLayer, LegendControls, LegendMode, LevelDensity, RenderDensity, advisory};
+ use crate::{panel::{PanelRequest, layout_path, render_panel, safe_component}, scales};
+ 
+-pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\ts2s-energy-scales\tglobal-ensemble-projection\tRENDERED\tFAILED";
++pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\ts2s-energy-scales\tglobal-ensemble-projection\ts2s-wind-terciles\tRENDERED\tFAILED";
+ const CONTRACT: &str = "gpuwm-resident-ensemble-products.v1";
+ 
+ fn attr(file: &File, name: &str) -> Result<String, String> {
+@@ -38,6 +38,7 @@
+ // S2S window means and anomalies have declared units and fixed comparison
+ // scales. The generic 0..100 fallback would hide every height/MSLP mean.
+ fn s2s_scale(field: &str, kind: &str) -> Option<rustwx_render::ColorScale> {
++    if field.contains("_tercile_") { return Some(scales::probability_scale()); }
+     let anomaly = field.ends_with("_anomaly");
+     let base = field.strip_suffix("_anomaly").unwrap_or(field);
+     let (low, high, delta, spread) = match base {
+@@ -45,12 +46,14 @@
+         "precipitation_rate" | "freezing_rain_rate" => (0.0, 10.0, 5.0, 5.0),
+         "z500" => (4500.0, 6200.0, 300.0, 150.0),
+         "mslp" => (960.0, 1040.0, 20.0, 15.0),
++        "u925" | "v925" | "u850" | "v850" => (-30.0, 30.0, 20.0, 15.0),
++        "u200" | "v200" => (-80.0, 80.0, 40.0, 30.0),
+         _ => return None,
+     };
+     if kind == "spread" { return Some(scales::spread_scale(spread)); }
+-    if anomaly {
++    if anomaly || matches!(base, "u925" | "v925" | "u850" | "v850" | "u200" | "v200") {
+         use rustwx_render::difference::{difference_scale, DifferenceTable};
+-        return Some(rustwx_render::ColorScale::Discrete(difference_scale(DifferenceTable::builtin(), delta)));
++        return Some(rustwx_render::ColorScale::Discrete(difference_scale(DifferenceTable::builtin(), if anomaly { delta } else { high })));
+     }
+     if base == "temperature2" { return None; } // canonical operational temperature palette
+     let mut scale = scales::spread_scale(high - low);
+@@ -359,9 +362,10 @@
+             } else {
+                 (if units == "1" { scales::probability_scale() } else { scales::spread_scale(100.0) }, units.clone())
+             };
++            let title = file.variable(&mean_name).and_then(|v| v.attribute("long_name").and_then(|a| a.as_string()).map(str::to_string)).unwrap_or_else(|| field_title(&field).to_string());
+             let slug = format!("ens_{kind}_{}", safe_component(&field, "field"));
+             let target = plane(out, domain, &valid, roster_subtitles(members, &valid, source), &latitude, &longitude,
+-                ny, nx, slug, format!("Ensemble {kind} {} ({display_units})", field_title(&field)),
++                ny, nx, slug, format!("Ensemble {kind} {title} ({display_units})"),
+                 values, display_units, scale, vec![], true, width, height)?;
+             println!("RENDERED\t{}", target.display()); written.push(target);
+         }

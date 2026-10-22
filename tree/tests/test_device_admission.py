@@ -599,8 +599,12 @@ def test_the_door_forwards_its_own_requirement_into_the_driver_argv(
     grid = tmp_path / "g.nc"
     static = tmp_path / "s.nc"
     init = tmp_path / "i.nc"
-    for path in (grid, static, init):
+    for path in (grid, static):
         path.write_bytes(b"x")
+    from netCDF4 import Dataset
+    with Dataset(init, "w") as dataset:
+        dataset.createDimension("nVertLevels", 55)
+        dataset.createDimension("nVertLevelsP1", 56)
     checkout = tmp_path / "engine"
     checkout.mkdir()
     parser = argparse.ArgumentParser()
@@ -665,8 +669,12 @@ def test_a_samehost_supplied_row_is_pinned_before_the_driver_argv(
     monkeypatch.setattr(door, "read_card_profile", lambda: surface.REFERENCE_CARD)
     monkeypatch.setattr(door, "seam_pin_problem", lambda checkout: None)
     grid, static, init = (tmp_path / name for name in ("g.nc", "s.nc", "i.nc"))
-    for path in (grid, static, init):
+    for path in (grid, static):
         path.write_bytes(b"x")
+    from netCDF4 import Dataset
+    with Dataset(init, "w") as dataset:
+        dataset.createDimension("nVertLevels", 55)
+        dataset.createDimension("nVertLevelsP1", 56)
     checkout = tmp_path / "engine"
     checkout.mkdir()
     parser = argparse.ArgumentParser()

@@ -139,6 +139,7 @@ class MeshRow:
     cull_receipt: str | None = None
     cull_region: Mapping[str, Any] | None = None
     cull_pad_scale: float | None = None
+    resolution_spec: Mapping[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -172,12 +173,23 @@ class MeshRow:
         values = dict(raw)
         values["point_deg"] = tuple(float(v) for v in values["point_deg"])
         values["admission"] = MappingProxyType(dict(values.get("admission") or {}))
+        if values.get("resolution_spec") is not None:
+            values["resolution_spec"] = MappingProxyType(dict(values["resolution_spec"]))
         if values.get("cull_region") is not None:
             values["cull_region"] = MappingProxyType(dict(values["cull_region"]))
         return cls(**{name: values.get(name) for name in names})
 
     def notes(self) -> str:
         lat, lon = self.point_deg
+        if self.resolution_spec is not None:
+            return (
+                f"GENERATED-GLOBAL-VR: resolution spec SHA-256 {self.spec_sha256}; "
+                f"generator receipt {self.generator_receipt}; static receipt {self.static_receipt}. "
+                f"{len(self.resolution_spec.get('regions', []))} refinement regions, "
+                f"{self.background_km:g} km background, {self.fine_dx_m:g} m finest requested. "
+                "Grid and static bytes are pinned and admissions are measured at bind. "
+                "Generation is not an observation-skill qualification."
+            )
         if self.kind == ARCHIVED_GLOBAL_KIND:
             return (
                 f"ARCHIVED-GLOBAL: external mesh archive and preprocessing provenance "
@@ -675,3 +687,15 @@ __all__ = [
     "sha256_file",
     "write_rows",
 ]
+
+
+def describe_resolution_spec(*, spec: Mapping[str, Any], **kwargs: Any) -> MeshRow:
+    """Register an authored global spec without a hand registry row."""
+    from dataclasses import replace
+
+    if kwargs["admission"].get("regional"):
+        raise MeshRowRefusal("a global resolution spec produced a regional mesh")
+    row = describe_generated(**kwargs)
+    if row.kind != "generated-global":
+        raise MeshRowRefusal("a runnable global VR row requires the generated static")
+    return replace(row, resolution_spec=MappingProxyType(dict(spec)))

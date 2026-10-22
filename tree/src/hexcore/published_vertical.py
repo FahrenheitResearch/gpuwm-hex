@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 
 
-def materialize(source, grid, output, declarations, *, static=None):
+def materialize(source, grid, output, declarations, *, static=None, vertical_spec=None):
     from netCDF4 import Dataset
     import numpy as np
     from .init_door import _COMPATIBILITY_VARIABLES
@@ -15,12 +15,33 @@ def materialize(source, grid, output, declarations, *, static=None):
     from .preset_prepare import describe
 
     source, grid, output = Path(source), Path(grid), Path(output)
+    from .vertical_spec import VerticalSpec
+    spec = None if vertical_spec is None else VerticalSpec.from_file(vertical_spec)
+    binding = None if spec is None else {"sha256": spec.sha256(), "declaration": spec.to_mapping()}
     static = None if static is None else Path(static)
     derived_names = ('edgeNormalVectors', 'localVerticalUnitVectors',
                      'cellTangentPlane', 'coeffs_reconstruct')
     required = (*_COMPATIBILITY_VARIABLES, 'edgeNormalVectors',
                 'localVerticalUnitVectors', 'cellTangentPlane', 'coeffs_reconstruct')
     with Dataset(source) as invariant, Dataset(grid) as mesh:
+        levels = len(invariant.dimensions['nVertLevels'])
+        declared_levels = declarations.get('config_nvertlevels', levels)
+        if declared_levels != levels or (spec is not None and spec.n_vert_levels != levels):
+            raise ValueError('published vertical level count disagrees with the requested vertical spec; '
+                             'construct the grid with --vertical-spec instead')
+        if 'config_ztop' in declarations:
+            source_top = getattr(invariant, 'config_ztop', None)
+            if source_top is None or not np.isclose(source_top, declarations['config_ztop'], rtol=0, atol=.01):
+                raise ValueError('published vertical declarations disagree with the source config_ztop')
+        if spec is not None:
+            if len(invariant.dimensions['nVertLevelsP1']) != levels + 1:
+                raise ValueError('published vertical interface count must equal nVertLevels + 1')
+            source_top = getattr(invariant, 'config_ztop', None)
+            if source_top is None or not np.isclose(source_top, spec.ztop_m, rtol=0, atol=.01):
+                raise ValueError('published vertical top is missing or disagrees with the requested vertical spec; '
+                                 'construct the grid with --vertical-spec instead')
+            if declarations.get('config_ztop', spec.ztop_m) != spec.ztop_m:
+                raise ValueError('published vertical declarations disagree on config_ztop')
         missing = [name for name in required if name not in invariant.variables]
         if missing:
             raise ValueError(f"public invariant lacks the native vertical contract: {missing}")
@@ -61,6 +82,7 @@ def materialize(source, grid, output, declarations, *, static=None):
         if (held and held.get('schema') == 'gpuwm-hex.published-vertical/v2'
                 and held.get('static') == static_receipt
                 and held.get('geometry_engine') == geometry
+                and held.get('vertical_binding') == binding
                 and held['declarations'] == declarations and held['source'] == describe(source)
                 and held['grid'] == describe(grid) and held['output'] == describe(output)):
             return held
@@ -83,6 +105,7 @@ def materialize(source, grid, output, declarations, *, static=None):
     result = {'schema': 'gpuwm-hex.published-vertical/v2',
               'source': describe(source), 'grid': describe(grid), 'output': describe(output),
               'static': static_receipt, 'geometry_engine': geometry,
+              'vertical_binding': binding,
               'derived_geometry_completed': completed,
               'declarations': declarations, 'declared_met_state': declared,
               'claim': 'Published vertical metrics are unchanged; zero derived geometry '

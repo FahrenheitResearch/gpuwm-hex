@@ -1,0 +1,29 @@
+"""gpuwm 2.9.4 radiation helpers are an admitted set (0.4.2 floor), without relaxing mixed-set refusal."""
+import json
+from pathlib import Path
+
+from hexcore import cuda_arwen_helper_scope_v2 as scope
+from hexcore import engine_pin
+
+
+def test_294_source_set_is_admitted_on_the_ordinary_route():
+    # THE BREAKAGE: the 2.9.4 slimming rewrote five of the six helpers, so with the floor at 2.9.4
+    # every default-physics forecast refused with "unknown or mixed gpuwm execution source set".
+    mode = "engine-2.9.4-source"
+    assert set(scope.ADMITTED_SOURCE_SETS[mode]) == set(scope.PUBLISHED_SOURCES)
+    assert mode in scope.PUBLISHED_MODES
+    rows = json.loads(Path(scope.__file__).with_name("data").joinpath(
+        "profiles", "engine-helper-sets.v1.json").read_text())["sets"]
+    row = next(row for row in rows if row["id"] == mode)
+    assert row["engine_commit"] == "2147c15faf63511b673d22d12c5656e3270c5176"
+    assert all(len(digest) == 64 for digest in row["sources"].values())
+    changed = {name for name, digest in row["sources"].items()
+               if digest != scope.ADMITTED_SOURCE_SETS["engine-2.9.3-high-top-buffer-source"][name]}
+    assert changed == {"gpuwm/core/rrtmg_lw.py", "gpuwm/core/rrtmg_sw.py", "gpuwm/core/rrtmg_mcica.py",
+                       "gpuwm/core/rrtmg_legacy_prep.py", "gpuwm/ingest/wrf_ozone.py"}
+
+
+def test_the_floor_engine_has_an_admitted_helper_set():
+    floor = engine_pin.gpuwm_floor()
+    assert floor == "2.9.4"
+    assert any(f"engine-{floor}" in mode for mode in scope.ADMITTED_SOURCE_SETS)

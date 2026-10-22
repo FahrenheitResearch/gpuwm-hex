@@ -24,7 +24,8 @@ TABLE = src.load_table()
 
 
 def test_the_table_loads_and_every_runnable_row_has_its_vtable():
-    runnable = [row for row in TABLE["sources"] if row.get("status") != "refused"]
+    runnable = [row for row in TABLE["sources"]
+                if row.get("status") != "refused" and row.get("coverage", "global") == "global"]
     assert {row["id"] for row in runnable} >= {"gfs", "ifs", "aifs", "ifs-ens", "gefs", "era5", "icon"}
     for row in runnable:
         assert src.resolve_vtable(row).is_file(), row["id"]
@@ -43,7 +44,7 @@ def test_every_vtable_ships_inside_the_package():
 
     package = Path(hexcore.__file__).resolve().parent
     for row in TABLE["sources"]:
-        if row.get("status") == "refused":
+        if row.get("status") == "refused" or row.get("coverage", "global") != "global":
             continue
         vtable = src.resolve_vtable(row)
         assert vtable.is_relative_to(package / "data"), (row["id"], vtable)
@@ -133,7 +134,7 @@ def test_map_source_labels_are_the_writers_closed_vocabulary():
     # met_intermediate refuses an unknown label; the rows must use its labels.
     known = {"ncep-gfs", "ncep-gefs", "ncep-cdas-cfsv2", "ecmwf", "dwd"}
     for row in TABLE["sources"]:
-        if row.get("status") != "refused":
+        if row.get("status") != "refused" and row.get("coverage", "global") == "global":
             assert row["decode"]["map_source"] in known, row["id"]
 
 
@@ -205,7 +206,7 @@ def test_every_row_initialises_under_the_same_run_switches(tmp_path):
     cycle = src.Cycle.parse("2026-10-03T12")
     tails = set()
     for row in TABLE["sources"]:
-        if row.get("status") == "refused":
+        if row.get("status") == "refused" or row.get("coverage", "global") != "global":
             continue
         argv = src.init_argv(TABLE, row, met=tmp_path / "m", grid=tmp_path / "g", static=tmp_path / "s",
                              vertical_spec=tmp_path / "v", out=tmp_path / "o", cycle=cycle)
@@ -341,3 +342,111 @@ def test_the_gfs_row_fetches_its_records_by_range_on_many_streams():
     plan = src.plan_products(src.resolve_source(TABLE, "gfs"), src.Cycle.parse("2026-10-16T12"), None)[0]
     assert plan.index_format == "ncep-idx" and plan.index_url == plan.url + ".idx"
     assert plan.streams >= 8
+
+
+def test_keyless_reanalysis_row_uses_engine_rust_fetch_and_specific_humidity():
+    row = src.resolve_source(TABLE, 'era5-arco')
+    assert row['id'] == 'era5' and src.resolve_source(TABLE, 'era5')['id'] == 'era5'
+    plan, = src.plan_products(row, src.Cycle.parse('2023-03-31T12'), None)
+    assert plan.transport == 'engine-fetch'
+    assert plan.fetch_args == ['--source', 'era5', '--era5-provider', 'arco', '--retrieve',
+                               '--cycle', '2023-03-31T12', '--hours', '0', '--area=-90,0,90,360']
+    assert plan.streams == 8
+    assert row['first_guess']['use_spechumd'] == 'yes'
+    # Ruling of 2026-10-20: the Licence to Use Copernicus Products permits commercial use
+    # with attribution, so the keyless row is the default ERA5 route and carries it.
+    assert 'Copernicus' in row['license'] and 'commercial use permitted with attribution' in row['license']
+    assert 'Copernicus Climate Change Service' in row['attribution']
+    assert row['decode']['mapping'] == 'rw-wps-era5-arco-netcdf-donor.mapping.json'
+    assert not row['decode']['composition']['field_sources']
+    assert row['decode']['mapping_fields']['air_pressure_at_mean_sea_level']['selectors'][0]['name'] == ['PMSL']
+    assert row['decode']['in_band_supplements'] == {'primary_surface': 'primary_surface_provenance'}
+
+
+def test_engine_fetch_receipts_parallel_workers_and_never_uses_cds(tmp_path, monkeypatch):
+    import subprocess
+    row = src.resolve_source(TABLE, 'era5-arco')
+    cycle = src.Cycle.parse('2023-03-31T12')
+    def run(argv, **kwargs):
+        assert argv[:4] == [src.sys.executable, '-m', 'gpuwm', 'fetch']
+        assert kwargs['env']['GPUWM_RW_ZARR_WORKERS'] == '5'
+        (tmp_path / 'products' / 'era5-combined.nc').write_bytes(b'native-output')
+        return subprocess.CompletedProcess(argv, 0, 'Rust Zarr read\n', '')
+    monkeypatch.setattr(src.subprocess, 'run', run)
+    monkeypatch.setattr(src, '_fetch_cds', lambda *args: pytest.fail('CDS route called'))
+    receipts = src.acquire(src.plan_products(row, cycle, None), tmp_path / 'products', cycle, jobs=5)
+    assert receipts[0]['workers'] == 5
+    assert receipts[0]['bytes'] == 13
+    assert Path(receipts[0]['log']).read_text() == 'Rust Zarr read\n'
+
+
+def test_engine_fetch_failure_retains_diagnostic(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(src.subprocess, 'run', lambda argv, **kw:
+                        subprocess.CompletedProcess(argv, 7, '', 'native store refused'))
+    row = src.resolve_source(TABLE, 'era5-arco')
+    cycle = src.Cycle.parse('2023-03-31T12')
+    with pytest.raises(src.InitSourceRefusal, match='native store refused'):
+        src.acquire(src.plan_products(row, cycle, None), tmp_path, cycle)
+    assert 'native store refused' in (tmp_path / 'era5-combined.nc.fetch.log').read_text()
+
+
+def test_mapped_decode_rejects_missing_composition_and_unsafe_mapping():
+    import copy
+    row = copy.deepcopy(src.resolve_source(TABLE, 'era5-arco'))
+    row['decode']['mapping'] = '../outside.json'
+    with pytest.raises(src.InitSourceRefusal, match='packaged mapping filename'):
+        src.validate_row(row)
+    row['decode']['mapping'] = 'packaged.json'
+    row['decode']['workers'] = 0
+    with pytest.raises(src.InitSourceRefusal, match='positive integer'):
+        src.validate_row(row)
+
+
+def test_mapped_export_preserves_previous_intermediate_until_validated(tmp_path, monkeypatch):
+    import subprocess
+    import types
+
+    package = tmp_path / 'engine'
+    authorities = package / 'authorities'
+    authorities.mkdir(parents=True)
+    row = src.resolve_source(TABLE, 'era5-arco')
+    (authorities / row['decode']['mapping']).write_text('{"fields": {}}')
+    writer = package / 'mapped-engine'
+    writer.write_bytes(b'engine')
+    primary = tmp_path / 'primary.nc'
+    primary.write_bytes(b'input')
+    monkeypatch.setitem(src.sys.modules, 'gpuwm', types.SimpleNamespace(__file__=str(package / '__init__.py')))
+    monkeypatch.setitem(src.sys.modules, 'gpuwm.mapped_authoring', types.SimpleNamespace(
+        author_input_manifest=lambda *a, **kw: {'manifest': {'path': 'inputs.json', 'sha256': 'digest'}}))
+    monkeypatch.setitem(src.sys.modules, 'gpuwm.mapped_engine_bridge', types.SimpleNamespace(
+        run_engine=lambda *a, **kw: {'receipt': {}}))
+    monkeypatch.setitem(src.sys.modules, 'gpuwm.ingest.preparation_workers', types.SimpleNamespace(
+        worker_environment=lambda n: {'WORKERS': str(n)}))
+    cycle = src.Cycle.parse('2023-03-31T12')
+    met = tmp_path / 'MET:2023-03-31_12'
+    met.write_bytes(b'previous')
+    def export(argv, **kwargs):
+        Path(argv[-1]).write_bytes(b'replacement')
+        return subprocess.CompletedProcess(argv, 0, json.dumps(native), '')
+    monkeypatch.setattr(src.subprocess, 'run', export)
+    native = {'nfglevels': 1, 'nfgsoillevels': 4}
+    with pytest.raises(src.InitSourceRefusal, match='disagrees with row'):
+        src.decode(row, [str(primary)], cycle, tmp_path, writer)
+    assert met.read_bytes() == b'previous'
+    native['nfglevels'] = 38
+    receipt = src.decode(row, [str(primary)], cycle, tmp_path, writer)
+    assert met.read_bytes() == b'replacement'
+    assert receipt['met_bytes'] == len(b'replacement')
+
+
+def test_arco_surface_series_declares_only_native_surface_fields():
+    row = src.resolve_source(TABLE, "era5-arco")
+    surface = row["surface_series"]
+    assert surface["interval_hours"] == 1
+    assert surface["decode"]["format"] == "regular-netcdf"
+    request = surface["products"][0]["request"]
+    assert {f["source"] for f in request["fields"]} == {
+        "sea_surface_temperature", "sea_ice_cover", "land_sea_mask"}
+    assert all(not f["pressure"] for f in request["fields"])
+    assert {f["output"] for f in request["fields"]} == {f["name"] for f in surface["decode"]["fields"]}

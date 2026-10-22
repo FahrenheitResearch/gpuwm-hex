@@ -196,6 +196,40 @@ def test_rw_igra2_resolves_to_the_copy_this_wheel_bundles(tmp_path, monkeypatch)
     assert scorecard.binary("rw_igra2") == str(bundled)
 
 
+
+def test_on_demand_bridge_is_staged_when_the_ladder_finds_nothing(tmp_path, monkeypatch):
+    # gpuwm 2.9.3 moved rw_asos out of the wheel to on-demand; the scorer never fetched it, so every
+    # ASOS row scored NOT_MEASURED (hex 0.4.1 on gpuwm 2.9.3, 2026-10-20).
+    import hexcore.engines as engines
+    import gpuwm.rustwx as rustwx
+    from gpuwm import bridges
+
+    staged = tmp_path / "rw_asos"
+    monkeypatch.delenv("GPUWM_RW_ASOS", raising=False)
+    monkeypatch.setattr(engines, "bundled_program", lambda name: None)
+    monkeypatch.setattr(rustwx, "crate_dir", lambda: tmp_path / "no-crate")
+    monkeypatch.setattr(bridges, "find_artifact", lambda env, filename: staged if staged.is_file() else None)
+    calls = []
+
+    def fetch(name):
+        calls.append(name)
+        staged.write_text("#!/bin/sh\n")
+        return True
+
+    monkeypatch.setattr(bridges, "fetch_on_demand", fetch, raising=False)
+    assert scorecard.binary("rw_asos") == str(staged.resolve())
+    assert calls == ["rw_asos"]
+
+    staged.unlink()
+    monkeypatch.setattr(bridges, "fetch_on_demand", lambda name: False, raising=False)
+    monkeypatch.setattr(bridges, "on_demand_failure", lambda name: "bundle v2.9.3 answered HTTP 404", raising=False)
+    try:
+        scorecard.binary("rw_asos")
+    except FileNotFoundError as error:
+        assert "HTTP 404" in str(error)
+    else:
+        raise AssertionError("a failed on-demand fetch must refuse with its reason")
+
 def test_native_streams_score_once_with_native_provenance(tmp_path):
     for prefix in ("custom", "custom-diag"):
         for hour in (0, 3):

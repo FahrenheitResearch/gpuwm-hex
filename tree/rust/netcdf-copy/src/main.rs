@@ -1,7 +1,8 @@
 //! Lossless primitive-variable copy into CDF-5. No field arithmetic.
 use std::{env, ffi::{CStr, CString}, os::raw::{c_char, c_int, c_void}, ptr};
 
-#[link(name = "netcdf")]
+#[cfg_attr(netcdf_classic_static, link(name = "netcdf", kind = "static"))]
+#[cfg_attr(not(netcdf_classic_static), link(name = "netcdf"))]
 extern "C" {
     fn nc_open(p: *const c_char, mode: c_int, id: *mut c_int) -> c_int;
     fn nc_create(p: *const c_char, mode: c_int, id: *mut c_int) -> c_int;

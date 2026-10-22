@@ -45,7 +45,11 @@ def install_noahmp_seaice(backend, seam):
             # interval precipitation for the sea-ice solver before that clear.
             rain = self.fields["rainbl"] + self._pending_rainbl
             base._run_noahmp(self, atmosphere, cfg, itimestep)
-            _energy_balance(self, atmosphere, cfg, rain)
+            service = getattr(backend, "_surface_updates", None)
+            if service is not None and getattr(service, "ocean", None) is not None:
+                service.ocean.step(self, atmosphere, self.bldt_seconds, rain)
+            else:
+                _energy_balance(self, atmosphere, cfg, rain)
 
     driver.__class__ = NoahmpSeaiceDriver
 
@@ -65,6 +69,9 @@ def _surface_layer(driver, a, cfg, backend, original):
     if service is not None:
         f[_PREFIX + "sst"][...] = service.owned["sstsk"].reshape(f["tsk"].shape)
     sst = cp.maximum(f[_PREFIX + "sst"], np.float32(271.4))
+    prognostic = service is not None and getattr(service, "ocean", None) is not None
+    if prognostic:
+        sst = service.owned["sstsk"].reshape(f["tsk"].shape)
     blended = f["tsk"].copy()
     fraction = cp.where(ice, f["xice"], np.float32(1))
     tice = cp.maximum((blended - (np.float32(1)-fraction)*sst) / fraction,
@@ -73,6 +80,8 @@ def _surface_layer(driver, a, cfg, backend, original):
                    np.float32(253.15), tice)
     tice = cp.where((fraction < np.float32(.1)) & (blended < np.float32(263.15)),
                    np.float32(263.15), tice)
+    if prognostic:
+        tice = service.ocean.array("ice_temp").reshape(f["tsk"].shape)
     f[_PREFIX + "tice"][...] = cp.where(ice, tice, blended)
     f["tsk"][...] = f[_PREFIX + "tice"]
     original(driver, a, cfg)

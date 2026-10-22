@@ -19,6 +19,10 @@
 
 # --- pytest members ---------------------------------------------------------
 
+# Native GPU mixed-layer ocean and thermodynamic sea ice (hexcap-ocean-ice): the device
+# members step the CUDA ocean kernels; the file's CPU members are tier 1.
+tests/test_ocean_mixed_layer.py
+
 # Device-side edge signs preserve the scalar loop's active and padded words.
 tests/test_mesh_signs_cuda.py
 

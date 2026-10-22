@@ -181,6 +181,9 @@ DUAL_TIER_ALLOWED: dict[str, str] = {
     "tests/test_cuda_graph_tables.py":
         "tier 1 takes fake allocator and descriptor residency checks; tier 3 "
         "takes retained descriptor tables during actual CUDA capture",
+    "tests/test_ocean_mixed_layer.py":
+        "tier 1 takes the ocean configuration, restart and budget checks; tier 3 "
+        "steps the native CUDA mixed-layer ocean and sea-ice kernels",
 }
 
 

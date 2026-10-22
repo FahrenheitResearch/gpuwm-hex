@@ -605,18 +605,24 @@ def publish_forecast_receipt(door, request, observed, binding, architecture, sec
 
 
 def _run_members(arguments, door, root, scratch, admit_co_tenancy):
+    from .card_handoff import CardGate
+    gate = CardGate.from_environ()
     try:
         requests = roster_requests(arguments, door)
         import cupy as cp
         from . import cuda_backend
         first = door._with_resolved_model(requests[0][1])
+        levels = int(first.model.levels)
         free, total = map(int, cp.cuda.runtime.memGetInfo())
         mesh_kind = "point-cull" if first.lbc_dir is not None else "global"
+        # Behind a card gate the group before this one may still hold the card, so this first decision is
+        # the card's capacity (does the group fit an empty card; a group that does not is split); the
+        # free-memory decision is taken at the hand-off below, once the gate is held.
         admission = admit_co_tenancy(mesh_kind=mesh_kind, cells=first.cells,
-            levels=55, members=len(requests), card_bytes=total, free_bytes=free,
+            levels=levels, members=len(requests), card_bytes=total, free_bytes=total if gate is not None else free,
             solo_required_bytes=door.required_free_bytes(first.cells, model=first.model,
                                                           margin_bytes=first.headroom_bytes),
-            member_additional_bytes=tuple(door.stochastic_array_bytes(request.cells, request.stochastic)
+            member_additional_bytes=tuple(door.stochastic_array_bytes(request.cells, request.stochastic, levels=levels)
                                           for _, request in requests))
         architecture = door.admit_architecture()
         binding, driver = door._load_drivers(first.repo)
@@ -671,9 +677,14 @@ def _run_members(arguments, door, root, scratch, admit_co_tenancy):
                 door.time_ledger.emit("prep.member_ready")
             if not payload:
                 raise MultiMemberRefusal("member driver did not prepare an executable forecast")
-            if int(member.N_LEVELS) != 55:
-                raise MultiMemberRefusal("resident point-cull rows cover 55 levels; another level count would understate device memory")
-            payload["host"] = tables.host(payload["host"])
+            if int(member.N_LEVELS) != levels:
+                raise MultiMemberRefusal("member vertical level count disagrees with its admitted column extent")
+            if len(requests) > 1:
+                # One member has nothing to share: interning would hash and copy every table on one core
+                # (3.6 s on the 60 km globe, card idle) for no reader.
+                payload["host"] = tables.host(payload["host"])
+            # The member's tail (history drain, final identity hash) runs after the card is released.
+            member.DEFER_TAIL = True
             # The full group floor was checked before any stack allocation.
             # Each unchanged loop records that same collective decision.
             member.proof.gpu_memory_admission = lambda *args, **kwargs: dict(admission)
@@ -688,34 +699,90 @@ def _run_members(arguments, door, root, scratch, admit_co_tenancy):
             prepared.append((run_id, request, member, payload))
         # Preparation may allocate a CUDA context, so repeat collective
         # admission at the actual handoff to resident construction.
-        free, total = map(int, cp.cuda.runtime.memGetInfo())
-        admission.update(admit_co_tenancy(mesh_kind=mesh_kind, cells=first.cells,
-            levels=55, members=len(requests), card_bytes=total, free_bytes=free,
-            solo_required_bytes=admission["solo_required_bytes"],
-            member_additional_bytes=tuple(admission["member_additional_bytes"])))
+        def readmit():
+            free, total = map(int, cp.cuda.runtime.memGetInfo())
+            return admit_co_tenancy(mesh_kind=mesh_kind, cells=first.cells,
+                levels=levels, members=len(requests), card_bytes=total, free_bytes=free,
+                solo_required_bytes=admission["solo_required_bytes"],
+                member_additional_bytes=tuple(admission["member_additional_bytes"]))
+        if gate is None:
+            admission.update(readmit())
+        else:
+            from .card_handoff import readmit_seconds
+            wait_mono, wait_unix = time.monotonic(), time.time()
+            gate.acquire()
+            # The previous group released the gate once its memory was returned; its process may still be
+            # exiting, so the free-memory decision is retaken until the card has the room (or refuses by
+            # the same sentence after the timeout).
+            deadline = time.monotonic() + readmit_seconds()
+            while True:
+                try:
+                    admission.update(readmit())
+                    break
+                except MemoryError:
+                    if time.monotonic() > deadline:
+                        raise
+                    time.sleep(1.0)
+            gate.receipt["admitted_after_seconds"] = round(time.monotonic() - wait_mono, 3)
+            for run_id, request, _member, _payload in prepared:
+                with door.time_ledger.member(run_id, card=card, root=request.out):
+                    door.time_ledger.emit("prep.card_wait", "begin", t_mono=wait_mono, t_unix=wait_unix)
+                    door.time_ledger.emit("prep.card_wait", "end", attrs=dict(gate.receipt))
+            result["card_handoff"] = gate.receipt
         result["shared_buffers"] = tables.receipt()
         result["host_preparation"] = list(preparation.rows)
         cuda_backend.KernelCache = family
         from .drivers.samehost_physics_scope_v841 import scoped_physics_resources
-        with serial_netcdf(), scoped_physics_resources() as physics, shared_device_tables() as device_tables, \
-                capture_exclusion(family.family_lock):
-            def execute(index, item):
+        with serial_netcdf():
+            with scoped_physics_resources() as physics, shared_device_tables() as device_tables, \
+                    capture_exclusion(family.family_lock):
+                def execute(index, item):
+                    run_id, request, member, payload = item
+                    stream = cp.cuda.Stream(non_blocking=True)
+                    try:
+                        with cp.cuda.Device(0), stream, cp.cuda.using_allocator(resident_pool.malloc), \
+                                physics.rank(index, 0), door.time_ledger.member(run_id, card=card, root=request.out):
+                            door.time_ledger.emit("prep.shared_buffers", attrs={
+                                "buffers": len(tables.rows),
+                                "storage": sorted({row["storage"] for row in tables.rows}),
+                                "fallback": sorted({row["fallback"] for row in tables.rows if row["fallback"]})})
+                            forecast = driver.execute_forecast
+                            # Rebind the unchanged execute function to the private
+                            # member globals, including its private proof module.
+                            execute_function = FunctionType(forecast.__code__, vars(member), forecast.__name__, forecast.__defaults__, forecast.__closure__)
+                            execute_function.__kwdefaults__ = forecast.__kwdefaults__
+                            member_started = time.monotonic()
+                            observed = execute_function(**payload)
+                            return observed, member_started, door.time_ledger.open_stages()
+                    except BaseException:
+                        _member_failure(request)
+                        ready.abort()
+                        raise
+                    finally:
+                        # Drain this member before releasing shared objects or
+                        # restoring physics factories, including failure paths.
+                        with cp.cuda.Device(0):
+                            stream.synchronize()
+                with ThreadPoolExecutor(max_workers=len(prepared), thread_name_prefix="hex-member") as pool:
+                    futures = [pool.submit(execute, index, item) for index, item in enumerate(prepared)]
+                    executed = [future.result() for future in futures]
+            # Every member's device work is done and its device stack is gone with execute_forecast's frame.
+            # Return the memory and hand the card to the next group now, BEFORE the host-only tail (history
+            # drain, final identity hash, authority checks, receipts), so the card never waits on it.
+            result["resident_allocator"] = _allocator_receipt(resident_pool)
+            resident_pool.free_all_blocks()
+            result["resident_allocator"]["reserved_bytes_after_release"] = int(resident_pool.total_bytes())
+            if gate is not None:
+                from .card_handoff import release_device_memory
+                gate.release(**release_device_memory(cp))
+
+            def finish(item, observed, member_started, open_stages):
                 run_id, request, member, payload = item
-                stream = cp.cuda.Stream(non_blocking=True)
                 try:
-                    with cp.cuda.Device(0), stream, cp.cuda.using_allocator(resident_pool.malloc), \
-                            physics.rank(index, 0), door.time_ledger.member(run_id, card=card, root=request.out):
-                        door.time_ledger.emit("prep.shared_buffers", attrs={
-                            "buffers": len(tables.rows),
-                            "storage": sorted({row["storage"] for row in tables.rows}),
-                            "fallback": sorted({row["fallback"] for row in tables.rows if row["fallback"]})})
-                        forecast = driver.execute_forecast
-                        # Rebind the unchanged execute function to the private
-                        # member globals, including its private proof module.
-                        execute_function = FunctionType(forecast.__code__, vars(member), forecast.__name__, forecast.__defaults__, forecast.__closure__)
-                        execute_function.__kwdefaults__ = forecast.__kwdefaults__
-                        member_started = time.monotonic()
-                        observed = execute_function(**payload)
+                    with door.time_ledger.member(run_id, card=card, root=request.out, open_stages=open_stages):
+                        tail = observed.pop("_deferred_tail", None)
+                        if tail is not None:
+                            tail()
                         member.proof.measure_execution_sources()
                         if member.verify_forecast_authorities({"grid": request.grid, "static": request.static, "init": request.init}) != payload["authority_receipt"]:
                             raise RuntimeError("member authority bytes changed during execution")
@@ -731,30 +798,21 @@ def _run_members(arguments, door, root, scratch, admit_co_tenancy):
                         door.time_ledger.emit("finish", attrs={"status": status})
                         return row
                 except BaseException:
-                    import traceback
-                    failure = request.out / "member-traceback.log"
-                    failure.parent.mkdir(parents=True, exist_ok=True)
-                    failure.write_text(traceback.format_exc(), encoding="utf-8")
-                    ready.abort()
+                    _member_failure(request)
                     raise
-                finally:
-                    # Drain this member before releasing shared objects or
-                    # restoring physics factories, including failure paths.
-                    with cp.cuda.Device(0):
-                        stream.synchronize()
-            with ThreadPoolExecutor(max_workers=len(prepared), thread_name_prefix="hex-member") as pool:
-                futures = [pool.submit(execute, index, item) for index, item in enumerate(prepared)]
+            with ThreadPoolExecutor(max_workers=len(prepared), thread_name_prefix="hex-member-tail") as pool:
+                futures = [pool.submit(finish, item, *done) for item, done in zip(prepared, executed)]
                 result["members"] = [future.result() for future in futures]
         result["physics_resource_scope"] = physics.receipt()
         result["device_tables"] = copy.deepcopy(device_tables)
         result["status"] = "passed" if all(row["status"] == "passed" for row in result["members"]) else "failed"
     finally:
         cuda_backend.KernelCache = old_cache
+        if gate is not None:
+            gate.release()  # a failed group hands the card on too (the kernel would at exit anyway)
         try:
-            result["resident_allocator"] = {"kind": "scoped-caching-pool",
-                "binding": "thread-local allocator, private member streams",
-                "used_bytes_at_drain": int(resident_pool.used_bytes()),
-                "reserved_bytes_at_drain": int(resident_pool.total_bytes())}
+            if "resident_allocator" not in result:
+                result["resident_allocator"] = _allocator_receipt(resident_pool)
             # Executor shutdown and each worker's finally have drained all streams,
             # including on failure, before any cached member blocks are returned.
             resident_pool.free_all_blocks()
@@ -765,3 +823,17 @@ def _run_members(arguments, door, root, scratch, admit_co_tenancy):
             result["wall_seconds"] = time.time() - started
             (root / "multi-member.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     return 0 if result["status"] == "passed" else 1
+
+
+def _allocator_receipt(pool):
+    return {"kind": "scoped-caching-pool",
+            "binding": "thread-local allocator, private member streams",
+            "used_bytes_at_drain": int(pool.used_bytes()),
+            "reserved_bytes_at_drain": int(pool.total_bytes())}
+
+
+def _member_failure(request):
+    import traceback
+    failure = request.out / "member-traceback.log"
+    failure.parent.mkdir(parents=True, exist_ok=True)
+    failure.write_text(traceback.format_exc(), encoding="utf-8")

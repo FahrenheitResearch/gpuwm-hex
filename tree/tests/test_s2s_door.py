@@ -16,6 +16,18 @@ def arguments(tmp_path, *extra):
         "--cycle", "2026-10-16T00", "--members", "4", "--days", "30", "--work-dir", str(tmp_path), *extra])
 
 
+def test_cpu_budget_respects_affinity_and_native_thread_limit(monkeypatch):
+    monkeypatch.setattr(s2s_door.os, 'sched_getaffinity', lambda _: set(range(8)))
+    monkeypatch.setenv('RAYON_NUM_THREADS', '3')
+    assert s2s_door.cores() == 3
+    monkeypatch.setenv('RAYON_NUM_THREADS', '14')
+    assert s2s_door.cores() == 8
+    for invalid in ('0', '-1', 'many'):
+        monkeypatch.setenv('RAYON_NUM_THREADS', invalid)
+        with pytest.raises(s2s_door.S2SError, match='positive integer'):
+            s2s_door.cores()
+
+
 def test_dry_run_public_door_has_no_side_effects(tmp_path):
     destination = tmp_path / "not-created"
     argv = [sys.executable, "-m", "hexcore.cli", "s2s", "--row", "global-120km", "--source", "gfs",
@@ -33,10 +45,10 @@ def test_dry_run_public_door_has_no_side_effects(tmp_path):
     assert last["history_from_minutes"] == 0
     assert last["checkpoint_hours"] == "120,240,360,480,600,720"
     assert plan["surface_updating"] and plan["stochastic"]["sppt"] and plan["stochastic"]["skeb"]
-    assert plan["surface"]["source"] == "cfs"
-    assert plan["surface"]["forecast_cycle"] == "2026-10-14T00"
+    assert plan["surface"]["source"] == "member initialization SST/ice"
+    assert plan["surface"]["forecast_cycle"] is None
     assert plan["surface"]["end"] == "2026-11-15_00:00:00"
-    assert Path(plan["surface"]["path"]) == destination / "surface_series.nc"
+    assert plan["surface"]["path"] is None
     assert set(plan["parallelism"]) == set(s2s_door.STAGES)
 
 
@@ -49,9 +61,13 @@ def test_lagged_daily_history_has_common_valid_times():
 
 
 def test_bad_days_and_lags_refuse(tmp_path):
-    args = arguments(tmp_path, "--days", "29")
-    with pytest.raises(s2s_door.S2SError, match="30..90"):
-        s2s_door.plan(args)
+    # A 10-day subseasonal run plans (it used to be refused by a 30..90 bound
+    # that named no breakage); verification covers the whole short run.
+    ten = s2s_door.plan(arguments(tmp_path, "--days", "10"))
+    assert ten["days"] == 10 and ten["parallelism"]["verify"]["coverage_days"] == 10
+    assert s2s_door.plan(arguments(tmp_path, "--days", "29"))["days"] == 29
+    with pytest.raises(s2s_door.S2SError, match="week-1"):
+        s2s_door.plan(arguments(tmp_path, "--days", "6"))
     for bad in ("-6", "1", "0,0", "junk"):
         with pytest.raises(s2s_door.S2SError):
             s2s_door.lag_hours(bad, 4, "gfs")
@@ -76,6 +92,46 @@ def test_signature_allows_different_card_placement(tmp_path):
     a = s2s_door.plan(arguments(tmp_path, "--devices", "0"))
     b = s2s_door.plan(arguments(tmp_path, "--devices", "0,1"))
     assert a["signature"] == b["signature"]
+
+
+def test_forecast_child_uses_pool_uuid_for_logical_device_zero(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from hexcore import global_ensemble
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-pool-allocation")
+    args = arguments(tmp_path, "--members", "1", "--lagged", "0", "--devices", "0",
+                     "--ocean-mode", "prescribed")
+    value = s2s_door.plan(args)
+    source = Path(value["surface"]["path"])
+    source.write_bytes(b"native surface series")
+    state = {"completed": [], "attempts": [], "stages": {}}
+    calls = []
+    def child(argv, log, env):
+        calls.append(env["CUDA_VISIBLE_DEVICES"])
+        return 0
+    monkeypatch.setattr(global_ensemble, "_cli", child)
+    monkeypatch.setattr(global_ensemble, "group_limit", lambda *a: 1)
+    status = SimpleNamespace(stage=lambda *a, **kw: None, step=lambda *a, **kw: None)
+    result = s2s_door.forecasts(value, args, {}, state, tmp_path / "state.json", status)
+    assert calls == result["cards"] == ["GPU-pool-allocation"]
+    assert state["attempts"][0]["card"] == "GPU-pool-allocation"
+    assert state["completed"] == ["mem001"]
+
+
+def test_products_and_verification_resolve_the_original_device_allocation(tmp_path, monkeypatch):
+    import os
+    from hexcore import s2s_products
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-a,GPU-b")
+    monkeypatch.setattr(s2s_door, "STAGES", ("products", "verify"))
+    calls = []
+    def stage(*args):
+        calls.append(os.environ["CUDA_VISIBLE_DEVICES"])
+        return {}
+    monkeypatch.setattr(s2s_products, "build_products", stage)
+    monkeypatch.setattr(s2s_products, "verify_first_ten_days", stage)
+    from hexcore import s2s_energy
+    monkeypatch.setattr(s2s_energy, "build_energy_products", stage)
+    assert s2s_door.run(arguments(tmp_path, "--devices", "1")) == 0
+    assert calls == ["GPU-b", "GPU-b", "GPU-b"]
 
 
 def test_interruption_after_final_checkpoint_restarts_before_end(tmp_path):
@@ -108,11 +164,63 @@ def test_lagged_source_forecasts_reach_one_clock_and_manifest(tmp_path):
         assert manifest["valid_time"] == member["valid_time"]
 
 
-def test_analysis_only_source_defaults_to_common_init_with_stochastic_fill(tmp_path):
+def test_analysis_only_source_defaults_to_earlier_analyses_with_stochastic_fill(tmp_path):
     value = s2s_door.plan(arguments(tmp_path, "--source", "era5"))
-    assert all(m["lag_hours"] == m["lead_hours"] == 0 for m in value["members"])
-    assert len({m["init"] for m in value["members"]}) == 1
+    assert [m["lag_hours"] for m in value["members"]] == [0, 6, 12, 18]
+    assert all(m["lead_hours"] == 0 for m in value["members"])
+    assert len({m["init"] for m in value["members"]}) == 4
     assert all(m["stochastic"]["sppt"] and m["stochastic"]["skeb"] for m in value["members"])
+
+
+@pytest.mark.parametrize("source", ["era5", "era5-arco"])
+def test_analysis_lags_keep_input_clocks_and_common_output_window(tmp_path, source):
+    from datetime import datetime, timedelta
+    from hexcore.forecast_door import _schedule
+    value = s2s_door.plan(arguments(tmp_path, "--source", source, "--members", "8",
+        "--lagged", "0,6,12,18,24,30,36,42"))
+    s2s_door.update_manifests(value, {"attempts": [], "completed": []})
+    for m in value["members"]:
+        start = datetime.strptime(m["start_time"], "%Y-%m-%d_%H:%M:%S")
+        lag = m["lag_hours"]
+        assert start + timedelta(hours=lag) == datetime(2026, 10, 16)
+        assert start + timedelta(hours=m["hours"]) == datetime(2026, 11, 15)
+        assert m["valid_time"] == m["source_cycle"] == m["start_time"]
+        assert m["provenance"]["window_start"] == value["start_time"]
+        assert "--lead-hours" not in m["init_argv"]
+        assert _schedule(m["hours"], 1440, 600, "global", m["history_from_minutes"])[1] == 31
+        assert m["checkpoint_hours"].split(",")[0] == str(lag + 120)
+        manifest = json.loads(Path(m["manifest"]).read_text())
+        assert manifest["provenance"] == m["provenance"]
+    assert value["surface"]["start"] == "2026-10-14_06:00:00"
+
+
+def test_analysis_hourly_cadence_and_explicit_common_stochastic_fill(tmp_path):
+    value = s2s_door.plan(arguments(tmp_path, "--source", "era5", "--lagged", "0,1,2,3"))
+    assert [m["history_from_minutes"] for m in value["members"]] == [0, 60, 120, 180]
+    repeated = s2s_door.plan(arguments(tmp_path, "--source", "era5", "--lagged", "0"))
+    assert len({m["init"] for m in repeated["members"]}) == 1
+    assert len({m["stochastic"]["member"] for m in repeated["members"]}) == 4
+    with pytest.raises(s2s_door.S2SError, match="repeated source input"):
+        s2s_door.plan(arguments(tmp_path, "--source", "era5", "--lagged", "0",
+            "--stochastic", '{"sppt":false,"skeb":false}'))
+
+
+def test_prepared_path_cannot_hide_another_members_source_binding(tmp_path):
+    from types import SimpleNamespace
+    path = tmp_path / "prepared.nc"
+    path.write_bytes(b"analysis")
+    args = arguments(tmp_path / "run", "--source", "era5", "--members", "2", "--lagged", "0,6",
+        "--prepared-init", f"2026-10-16T00={path}", "--prepared-init", f"2026-10-15T18={path}")
+    value = s2s_door.plan(args)
+    # The later binding is valid. Deduplicating paths before checking each
+    # member used to discard the earlier, invalid binding entirely.
+    last = value["members"][-1]
+    s2s_door.write_json(tmp_path / "init-source-receipt.json", {
+        "source": "era5", "member": None, "cycle": last["source_cycle"], "lead_hours": 0,
+        "valid_time": last["valid_time"]})
+    status = SimpleNamespace(stage=lambda *a, **kw: None, step=lambda *a, **kw: None)
+    with pytest.raises(s2s_door.S2SError, match="source/cycle/member mismatch"):
+        s2s_door._inits(value, args, {}, status)
 
 
 def test_stochastic_policy_is_resolved_before_card_groups(tmp_path):
@@ -151,15 +259,16 @@ def test_resident_members_discover_selected_surface_series(tmp_path, monkeypatch
 
 
 def test_surface_restart_uses_fresh_destination_and_reuses_complete_receipt(tmp_path, monkeypatch):
-    from hexcore import global_ensemble
-    args = arguments(tmp_path)
+    from hexcore import global_ensemble, s2s_energy
+    monkeypatch.setattr(s2s_energy, "check_forcing", lambda value: {"objects": 121})
+    args = arguments(tmp_path, "--ocean-mode", "prescribed")
     value = s2s_door.plan(args)
     assert Path(value["surface"]["path"]).name == "surface_series.nc"
     legacy = tmp_path / "surface-series.nc"
     legacy.write_bytes(b"existing series")
     assert s2s_door.plan(args)["surface"]["path"] == str(legacy)
     explicit = tmp_path / "selected.nc"
-    assert s2s_door.plan(arguments(tmp_path, "--surface-series", str(explicit)))["surface"]["path"] == str(explicit)
+    assert s2s_door.plan(arguments(tmp_path, "--ocean-mode", "prescribed", "--surface-series", str(explicit)))["surface"]["path"] == str(explicit)
     commands = []
     def producer(argv, log, env):
         commands.append(argv)
@@ -177,6 +286,12 @@ def test_surface_restart_uses_fresh_destination_and_reuses_complete_receipt(tmp_
     assert "--forecast-cycle" in commands[1]
     assert s2s_door.surface_stage(value, args, {})["reused"]
     assert len(commands) == 2
+    receipt = Path(value["surface"]["path"]).with_suffix(".receipt.json")
+    saved = json.loads(receipt.read_text())
+    assert saved.pop("object_coverage") == {"objects": 121}
+    s2s_door.write_json(receipt, saved)
+    assert s2s_door.surface_stage(value, args, {})["object_coverage"] == {"objects": 121}
+    assert json.loads(receipt.read_text())["object_coverage"] == {"objects": 121}
 
 
 def test_resume_reuses_init_with_source_lane_clock_receipt(tmp_path, monkeypatch):
@@ -219,6 +334,27 @@ def test_prepared_lagged_init_checks_source_lead_and_common_valid_time(tmp_path)
         s2s_door.write_json(path, {**receipt, **changed})
         with pytest.raises(s2s_door.S2SError, match="mismatch"):
             s2s_door._inits(value, args, {}, status)
+
+
+
+def test_prepared_init_survives_producer_cleanup_same_inode(tmp_path):
+    from types import SimpleNamespace
+    source = tmp_path / "producer/init.nc"
+    source.parent.mkdir()
+    source.write_bytes(b"real-input-placeholder-for-file-lifetime-test")
+    options = arguments(tmp_path / "run", "--members", "1", "--lagged", "0",
+                        "--prepared-init", f"2026-10-16T00={source}")
+    value = s2s_door.plan(options)
+    s2s_door.write_json(source.parent / "init-source-receipt.json", {
+        "source": "gfs", "member": None, "cycle": "2026-10-16_00:00:00"})
+    status = SimpleNamespace(stage=lambda *a, **k: None, step=lambda *a, **k: None)
+    s2s_door._inits(value, options, {}, status)
+    retained = Path(value["members"][0]["init"])
+    assert source.stat().st_ino == retained.stat().st_ino
+    source.unlink()
+    (source.parent / "init-source-receipt.json").unlink()
+    assert retained.read_bytes() == b"real-input-placeholder-for-file-lifetime-test"
+    assert s2s_door._inits(value, options, {}, status)["reused"] == 1
 
 
 def test_successful_recovery_clears_the_persisted_previous_error(tmp_path, monkeypatch):
@@ -287,3 +423,29 @@ def test_latest_cycle_is_not_resolved_before_work_directory_admission(tmp_path, 
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(s2s_door.S2SError, match="another s2s command holds"):
             s2s_door.run(arguments(tmp_path, "--cycle", "latest", "--stage", "mesh"))
+
+
+def test_prepared_init_survives_producer_cleanup(tmp_path):
+    from types import SimpleNamespace
+    source = tmp_path / "producer/init.nc"
+    source.parent.mkdir()
+    source.write_bytes(b"prepared-source-forecast")
+    args = arguments(tmp_path / "run", "--members", "1", "--lagged", "0",
+                     "--prepared-init", f"2026-10-16T00={source}")
+    value = s2s_door.plan(args)
+    member = value["members"][0]
+    owned = Path(member["init"])
+    assert owned != source
+    receipt = {"source": "gfs", "member": None, "cycle": "2026-10-16_00:00:00",
+               "source_cycle": "2026-10-16_00:00:00", "lead_hours": 0,
+               "valid_time": "2026-10-16_00:00:00"}
+    receipt_path = source.parent / "init-source-receipt.json"
+    s2s_door.write_json(receipt_path, receipt)
+    status = SimpleNamespace(stage=lambda *args, **kwargs: None, step=lambda *args, **kwargs: None)
+    s2s_door._inits(value, args, {}, status)
+    assert owned.stat().st_ino == source.stat().st_ino
+    source.unlink()
+    receipt_path.unlink()
+    assert owned.read_bytes() == b"prepared-source-forecast"
+    assert s2s_door._inits(value, args, {}, status)["reused"] == 1
+    assert s2s_door.plan(args)["signature"] == value["signature"]

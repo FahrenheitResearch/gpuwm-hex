@@ -150,12 +150,22 @@ def binary(name):
             return bundled
     from gpuwm import bridges
     from gpuwm.rustwx import crate_dir
-    found = bridges.find_artifact("GPUWM_" + name.upper(), bridges.executable_name(name))
+    env_var, filename = "GPUWM_" + name.upper(), bridges.executable_name(name)
+    found = bridges.find_artifact(env_var, filename)
+    # gpuwm 2.9.3 serves rw_asos (and rw_mrms, rw_goes, ...) on demand, out of the wheel; rw_prepbufr
+    # has been on demand since 2.9.1.  Without this fetch every ASOS row scored NOT_MEASURED ("rw_asos is
+    # missing from the engine's Rust bridge installation", hex 0.4.1 global run on gpuwm 2.9.3, 2026-10-20),
+    # while MRMS, which goes through gpuwm.obs.frontdoor, staged its bridge.  Same step as frontdoor.require().
+    fetch = getattr(bridges, "fetch_on_demand", None)
+    if found is None and fetch is not None and fetch(name):
+        found = bridges.find_artifact(env_var, filename)
     if found is None:
         found = next((p for p in (crate_dir() / "target/release" / name,
                                  crate_dir() / "target/debug" / name) if p.is_file()), None)
     if found is None:
-        raise FileNotFoundError(f"{name} is missing from the engine's Rust bridge installation")
+        failure = getattr(bridges, "on_demand_failure", lambda _name: None)(name)
+        raise FileNotFoundError(f"{name} is missing from the engine's Rust bridge installation"
+                                + (f"; {failure}" if failure else ""))
     return str(found.resolve())
 
 
@@ -404,16 +414,25 @@ def acquire_rain(valid, previous, folder, commands, product):
         return list(pool.map(one, hours))
 
 
-def missing_rows(frame, source, reason, config):
+SONDE_NOT_APPLICABLE = "radiosondes launch at 00Z and 12Z only; no sounding is valid at this frame"
+
+
+def sonde_applies(valid):
+    """Radiosondes are launched at 00Z and 12Z. At any other valid time a sonde cell cannot apply, so
+    its rows are NOT_APPLICABLE and count neither for nor against coverage."""
+    return valid.hour in (0, 12)
+
+
+def missing_rows(frame, source, reason, config, status="NOT_MEASURED"):
     labels = ["hex"] + [r["label"] for r in config["references"]]
     quantities = ["height", "temperature", "wind"] if source == "radiosonde" else ["temperature", "dewpoint", "wind", "pressure"]
     if source == rain_source(config):
         return [{"source": source, "quantity": "precipitation", "label": label, "valid_time": frame["valid_time"],
-                 "threshold_mm": threshold, "width_km": width, "status": "NOT_MEASURED", "value": None, "n": 0, "reason": reason}
+                 "threshold_mm": threshold, "width_km": width, "status": status, "value": None, "n": 0, "reason": reason}
                 for label in ["hex"] + [r["label"] for r in config["references"] if r["role"] == "forecast"]
                 for threshold in config["thresholds_mm"] for width in config["widths_km"]]
     return [{"source": source, "quantity": quantity, "label": label, "valid_time": frame["valid_time"], "level_hpa": level,
-             "status": "NOT_MEASURED", "rmse": None, "bias": None, "n": 0, "reason": reason}
+             "status": status, "rmse": None, "bias": None, "n": 0, "reason": reason}
             for label in labels for level in (LEVELS if source == "radiosonde" else [0]) for quantity in quantities]
 
 
@@ -457,7 +476,7 @@ def markdown(card):
                 found = [r for r in rows if r["source"] == rs and r["label"] == label and r.get("threshold_mm") == threshold and r.get("width_km") == width and r["status"] == "MEASURED" and r["valid_time"] == target]
                 values.append(f"{found[-1]['value']:.3f} ({found[-1]['interval_hours']} h)" if found else "N/M")
             text.append(f"| {threshold:g} / {width:g} | " + " | ".join(values) + " |")
-    reasons = list(dict.fromkeys(r["reason"] for r in rows if r.get("reason")))
+    reasons = list(dict.fromkeys(r["reason"] for r in rows if r.get("reason") and r["status"] != "NOT_APPLICABLE"))
     text += ["", "N/M reasons: " + "; ".join(reasons[:6]) + ("; see JSON for additional reasons" if len(reasons) > 6 else ""),
              "", "Paired diagnostics cluster squared-error differences by station. Single-cycle results are exploratory; no independent-event significance or model promotion is claimed."]
     return "\n".join(text) + "\n"
@@ -497,9 +516,13 @@ def _score_frame_rows(index, frame, context):
     sources = ("radiosonde", "asos", rs)
     rows = {"metrics": [], "paired": [], "sources": []}
     valid = instant(frame["valid_time"])
+    sonde_ok = sonde_applies(valid)
     if valid > datetime.now(timezone.utc):
         for source in sources:
-            rows["metrics"].extend(missing_rows(frame, source, "observations pending for a future valid time", config))
+            if source == "radiosonde" and not sonde_ok:
+                rows["metrics"].extend(missing_rows(frame, source, SONDE_NOT_APPLICABLE, config, "NOT_APPLICABLE"))
+            else:
+                rows["metrics"].extend(missing_rows(frame, source, "observations pending for a future valid time", config))
         return rows
     folder = context["scratch"] / str(index)
     folder.mkdir()
@@ -509,8 +532,6 @@ def _score_frame_rows(index, frame, context):
     local_files = config.get("observation_files", {}).get(frame["valid_time"], {})
 
     def sondes():
-        if valid.hour not in (0, 12):
-            raise LookupError("radiosondes require a 00Z or 12Z history frame")
         return local_files.get("sondes") or acquire_sondes(valid, folder / "radiosonde", commands, config)
 
     def surface():
@@ -571,12 +592,15 @@ def _score_frame_rows(index, frame, context):
     # the order the serial scorer used, so reasons and rows come out the same.
     references = config["references"]
     with ThreadPoolExecutor(max_workers=3 + len(references)) as pool:
-        got_sondes = pool.submit(caught, sondes)
+        # No sounding exists off 00Z/12Z, so nothing is fetched for it (IGRA2/prepbufr are not tried).
+        got_sondes = pool.submit(caught, sondes) if sonde_ok else None
         got_surface = pool.submit(caught, surface)
         got_rain = pool.submit(caught, rain) if index > 0 else None
         got_references = [pool.submit(reference, row) for row in references]
         missing = []
         for source, key, future in [("radiosonde", "sondes", got_sondes), ("asos", "surface", got_surface)]:
+            if future is None:
+                continue
             value, error = future.result()
             if error is not None:
                 missing.append({"source": source, "reason": str(error)})
@@ -614,6 +638,11 @@ def _score_frame_rows(index, frame, context):
             if miss.get("source") == source and not miss.get("label"):
                 rows["metrics"] = [r for r in rows["metrics"] if r["source"] != source]
                 rows["metrics"].extend(missing_rows(frame, source, miss["reason"], config))
+    if not sonde_ok:
+        # The native scorer, given no soundings, emits empty radiosonde rows; at this frame they cannot apply.
+        rows["metrics"] = [r for r in rows["metrics"] if r["source"] != "radiosonde"]
+        rows["paired"] = [r for r in rows["paired"] if r.get("source") != "radiosonde"]
+        rows["metrics"].extend(missing_rows(frame, "radiosonde", SONDE_NOT_APPLICABLE, config, "NOT_APPLICABLE"))
     for row in references:
         for source in sources:
             # Absent references remain explicit even when hex was measured.
@@ -687,9 +716,14 @@ def score(run, *, config=None, out=None, timeout=180, budget=1800, leads=None):
                 elif path.is_dir():
                     path.rmdir()
             scratch.rmdir()
-        measured = sum(r["status"] == "MEASURED" for r in card["metrics"])
-        card["status"] = "MEASURED" if measured and measured == len(card["metrics"]) and not card.get("error") else "PARTIALLY_MEASURED" if measured else "NOT_MEASURED"
+        # Coverage counts only cells that can apply: NOT_APPLICABLE rows (sondes off 00Z/12Z) are neither
+        # measured nor missing.
+        applicable = [r for r in card["metrics"] if r["status"] != "NOT_APPLICABLE"]
+        measured = sum(r["status"] == "MEASURED" for r in applicable)
+        card["status"] = "MEASURED" if measured and measured == len(applicable) and not card.get("error") else "PARTIALLY_MEASURED" if measured else "NOT_MEASURED"
         card["measured_metrics"] = measured
+        card["applicable_metrics"] = len(applicable)
+        card["not_applicable_metrics"] = len(card["metrics"]) - len(applicable)
         atomic_json(out / "scorecard.json", card)
         (out / "scorecard.md").write_text(markdown(card), encoding="utf-8")
         lock.__exit__(None, None, None)

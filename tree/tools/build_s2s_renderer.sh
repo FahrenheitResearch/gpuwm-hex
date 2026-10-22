@@ -21,10 +21,15 @@ for name in ('rustwx', 'grib1_bridge', 'region_global_dealias'):
 # Current bridge build scripts read the engine's project version declaration.
 shutil.copy2(engine / 'pyproject.toml', out / 'source/pyproject.toml')
 PY
+patch -d "$out/source" -p1 --forward < "$root/docs/s2s/engine-patches/0002-s2s-energy-scales.patch"
 # Both historical renderer patches are integrated in current engine sources.
 # Reapplying them aborts under set -e before Cargo even runs. Build the supplied
-# source unchanged; the executable capability checks below still reject stale
+# integrated source with the wind/tercile and energy scale patches; the executable capability checks below still reject stale
 # sources that lack the S2S scales or matching global raster transform.
+# Apply only the added wind/tercile capability, in this private source copy.
+if ! grep -q s2s-wind-terciles "$out/source/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs"; then
+  (cd "$out/source" && patch -p1 < "$root/docs/s2s/engine-patches/0003-rw-wrfbatch-s2s-wind-terciles.patch")
+fi
 # Cargo discovers .cargo/config.toml from cwd, not --manifest-path. This
 # workspace's config points every external dependency at its vendored source.
 (cd "$out/source/tools/rustwx"
@@ -39,6 +44,8 @@ for binary in rw_wrfbatch rw_ensbatch; do
   "$out/$binary" --ensemble-products-abi > "$out/$binary.abi"
   grep -q s2s-window "$out/$binary.abi"
   grep -q global-ensemble-projection "$out/$binary.abi"
+  grep -q s2s-wind-terciles "$out/$binary.abi"
+  grep -q s2s-energy-scales "$out/$binary.abi"
 done
 cmp "$out/rw_wrfbatch.abi" "$out/rw_ensbatch.abi"
 python3 - "$root" "$engine" "$out" <<'PY'
@@ -48,8 +55,8 @@ sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 record = {'schema': 'gpuwm-hex.s2s-renderer-build/v1', 'engine_source': str(engine),
           'sha256': sha(out / 'rw_wrfbatch'), 'bytes': (out / 'rw_wrfbatch').stat().st_size,
           'recipe_sha256': sha(root / 'tools/build_s2s_renderer.sh'),
-          'patches': {},
-          'source_copy': 'unchanged integrated engine source; no patches applied',
+          'patches': {p.name: sha(p) for p in sorted((root / 'docs/s2s/engine-patches').glob('*.patch'))},
+          'source_copy': 'private copy; integrated historical fixes plus wind/tercile capability patch',
           'engine_version_declaration_sha256': sha(out / 'source/pyproject.toml'),
           'ensemble_source_sha256': sha(out / 'source/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs'),
           'abi': (out / 'rw_wrfbatch.abi').read_text().strip(),

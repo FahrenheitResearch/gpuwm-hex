@@ -1210,6 +1210,10 @@ def run_ensemble(args):
 
 
 def add_ensemble_parser(commands):
+    moving = commands.add_parser("moving-ensemble",
+        help="moving-region members with physics diversity, track spread and intensity plumes")
+    from .moving_members import add_moving_ensemble_arguments
+    add_moving_ensemble_arguments(moving)
     parser = commands.add_parser("ensemble", help="hourly global MPAS ensemble, 20 members at 60 km by default")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)

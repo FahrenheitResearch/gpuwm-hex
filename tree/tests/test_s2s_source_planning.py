@@ -73,6 +73,42 @@ def test_global_four_deterministic_lags_build_distinct_inputs(tmp_path):
     assert records[-1]["init_argv"][-2:] == ["--lead-hours","18"]
 
 
+@pytest.mark.parametrize("source", ["era5", "era5-cds"])
+def test_analysis_lags_use_analysis_products_across_year_boundary(source):
+    row = src.resolve_source(src.load_table(), source)
+    records = expand_lags(row, src.Cycle.parse("2024-01-01T00"), [None], [0, 1, 6, 12, 18])
+    assert records[-1]["source_cycle"] == "2023-12-31_06:00:00"
+    for p in records:
+        assert p["lead_hours"] == 0 and p["valid_time"] == p["source_cycle"]
+        cycle = src.Cycle.parse(p["source_cycle"])
+        assert src.Cycle(cycle.when + timedelta(hours=p["spinup_hours"])).start_time == p["window_start"]
+        products = src.plan_products(row, cycle, None, p["lead_hours"])
+        # CDS names the cycle in its files; keyless ARCO (the default era5 row) asks
+        # the engine fetch for the cycle by argument.
+        assert all(cycle.when.strftime("%Y%m%d%H") in product.filename
+                   or cycle.when.strftime("%Y-%m-%dT%H") in (product.fetch_args or [])
+                   for product in products)
+    # Analysis lagging must not fabricate forecast products on the source door.
+    with pytest.raises(src.InitSourceRefusal, match="forecast cadence/range"):
+        src.plan_products(row, src.Cycle.parse("2024-01-01T00"), None, 6)
+
+
+def test_analysis_lag_rules_come_from_source_metadata():
+    row = {"id": "analysis-provider", "posting": {"cycle_hours": [0, 6, 12, 18]}}
+    records = expand_lags(row, src.Cycle.parse("2024-01-01T00"), [None], [6], lead_hours=12)
+    assert records[0]["spinup_hours"] == 18 and records[0]["window_start"] == "2024-01-01_12:00:00"
+    for cycle, lags in (("2024-01-01T00", [1]), ("2024-01-01T00:30", [0])):
+        with pytest.raises(src.InitSourceRefusal, match="unpublished cycle"):
+            expand_lags(row, src.Cycle.parse(cycle), [None], lags)
+
+
+def test_init_only_manifest_refuses_unintegrated_analysis_lags():
+    from hexcore.ensemble import EnsembleRefusal
+    with pytest.raises(EnsembleRefusal, match="require model integration"):
+        prepare_plan(Namespace(source="era5", source_cycle="2024010100", source_hour=0,
+                               members=2, lagged="0,6", table=None))
+
+
 def test_shared_grib_message_selection_preserves_first_submessage():
     inventory = "1.1:0:d=2023033100:UGRD:500 mb:anl:\n1.2:0:d=2023033100:VGRD:500 mb:anl:\n2:100:d=2023033100:TMP:surface:anl:"
     selected = src.select_ncep_idx_records(inventory, {"records":[["UGRD","500 mb"]]})

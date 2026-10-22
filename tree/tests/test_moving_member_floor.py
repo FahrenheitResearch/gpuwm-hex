@@ -206,3 +206,40 @@ def test_preparation_defaults_use_all_available_cores_and_propagate(monkeypatch)
     limited = parser.parse_args(['moving', 'run', '--case', 'c', '--casedir', 'd', '--out', 'r', '--hours', '3',
                                 '--prep-threads', '8', '--prep-tile-workers', '4'])
     assert (limited.prep_threads, limited.prep_tile_workers) == (8, 4)
+
+
+@pytest.mark.parametrize('completed', [True, False])
+def test_due_move_holds_until_preparation_ready_or_stops(tmp_path, monkeypatch, completed):
+    c = _tracking_controller()
+    fix = c.st.Fix(seconds=7200, ok=True, lat=0, lon=0.3)
+    decision = c.st.Decision(7200, True, [0, 0.5], 9000, 0, 'move due')
+    c.state.update(members={'start': dict(status='ready', center_deg=[0, 0]),
+                            'next': dict(status='preparing', center_deg=[0, 0.5])},
+                   frames=[], segments=[{}], pending_move=None)
+    c.a.hold_for_member_seconds = 1800
+    c.interior_km = 82
+    c.observe = lambda *args: (fix, 0.01)
+    c.ready_members = lambda: ({'next': [0, 0.5]}
+        if c.state['members']['next']['status'] == 'ready' else {})
+    c.session.decide = lambda *args, **kwargs: decision
+    c.anticipate_chain = lambda *args: [{'centre': [0, 0.5]}]
+    c.save = lambda: None
+    c.log = lambda *args: None
+    c.event = lambda *args, **kwargs: None
+    c.request_member = lambda *args, **kwargs: 'next'
+    c.poll_background = lambda: None
+    waits = []
+    def wait(seconds):
+        waits.append(seconds)
+        c.state['members']['next']['status'] = 'ready' if completed else 'failed'
+    monkeypatch.setattr(moving_run.time, 'sleep', wait)
+    control = tmp_path / 'control'; control.mkdir()
+    (control / 'await-verdict.json').write_text('{}')
+    if completed:
+        assert c.on_frame(7200, tmp_path / 'history.nc', control)['stop'] is True
+        assert c.state['pending_move']['target'] == 'next'
+    else:
+        with pytest.raises(RuntimeError, match='continuing would let the storm leave'):
+            c.on_frame(7200, tmp_path / 'history.nc', control)
+        assert not (control / 'verdict-00007200.json').exists()
+    assert waits == [2.0]

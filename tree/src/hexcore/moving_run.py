@@ -60,6 +60,66 @@ RUN_STATE_VARIABLES = ('GPUWM_HEX_MOVING_CHECKPOINT_IN', 'GPUWM_HEX_MOVING_CHECK
                        'GPUWM_HEX_MOVING_SOURCE_GRID', 'GPUWM_HEX_MOVING_ZONE', 'GPUWM_HEX_MOVING_SHOCK_ZONE')
 
 
+def restart_dead_products(segments, log, popen=None, alive=None) -> list[str]:
+    """Redraw the products of closed segments whose detached product stage died with the controller.
+
+    THE BREAKAGE THIS PREVENTS: each segment's forecast starts its product door detached
+    (forecast_door.start_detached_products), so a box or container restart kills it with
+    the controller.  ``--resume`` then carried on from the saved state and never redrew it:
+    on a rented box (2026-10-21) member-004 segment-000 of a moving ensemble was left with no global
+    maps and 60 GB of render-global scratch frames that nothing would ever clear.  A closed
+    segment (rc 0) whose products.log has no ``PRODUCTS done`` line and no live product
+    process gets its stale scratch cleared and the same product command started again,
+    detached, with no CUDA device (as the forecast door starts it).
+    """
+    import shlex
+    popen = popen or subprocess.Popen
+    alive = alive or product_stage_alive
+    restarted = []
+    for record in segments:
+        fc = Path(record.get('path', '')) / 'fc'
+        products_log = fc / 'products.log'
+        if record.get('rc') != 0 or not products_log.is_file():
+            continue
+        if any(line.startswith('PRODUCTS done ')
+               for line in products_log.read_text(errors='replace').splitlines()):
+            continue
+        if alive(fc):
+            continue
+        logged = Path(record['path']) / 'forecast.log'
+        lines = logged.read_text(errors='replace').splitlines() if logged.is_file() else []
+        command = next((shlex.split(line[len('PRODUCTS $ '):]) for line in reversed(lines)
+                        if line.startswith('PRODUCTS $ ')), None)
+        if not command:
+            log(f'products of {fc} died unfinished and their command is not in {logged}; not redrawn')
+            continue
+        if '--scratch' not in command and '--keep-scratch' not in command:
+            shutil.rmtree(fc / 'products.products-scratch', ignore_errors=True)
+        environment = dict(os.environ, CUDA_VISIBLE_DEVICES='', GPUWM_NO_LOCAL_GPU='1')
+        with products_log.open('ab') as stream:
+            child = popen([sys.executable, '-m', 'hexcore.cli', *command[1:]], stdin=subprocess.DEVNULL,
+                          stdout=stream, stderr=subprocess.STDOUT, env=environment,
+                          start_new_session=True)
+        log(f'products of {fc} died unfinished with the controller; redrawing detached pid={child.pid}')
+        restarted.append(str(fc))
+    return restarted
+
+
+def product_stage_alive(fc: Path) -> bool:
+    """True when a live process is a product door for this forecast folder."""
+    target = str(fc)
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            argv = (proc / 'cmdline').read_bytes().decode(errors='replace').split('\0')
+        except OSError:
+            continue
+        if 'products' in argv and any(a == target and i and argv[i - 1] == '--forecast'
+                                      for i, a in enumerate(argv)):
+            return True
+    return False
+
 def card_arguments(cards: int, case, extra=()) -> list[str]:
     """The forecast-door flags that split every segment across ``cards`` visible cards of this host.
 
@@ -222,6 +282,18 @@ class Controller:
         a.out = str(Path(a.out).expanduser().absolute())
         a.members = str(Path(a.members or Path(a.out) / 'members').expanduser().absolute())
         self.case = load_case(a.case)
+        # M2 appended max-rate=1 after the controller's max-rate=8. That executor
+        # has no progress or carrier hooks, so refuse before any member preparation.
+        flags = [*self.case.get('physics_args', []), *getattr(a, 'forecast_arg', [])]
+        rate = '8'
+        for index, flag in enumerate(flags):
+            if flag == '--fullstep-lts-max-rate' and index + 1 < len(flags):
+                rate = flags[index + 1]
+            elif str(flag).startswith('--fullstep-lts-max-rate='):
+                rate = str(flag).split('=', 1)[1]
+        if str(rate) == '1':
+            raise SystemExit('moving run requires the active multi-rate executor: max-rate=1 selects '
+                             'an executor without moving progress or carrier hooks; omit the override')
         if getattr(a, 'rotate_template', False) and (a.zone_carry or self.case['mesh'].get('corridor')):
             raise SystemExit('--rotate-template requires a concentric global family without corridor or --zone-carry')
         if a.check_minutes is None:
@@ -262,6 +334,7 @@ class Controller:
                     self.state['members'][name] = (dict(self.read_member(name, 'prepared'), why=member.get('why'))
                                                    if done else dict(member, status='cancelled'))
             self.log(f'resume at model {self.state["t"]:.0f} s, {len(self.state["segments"])} segments')
+            restart_dead_products(self.state['segments'], self.log)
         else:
             self.out.mkdir(parents=True, exist_ok=False)
             # The case's own tracker block is the base; --tracker-config overrides it
@@ -614,10 +687,11 @@ class Controller:
         if decision.move:
             target = self.pick_target(decision, current, seconds, ready, fix)
             if target is None:
-                # Use the refreshed model-motion target, never an obsolete steering guess.
-                centre = chain[0]['centre'] if chain else [fix.lat, fix.lon]
+                # The decision is for this frame. The anticipation chain starts at the
+                # NEXT move and can already lie outside this fix's safe radius.
+                centre = decision.centre
                 wanted = (self.request_member(centre, f'move decided at {seconds:.0f} s, no ready member')
-                          if fix.ok and great_circle_km(centre, current['center_deg']) >= self.session.policy.c.min_move_km
+                          if fix.ok and great_circle_km(centre, current['center_deg']) > 1e-6
                           else None)
                 # a member reused from disk with a cached operator is ready at once
                 self.poll_background()
@@ -635,6 +709,13 @@ class Controller:
                                status=self.state['members'].get(wanted, {}).get('status'))
                 ready = self.ready_members()
                 target = self.pick_target(decision, current, seconds, ready, fix)
+                if wanted and self.a.hold_for_member_seconds > 0 and target is None:
+                    status = self.state['members'].get(wanted, {}).get('status', 'missing')
+                    self.event('move-member-unavailable', name=wanted, status=status, at_seconds=seconds)
+                    self.save()
+                    raise RuntimeError(f'moving member {wanted} is {status} after waiting '
+                                       f'{time.monotonic() - held:.0f} s; continuing would let the '
+                                       'storm leave the fine-region interior before its decided move')
             if target is not None:
                 verdict = {'stop': True, 'target': target, 'reason': decision.reason}
                 self.state['pending_move'] = dict(target=target, decided_at_seconds=seconds,
@@ -1028,6 +1109,12 @@ class Controller:
                 retries = 0
                 previous_in = self.state['boundary']
                 end = float(json.loads(boundary.with_suffix('.pkl.json').read_text())['time_seconds'])
+                if not math.isfinite(end) or not record['begin_seconds'] < end <= self.duration:
+                    self.event('segment-contract-failed', index=record['index'], end_seconds=end,
+                               begin_seconds=record['begin_seconds'], duration_seconds=self.duration)
+                    self.save()
+                    raise SystemExit(f'segment {record["index"]}: carrier time {end} must advance '
+                                     f'beyond {record["begin_seconds"]} and not beyond {self.duration}')
                 record['end_seconds'] = end
                 # recovery seals of a closed segment are superseded by its boundary
                 for seal in control.glob('seal-*.pkl'):
@@ -1071,6 +1158,16 @@ class Controller:
                         self.state['t'] = self.duration
             else:
                 self.drop_prelaunch('the segment failed')
+                if rc == 0:
+                    # M2 reran a successful fixed-mesh forecast three times without hooks.
+                    self.event('segment-contract-failed', index=record['index'],
+                               reason='successful forecast did not seal its moving carrier',
+                               expected_carrier=str(boundary))
+                    self.save()
+                    raise SystemExit(f'segment {record["index"]}: forecast returned 0 without '
+                                     f'moving carrier {boundary}; inspect {seg / "forecast.log"}. '
+                                     'The selected executor must publish moving progress and a carrier; '
+                                     'retrying the same interval cannot repair missing hooks.')
                 refusal = route_refusal(seg)
                 if refusal is not None:
                     # The route refuses this command the same way every time: retrying spends nothing useful.
@@ -1175,8 +1272,9 @@ def summarize(state, interior_km):
     walls = sum(s.get('wall_seconds') or 0 for s in segments)
     frames = state['frames']
     offsets = [f['offset_km'] for f in frames if f['offset_km'] is not None]
+    inside = bool(offsets) and len(offsets) == len(frames) and max(offsets) <= interior_km
     return dict(
-        status='passed' if state['t'] >= state['hours'] * 3600 and all(s.get('rc') == 0 for s in segments[-1:])
+        status='passed' if inside and state['t'] >= state['hours'] * 3600 and all(s.get('rc') == 0 for s in segments[-1:])
         else 'incomplete',
         forecast_hours=state['t'] / 3600, wall_seconds=state.get('wall_seconds'),
         segment_wall_seconds=walls, integration_seconds=integration,
@@ -1187,8 +1285,7 @@ def summarize(state, interior_km):
         failed_segments=sum(1 for s in segments if s.get('rc') not in (0, None)),
         frames=len(frames), fixes_ok=sum(1 for f in frames if f['fix'].get('ok')),
         max_offset_km=max(offsets) if offsets else None, interior_km=interior_km,
-        a2_storm_inside_interior_every_frame=bool(offsets) and len(offsets) == len(frames)
-        and max(offsets) <= interior_km,
+        a2_storm_inside_interior_every_frame=inside,
         fixes_source=state['fixes_source'],
         move_costs=move_costs(state),
         seals=[row for record in segments for row in ((record.get('control') or {}).get('recovery_seals') or [])])

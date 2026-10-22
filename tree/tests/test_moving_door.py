@@ -49,6 +49,7 @@ def test_every_moving_command_is_reachable_from_the_console_door():
     arguments = parser.parse_args(["moving", "run", "--case", "c.json", "--casedir", "d", "--out", "r",
                                    "--hours", "6"])
     assert arguments.engine is None and arguments.device is None and arguments.members is None
+    assert arguments.hold_for_member_seconds == 1800
 
 
 def test_the_console_door_still_imports_without_numpy():

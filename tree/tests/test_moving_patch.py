@@ -82,9 +82,17 @@ def test_remapped_feedback_preserves_values_with_contiguous_local_columns():
     targets=[SimpleNamespace(cell_l2g=np.array([6,1,4,7]),n_owned_cells=2),
              SimpleNamespace(cell_l2g=np.array([0,2,3,5,4,7]),n_owned_cells=6)]
     values=np.arange(24,dtype=np.float32).reshape(3,8)
+    spectral = dict(time_seconds=1800., draws=7, coefficients=np.arange(6.))
     payload=dict(layouts=[source],previous=[{'surface':values}],
+                 stochastic=spectral,
                  forcing=[dict(rthdynten=values,rqvdynten=values+2,time_seconds=1800.)])
     result=remap_step_carriers(payload,weights,targets)
+    # Spectral coefficients are mesh-independent; keep the original carrier for
+    # the driver's restore instead of interpolating them onto target columns.
+    assert payload['stochastic'] is spectral
+    assert result['stochastic'] is spectral
+    np.testing.assert_array_equal(spectral['coefficients'], np.arange(6.))
+    assert spectral['time_seconds'] == 1800. and spectral['draws'] == 7
     for layout,previous,forcing in zip(targets,result['previous'],result['forcing']):
         for name,expected in [('rthdynten',values),('rqvdynten',values+2)]:
             assert forcing[name].flags.c_contiguous

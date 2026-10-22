@@ -96,6 +96,7 @@ class ArwenSurfaceUpdate:
         self._saved = None
         self.classification = dict(backend._constructor.expected_surface_classification())
         self.physics_classification = None
+        self.ocean = None
 
     def _read_initial(self, name, levels=1, axis=None, dtype=np.float32):
         import cupy as cp
@@ -152,7 +153,7 @@ class ArwenSurfaceUpdate:
         if rings["green"]:
             physics_update_surface(now.isoformat(), True, self.mesh, s, calendar=self.calendar)
             self.counts["green"] += 1
-        if rings["surface"]:
+        if rings["surface"] and self.ocean is None:
             # Decode in original file order, gather on device for reordered meshes.
             if self.order is None:
                 self.reader(now.isoformat(), s)
@@ -161,17 +162,21 @@ class ArwenSurfaceUpdate:
                 self.reader(now.isoformat(), incoming)
                 for key in incoming:
                     s[key][...] = incoming[key][self.order]
-            f = self.backend._seam._driver.fields
-            for key in ("tslb", "smois", "sh2o"):
-                s[key] = (cp.asfortranarray(f[key].reshape(self.mesh["nSoilLevels"], self.n))
-                          if key in f else cp.empty((0, self.n), dtype=cp.float32, order="F"))
-            physics_update_sst(True, self.mesh, s, s,
-                               xice_threshold=self.threshold)
-            for key in ("tslb", "smois", "sh2o"):
-                if key in f:
-                    f[key][...] = s[key].reshape(f[key].shape)
+            self.convert_surface()
             self.counts["surface"] += 1
             self.refresh_classification()
+
+    def convert_surface(self):
+        import cupy as cp
+        f = self.backend._seam._driver.fields
+        s = self.pools()
+        for key in ("tslb", "smois", "sh2o"):
+            s[key] = (cp.asfortranarray(f[key].reshape(self.mesh["nSoilLevels"], self.n))
+                      if key in f else cp.empty((0, self.n), dtype=cp.float32, order="F"))
+        physics_update_sst(True, self.mesh, s, s, xice_threshold=self.threshold)
+        for key in ("tslb", "smois", "sh2o"):
+            if key in f:
+                f[key][...] = s[key].reshape(f[key].shape)
 
     def advance(self, seconds, dt):
         now = self.start + timedelta(seconds=seconds)
@@ -183,12 +188,13 @@ class ArwenSurfaceUpdate:
         f = self.backend._seam._driver.fields
         # The engine publishes downwelling SW; MPAS skin consumes absorbed SW.
         s["gsw"] = (f["swdown"] * (np.float32(1)-f["albedo"])).reshape(-1)
-        physics_update_sstskin(dt, self.mesh, s, s)
+        if self.ocean is None:
+            physics_update_sstskin(dt, self.mesh, s, s)
         # Julian day has a fractional day, including the clock's UTC time.
         julian = (now - now.replace(month=1, day=1, hour=0, minute=0, second=0,
                                     microsecond=0)).total_seconds()/86400 + 1
         physics_update_deepsoiltemp(calendar.isleap(now.year), dt, julian, self.mesh, s, s)
-        self.counts["skin"] += 1
+        self.counts["skin"] += int(self.ocean is None)
         self.counts["deep"] += 1
 
     def commit(self):
@@ -209,6 +215,7 @@ class ArwenSurfaceUpdate:
                             for k, v in vars(self.alarms).items()},
                     february=self.calendar.february, counts=dict(self.counts),
                     last_record=self.reader.last_record,
+                    ocean=None if self.ocean is None else self.ocean.receipt(),
                     physics_classification=self.physics_classification,
                     identity=dict(albedo_initialization="fractional-ice-v1",
                                   start=self.start.isoformat(), cells=self.n,
@@ -227,6 +234,13 @@ class ArwenSurfaceUpdate:
             if value.shape != self.owned[key].shape or value.dtype != self.owned[key].dtype:
                 raise ValueError(f"surface update restart {key} layout differs")
             self.owned[key][...] = cp.asarray(value)
+        saved_ocean = state.get("ocean")
+        if (saved_ocean is None) != (self.ocean is None):
+            raise ValueError("surface restart ocean mode differs")
+        if self.ocean is not None:
+            if saved_ocean["options"] != self.ocean.options:
+                raise ValueError("surface restart ocean parameters differ")
+            self.ocean.steps = saved_ocean["steps"]
         self.alarms = SurfaceAlarms(**{k: (None if v is None else
             datetime.fromisoformat(v) if k.startswith("next_") else timedelta(seconds=v))
             for k, v in state["alarms"].items()})
@@ -237,29 +251,45 @@ class ArwenSurfaceUpdate:
         self.refresh_classification()
 
     def receipt(self):
-        return dict(enabled=True, path=os.fsdecode(self.reader.path),
+        return dict(ocean=None if self.ocean is None else self.ocean.receipt(), enabled=True, path=os.fsdecode(self.reader.path),
                     backend="hex-cuda", operations=dict(self.counts),
                     albedo_initialization="fractional-ice-v1",
                     classification=dict(self.classification),
                     physics_classification=self.physics_classification,
                     reader="packaged Rust read_surface_time/read_surface_field",
                     reads=self.reader.reads, record_h2d_transfers=1,
-                    device_kernels=["monthly", "sst_update", "skin", "deep"])
+                    device_kernels=(["monthly", "sst_update", "skin", "deep"] if self.ocean is None
+                                    else ["monthly", "ocean_step", "sst_update", "deep"]))
 
 
 def attach(backend, *, work_dir, init_path, start, end, cell_order=None, n_global_cells=None):
     from .surface_series_reader import covering_reader, discover
-    path = discover(work_dir)
+    from .ocean_mixed_layer import mode, MixedLayerOcean
+    prognostic = mode() == "prognostic"
+    path = None if prognostic else discover(work_dir)
     backend._surface_updates_receipt = dict(enabled=False, reason="no surface series in run work dir")
-    if path is None:
+    if path is None and not prognostic:
         if getattr(backend, "_surface_restart", None) is not None:
             raise ValueError("surface-updated restart requires its surface series")
         return backend._surface_updates_receipt
-    reader = covering_reader(path, n_cells=n_global_cells or backend._constructor.n_columns,
-                             start=start, end=end)
+    if prognostic:
+        from .surface_series_reader import reader_library
+        from .mpasphys.surface_update_v842 import RustSurfaceRecordReader
+        reader = RustSurfaceRecordReader(reader_library(), init_path,
+            n_cells=n_global_cells or backend._constructor.n_columns)
+        reader.record_interval = timedelta(days=1)
+    else:
+        reader = covering_reader(path, n_cells=n_global_cells or backend._constructor.n_columns,
+                                 start=start, end=end)
     service = ArwenSurfaceUpdate(backend, reader, init_path, start=start, cell_order=cell_order)
     backend._surface_updates = service
     saved = getattr(backend, "_surface_restart", None)
+    if prognostic:
+        service.ocean = MixedLayerOcean(service, restoring=saved is not None)
+        if saved is None:
+            service.convert_surface()
+            service.ocean.publish(convert=False)
+            service.refresh_classification()
     if saved is not None:
         service.restore(saved)
     else:

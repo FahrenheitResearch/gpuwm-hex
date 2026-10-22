@@ -7,7 +7,7 @@ renderer's own maps (weather fields) or plots of measured numbers (marked as
 charts). Full-size originals and their source hashes are kept with the release
 evidence.
 
-0.4 needs the gpuwm 2.9 engine (`gpuwm>=2.9.0,<2.10`; pip installs it): it
+0.4 needs the gpuwm 2.9 engine (0.4.2: `gpuwm>=2.9.4,<2.10`; pip installs it): it
 calls the engine's generic MPAS column physics entry and its new renderer
 pieces, which earlier engines do not have.
 

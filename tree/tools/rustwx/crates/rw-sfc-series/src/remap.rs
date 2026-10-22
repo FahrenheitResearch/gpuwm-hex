@@ -156,7 +156,15 @@ pub(crate) fn remap(
     lon: &[f32],
     land: &[i32],
 ) -> MpasResult<(Vec<f32>, Vec<f32>, Option<Vec<f32>>)> {
-    let slabs = read_surface_file(path)?;
+    remap_slabs(&read_surface_file(path)?, lat, lon, land)
+}
+
+pub(crate) fn remap_slabs(
+    slabs: &[SurfaceSlab],
+    lat: &[f32],
+    lon: &[f32],
+    land: &[i32],
+) -> MpasResult<(Vec<f32>, Vec<f32>, Option<Vec<f32>>)> {
     let present = |field: &str| slabs.iter().any(|s| s.met.field == field);
     if !(present("SST") || present("SKINTEMP")) || !present("SEAICE") || !present("LANDSEA") {
         return Err(MpasError::Refusal("each surface record needs SST/SKINTEMP, SEAICE and LANDSEA; missing records cannot silently retain stale ocean forcing".into()));

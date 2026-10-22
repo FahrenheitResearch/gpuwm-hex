@@ -17,6 +17,9 @@ def run_surface_series(args):
                "--cycle", args.cycle, "--hours", str(args.hours), "--static", str(args.static),
                "--out", str(args.out), "--receipt", str(args.receipt or args.out.with_suffix(".receipt.json")),
                "--vtable-root", str(VTABLE_ROOT)]
+    if any(p["transport"] == "zarr" for p in row.get("surface_series", {}).get("products", [])):
+        from gpuwm.zarr_bridge import resolve_zarr_bin
+        command += ["--zarr-engine", str(resolve_zarr_bin())]
     for name in ("jobs", "threads", "interval_hours", "staged", "forecast_cycle"):
         value = getattr(args, name)
         if value is not None:

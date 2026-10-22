@@ -40,14 +40,17 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
 import time
 from typing import Any, Mapping, Sequence
+import urllib.error
 import urllib.request
 
 from .errors import MpasPortError
@@ -104,6 +107,72 @@ def resolve_row(table: Mapping[str, Any], name: str, physics: str | None = None
                 f"--physics-row {physics!r} is not a physics row (rows: {', '.join(table['physics'])})")
         row["physics"] = physics
     return row, dict(table["meshes"][row["mesh"]]), dict(table["physics"][row["physics"]])
+
+
+_FORECAST_PHYSICS_FLAGS = {"--physics-suite": "suite", "--physics-mode": "mode",
+                           "--physics-namelist": "namelist"}
+
+
+def forecast_arg_physics(forecast_args: Sequence[str] | None) -> dict[str, str]:
+    """The physics choices a run passes through ``--forecast-arg``: ``--physics-suite``,
+    ``--physics-mode`` and ``--physics-namelist``, spelled ``--flag=VALUE`` or as two
+    ``--forecast-arg`` values.  The last one wins, as in the forecast door's own parser."""
+
+    found: dict[str, str] = {}
+    items = [str(item) for item in forecast_args or ()]
+    index = 0
+    while index < len(items):
+        flag, equals, value = items[index].partition("=")
+        if flag in _FORECAST_PHYSICS_FLAGS:
+            if not equals:
+                if index + 1 >= len(items):
+                    break  # the forecast door refuses a flag with no value by name
+                index += 1
+                value = items[index]
+            found[_FORECAST_PHYSICS_FLAGS[flag]] = value
+        index += 1
+    return found
+
+
+def forecast_physics_arm(table: Mapping[str, Any], named: Mapping[str, str],
+                         physics_row: str | None) -> tuple[str, dict[str, Any]] | None:
+    """The physics arm a run takes when ``--forecast-arg`` names a suite or a namelist, or None.
+
+    THE BREAKAGE THIS PREVENTS (G12, 2026-10-20): ``--forecast-arg=--physics-suite=mesoscale_reference``
+    ran the MPAS suite, but the plan (and the ``global-plan.json`` the run keeps as its physics record)
+    said ``physics: arwen``, "No override: the forecast door's own default", and the ArWen arm's step
+    cap was computed for it.  The suite is the run's physics: it is labelled as such, carries no ArWen
+    overrides, and its step cap is the one the forecast door itself applies to that suite's selectors
+    (:func:`default_step_cap`)."""
+
+    suite, namelist = named.get("suite"), named.get("namelist")
+    if suite is None and namelist is None:
+        return None
+    if physics_row is not None:
+        raise GlobalDoorError(
+            f"--physics-row {physics_row} and --forecast-arg "
+            + (f"--physics-suite {suite}" if suite is not None else f"--physics-namelist {namelist}")
+            + " both name the run's physics; give one")
+    if suite is None:
+        return "namelist", {
+            "about": f"The physics of MPAS namelist {namelist} (--forecast-arg=--physics-namelist): its "
+                     "config_physics_suite and scheme selectors, resolved by the forecast door, whose receipt "
+                     "records the suite it ran.",
+            "overrides": {}, "namelist": namelist, "selectors": {}}
+    from .physics_suites import load_table as load_suites, mpas_suite_names, recordable_suite_names, suite_row
+
+    if suite not in recordable_suite_names():
+        raise GlobalDoorError(f"--forecast-arg --physics-suite {suite!r} names no suite "
+                              f"(suites: {', '.join(recordable_suite_names())})")
+    if suite in mpas_suite_names():
+        selectors = dict(load_suites()["mpas_suites"]["suites"][suite])
+        about = (f"MPAS-A's own {suite} suite (--forecast-arg=--physics-suite), resolved by the forecast door "
+                 "as MPAS resolves it: " + ", ".join(f"{key}={value}" for key, value in selectors.items()) + ".")
+    else:
+        hex_row = suite_row(suite)
+        selectors = dict(hex_row.get("selectors") or {})
+        about = f"The hex {suite} suite (--forecast-arg=--physics-suite): {hex_row.get('describes', '')}".rstrip(": ")
+    return suite, {"about": about, "overrides": {}, "suite": suite, "selectors": selectors}
 
 
 def engine_identities() -> frozenset[str]:
@@ -361,7 +430,25 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
     cycle = _cycle(args.cycle)
     row, mesh, physics = resolve_row(table, args.row, args.physics_row)
     hours = float(args.hours if args.hours is not None else row.get("hours", 24))
-    step = row_step(mesh, physics, engine=engine_identities())
+    named = forecast_arg_physics(args.forecast_arg)
+    suite_arm = forecast_physics_arm(table, named, args.physics_row)
+    if suite_arm is None:
+        step = row_step(mesh, physics, engine=engine_identities())
+    else:
+        # A named suite takes the step the forecast door gives that suite's selectors (it caps its own
+        # default step, default_step_cap); the global door passes no --dt, so no ArWen-arm cap reaches it.
+        from .mpas_defaults import DEFAULT_RADIATION_SECONDS
+
+        row["physics"], physics = suite_arm
+        mesh_dt = float(row_step(mesh, {})["dt_seconds"])
+        step = default_step_cap({"dt_seconds": mesh_dt, "source": "mesh"}, physics["selectors"],
+                                radiation_seconds=DEFAULT_RADIATION_SECONDS, table=table)
+        step = {**step, "capped": step.get("source") == "physics cap", "mesh_dt_seconds": mesh_dt,
+                "passed_as_dt": False,
+                "note": "the forecast door applies this step to the named suite itself; the global door passes no --dt"}
+    physics["mode"] = named.get("mode") or "correct"
+    physics["mode_source"] = ("--forecast-arg=--physics-mode" if named.get("mode")
+                              else "the forecast door default (correct)")
     cadence = history_cadence(hours, args.history_every_minutes, int(row.get("history_every_minutes", 180)),
                               {float(step["dt_seconds"]), float(step["mesh_dt_seconds"])}, row["id"])
     every = cadence["minutes"]
@@ -371,22 +458,38 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
     grid = mesh_dir / mesh["grid_member"]
     static = mesh_dir / f"{row['mesh']}.native.static.nc"
     rows_file = mesh_dir / "mesh-rows.json"
-    vertical = (DATA / table["vertical_spec"]).resolve()
+    from .vertical_spec import VerticalSpec
+    explicit_vertical = getattr(args, "vertical_spec", None)
+    vertical = (Path(explicit_vertical).expanduser().resolve() if explicit_vertical else
+                (DATA / row.get("vertical_spec", table["vertical_spec"])).resolve())
+    spec = VerticalSpec.from_file(vertical)
+    selected_vertical = bool(explicit_vertical or row.get("vertical_spec"))
+    mesh_name = runtime_mesh_name(row["mesh"])
+    if selected_vertical:
+        mesh_name += "-v" + spec.sha256()[:12]
+        rows_file = work / "mesh-rows.json"
     source = args.source
+    from .init_sources import load_table as load_sources, resolve_source
+    accepted = getattr(args, "accept_licence", ())
+    resolve_source(load_sources(), source, accepted)
     init_dir = work / "init"
+    if selected_vertical:
+        init_dir /= spec.sha256()[:12]
     init = init_dir / "init.nc"
     forecast = work / "forecast"
     start = cycle.strftime("%Y-%m-%d_%H:00:00")
     common = ["--grid", str(grid), "--static", str(static)]
     init_argv = ["init-source", "--source", source, "--cycle", args.cycle, "--out-dir", str(init_dir),
                  *common, "--vertical-spec", str(vertical)]
+    for licence in accepted:
+        init_argv += ["--accept-licence", licence]
     for staged in args.staged or []:
         init_argv += ["--staged", str(staged)]
     if getattr(args, "member", None) is not None:
         if getattr(args, "members", None) or getattr(args, "lagged", None) is not None:
             raise GlobalDoorError("--member runs one member and --members an ensemble; pass one of them")
         init_argv += ["--member", str(args.member)]
-    forecast_argv = ["forecast", "--mesh", runtime_mesh_name(row["mesh"]), *common, "--init", str(init),
+    forecast_argv = ["forecast", "--mesh", mesh_name, *common, "--init", str(init),
                      "--start-time", start,
                      "--init-source", f"{source} {args.cycle}"
                      + (f" member {args.member}" if getattr(args, "member", None) is not None else "")
@@ -394,9 +497,12 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
                      "--hours", f"{hours:g}", "--history-every-minutes", str(every),
                      "--out", str(forecast), "--scratch", str(work / "scratch"),
                      "--case-label", f"{row['id']}-{cycle.strftime('%Y%m%d%H')}", "--no-products"]
+    if getattr(args, "chemistry_config", None) is not None:
+        forecast_argv += ["--chemistry-config", str(args.chemistry_config)]
     for key, value in physics["overrides"].items():
         forecast_argv += ["--physics", f"{key}={value}"]
-    if step["capped"]:
+    forecast_argv += spec.forecast_arguments()
+    if step["capped"] and suite_arm is None:
         # Only a binding cap is passed: an uncapped row keeps the forecast door's own default.
         # A --forecast-arg=--dt=... given by the caller comes later and wins.
         forecast_argv += ["--dt", f"{step['dt_seconds']:g}"]
@@ -412,6 +518,9 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
     score_config = work / "observation-scorecard.config.json"
     score_argv = ["score", str(forecast), "--config", str(score_config)]
     cards = card_estimate(mesh["cells"], args.devices)
+    if selected_vertical and not args.devices:
+        cards = {"selected_cards": None,
+                 "basis": "this vertical grid has no card-fit measurement; forecast admission must measure it"}
     result = {
         "schema": PLAN_SCHEMA,
         "row": row, "mesh": {"id": row["mesh"], **mesh}, "physics": {"row": row["physics"], **physics},
@@ -419,6 +528,9 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
         "cycle": args.cycle, "start_time": start, "hours": hours, "history_every_minutes": every,
         "history_cadence": cadence,
         "source": source,
+        "vertical": {**spec.to_mapping(), "sha256": spec.sha256(), "mesh_name": mesh_name,
+                     "explicit_binding": selected_vertical},
+        "accepted_licences": list(accepted),
         "paths": {"work": str(work), "cache": str(cache), "grid": str(grid), "static": str(static),
                   "mesh_rows": str(rows_file), "vertical_spec": str(vertical), "init": str(init),
                   "forecast": str(forecast), "products": str(work / "products"),
@@ -431,10 +543,11 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
         # The scorer reads init and start from the forecast receipt when it can; a run stopped before
         # writing one (a killed or timed-out forecast still leaves its frames) would otherwise score nothing.
         "score_config": {**dict(table.get("score", {})), "init": str(init), "grid": str(grid),
-                         "mesh": runtime_mesh_name(row["mesh"]), "start": start},
+                         "mesh": mesh_name, "start": start},
         "step": step,
         "cards": cards,
-        "wall_estimate": wall_estimate(table, row["mesh"], cards.get("selected_cards"), hours),
+        "wall_estimate": (None if selected_vertical else
+                          wall_estimate(table, row["mesh"], cards.get("selected_cards"), hours)),
         "stages": list(STAGES),
     }
     if getattr(args, "members", None) or getattr(args, "lagged", None):
@@ -443,12 +556,8 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
 
         from .lagged_members import parse_lags
         ensemble_source = bool(resolve_source(load_sources(None), source).get("members"))
-        if not ensemble_source and not getattr(args, "lagged", None):
-            raise GlobalDoorError(f"--members needs an ensemble source; {source!r} publishes one state")
         if ensemble_source and not args.members:
             raise GlobalDoorError("an ensemble source needs --members with --lagged")
-        if not ensemble_source and args.members not in (None, "0"):
-            raise GlobalDoorError("a deterministic source has one state per lag; omit --members or use 0")
         result["members"] = member_plan(result, parse_members(args.members or "0"),
                                          parse_lags(args.lagged) if args.lagged is not None else None)
         from .stochastic import member_number, member_options
@@ -460,28 +569,79 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
             identity = member['member'] if member['member'] is not None and not member['provenance']['lag_hours'] else member_number(member['run_id'])
             member['stochastic'] = member_options(identity, seed=seed,
                 source_members=len({item['member'] for item in result['members']}), ensemble_size=len(result['members']), **options)
+        from .global_ensemble import validate_member_bindings
+        validate_member_bindings(result['members'], GlobalDoorError)
     return result
 
 
 # ---------------------------------------------------------------------------
 # the stages
 # ---------------------------------------------------------------------------
+# A slow or flaky link drops the connection part way; Python's http.client then returns an empty block on a
+# short body instead of raising, so the byte count is the only witness of a cut.  A cut resumes the kept
+# ``.part`` file with a Range request; this many attempts in a row that add no bytes end the fetch.
+_FETCH_STALLS = 6
+
+
 def _download(url: str, target: Path, status, expected_bytes: int | None) -> None:
     partial = target.with_name(target.name + ".part")
     target.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "gpuwm-hex"})
-    with urllib.request.urlopen(request, timeout=120) as response, partial.open("wb") as out:
-        total = int(response.headers.get("Content-Length") or expected_bytes or 0)
-        done, last = 0, 0.0
-        while True:
-            block = response.read(1 << 22)
-            if not block:
-                break
-            out.write(block)
-            done += len(block)
-            if total and time.monotonic() - last > 5.0:
-                status.step(int(100 * done / total), note=f"{done} of {total} bytes")
-                last = time.monotonic()
+    total = int(expected_bytes or 0)
+    best, stalls, last, error = -1, 0, 0.0, None
+    while True:
+        done = partial.stat().st_size if partial.is_file() else 0
+        if total and done > total:
+            partial.unlink()
+            done = 0
+        if total and done == total:
+            break
+        headers = {"User-Agent": "gpuwm-hex"}
+        if done:
+            headers["Range"] = f"bytes={done}-"
+        want, error = None, None
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as response:
+                length = response.headers.get("Content-Length")
+                ranged = done and getattr(response, "status", None) == 206
+                if ranged:
+                    match = re.match(r"bytes (\d+)-\d+/(\d+|\*)", response.headers.get("Content-Range") or "")
+                    if not match or int(match.group(1)) != done:
+                        raise urllib.error.URLError(f"resume answered Content-Range "
+                                                    f"{response.headers.get('Content-Range')!r}, not bytes {done}-")
+                    if match.group(2) != "*":
+                        want = int(match.group(2))
+                    elif length is not None:
+                        want = done + int(length)
+                else:
+                    done = 0  # a first request, or a server that ignored the Range: the body is the whole file
+                    want = int(length) if length is not None else None
+                total = want or total
+                with partial.open("ab" if ranged else "wb") as out:
+                    while True:
+                        block = response.read(1 << 22)
+                        if not block:
+                            break
+                        out.write(block)
+                        done += len(block)
+                        if total and time.monotonic() - last > 5.0:
+                            status.step(int(100 * done / total), note=f"{done} of {total} bytes")
+                            last = time.monotonic()
+        except (OSError, http.client.HTTPException) as caught:  # URLError, timeouts and resets are OSErrors
+            error = caught
+        got = partial.stat().st_size if partial.is_file() else 0
+        want = want or total or None
+        if error is None and (want is None or got >= want):
+            break  # the server sent everything it declared; stage_mesh checks the bytes against the pins
+        stalls = 0 if got > best else stalls + 1
+        best = max(best, got)
+        if stalls >= _FETCH_STALLS:
+            raise GlobalDoorError(
+                f"{url}: the download was cut off at {got} of {total or '?'} bytes and {_FETCH_STALLS} resumes in "
+                f"a row added nothing (last: {error or 'the server closed the connection early'}); "
+                f"{partial} is kept and the next run resumes it")
+        status.note(f"the link was cut at {got} of {total or '?'} bytes "
+                    f"({error or 'the server closed the connection early'}); resuming")
+        time.sleep(min(30.0, 2.0 ** stalls))
     os.replace(partial, target)
 
 
@@ -497,10 +657,13 @@ def stage_mesh(value: Mapping[str, Any], status) -> dict[str, Any]:
         status.skip("mesh", f"the cache holds {grid.name} with the pinned sha256 {mesh['grid_sha256'][:16]}")
         return {"grid": str(grid), "cached": True}
     archive = grid.parent / Path(mesh["url"]).name
+    size = int(mesh.get("archive_bytes") or 0)
     if not (archive.is_file() and sha256_file(archive) == mesh["archive_sha256"]):
         status.stage("mesh", step_count=100)
         status.note(f"fetching {mesh['url']}")
-        _download(mesh["url"], archive, status, mesh.get("archive_bytes"))
+        if size and archive.is_file() and archive.stat().st_size < size:
+            os.replace(archive, archive.with_name(archive.name + ".part"))  # a short archive is resumed, not refused
+        _download(mesh["url"], archive, status, size or None)  # a cut is resumed there or refused as a cut
         got = sha256_file(archive)
         if got != mesh["archive_sha256"]:
             archive.unlink()
@@ -588,9 +751,12 @@ def _register(value: Mapping[str, Any], grid: Path, static: Path, rows_file: Pat
     mesh = value["mesh"]
     dx = float(mesh["nominal_dx_m"])
     dims = mesh_rows._dimensions(grid)
+    vertical = value.get("vertical", {})
+    n_levels = int(vertical.get("n_vert_levels", 55))
+    rows_file.parent.mkdir(parents=True, exist_ok=True)
     row = mesh_rows.MeshRow(
-        kind=mesh_rows.ARCHIVED_GLOBAL_KIND, name=runtime_mesh_name(mesh["id"]),
-        n_cells=int(dims["nCells"]), n_edges=int(dims["nEdges"]), n_levels=55, n_interfaces=56,
+        kind=mesh_rows.ARCHIVED_GLOBAL_KIND, name=vertical.get("mesh_name", runtime_mesh_name(mesh["id"])),
+        n_cells=int(dims["nCells"]), n_edges=int(dims["nEdges"]), n_levels=n_levels, n_interfaces=n_levels + 1,
         n_soil_levels=4, nominal_dx_m=dx, dt_seconds=float(default_dt_seconds(dx)["dt_seconds"]),
         grid=str(grid), grid_bytes=grid.stat().st_size, grid_sha256=mesh["grid_sha256"],
         static=str(static), static_bytes=static.stat().st_size, static_sha256=sha256_file(static),
@@ -617,12 +783,13 @@ def _init_matches(value: Mapping[str, Any]) -> bool:
 
 
 def _run_door(argv: Sequence[str], env: Mapping[str, str]) -> int:
-    from .cli import main
+    from . import cli
 
     saved = {key: os.environ.get(key) for key in env}
     os.environ.update(env)
     try:
-        return int(main(list(argv)))
+        # The forecast runs in its own process, so its device memory ends with it (cli.DEVICE_COMMANDS).
+        return cli.run_stage(list(argv))
     finally:
         for key, old in saved.items():
             if old is None:
@@ -678,7 +845,12 @@ def run_global(args: argparse.Namespace) -> int:
     if status.log_path is not None:
         print(f"log: {status.log_path}", flush=True)
     receipt: dict[str, Any] = {"schema": RECEIPT_SCHEMA, "plan": str(work / "global-plan.json"),
-                               "row": value["row"]["id"], "cycle": value["cycle"], "stages": {}}
+                               "row": value["row"]["id"], "cycle": value["cycle"], "stages": {},
+                               "physics": {"planned": {"row": value["physics"]["row"],
+                                                       "suite": value["physics"].get("suite"),
+                                                       "mode": value["physics"]["mode"]},
+                                           "forecast_receipt": str(Path(value["paths"]["forecast"])
+                                                                   / "forecast-receipt.json")}}
     rows_env = os.pathsep.join(filter(None, [value["paths"]["mesh_rows"], os.environ.get("GPUWM_HEX_MESH_ROWS")]))
     env = {"GPUWM_HEX_MESH_ROWS": rows_env}
     # ONE scorer per run. The forecast door queues the automatic scorer when the forecast ends; it
@@ -761,7 +933,25 @@ def run_global(args: argparse.Namespace) -> int:
         raise
 
 
+def _ran_physics(path: Path) -> dict[str, Any] | None:
+    """The suite and mode the forecast stage ran, from its own receipt (None until it writes one).
+    No ``configuration.physics_mode`` block means exact: the forecast door records it only for correct."""
+
+    try:
+        forecast = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    block = (forecast.get("configuration") or {}).get("physics_mode") or {}
+    return {"suite": (forecast.get("physics") or {}).get("suite") or "arwen (the forecast door default)",
+            "mode": block.get("physics.mode", "exact")}
+
+
 def _write_receipt(work: Path, receipt: Mapping[str, Any]) -> None:
+    physics = receipt.get("physics")
+    if isinstance(physics, dict) and "forecast" in receipt.get("stages", {}):
+        ran = _ran_physics(Path(physics["forecast_receipt"]))
+        if ran is not None:
+            physics["ran"] = ran
     (work / "global-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n",
                                               encoding="utf-8")
 
@@ -779,8 +969,12 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
                              "waited for until it posts (see --max-wait-minutes)")
     parser.add_argument("--work-dir", type=Path, default=None, help="the run folder")
     parser.add_argument("--source", default="gfs", help="init-source row (default gfs; see init-source --list)")
+    parser.add_argument("--accept-licence", action="append", default=[], metavar="LICENCE",
+                        help="research-only model opt-in naming each exact code/weight licence")
     parser.add_argument("--member", type=int, default=None, help="one member of an ensemble source (e.g. gefs)")
     parser.add_argument("--physics-row", default=None, help="override the row's physics arm (arwen, morrison)")
+    parser.add_argument("--vertical-spec", type=Path, default=None,
+                        help="versioned vertical grid and runtime settings (default: the row's specification)")
     parser.add_argument("--hours", type=float, default=None, help="forecast length (default: the row's)")
     parser.add_argument("--history-every-minutes", type=int, default=None)
     parser.add_argument("--devices", default=None, metavar="D0,D1,...",
@@ -795,6 +989,8 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--observation-config", type=Path, default=None,
                         help="observation scorecard overrides (the region stays the row's)")
     parser.add_argument("--export-field-set", default="surface", choices=("surface", "full"))
+    parser.add_argument("--chemistry-config", type=Path, default=None,
+                        help="N-species chemistry transport configuration, forwarded to forecast")
     parser.add_argument("--forecast-arg", action="append", default=[], metavar="ARG",
                         help="one extra forecast-door argument, repeatable (e.g. --forecast-arg=--checkpoint-hours=6)")
     parser.add_argument("--table", type=Path, default=None, help="alternative table (tests)")
@@ -832,6 +1028,7 @@ def run_sources(args: argparse.Namespace) -> int:
         "init_sources": [{"id": row["id"], "display_name": row.get("display_name"),
                           "aliases": row.get("aliases", []), "role": row.get("role"),
                           "status": row.get("status", "runnable"),
+                          "coverage": row.get("coverage", "global"),
                           "members": bool(row.get("members"))} for row in sources["sources"]],
         "global_rows": [{"id": row["id"], "mesh": row["mesh"], "cells": table["meshes"][row["mesh"]]["cells"],
                          "nominal_dx_m": table["meshes"][row["mesh"]]["nominal_dx_m"],
@@ -843,7 +1040,7 @@ def run_sources(args: argparse.Namespace) -> int:
         print(json.dumps(value, indent=2))
     else:
         for row in value["init_sources"]:
-            print(f"source  {row['id']:10s} {row['status']:9s} {row['display_name']}")
+            print(f"source  {row['id']:10s} {row['status']:9s} {row['coverage']:12s} {row['display_name']}")
         for row in value["global_rows"]:
             print(f"global  {row['id']:24s} {row['mesh']:12s} physics={row['physics']}")
     return 0

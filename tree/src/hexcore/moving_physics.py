@@ -157,6 +157,34 @@ def mapped_owner_field(payload, weights, key, cache=None, *, target_mesh=None):
     return fields[key]
 
 
+def sea_ice_threshold(identity):
+    """The seam's own sea-ice classification threshold.
+
+    The Arwen and Noah-MP seams seal an explicit xice_threshold; the Noah
+    suite seams seal fractional_seaice (0/1) instead, whose threshold is
+    MPAS's own rule (mpas_atmphys_vars / framework init: 0.02 when
+    config_frac_seaice, else 0.5).  Breakage it fixes: every Thompson (suite
+    seam) moving member died at its first move with KeyError xice_threshold
+    (ensemble-07, 2026-10-21).
+    """
+    if 'xice_threshold' in identity:
+        return float(identity['xice_threshold'])
+    if 'xice_threshold' in identity.get('surface',()):
+        # The column-physics seam (mpas-column-physics-v1) seals the NAMES of
+        # its initialize_physics surface inputs, not their values; the hex
+        # driver passes xice_threshold=ARWEN_XICE_THRESHOLD on every such
+        # seam (run_cuda_v841_full_physics_x4 surface inputs).  Breakage it
+        # fixes: Thompson moving members still died at their first move with
+        # "seals neither xice_threshold nor fractional_seaice" (moving
+        # smoke-thompson-08, 2026-10-21).
+        from hexcore.drivers.run_cuda_v841_full_physics_x4 import ARWEN_XICE_THRESHOLD
+        return float(ARWEN_XICE_THRESHOLD)
+    fractional=identity.get('fractional_seaice')
+    if fractional in (0,1):
+        return 0.02 if int(fractional) else 0.5
+    raise KeyError('seam identity seals neither xice_threshold nor fractional_seaice')
+
+
 def land_state_donors(payload,weights,layout,fresh,target_mesh,cache):
     """One local coherent donor, preserving land, sea-ice and glacier roles."""
     from scipy.spatial import cKDTree
@@ -169,7 +197,7 @@ def land_state_donors(payload,weights,layout,fresh,target_mesh,cache):
     categories=np.stack([sources[key].reshape(-1) for key in LAND_CATEGORIES],axis=-1)
     count=len(layout.cell_l2g)
     targets=np.stack([fresh[key].reshape(-1)[:count] for key in LAND_CATEGORIES],axis=-1)
-    threshold=float(payload['backends'][0]['seam']['identity']['xice_threshold'])
+    threshold=sea_ice_threshold(payload['backends'][0]['seam']['identity'])
     categories[:,0]=categories[:,0]>=1.5;targets[:,0]=targets[:,0]>=1.5
     categories[:,1]=categories[:,1]>=threshold;targets[:,1]=targets[:,1]>=threshold
     categories=np.column_stack((categories,categories[:,3]==_ISICE_TABLE))
@@ -334,4 +362,5 @@ def remap_step_carriers(payload, weights, layouts):
         forcing=[dict(time_seconds=payload['forcing'][0]['time_seconds'],
                       **{key:np.ascontiguousarray(value[...,layout.cell_l2g])
                          for key,value in global_values.items()}) for layout in layouts]
-    return dict(previous=previous,forcing=forcing)
+    # Spectral coefficients and their AR clock are independent of either mesh.
+    return dict(previous=previous,forcing=forcing,stochastic=payload.get("stochastic"))

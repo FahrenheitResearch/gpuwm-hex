@@ -28,6 +28,10 @@ Licence key
   ARM      MIT, Arm Limited               LICENSE.arm-powf, licenses/LICENSE-Arm-optimized-routines-MIT.txt
   CORE     MIT, CORE-MATH                 licenses/LICENSE-CORE-MATH-MIT.txt
   SUN      FDLIBM notice, Sun Microsystems  licenses/LICENSE-FDLIBM-SunPro.txt
+  BLOSC    BSD-3-Clause, Francesc Alted / The Blosc Development Team
+                                         licenses/LICENSE-c-blosc-BSD-3-Clause.txt
+           (rust/s2s-zarr loads c-blosc at run time from the host or the
+           netCDF4 wheel to decode ERA5 Zarr chunks; it is not bundled)
   USGOV    a work of the US Government (NOAA GSL), by the project's ruling
            of 2026-10-14                  NOTICE sections 8 and 9
   NR       Numerical Recipes notice as MMM-physics preserves it (a stated

@@ -5,7 +5,10 @@ Three verbs, all read from the one suite table (hexcore.physics_suites):
 * ``list``    -- every named suite, MPAS's own suites, and every option the
   column seams carry or refuse (with the breakage and the follow-up);
 * ``resolve`` -- what a ``--physics-suite``/``--physics`` request runs: the
-  seam, the backend row, the convection request, the differences;
+  seam, the backend row, the convection request, the differences.  A suite
+  the forecast door sends down an MPAS suite route (the ``suite_routes`` of
+  the mpasphys_v842 and mpasphys_rrfs rows) reports that route, resolved by
+  the door's own ``hexcore.mpasphys.forecast_v842.native_route``;
 * ``import``  -- a ``namelist.atmosphere``, option by option.
 
 The forecast door takes the same flags, so a request checked here is the
@@ -16,7 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from .errors import ConfigurationRefusal
 
@@ -39,28 +42,89 @@ def _mesh_spacing(mesh: str | None) -> float | None:
     return None if row is None else getattr(row, "nominal_dx_m", None)
 
 
+def _route_providers(table: Any) -> list[tuple[str, Any]]:
+    """The table rows that carry an MPAS suite route, chosen as forecast_v842.native_route chooses them."""
+    return [(key, row) for key, row in table.items()
+            if isinstance(row, Mapping) and (row.get("backend") == "mpasphys" or row.get("backend_row") == key)
+            and "suite_routes" in row]
+
+
+def _mpas_route(table: Any, name: str | None, overrides: Any = None, mode: str | None = None) -> Any:
+    """What the forecast door runs for this request on an MPAS suite route, or None when it has none.
+
+    The door (forecast_door._run_forecast) calls forecast_v842.native_route first, and a name in a
+    provider's ``suite_routes`` runs that provider's driver port (hex-cuda by default) without reaching
+    physics_suites.resolve_physics.  Resolving it here with the same function keeps these verbs true to
+    the door: before this they judged every MPAS suite on the ArWen engine columns, refused
+    convection_permitting on the engine-MYNN cloud pairing and named engine or column rows the forecast
+    never runs.
+    """
+    if name is None:
+        return None
+    matches = [(key, row) for key, row in _route_providers(table) if name in row["suite_routes"]]
+    if not matches:
+        return None
+    from .forecast_door import PHYSICS_MODE_DEFAULT
+    from .mpasphys.forecast_v842 import native_route
+
+    request = argparse.Namespace(physics_namelist=None, physics_suite=name, physics=list(overrides or ()) or None,
+                                 physics_mode=mode, physics_correct_skip=None, physics_default_backend=None)
+    config, _ = native_route(request, default_mode=PHYSICS_MODE_DEFAULT)
+    if config is None:
+        return None
+    key, row = matches[0]
+    return {
+        "route": "mpas_suite",
+        "suite": name,
+        "native_suite": getattr(config, "native_suite", config.suite),
+        "backend_row": key,
+        "driver_module": row.get("driver_module", "hexcore.mpasphys.driver_v842"),
+        "default_backend": row["default_backend"],
+        "physics_mode": config.mode,
+        "corrections_applied": sorted(config.corrections),
+        "gaps": [gap.as_dict() for gap in config.gaps],
+        "selectors": dict(config.selectors),
+        "backends": {slot: str(backend) for slot, backend in config.backends.items()},
+        "cpu_slots": [f"{item.slot}={item.scheme}: {item.reason}" for item in config.cpu_slots],
+    }
+
+
 def _list(arguments: argparse.Namespace) -> int:
     from .physics_suites import load_table, mpas_suite_names, resolve_physics, suite_names
 
     table = load_table()
+    names = suite_names() + mpas_suite_names()
+    names += tuple(dict.fromkeys(alias for _, row in _route_providers(table) for alias in row["suite_routes"]
+                                 if alias not in names))
     suites = []
-    for name in suite_names() + mpas_suite_names():
+    for name in names:
+        route = None
         try:
-            resolved = resolve_physics(
-                name, mesh=arguments.mesh, nominal_dx_m=_mesh_spacing(arguments.mesh))
-            verdict = {"runs": True, "seam": resolved.seam, "backend_row": resolved.backend_row,
-                       "convection_request": resolved.convection}
+            route = _mpas_route(table, name)
+            if route is not None:
+                verdict = {"runs": True, "seam": "mpas_suite", "backend_row": route["backend_row"],
+                           "driver_module": route["driver_module"],
+                           "default_backend": route["default_backend"], "physics_mode": route["physics_mode"]}
+            else:
+                resolved = resolve_physics(
+                    name, mesh=arguments.mesh, nominal_dx_m=_mesh_spacing(arguments.mesh))
+                verdict = {"runs": True, "seam": resolved.seam, "backend_row": resolved.backend_row,
+                           "convection_request": resolved.convection}
         except ConfigurationRefusal as error:
             verdict = {"runs": False, "refusals": [
                 item.line() for item in getattr(error, "refusals", ())] or [str(error)]}
+        except ValueError as error:
+            verdict = {"runs": False, "refusals": [str(error)]}
         row = next((item for item in table["suites"] if item["name"] == name), None)
+        mpas_row = table["mpas_suites"]["suites"].get(name)
         suites.append({
             "name": name,
             "kind": "hex" if row is not None else "MPAS",
             "default": bool(row is not None and row.get("default")),
             "describes": None if row is None else row["describes"],
             "selectors": dict(row["selectors"]) if row is not None
-            else dict(table["mpas_suites"]["suites"][name]),
+            else dict(mpas_row) if mpas_row is not None
+            else dict(route["selectors"]) if route is not None else {},
             **verdict,
         })
     options = {
@@ -103,6 +167,16 @@ def _list(arguments: argparse.Namespace) -> int:
 def _resolve(arguments: argparse.Namespace) -> int:
     from .physics_suites import parse_override, resolve_physics
 
+    from .physics_suites import load_table
+
+    try:
+        route = _mpas_route(load_table(), arguments.physics_suite, arguments.physics, arguments.physics_mode)
+    except ValueError as error:
+        _print({"resolved": False, "refusals": [str(error)]})
+        return REFUSED_EXIT
+    if route is not None:
+        _print({"resolved": True, **route})
+        return 0
     try:
         overrides = dict(parse_override(text) for text in arguments.physics or ())
         resolved = resolve_physics(
@@ -146,6 +220,8 @@ def add_physics_parser(commands: Any) -> None:
     resolve.add_argument("--physics-suite", default=None, metavar="NAME")
     resolve.add_argument("--physics", action="append", default=None, metavar="KEY=VALUE")
     resolve.add_argument("--mesh", default=None)
+    resolve.add_argument("--physics-mode", choices=("correct", "exact"), default=None,
+                         help="as on the forecast door: an MPAS suite route runs correct unless exact is named")
     resolve.set_defaults(handler=_resolve)
     importer = verbs.add_parser("import", help="a namelist.atmosphere, option by option")
     importer.add_argument("namelist", metavar="NAMELIST")

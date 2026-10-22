@@ -31,6 +31,7 @@ def test_the_sdist_carries_the_copier_crate_and_not_its_build_output(monkeypatch
     assert "rust/netcdf-copy/Cargo.toml" in shipped
     assert "rust/netcdf-copy/Cargo.lock" in shipped
     assert "rust/netcdf-copy/src/main.rs" in shipped
+    assert "rust/netcdf-copy/build.rs" in shipped
     assert not any(name.startswith("rust/netcdf-copy/target/") for name in shipped)
 
 

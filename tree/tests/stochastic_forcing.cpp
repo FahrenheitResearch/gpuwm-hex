@@ -121,6 +121,44 @@ int main() {
             max_divergence=std::max(max_divergence,fabs(d)/largest);
         ++curl_cases;
     }
+    // A permuted class mesh must use original global dual vertices, including
+    // halo edges also present in another class. Padding remains untouched.
+    std::vector<float> global(levels*edges, -.4f);
+    launch(edges*levels,[&] {
+        force_edges(global.data(),rho.data(),taper,vertex_taper,pattern,psi,
+                    diss,&norm,coe,voe,orientation,dv,edges,1,edges,1,
+                    cells,4,edges,levels,1,1,0,1,.003f);
+    });
+    for (const auto &ids: std::vector<std::vector<int>>{{4,1,5,0},{0,3,2,4}}) {
+        std::vector<float> local(levels*5, 777), density(levels*5, 888);
+        for (int k=0;k<levels;++k) for (int e=0;e<4;++e) {
+            local[k*5+e]=-.4f; density[k*5+e]=rho[k*edges+ids[e]];
+        }
+        launch(levels*4,[&] {
+            force_lts_edges(local.data(),density.data(),taper,vertex_taper,pattern,psi,
+                            diss,&norm,coe,voe,orientation,dv,ids.data(),5,1,5,1,
+                            cells,4,4,levels,1,1,0,1,.003f);
+        });
+        for (int k=0;k<levels;++k) {
+            for (int e=0;e<4;++e)
+                if (local[k*5+e]!=global[k*edges+ids[e]]) return 9;
+            if (local[k*5+4]!=777) return 10;
+        }
+    }
+    const int eoc[]={0,1,2, 0,3,4, 1,3,5, 2,4,5}, nec[]={3,3,3,3};
+    const float weight[]={1,2,3,4,5,6};
+    float integral[levels*edges], cell_sink[levels*cells];
+    for (int i=0;i<levels*edges;++i) integral[i]=2*(i+1);
+    launch(cells*levels,[&] {
+        lts_sink_cells(integral,cell_sink,eoc,nec,weight,cells,edges,3,levels,2);
+    });
+    for (int k=0;k<levels;++k) for (int c=0;c<cells;++c) {
+        double value=0, total=0;
+        for (int j=0;j<3;++j) {
+            int e=eoc[c*3+j]; value+=(k*edges+e+1)*weight[e]; total+=weight[e];
+        }
+        if (fabs(cell_sink[k*cells+c]-value/total)>1e-6) return 11;
+    }
     // With spatially uniform taper, density-normalized thermal forcing must
     // retain zero area mean and the prescribed variance. Unequal cell areas
     // and densities prevent an unweighted mean or missing density factor
@@ -149,5 +187,6 @@ int main() {
         << ",\"max_relative_divergence\":" << max_divergence
         << ",\"max_thermal_invariant_error\":" << max_heat_error
         << ",\"padding_unchanged\":true,\"zero_dissipation_unchanged\":true"
+        << ",\"lts_global_halo_words_equal\":true,\"lts_cell_budget_pass\":true"
         << ",\"wall_seconds\":" << std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count() << "}\n";
 }

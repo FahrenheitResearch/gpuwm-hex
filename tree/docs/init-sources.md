@@ -1,7 +1,8 @@
 # Init sources: one table, one path
 
 `gpuwm-hex init-source` builds an initial condition from any row of
-`src/hexcore/data/init-sources.v1.json`. Every row travels the same four
+`src/hexcore/data/init-sources.v1.json` or `src/hexcore/earth2_init_rows.json`.
+Every row travels the same four
 stages; no line of `src/hexcore/init_sources.py` names a source, and
 `tests/test_init_sources.py::test_the_path_names_no_source` holds that.
 
@@ -74,3 +75,53 @@ The `icon` row needs the engine at or after the commit that gives
 `gdt101_remap` a whole-sphere target and `met_intermediate` the `dwd` map
 source and the soil-water-mass rule. Every other row runs on the unchanged
 writer.
+
+## Generated Earth-2 forecasts
+
+The Earth-2 extension lists each model's output channels, pressure levels,
+units, transforms, explicit exclusions, source licences and pinned weights
+revision. There are no model adapter modules. Generation uses the engine's
+shared Earth2Studio runner. Its existing Rust composition profiles read the
+forecast and physical surface/soil donor, then export WPS intermediate.
+The export's actual atmospheric and soil level counts drive hex initialization.
+The installed model contract and Rust mapping are checked before inference.
+
+```sh
+gpuwm-hex global --row global-120km --source earth2-fcn3 \
+  --cycle 2024-10-08T06 --hours 24 --work-dir earth2-global
+gpuwm-hex s2s --row global-120km --source earth2-fcn3 \
+  --cycle 2024-10-08T06 --days 30 --members 2 --lagged 0,6 \
+  --work-dir earth2-s2s
+```
+
+`--cycle` names the hex initialization time. The model starts one forecast
+step earlier, so even source lead zero consumes a positive-lead forecast.
+For a lagged S2S member, the requested source lead is added to that step;
+all members retain the common hex valid time. The inference receipt records
+both clocks. Surface and soil fields come from the physical donor at the
+inference cycle, broadcast in time by the shared engine composition.
+
+FCN3 and SFNO weights are Apache-2.0; Aurora weights are MIT. These are the
+default rows, with licence links in the table. Other verified weight grants
+require `--accept-licence 'EXACT NAME'` on the global, S2S or init-source door.
+Rows without a weight grant or a compatible global pressure-column contract
+refuse with the concrete missing requirement. A research opt-in does not
+override those refusals.
+
+Install the engine's Earth2Studio environment and set `GPUWM_EARTH2_PYTHON`
+to its interpreter. The shared runner checks its pinned Earth2Studio version;
+model-specific runtime dependencies remain the engine's responsibility.
+Inference and Rust composition use 14 workers by default. `RAYON_NUM_THREADS`
+or `init-source --jobs` sets another budget. On Linux the inference child
+inherits a bounded CPU affinity, which the engine uses to size Torch and BLAS
+pools; the caller's affinity is restored even when inference fails.
+The initialization receipt includes the extension digest, inference receipt,
+channel bindings, Rust export command and effective first-guess counts.
+
+For ARCO surface donors, `generation.global_donor` declares an explicit
+360-degree native request. It bypasses the corner-string dateline heuristic;
+Rust acquires only the surface and soil fields needed by composition.
+Rerunning the same work directory reuses the generated forecast only when
+its model contract, clocks, member, checkpoint revision and every output's
+size and SHA256 match the saved runner receipt. A mismatch refuses before
+inference instead of overwriting a forecast of different provenance.

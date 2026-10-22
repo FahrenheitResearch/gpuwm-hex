@@ -31,6 +31,7 @@ PHYSICS_TABLES = ({"win32": "lookup_decode.dll", "darwin": "liblookup_decode.dyl
 # breaks without it); hexcore.mpasphys.resources_build binds this name.
 POOL_READER = "rw_mpas_physics_pool" + _EXE
 OBS_SCORER = "hex_obs_scorecard" + (".exe" if sys.platform == "win32" else "")
+CHEM_SOURCES = "rw_hex_chem_sources" + (".exe" if sys.platform == "win32" else "")
 NETCDF_COPY = "gpuwm-hex-netcdf-copy" + (".exe" if sys.platform == "win32" else "")
 # The history writer's parallel deflate (hexcore.history_deflate binds this name).
 HISTORY_DEFLATE = "libhex_history_deflate.so"
@@ -108,6 +109,29 @@ def engine_source() -> Path | None:
 
 
 class BuildPy(build_py):
+
+    @staticmethod
+    def netcdf_environment(root: Path, *, full: bool = False):
+        """Use the pinned static format-specific archive in Linux wheel payloads."""
+        import os
+        env = os.environ.copy()
+        if not sys.platform.startswith("linux"):
+            return env
+        kind = "NETCDF4" if full else "NETCDF_CLASSIC"
+        suffix = "netcdf4" if full else "netcdf-classic"
+        prefix = Path(env.get(f"GPUWM_HEX_{kind}_PREFIX", str(root / "rust/netcdf-copy/target" / suffix))).resolve()
+        if not (prefix / "lib/libnetcdf.a").is_file():
+            script = "build_netcdf4_static.sh" if full else "build_netcdf_classic_static.sh"
+            subprocess.run(["bash", str(root / "tools" / script), str(prefix)], check=True, env=env)
+        env[f"GPUWM_HEX_{kind}_PREFIX"] = str(prefix)
+        # An explicit link-search argument also invalidates stale cargo outputs
+        # built against the host shared library. LIBRARY_PATH alone does not.
+        flags = env.get("CARGO_ENCODED_RUSTFLAGS")
+        if flags is None:
+            import shlex
+            flags = "\x1f".join(shlex.split(env.get("RUSTFLAGS", "")))
+        env["CARGO_ENCODED_RUSTFLAGS"] = flags + ("\x1f" if flags else "") + "-Lnative=" + str(prefix / "lib")
+        return env
     def run(self):
         super().run()
         root = Path(__file__).parent
@@ -177,6 +201,12 @@ class BuildPy(build_py):
         # rust/netcdf-copy", which no pip user can do.  The copier links
         # libnetcdf; a build host without its development files still installs
         # everything else, and the door says what it costs (vertical_spec).
+        # Chemistry source preparation is required by the chemistry public door.
+        subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
+                        str(root / "rust/chem-sources/Cargo.toml"), "--target-dir",
+                        str(root / "rust/chem-sources/target")], check=True)
+        shutil.copy2(root / "rust/chem-sources/target/release" / ("rw_hex_chem_sources" + _EXE),
+                     destination.parent / ("rw_hex_chem_sources" + _EXE))
         copier = self.build_netcdf_copy(root)
         if copier is not None:
             shutil.copy2(copier, destination.parent / NETCDF_COPY)
@@ -193,6 +223,11 @@ class BuildPy(build_py):
         deflate = self.build_history_deflate(root)
         if deflate is not None:
             shutil.copy2(deflate, destination.parent / HISTORY_DEFLATE)
+        if sys.platform.startswith("linux"):
+            crate = root / "rust/s2s-zarr"
+            subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
+                            str(crate / "Cargo.toml"), "--target-dir", str(crate / "target")], check=True)
+            shutil.copy2(crate / "target/release/libhex_s2s_zarr.so", destination.parent / "libhex_s2s_zarr.so")
         # Both physics routes decode their timed surface stream through this
         # source-built bridge. A lab-only reader.so is never a package input.
         surface = self.build_surface_reader(root)
@@ -217,6 +252,13 @@ class BuildPy(build_py):
         renderer = s2s_renderer_bridge(root)
         if renderer is not None:
             shutil.copy2(renderer, destination.parent / renderer.name)
+            sibling = renderer.with_name("rw_ensbatch" + _EXE)
+            shutil.copy2(sibling, destination.parent / sibling.name)
+            reducer = renderer.with_name("rw_s2s" + _EXE)
+            shutil.copy2(reducer, destination.parent / reducer.name)
+        converter = chemistry_converter_bridge(root)
+        if converter is not None:
+            shutil.copy2(converter, destination.parent / converter.name)
         # THE BREAKAGE THIS PREVENTS (hex global on 2x RTX PRO 6000, 2026-10-16,
         # defect 4): automatic multi-card runs need a METIS partition and a pip
         # install had no gpmetis, so every two-card run refused.  The wheel now
@@ -244,8 +286,9 @@ class BuildPy(build_py):
     @staticmethod
     def build_netcdf_copy(root: Path) -> Path | None:
         crate = root / "rust/netcdf-copy"
+        env = BuildPy.netcdf_environment(root)
         built = subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
-                                str(crate / "Cargo.toml"), "--target-dir", str(crate / "target")])
+                                str(crate / "Cargo.toml"), "--target-dir", str(crate / "target")], env=env)
         binary = crate / "target/release" / NETCDF_COPY
         if built.returncode == 0 and binary.is_file():
             return binary
@@ -290,7 +333,15 @@ class BuildPy(build_py):
                                     record["source_sha256"])):
                 if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
                     raise SystemExit(f"surface reader build provenance differs: {path}")
-            return library
+            if not sys.platform.startswith("linux"):
+                return library
+            # ldd exits 1 on a file with no dynamic section (a fully static reader):
+            # that has no host netCDF/HDF5 dependency, so it is kept, not a crash.
+            dependencies = subprocess.run(["ldd", str(library)], check=False, text=True, capture_output=True).stdout
+            if "libnetcdf.so" not in dependencies and "libhdf5" not in dependencies:
+                return library
+            print("gpuwm-hex: rebuilding verified surface reader source with static netCDF; "
+                  "the supplied reader depends on a host netCDF/HDF5 shared library", file=sys.stderr)
         # THE BREAKAGE THIS PREVENTS (hex 0.4.1 doors, Windows desktop,
         # 2026-10-20): this step ran `bash tools/build_surface_reader.sh`, and
         # on Windows `bash` is WSL's launcher or absent, so `pip install
@@ -310,11 +361,13 @@ class BuildPy(build_py):
             if profile is not None:
                 handle.write(workspace[profile.start():])
         jobs = os.environ.get("CARGO_BUILD_JOBS")
+        env = BuildPy.netcdf_environment(root, full=True)
         locked = subprocess.run(["cargo", "generate-lockfile", "--offline", "--manifest-path", str(manifest)])
         built = locked.returncode == 0 and subprocess.run(
             ["cargo", os.environ.get("RW_SURFACE_CARGO_ACTION", "build"), "--release", "--locked", "--offline",
              "--manifest-path", str(manifest), "--target-dir", str(out / "target")]
-            + (["-j", jobs] if jobs else [])).returncode == 0
+            + (["--features", "static-netcdf"] if sys.platform.startswith("linux") else [])
+            + (["-j", jobs] if jobs else []), env=env).returncode == 0
         library = out / "target/release" / SURFACE_READER
         if built and library.is_file():
             return library
@@ -331,7 +384,8 @@ class BuildPy(build_py):
     def build_pool_reader(root: Path) -> Path | None:
         crate = root / "rust/physics-pool"
         built = subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
-                                str(crate / "Cargo.toml"), "--target-dir", str(crate / "target")])
+                                str(crate / "Cargo.toml"), "--target-dir", str(crate / "target")],
+                               env=BuildPy.netcdf_environment(root))
         binary = crate / "target/release" / POOL_READER
         if built.returncode == 0 and binary.is_file():
             return binary
@@ -373,28 +427,73 @@ def surface_series_bridge(root: Path) -> Path | None:
 
 
 def s2s_renderer_bridge(root: Path) -> Path | None:
-    """Ship the two source-owned renderer fixes through the ordinary engine ladder."""
+    """Ship the source-owned renderer capabilities through the ordinary engine ladder."""
     import os
     name = "rw_wrfbatch" + _EXE
     patches = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                for p in sorted((root / "docs/s2s/engine-patches").glob("*.patch"))}
-    recipe = hashlib.sha256((root / "tools/build_s2s_renderer.sh").read_bytes()).hexdigest()
+    recipe = hashlib.sha256((root / "tools/build_s2s_diagnostics.sh").read_bytes()).hexdigest()
     prebuilt = os.environ.get("GPUWM_HEX_ENGINE_BRIDGES")
     if prebuilt:
         directory = Path(prebuilt)
         binary = directory / name
         receipt = json.loads((directory / "provenance.json").read_text()).get("bridges", {}).get("rw_wrfbatch", {})
-        if not binary.is_file() or receipt.get("patches") != patches or receipt.get("recipe_sha256") != recipe:
+        integrated = (receipt.get("patches") == {} and
+                      receipt.get("source_copy") == "unchanged integrated engine source; no patches applied")
+        if (not binary.is_file() or
+                not (receipt.get("patches") == patches or integrated) or
+                receipt.get("recipe_sha256") != recipe):
             raise SystemExit("rw_wrfbatch prebuilt lacks the current S2S fixes; rebuild tools/build_engine_bridges.sh")
         if receipt.get("sha256") != hashlib.sha256(binary.read_bytes()).hexdigest():
             raise SystemExit("rw_wrfbatch prebuilt hash mismatch; rebuild tools/build_engine_bridges.sh")
+        sibling = directory / ("rw_ensbatch" + _EXE)
+        if (not sibling.is_file() or receipt.get("ensemble_renderer", {}).get("sha256")
+                != hashlib.sha256(sibling.read_bytes()).hexdigest()):
+            raise SystemExit("rw_ensbatch prebuilt lacks the matching S2S renderer; rebuild tools/build_engine_bridges.sh")
+        reducer = directory / ("rw_s2s" + _EXE)
+        if (not reducer.is_file() or receipt.get("diagnostics", {}).get("rw_s2s_sha256")
+                != hashlib.sha256(reducer.read_bytes()).hexdigest()
+                or receipt.get("diagnostics", {}).get("reducer_lock_sha256")
+                != hashlib.sha256((root / "tools/rustwx/Cargo.lock").read_bytes()).hexdigest()
+                or receipt.get("diagnostics", {}).get("reducer_sources")
+                != {str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in sorted((root / "tools/rustwx/crates/rw-s2s").rglob('*.rs'))}
+                or receipt.get("diagnostics", {}).get("renderer_source_sha256")
+                != hashlib.sha256((root / "tools/s2s_renderer/s2s_diagnostics.rs").read_bytes()).hexdigest()):
+            raise SystemExit("rw_s2s prebuilt lacks the matching S2S diagnostics; rebuild tools/build_engine_bridges.sh")
         return binary
     engine = engine_source()
     if engine is None:
         print("gpuwm-hex: S2S rw_wrfbatch NOT BUILT: set GPUWM_HEX_ENGINE_SOURCE to a gpuwm source checkout", file=sys.stderr)
         return None
     output = root / "rust/s2s-renderer-build"
-    subprocess.run(["bash", str(root / "tools/build_s2s_renderer.sh"), str(engine), str(output)], check=True)
+    subprocess.run(["bash", str(root / "tools/build_s2s_diagnostics.sh"), str(engine), str(output)], check=True)
+    return output / name
+
+
+def chemistry_converter_bridge(root: Path) -> Path | None:
+    """Bundle the chemistry-aware converter on the ordinary engine ladder."""
+    name = "rw_mpas_convert" + _EXE
+    patch = hashlib.sha256((root / "engine-patches/chemistry-products.patch").read_bytes()).hexdigest()
+    recipe = hashlib.sha256((root / "tools/build_chemistry_converter.sh").read_bytes()).hexdigest()
+    prebuilt = os.environ.get("GPUWM_HEX_ENGINE_BRIDGES")
+    if prebuilt and (Path(prebuilt) / name).is_file():
+        directory = Path(prebuilt)
+        provenance = json.loads((directory / "provenance.json").read_text())
+        # publish.yml stages each source prebuilt's pinned provenance under "bridges" by file name.
+        record = provenance.get("bridges", {}).get(name) or provenance.get("chemistry_converter", {})
+        binary = directory / name
+        if (record.get("patch_sha256") != patch or record.get("recipe_sha256") != recipe
+                or record.get("sha256") != hashlib.sha256(binary.read_bytes()).hexdigest()):
+            raise SystemExit("rw_mpas_convert prebuilt lacks current chemistry product provenance")
+        return binary
+    engine = engine_source()
+    if engine is None:
+        print("gpuwm-hex: chemistry rw_mpas_convert NOT BUILT: set GPUWM_HEX_ENGINE_SOURCE "
+              "to a gpuwm source checkout; chemistry products require this converter", file=sys.stderr)
+        return None
+    output = root / "rust/chemistry-converter-build"
+    subprocess.run(["bash", str(root / "tools/build_chemistry_converter.sh"), str(engine), str(output)], check=True)
     return output / name
 
 
@@ -452,7 +551,10 @@ def engine_bridges(root: Path) -> list[Path]:
             built = subprocess.run(["cargo", "build", "--release", "--locked", "--offline", "-p", "rw-obs",
                                     *[part for name in OBS_BRIDGES for part in ("--bin", name.removesuffix(_EXE))]],
                                    cwd=workspace)
-        paths = [workspace / "target/release" / name for name in ENGINE_BRIDGES]
+        target_dir = Path(os.environ.get("CARGO_TARGET_DIR", workspace / "target"))
+        if not target_dir.is_absolute():
+            target_dir = workspace / target_dir
+        paths = [target_dir / "release" / name for name in ENGINE_BRIDGES]
         if built.returncode == 0 and all(path.is_file() for path in paths):
             # Source builds must obey the same byte pins as prebuilt assets.
             for path in paths:
@@ -558,10 +660,19 @@ def bundled_helpers(root: Path) -> tuple[Path, ...]:
     import os
     tables = root / "rust/physics-tables/target/release"
     return (root / "src/hexcore/libexec" / OBS_SCORER,
+            root / "rust/chemistry-converter-build" / ("rw_mpas_convert" + _EXE),
+            root / "rust/chem-sources/target/release" / CHEM_SOURCES,
             root / "rust/netcdf-copy/target/release" / NETCDF_COPY,
             (Path(os.environ["GPUWM_HEX_ENGINE_BRIDGES"]) / ("rw_wrfbatch" + _EXE)
              if os.environ.get("GPUWM_HEX_ENGINE_BRIDGES") else
              root / "rust/s2s-renderer-build" / ("rw_wrfbatch" + _EXE)),
+            (Path(os.environ["GPUWM_HEX_ENGINE_BRIDGES"]) / ("rw_ensbatch" + _EXE)
+             if os.environ.get("GPUWM_HEX_ENGINE_BRIDGES") else
+             root / "rust/s2s-renderer-build" / ("rw_ensbatch" + _EXE)),
+            (Path(os.environ["GPUWM_HEX_ENGINE_BRIDGES"]) / ("rw_s2s" + _EXE)
+             if os.environ.get("GPUWM_HEX_ENGINE_BRIDGES") else
+             root / "rust/s2s-renderer-build" / ("rw_s2s" + _EXE)),
+            root / "rust/s2s-zarr/target/release/libhex_s2s_zarr.so",
             *bundled_engine_bridges(root),
             *(tables / name for name in PHYSICS_TABLES),
             root / "rust/physics-pool/target/release" / POOL_READER,

@@ -52,9 +52,16 @@ PROGRAMS = (("S", "hex_obs_scorecard", "the observation scorer (rust/obs-scoreca
                   "rw_mpas_rrfs_connectivity, rw_mpas_rrfs_damping and rw_mpas_rrfs_deformation",
              "the bundled engine bridges (crate rw-mpas)"),
             ("O", "rw_igra2", "the IGRA2 radiosonde door (crate rw-obs)"),
-            ("W", "rw_wrfbatch", "the renderer (crate rw-wrfbatch)"),
+            ("W", "rw_wrfbatch and rw_ensbatch", "the renderer and the ensemble renderer (crate rw-wrfbatch)"),
+            ("C", "rw_mpas_convert", "the chemistry-aware history converter (crate rw-mpas)"),
             ("F", "rw_sfc_series", "the surface series producer (crate rw-sfc-series)"),
-            ("P", "rw_mpas_physics_pool", "the Registry pool reader (rust/physics-pool)"))
+            ("P", "rw_mpas_physics_pool", "the Registry pool reader (rust/physics-pool)"),
+            # THE BREAKAGE THIS PREVENTS (0.4.2 licence census, 2026-10-22): the wheel ships rw_s2s (this tree's
+            # tools/rustwx workspace, crate rw-s2s) and rw_hex_chem_sources (rust/chem-sources), which link rayon,
+            # serde, serde_json and chrono at versions no other helper links, while this notice said the remaining
+            # helpers link the Rust standard library only, so those versions' texts did not travel with the wheel.
+            ("R", "rw_s2s", "the subseasonal reducer (crate rw-s2s, this tree's tools/rustwx)"),
+            ("H", "rw_hex_chem_sources", "the chemistry source preparer (rust/chem-sources)"))
 
 
 def cargo_tree(cwd: Path, *args: str, linked: bool, target: str = "all") -> list[tuple[str, str, str | None]]:
@@ -97,10 +104,14 @@ def closures(engines: dict[str, Path], work: Path) -> dict[str, dict[str, list]]
                               ("B", ("-p", "rw-mpas"), ("--locked",)),
                               ("O", ("-p", "rw-obs"), ("--locked",)),
                               ("W", ("-p", "rw-wrfbatch"), ("--locked",)),
+                              ("C", ("-p", "rw-mpas"), ("--locked",)),
                               ("F", ("--manifest-path", str(sfc / "Cargo.toml")), ("--locked",)),
-                              ("P", ("--manifest-path", str(TREE / "rust/physics-pool/Cargo.toml")), ("--locked",))):
-        root = sfc if key == "F" else (TREE / "rust/physics-pool" if key == "P" else engines[key] / "tools/rustwx")
-        target = "x86_64-unknown-linux-gnu" if key in ("F", "P") else "all"
+                              ("P", ("--manifest-path", str(TREE / "rust/physics-pool/Cargo.toml")), ("--locked",)),
+                              ("R", ("-p", "rw-s2s"), ("--locked",)),
+                              ("H", ("--manifest-path", str(TREE / "rust/chem-sources/Cargo.toml")), ("--locked",))):
+        root = {"F": sfc, "P": TREE / "rust/physics-pool", "R": TREE / "tools/rustwx",
+                "H": TREE / "rust/chem-sources"}.get(key, engines[key] / "tools/rustwx")
+        target = "x86_64-unknown-linux-gnu" if key in ("F", "P", "R", "H") else "all"
         linked = cargo_tree(root, *locked, *args, linked=True, target=target)
         every = cargo_tree(root, *locked, *args, linked=False, target=target)
         out[key] = {"linked": linked,
@@ -113,7 +124,8 @@ def own_crate(source: str | None, engines: dict[str, Path], work: Path) -> bool:
     if source is None or not source.startswith("/"):
         return False
     path = Path(source)
-    return path.is_relative_to(work) or path.is_relative_to(TREE / "rust") or any(path.is_relative_to(engine / "tools/rustwx/crates")
+    return path.is_relative_to(work) or path.is_relative_to(TREE / "rust") or path.is_relative_to(
+        TREE / "tools/rustwx/crates") or any(path.is_relative_to(engine / "tools/rustwx/crates")
                                             for engine in engines.values())
 
 
@@ -336,6 +348,10 @@ def render(engines: dict[str, Path], notice_sha: str, notice: dict, sets: dict, 
     if scorer != bridges:
         out.append(f"  scorer resolved against  gpuwm commit {scorer[0]},\n"
                    f"                           Cargo.lock sha256 {scorer[1]}\n")
+    prebuilt = identity(engines["W"])
+    if prebuilt != bridges:
+        out.append(f"  [W][C] resolved against   gpuwm commit {prebuilt[0]},\n"
+                   f"                           Cargo.lock sha256 {prebuilt[1]}\n")
     out.append("\nThe crate lists use cargo tree -e normal,no-proc-macro, with all targets\n"
                "for the engine workspace and x86_64-unknown-linux-gnu for the separate\n"
                "surface-series and pool-reader projects. These are conservative package\n"
@@ -350,7 +366,8 @@ def render(engines: dict[str, Path], notice_sha: str, notice: dict, sets: dict, 
                "ArWen crates below are the rustwx workspace's own under MIT; its text ships as\n"
                "hexcore/data/licenses/rustwx-LICENSE-MIT.\n\n")
     out.append("rw-sfc-series is project code with MPAS-derived portions under Apache-2.0\n"
-               "AND BSD-3-Clause. The Registry pool reader is MIT.\n\n")
+               "AND BSD-3-Clause. The Registry pool reader is MIT. rw-s2s and\n"
+               "rust/chem-sources (hex-chem-sources) are this project's own code (Apache-2.0).\n\n")
     out += [f"  {name} {version}\n" for name, version in sorted(own)]
     if two:
         out.append(f"\n{RULE}\n2.  NOTICES THAT ARE NOT CRATE LICENCES\n{DASH}\n\n"
@@ -402,6 +419,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scorer-engine", type=Path,
                         help="the gpuwm source the scorer is built against, when it is another one "
                              "(publish.yml builds it against the engine release the declared floor names)")
+    parser.add_argument("--prebuilt-engine", type=Path,
+                        help="the gpuwm source the renderer prebuilts are built from "
+                             "(engine-bridges.json source_prebuilts.gpuwm_source_rev), when it is another one")
     parser.add_argument("--out", type=Path, default=OUTPUT)
     parser.add_argument("--source-notice", type=Path,
                         help="bridge notice from the sealed engine wheel when the build source export omits licenses/")
@@ -411,6 +431,11 @@ def main(argv: list[str] | None = None) -> int:
     engine = args.engine.resolve()
     engines = {key: engine for key, _, _ in PROGRAMS}
     engines["S"] = (args.scorer_engine or args.engine).resolve()
+    # THE BREAKAGE THIS PREVENTS: the S2S/CF renderer (rw_wrfbatch, rw_ensbatch) and the chemistry converter
+    # (rw_mpas_convert) are built from a newer
+    # engine source than the bridges (source_prebuilts); listing their crates from the bridges' source would
+    # ship texts for crates the renderer no longer links and none for those it now does.
+    engines["W"] = engines["C"] = (args.prebuilt_engine or args.engine).resolve()
     rev = identity(engine)[0]
     notice_bytes = (args.source_notice or engine / SOURCE_NOTICE).read_bytes()
     with tempfile.TemporaryDirectory(prefix="helper-licences-") as scratch:
@@ -434,6 +459,7 @@ def main(argv: list[str] | None = None) -> int:
                            "licence": (notice["inventory"][(n, v)][0] if (n, v) in notice["inventory"] else
                                        ("Apache-2.0" if n == "hex-obs-scorecard" else
                                         "Apache-2.0 AND BSD-3-Clause" if n == "rw-sfc-series" else
+                                        "Apache-2.0" if n in ("rw-s2s", "hex-chem-sources") else
                                         crate_source(n, v, s, engines)[1].get("license", "UNKNOWN")))}
                           for n, v, s in closure["linked"]] for key, closure in sets.items()}
             args.closures_json.write_text(json.dumps({"engine": identity(engine), "programs": rows}, indent=2) + "\n")

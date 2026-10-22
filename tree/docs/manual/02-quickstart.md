@@ -33,7 +33,7 @@ individual gpuwm source files by SHA-256. A bare install reached an engine the
 pin refused, and the forecast door refused at launch with a digest mismatch
 that named neither the version that works nor the fact that pip chose it.
 
-gpuwm-hex 0.4.0 declares `gpuwm>=2.9.0,<2.10`, the whole 2.9 minor, so
+gpuwm-hex 0.4.2 declares `gpuwm>=2.9.4,<2.10`, inside the 2.9 minor, so
 installing it never downgrades an engine you already have. An engine inside
 that range whose radiation helper set this release has not measured is refused
 at the forecast door by name, with the version to install. The range is
@@ -143,7 +143,7 @@ gpuwm you have: the transcript above was taken against the published gpuwm
 2.5.2 wheel, whose bundle carries `rw_wrfbatch` and **not** `rw_mpas_init`
 or `rw_mpas_convert` — which is exactly the shortfall the doctor reports
 there. The four MPAS bridge binaries enter the bundle at gpuwm 2.5.3, and
-this distribution's declared range is `gpuwm>=2.9.0,<2.10` (the floor is
+this distribution's declared range is `gpuwm>=2.9.4,<2.10` (the floor is
 far past 2.5.3, for the seam bytes the port pins): a conforming install cannot
 land on the engine that transcript was taken from. Doctor
 asks the gpuwm you actually have what its bundle declares, so it never sends

@@ -1,27 +1,53 @@
 # A fine hex core at any CONUS point, from HRRR
 
-Four doors that were missing, in the order a case meets them, and the
-measured chain that ran them end to end on 2026-09-13. Before this work every
-sub-kilometre row this program held sat at 35.0 N 97.0 W, because a person
-typed its spec and its registry row; and no HRRR byte had ever reached a hex
-init, because a Lambert product is refused by the intermediate writer and the
-init engine alike (`docs/source-matrix.md`). Both of those were the reasons a
-"hex nest at an arbitrary point from HRRR" was on the not-built list.
+`gpuwm-hex regional` builds and culls the mesh, fetches HRRR, writes the
+intermediates, initial state and hourly boundaries, checks the regional
+contract, runs the forecast and invokes the products door:
 
-```
-gpuwm-hex mesh-plan --point LAT,LON --fine-dx-m 937.5 --radius-km 100 --card 32gb \
-    --generate --out-dir MESH --vertical-spec verification/vertical-specs/tc55-v1.json
-gpuwm-hex intermediate --source hrrr --from-plan MESH/<stem>.point-generate.json \
-    --grib-dir HRRR --cycle YYYY-MM-DDTHH --hours 0-3 --out-dir MET
-gpuwm-hex init --met MET/MET:YYYY-MM-DD_HH --static MESH/<stem>-cull.static.nc \
-    --capsule MESH/<stem>-cull.vertical.nc --reference MESH/<stem>-cull.vertical.nc ...
-gpuwm-hex lbc --grid MESH/<stem>-cull.init.nc --met-dir MET --out-dir MESH/<stem>-cull.lbc ...
-GPUWM_HEX_MESH_ROWS=MESH/mesh-rows.json gpuwm-hex forecast --mesh <cull row> --lbc-dir ...
+```sh
+gpuwm-hex regional --point LAT,LON --fine-dx-m 937.5 --radius-km 100 \
+    --source hrrr --cycle YYYY-MM-DDTHH --hours 3 --work-dir RUN \
+    --geog /path/to/WPS_GEOG
 ```
 
-Every door is on the complete surface: nothing here is a walk that hides a
-knob. `--spec` still hands the generator an authored spec unchanged; `--point`
-writes one for you and says what it wrote.
+The door passes its mesh registry and contract evidence internally. There is
+no environment variable to set by hand. `RUN/regional-receipt.json` records
+start, finish, wall time and outcome for every stage, the mesh and product
+counts. Preparation stages can reuse their files; the forecast destination
+must be fresh. `--card` selects a measured sizing row when supplied.
+
+The source is a `limited_area` row in `data/init-sources.v1.json`; run shapes
+are `limited_area` rows in `data/countries.v1.json`. A new configuration class
+earns its runtime mint through two independent strict dry forecasts with
+finite, byte-identical fields, then runs the contract deck on its own rings.
+This is a reproducibility check, not a weather-skill certificate.
+
+Measured on 2026-10-20 at 36.5 N, 97.5 W, HRRR 2024-05-06 18Z, three hours:
+43,360 cells, 55 levels, 5 s timestep, 2,160 steps and four history frames.
+The forecast stage completed in 1,908.79 s on a shared RTX PRO 6000 Blackwell
+Server Edition with CUDA graphs disabled. The installed hex 0.4.1 native
+binaries and gpuwm 2.9.3 dependencies were used with this branch's Python
+overlay. Maps rendered: 70, with two expected hour-zero skips and no failures;
+the view is `refined-core`, with no global view.
+
+Sampled forecast VRAM peaked at 6,508 MiB under a 9,000 MiB pool reservation.
+Stage walls were mesh 1,246.24 s, intermediate 328.85 s, init 3.44 s,
+boundaries 9.11 s, contract 85.19 s and forecast 1,908.79 s. These are shared
+host timings. The original command hung in the engine's `rw_hex_points`
+bridge after the forecast passed. The engine fix on
+`lane/improve-32b-hex-points-hang` (for 2.9.4) masks missing surface wind
+values and bounds raster work to the image canvas. The exact retained bridge
+invocation then completed in 0.53 s. Products-only recovery on
+the retained forecast completed in 13.81 s with 70 maps and
+6 point pictures, no failures and no global view. The merged regional
+receipt preserves the failed attempt and measured recovery separately. This
+was not an uninterrupted successful command wall, and the forecast was not
+repeated. F000 surface winds are unavailable, so point wind diagnostics show
+gaps or n/a; later frames have valid winds.
+
+The component doors remain available for inspecting each stage. `--spec`
+hands the generator an authored spec unchanged; `--point` writes one and
+records it. Their mesh and HRRR mechanics follow.
 
 ## `mesh-plan --point`: the ladder is data
 

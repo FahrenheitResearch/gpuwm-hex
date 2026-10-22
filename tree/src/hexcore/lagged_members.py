@@ -17,17 +17,38 @@ def parse_lags(spec):
 
 
 def expand_lags(row, cycle, members, lags, lead_hours=0):
-    """Cycle-major Cartesian expansion. Every member verifies to one common clock."""
+    """Bind source bytes separately from the common forecast window.
+
+    Forecast rows supply their own lead at the common clock. Analysis rows
+    supply an earlier analysis at lead zero; the model integrates the gap.
+    ``valid_time`` always describes the input bytes, never a relabelled analysis.
+    """
+    if type(lead_hours) is not int or lead_hours < 0:
+        raise InitSourceRefusal("forecast lead must be nonnegative integer hours")
     valid = Cycle(cycle.when + timedelta(hours=lead_hours)).start_time
     result = []
     for lag in lags:
+        if type(lag) is not int or lag < 0:
+            raise InitSourceRefusal("lags must be nonnegative integer hours")
         source = Cycle(cycle.when - timedelta(hours=lag))
-        if source.when.hour not in row.get("posting", {}).get("cycle_hours", list(range(24))):
+        if (source.when.minute or source.when.second or
+                source.when.hour not in row.get("posting", {}).get("cycle_hours", list(range(24)))):
             raise InitSourceRefusal(f"{row['id']}: lag {lag} selects an unpublished cycle")
         for member in members:
-            lead = lead_hours + lag
+            analysis = not row.get("forecast")
+            lead = 0 if analysis else lead_hours + lag
             template_context(source, row, member, lead)
-            result.append(dict(source=row["id"], source_cycle=source.start_time,
-                               source_member=member, lead_hours=lead, lag_hours=lag,
-                               valid_time=valid))
+            record = dict(source=row["id"], source_cycle=source.start_time,
+                          source_member=member, lead_hours=lead, lag_hours=lag,
+                          valid_time=source.start_time if analysis else valid)
+            if analysis:
+                record.update(window_start=valid, spinup_hours=lead_hours + lag)
+            result.append(record)
     return result
+
+
+def forecast_window(provenance, hours):
+    """The existing resident roster can integrate private member clocks."""
+    spinup = provenance.get("spinup_hours", 0)
+    return dict(start_time=provenance["valid_time"], hours=hours + spinup,
+                history_from_minutes=60 * spinup)

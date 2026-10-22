@@ -1,4 +1,4 @@
-"""Persistent 30 to 90 day global ensemble orchestration.
+"""Persistent multi-week global ensemble orchestration.
 
 The plan is a public interface: it records each member's actual initialization
 cycle, common verification window, seed and restart chain before any GPU work.
@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 from typing import Any
@@ -20,7 +21,13 @@ from typing import Any
 from .errors import MpasPortError
 
 SCHEMA = "gpuwm-hex.s2s/v1"
-STAGES = ("mesh", "static", "init", "surface", "forecast", "products", "verify")
+STAGES = ("mesh", "static", "init", "surface", "forecast", "export", "products", "diagnostics", "verify")
+# Products need a complete week (week-1 is days 0-7); verification covers the
+# first ten days, or the whole run when it is shorter. No upper bound.
+MIN_DAYS = 7
+MAX_MEMBERS = 1000
+DURATION_HELP = (f"forecast days ({MIN_DAYS} or more); the minimum is the week-1 product window; verification covers "
+                 "the first ten days or the whole shorter run; shorter experiments are not seasonal-skill qualification")
 
 
 class S2SError(MpasPortError):
@@ -36,21 +43,33 @@ def write_json(path: Path, value: Any) -> None:
 
 def cores() -> int:
     try:
-        return len(os.sched_getaffinity(0))
+        available = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
-        return os.cpu_count() or 1
+        available = os.cpu_count() or 1
+    try:
+        budget = int(os.environ.get("RAYON_NUM_THREADS", available))
+    except ValueError:
+        raise S2SError("RAYON_NUM_THREADS must be a positive integer") from None
+    if budget < 1:
+        raise S2SError("RAYON_NUM_THREADS must be a positive integer")
+    return min(available, budget)
 
 
 def lag_hours(text: str | None, count: int, source: str) -> list[int]:
-    # Deterministic repeats without lag would merely repeat one initial state.
+    from .init_sources import load_table, resolve_source
+    row = resolve_source(load_table(), source)
+    published = sorted(row.get("posting", {}).get("cycle_hours", range(24)))
     if text is None:
-        return [6 * n for n in range(count)] if source in ("gfs", "cfs") else [0] * count
+        gaps = [(b - a) % 24 or 24 for a, b in zip(published, published[1:] + published[:1])]
+        stride = 6 if not row.get("posting") else min(gaps)
+        return [0] * count if row.get("members") else [stride * n for n in range(count)]
     try:
         values = [int(item) for item in text.split(",")]
     except ValueError:
         raise S2SError("--lagged needs nonnegative initialization offsets in hours, e.g. 0,6,12,18") from None
-    if not values or any(n < 0 or n % 6 for n in values):
-        raise S2SError("--lagged offsets must be nonnegative multiples of 6 hours")
+    offsets = {(a - b) % 24 for a in published for b in published}
+    if not values or any(n < 0 or n % 24 not in offsets for n in values):
+        raise S2SError(f"--lagged offsets must be nonnegative and connect published source hours {published}")
     if len(values) > count or len(set(values)) != len(values):
         raise S2SError("--lagged must list unique offsets, no more than the total member count")
     return [values[index % len(values)] for index in range(count)]
@@ -58,16 +77,18 @@ def lag_hours(text: str | None, count: int, source: str) -> list[int]:
 
 def plan(args: argparse.Namespace) -> dict[str, Any]:
     from .global_door import plan as global_plan, _cycle
-    if args.row not in ("global-60km", "global-120km"):
-        raise S2SError("--row must be global-60km or global-120km")
-    if not 30 <= args.days <= 90:
-        raise S2SError("--days must be in 30..90")
-    if not 1 <= args.members <= 1000:
-        raise S2SError("--members must be in 1..1000")
+    if args.days < MIN_DAYS:
+        # The shortest S2S product window is week-1 (days 0-7); a shorter run
+        # has no window to reduce. Shorter forecasts use `gpuwm-hex global`.
+        raise S2SError(f"--days must be at least {MIN_DAYS}: the shortest S2S product window is week-1 (days 0-7)")
+    if not 1 <= args.members <= MAX_MEMBERS:
+        raise S2SError(f"--members must be in 1..{MAX_MEMBERS}")
     if args.hours is not None or args.history_every_minutes is not None:
         raise S2SError("s2s uses --days and --history-hours; remove --hours/--history-every-minutes")
     if args.member is not None:
         raise S2SError("s2s uses --members as the total count; remove --member")
+    from .s2s_energy import energy_config
+    energy = energy_config(args)
     base_args = copy.copy(args)
     base_args.members = None
     base_args.lagged = None
@@ -75,12 +96,12 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
     base_args.history_every_minutes = args.history_hours * 60
     base_args.member = None
     value = global_plan(base_args)
-    if args.source not in ("gefs", "ifs-ens", "gfs", "era5", "cfs"):
-        raise S2SError("--source must be gefs, ifs-ens, gfs, era5 or cfs")
+    if args.row not in ("global-60km", "global-120km") and not value["row"].get("s2s"):
+        raise S2SError("--row must be global-60km, global-120km or a row declaring s2s=true")
     start = _cycle(args.cycle)
     from .init_sources import Cycle, load_table, resolve_source
-    from .lagged_members import expand_lags
-    source_row = resolve_source(load_table(), args.source)
+    from .lagged_members import expand_lags, forecast_window
+    source_row = resolve_source(load_table(), args.source, getattr(args, "accept_licence", ()))
     lags = lag_hours(args.lagged, args.members, args.source)
     work = Path(value["paths"]["work"])
     prepared = {}
@@ -94,11 +115,14 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
     for index, lag in enumerate(lags, 1):
         cycle = (start - timedelta(hours=lag)).strftime("%Y-%m-%dT%H")
         lag_counts[lag] = lag_counts.get(lag, 0) + 1
-        source_member = lag_counts[lag] if args.source in ("gefs", "ifs-ens") else None
-        if source_member is not None and source_member > (30 if args.source == "gefs" else 50):
+        native = source_row.get("members", {}).get("perturbed")
+        source_member = native["first"] + lag_counts[lag] - 1 if native else None
+        if native and source_member > native["last"]:
             raise S2SError("requested member count exceeds native source members across the selected lags")
         provenance = expand_lags(source_row, Cycle.parse(args.cycle), [source_member], [lag])[0]
         init_key = cycle.replace("-", "").replace("T", "") + (f"-m{source_member:03d}" if source_member else "")
+        if value["vertical"]["explicit_binding"]:
+            init_key += "-v" + value["vertical"]["sha256"][:12]
         init_dir = work / "inits" / init_key
         argv = list(value["commands"]["init"])
         argv[argv.index("--cycle") + 1] = cycle
@@ -113,10 +137,11 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
         members.append({"run_id": run_id, "member": source_member, "cycle": cycle,
                         **provenance, "provenance": provenance,
                         "lag_hours": lag, "seed": seed, "init_dir": str(init_dir),
-                        "init": prepared_path or str(init_dir / "init.nc"), "prepared": bool(prepared_path), "init_argv": argv,
-                        "start_time": provenance["valid_time"],
-                        "hours": args.days * 24, "history_from_minutes": 0,
-                        "checkpoint_hours": ",".join(str(h) for h in range(120, args.days * 24 + 1, 120)),
+                        "init": str(init_dir / "init.nc"), "prepared": bool(prepared_path),
+                        "prepared_init": prepared_path, "init_argv": argv,
+                        **forecast_window(provenance, args.days * 24),
+                        "checkpoint_hours": ",".join(str(h + provenance.get("spinup_hours", 0))
+                                                     for h in range(120, args.days * 24 + 1, 120)),
                         "manifest": str(work / "members" / run_id / "provenance.json")})
     from .stochastic import member_number, member_options
     try:
@@ -132,6 +157,8 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
         member["stochastic"] = member_options(member_number(member["run_id"]),
             seed=member["seed"], source_members=native_members, ensemble_size=len(members),
             **stochastic_options)
+    from .global_ensemble import validate_member_bindings
+    validate_member_bindings(members, S2SError)
     # Stable identity excludes device placement and invocation stage so the same
     # command can recover an interrupted run on a different card count.
     surface_start = min(m["start_time"] for m in members)
@@ -146,9 +173,16 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
                "path": str(args.surface_series or surface_path),
                "start": surface_start, "end": (start + timedelta(days=args.days)).strftime("%Y-%m-%d_%H:%M:%S"),
                "source": args.surface_source, "forecast_cycle": surface_cycle if args.surface_source == "cfs" else None}
+    surface["ocean_mode"] = args.ocean_mode
+    from .ocean_mixed_layer import configuration
+    surface["ocean_options"] = configuration(json.loads(args.ocean_options))
+    if args.ocean_mode == "prognostic":
+        if args.surface_series:
+            raise S2SError("--surface-series requires --ocean-mode prescribed")
+        surface.update(owner="prognostic-ocean", source="member initialization SST/ice", path=None, forecast_cycle=None)
     identity = {"row": args.row, "source": args.source, "cycle": args.cycle,
                 "days": args.days, "history_hours": args.history_hours, "members": members,
-                "surface": surface,
+                "surface": surface, "energy": energy,
                 "forecast_argv": value["commands"]["forecast"]}
     identity["forecast_argv"] = [x for x in identity["forecast_argv"]]
     argv = identity["forecast_argv"]
@@ -161,30 +195,33 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
             "stochastic": {"sppt": members[0]["stochastic"]["sppt"],
                            "skeb": members[0]["stochastic"]["skeb"], "seed_base": args.seed,
                            "owner": "stochastic-physics"},
-            "surface": surface,
+            "surface": surface, "energy": energy,
+            "product_options": {"regions": getattr(args, "product_region", []),
+                                "climatology": str(args.climatology) if args.climatology else None,
+                                "research_data_license": getattr(args, "research_data_license", None)},
             "parallelism": {"mesh": {"backend": "Rust", "threads": cores()},
                             "static": {"backend": "Rust", "threads": cores()},
                             "init": {"backend": "parallel member processes / Rust threads", "cores": cores()},
                             "surface": {"backend": "Rust", "threads": cores()},
                             "forecast": {"backend": "GPU", "members_per_card": args.members_per_card,
                                          "devices": args.devices or "all visible"},
+                            "export": {"backend": "Rust", "threads": cores(), "scope": "every bound member"},
                             "products": {"backend": "GPU reductions / Rust renderer", "threads": cores()},
-                            "verify": {"backend": "observation scorecard", "coverage_days": 10}}}
+                            "diagnostics": {"backend": "Rust / Rayon / rw_wrfbatch", "threads": cores()},
+                            "verify": {"backend": "Rust weekly ERA5 / legacy observation scorecard",
+                                       "coverage_days": args.days if args.s2s_observations else min(10, args.days)}}}
 
 
-def visible_cards(requested: str | None) -> list[str]:
-    if requested:
-        cards = requested.split(",")
-    elif "CUDA_VISIBLE_DEVICES" in os.environ:
-        cards = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
-    else:
+def visible_cards(requested: str | None, environment=None) -> list[str]:
+    from .global_ensemble import forecast_devices
+    environment = os.environ if environment is None else environment
+    if not requested and "CUDA_VISIBLE_DEVICES" not in environment:
         result = subprocess.run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
                                 capture_output=True, text=True, check=True)
-        cards = result.stdout.splitlines()
-    cards = [card.strip() for card in cards if card.strip() and card.strip() != "-1"]
-    if not cards or len(set(cards)) != len(cards):
-        raise S2SError("no visible GPU cards, or duplicate --devices entries")
-    return cards
+        requested = ",".join(result.stdout.splitlines())
+        if not requested:
+            raise S2SError("nvidia-smi reports no GPU cards to launch")
+    return forecast_devices(requested, environment, S2SError)
 
 
 def latest_checkpoint(member: dict, attempts: list[dict]) -> Path | None:
@@ -221,9 +258,13 @@ def update_manifests(value: dict, state: dict) -> None:
 def _inits(value: dict, args, env: dict, status) -> dict:
     from .global_ensemble import _cli, _init_done, init_jobs
     unique = {member["init"]: member for member in value["members"]}
-    for member in unique.values():
+    # Validate every binding before deduplicating builds. A reused path must
+    # not hide an earlier member's mismatching source receipt.
+    for member in value["members"]:
         if member["prepared"]:
-            init = Path(member["init"])
+            retained = Path(member["init"])
+            source = Path(member.get("prepared_init") or member["init"])
+            init = source if source.is_file() else retained
             receipt_path = init.parent / "init-source-receipt.json"
             try:
                 receipt = json.loads(receipt_path.read_text())
@@ -235,12 +276,36 @@ def _inits(value: dict, args, env: dict, status) -> dict:
                     return Cycle.parse(actual).start_time == expected
                 except (MpasPortError, TypeError):
                     return False
-            if (not init.is_file() or receipt.get("source") != value["source"]
+            if (not (source.is_file() or init.is_file()) or receipt.get("source") != value["source"]
                     or not same_cycle(receipt.get("source_cycle", receipt.get("cycle")), member["source_cycle"])
                     or receipt.get("lead_hours", 0) != member["lead_hours"]
                     or not same_cycle(receipt.get("valid_time", receipt.get("cycle")), member["valid_time"])
                     or receipt.get("member") != member["member"]):
                 raise S2SError(f"prepared init source/cycle/member mismatch: {receipt_path}")
+            if value.get("vertical", {}).get("explicit_binding"):
+                provenance_path = init.with_name(init.name + ".provenance.json")
+                try:
+                    provenance = json.loads(provenance_path.read_text())
+                except (OSError, ValueError) as error:
+                    raise S2SError(f"prepared init requires vertical provenance {provenance_path}: {error}") from error
+                actual = provenance.get("vertical_source", {}).get("summary", {}).get(
+                    "vertical_spec_canonical_sha256")
+                if actual != value["vertical"]["sha256"]:
+                    raise S2SError(f"prepared init vertical spec mismatch: {provenance_path}")
+            # Keep one inode alive through final authority checks and restart.
+            # A producer may dispose of its own input after its forecast ends.
+            if init != retained:
+                retained.parent.mkdir(parents=True, exist_ok=True)
+                if retained.exists():
+                    if not os.path.samefile(init, retained):
+                        raise S2SError(f"retained prepared init differs from selected source: {retained}")
+                else:
+                    try:
+                        os.link(init, retained)
+                    except OSError as error:
+                        raise S2SError(f"cannot retain prepared init with a hard link: {init} -> {retained}: {error}; "
+                                       "stage the shared prepared input on the work directory filesystem") from error
+                write_json(retained.parent / "init-source-receipt.json", receipt)
     todo = [member for member in unique.values()
             if not member["prepared"] and not _init_done(member, value)]
     jobs = init_jobs(args.init_jobs, value, max(1, len(todo)))
@@ -262,19 +327,28 @@ def _inits(value: dict, args, env: dict, status) -> dict:
 
 def surface_stage(value: dict, args, env: dict) -> dict:
     """Named producer hook, kept separate from the live forecast consumer."""
+    if value["surface"].get("ocean_mode") == "prognostic":
+        return {"mode": "prognostic", "source": "member initialization SST/ice",
+                "future_surface_records": 0, "ocean_options": value["surface"]["ocean_options"]}
     target = Path(value["surface"]["path"])
     if args.surface_series:
         if not target.is_file():
             raise S2SError(f"--surface-series does not exist: {target}")
         return {"path": str(target), "supplied": True}
     from .global_ensemble import _cli
+    from .s2s_energy import check_forcing
     surface = value["surface"]
     receipt = target.with_suffix(".receipt.json")
     if target.is_file() and receipt.is_file():
         saved = json.loads(receipt.read_text())
         if saved.get("status") == "complete" and saved.get("s2s_surface_plan") == surface:
-            return {"path": str(target), "receipt": str(receipt), "reused": True}
+            if surface.get("forecast_cycle") and not saved.get("object_coverage"):
+                saved["object_coverage"] = check_forcing(value)
+                write_json(receipt, saved)
+            return {"path": str(target), "receipt": str(receipt), "reused": True,
+                    "object_coverage": saved.get("object_coverage")}
         raise S2SError(f"surface series belongs to another configuration: {receipt}")
+    coverage = check_forcing(value) if value["surface"].get("forecast_cycle") else None
     # The producer refuses an existing output/receipt. A private destination
     # per invocation lets interruption recovery restart acquisition safely.
     build = target.with_name(f"{target.stem}.build-{time.time_ns()}{target.suffix}")
@@ -292,9 +366,9 @@ def surface_stage(value: dict, args, env: dict) -> dict:
     if rc:
         raise S2SError(f"surface-series exited {rc}; {log}")
     saved = json.loads(build_receipt.read_text())
-    write_json(receipt, {**saved, "s2s_surface_plan": surface})
+    write_json(receipt, {**saved, "s2s_surface_plan": surface, "object_coverage": coverage})
     build.replace(target)
-    return {"path": str(target), "receipt": str(receipt), "argv": argv, "log": str(log), "reused": False}
+    return {"path": str(target), "receipt": str(receipt), "argv": argv, "log": str(log), "reused": False, "object_coverage": coverage}
 
 
 def science_arguments(value: dict) -> list[str]:
@@ -314,8 +388,12 @@ def science_arguments(value: dict) -> list[str]:
 
 def surface_environment(value: dict) -> dict:
     """Select the series without pre-creating a forecast's fresh output."""
+    surface = value["surface"]
+    if surface.get("ocean_mode") == "prognostic":
+        return {"GPUWM_HEX_OCEAN_MODE": "prognostic",
+                "GPUWM_HEX_OCEAN_OPTIONS": json.dumps({k: v for k, v in surface["ocean_options"].items() if k != "identity"})}
     source = Path(value["surface"]["path"]).resolve(strict=True)
-    return {"GPUWM_HEX_SURFACE_SERIES": str(source)}
+    return {"GPUWM_HEX_SURFACE_SERIES": str(source), "GPUWM_HEX_OCEAN_MODE": "prescribed"}
 
 
 def forecasts(value: dict, args, env: dict, state: dict, state_path: Path, status) -> dict:
@@ -343,7 +421,7 @@ def forecasts(value: dict, args, env: dict, state: dict, state_path: Path, statu
         for member in group:
             record = {key: member[key] for key in ("run_id", "init", "start_time", "hours",
                                                    "history_from_minutes", "checkpoint_hours")}
-            record["init_source"] = f"{value['source']} {member['cycle']} member {member['member']}; lag {member['lag_hours']} h"
+            record["init_source"] = json.dumps(member["provenance"], sort_keys=True)
             checkpoint = latest_checkpoint(member, state["attempts"])
             if checkpoint:
                 record["restart_from"] = str(checkpoint)
@@ -450,13 +528,19 @@ def run(args) -> int:
         score_config = Path(value["paths"]["score_config"])
         write_json(score_config, {**value["score_config"], "verification_owner": "s2s verify stage",
                    "verification_end_time":
-                   (datetime.strptime(value["start_time"], "%Y-%m-%d_%H:%M:%S") + timedelta(days=10)).strftime("%Y-%m-%d_%H:%M:%S")})
+                   (datetime.strptime(value["start_time"], "%Y-%m-%d_%H:%M:%S")
+                    + timedelta(days=min(10, args.days))).strftime("%Y-%m-%d_%H:%M:%S")})
         env["GPUWM_HEX_OBSERVATION_CONFIG"] = str(score_config)
         selected = STAGES if args.stage == "all" else (args.stage,)
+        device_environment = dict(os.environ)
         try:
             for stage in selected:
                 started = time.monotonic()
                 status.stage(stage)
+                if stage in ("export", "diagnostics", "verify"):
+                    state["stages"][stage] = {"status": "running"}
+                    write_json(state_path, state)
+                    write_json(work / "s2s-receipt.json", state)
                 if stage == "mesh":
                     result = stage_mesh(value, status)
                 elif stage == "static":
@@ -467,17 +551,26 @@ def run(args) -> int:
                     result = surface_stage(value, args, env)
                 elif stage == "forecast":
                     result = forecasts(value, args, env, state, state_path, status)
+                elif stage == "export":
+                    from .s2s_mjo import export_members
+                    result = export_members(value, state, args, env)
                 elif stage == "products":
                     # Forecast workers have private CUDA visibility. Select
                     # the product card before this coordinator first imports
                     # CuPy, including when --devices excludes physical card 0.
-                    os.environ["CUDA_VISIBLE_DEVICES"] = visible_cards(args.devices)[0]
+                    os.environ["CUDA_VISIBLE_DEVICES"] = visible_cards(args.devices, device_environment)[0]
                     from .s2s_products import build_products
                     result = build_products(value, state, args, env)
+                    from .s2s_energy import build_energy_products
+                    result["energy"] = build_energy_products(value, state, args, env)
+                elif stage == "diagnostics":
+                    from .s2s_mjo import build_mjo
+                    result = build_mjo(value, state, args, env)
                 else:
-                    os.environ["CUDA_VISIBLE_DEVICES"] = visible_cards(args.devices)[0]
-                    from .s2s_products import verify_first_ten_days
-                    result = verify_first_ten_days(value, state, args, env)
+                    if not args.s2s_observations:
+                        os.environ["CUDA_VISIBLE_DEVICES"] = visible_cards(args.devices, device_environment)[0]
+                    from .s2s_scores import verify
+                    result = verify(value, state, args, env)
                 state["stages"][stage] = {**result, "seconds": round(time.monotonic() - started, 3),
                     "parallelism": {**value["parallelism"][stage], **result.get("parallelism", {})}}
                 write_json(state_path, state)
@@ -487,34 +580,64 @@ def run(args) -> int:
             write_json(work / "s2s-receipt.json", state)
         except BaseException as error:
             state["error"] = f"{type(error).__name__}: {error}"
+            if stage in ("export", "diagnostics", "verify"):
+                state["stages"][stage] = {"status": "failed", "error": state["error"],
+                                           "seconds": round(time.monotonic() - started, 3)}
             write_json(state_path, state)
             write_json(work / "s2s-receipt.json", state)
             raise
     return 0
 
 
+def _member_count(text: str) -> int:
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"s2s takes a total member count COUNT (1 to {MAX_MEMBERS}), not a member list: {text!r}") from None
+
+
 def add_s2s_parser(commands) -> None:
     from .global_door import _add_common
-    parser = commands.add_parser("s2s", help="30 to 90 day global ensembles with persistent checkpoint recovery")
+    parser = commands.add_parser("s2s", help="multi-week (7 days and longer) global ensembles with persistent checkpoint recovery")
     _add_common(parser)
     # Reuse the global options and replace only S2S-specific defaults/types.
-    parser._option_string_actions["--members"].type = int
-    parser._option_string_actions["--members"].default = 4
+    members = parser._option_string_actions["--members"]
+    members.type = _member_count
+    members.default = 4
+    members.metavar = "COUNT"
+    members.help = f"total output member count (1..{MAX_MEMBERS}, default: 4); balanced across --lagged offsets"
     for flag in ("--row", "--cycle", "--work-dir"):
         parser._option_string_actions[flag].required = True
     parser.add_argument("--prepared-init", action="append", default=[], metavar="CYCLE[:MEMBER]=PATH",
                         help="reuse an existing init with its matching init-source-receipt.json")
-    parser.add_argument("--days", type=int, required=True)
-    parser._option_string_actions["--lagged"].help = "offsets in hours; balance total members across them; deterministic default 0,6,12,..."
-    parser.add_argument("--history-hours", type=int, choices=(6, 24), default=24)
+    parser.add_argument("--days", type=int, required=True, help=DURATION_HELP)
+    parser._option_string_actions["--lagged"].help = "offsets in hours; balance total members across them; deterministic default uses earlier published cycles"
+    # S2S energy products are default-on and need 6-hourly samples (daily samples alias the solar cycle).
+    parser.add_argument("--history-hours", type=int, choices=(6, 24), default=6)
+    parser.add_argument("--hub-heights", default="80,100", help="comma-separated hub heights in metres AGL, (10,1000]")
+    parser.add_argument("--energy-table", type=Path, help="table-driven turbine and horizontal PV proxy rows")
+    parser.add_argument("--energy-climatology", type=Path, help="dated energy window climatology for historical energy anomalies")
     parser.add_argument("--seed", type=int, default=1729)
-    parser.add_argument("--surface-series", type=Path, help="existing dated native case-8 series; otherwise build it")
-    parser.add_argument("--surface-source", choices=("gfs", "era5", "cfs"), default="cfs",
+    parser.add_argument("--ocean-mode", choices=("prognostic", "prescribed"), default="prognostic",
+                        help="coupled mixed-layer ocean and thermodynamic ice (default); prescribed uses dated records")
+    parser.add_argument("--ocean-options", default="{}", metavar="JSON",
+                        help="declared mixed-layer/sea-ice parameter overrides; recorded and checked on restart")
+    parser.add_argument("--surface-series", type=Path, help="existing dated native case-8 series for --ocean-mode prescribed; otherwise build it")
+    parser.add_argument("--surface-source", default="cfs",
                         help="surface forcing source; default CFS forecasts cover the whole future window")
     parser.add_argument("--surface-cycle", help="CFS forecast cycle; default 48 hours before the earliest member init")
     parser.add_argument("--climatology", type=Path, help="ERA5 window climatology on the product grid")
+    parser.add_argument("--product-region", action="append", default=[], metavar="NAME:SOUTH,NORTH,WEST,EAST",
+                        help="additional regional S2S maps; repeatable; west>east crosses the date line")
+    parser.add_argument("--research-data-license", choices=("copernicus-products",), default="copernicus-products",
+                        help="ERA5 data licence recorded in the receipt (Licence to Use Copernicus Products: commercial use permitted with attribution; default)")
     parser.add_argument("--analysis-reference", action="append", default=[], metavar="SOURCE:CYCLE=INIT.nc",
                         help="prepared gfs|era5 analysis and source receipt for direct GPU verification; GFS is fetched otherwise")
+    parser.add_argument("--s2s-export-window", default="global", help="existing export door window; full fields for every member")
+    parser.add_argument("--mjo-reference", type=Path, help="qualified fixed RMM/BSISO EOFs and dated backgrounds JSON")
+    parser.add_argument("--s2s-observations", type=Path, help="qualified weekly ERA5 NetCDF and daily observed RMM manifest")
+    parser.add_argument("--s2s-reference-license", help="explicit research opt-in for a non-permissive reference data licence")
     parser.add_argument("--dry-run", action="store_true", help="print the complete plan without downloads or GPU work")
     parser.add_argument("--stage", choices=("all", *STAGES), default="all")
     parser.set_defaults(handler=run, export_field_set="full")

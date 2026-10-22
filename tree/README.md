@@ -439,7 +439,7 @@ Also proven:
 | Python | 3.11 or newer |
 | GPU | A CUDA device: any NVIDIA card of compute capability 7.5 (Turing) or newer runs, on a CUDA 12 or CUDA 13 driver, with no flag. sm_86 and sm_89 are anchored (the numerical contract measured again on that architecture), sm_120 is the proven contract floor where it was first measured, and any other card runs unanchored and its receipt says so; `gpuwm-hex doctor` names your card and its status. Memory is set by mesh size *and* by the card, and not by a line through the two: the footprint is a per-card core, plus the Grell-Freitas and YSU column workspaces charged at `min(cells, tile)`, plus a per-cell term, all in `hexcore.device_admission`. Measured 2026-08-26 on an RTX 5090 at the merged tip: the published 40,962-cell global mesh (x1.40962, about 120 km) peaked at **8,874 MiB, inside a 12 GiB card's budget**; the 163,842-cell mesh (x4.163842, about 24 km) peaked at **20,446 MiB**, and every free-memory gate admits at the measured floor (the prediction plus that card's own margin, **about 21.7 GiB free at x4**), so x4 remains in practice a 32 GiB-card configuration. The core is a property of the card, not the mesh, and the door reads the card's multiprocessor count at the decision rather than assuming a 5090: the 16 GiB and 10 GiB parts each carry their own measured row, and a card nobody has measured gets a derived row that is labelled derived. A card with its own per-allocation ledger can still supply it with `--device-fixed-mib` / `--device-bytes-per-cell`. |
 | CUDA | CuPy matching your driver's CUDA major. There is no way for pip to detect it, so you choose (below). |
-| Engine | The `gpuwm` distribution, 2.9 (`gpuwm>=2.9.2,<2.10`), which pip resolves for you: the ArWen physics seam, and the bundle that carries the MPAS bridge binaries the doors drive (including `met_intermediate` for init-source and the renderers for products). The forecast runs on the installed engine; a git clone at `v2.9.0` is optional (receipts then name its commit). See *The engine pin*. gpuwm 2.8.9 cannot serve 0.4: it has no `met_intermediate`, its renderer knows none of the product windows, and it has no `rw_hex_points`. |
+| Engine | The `gpuwm` distribution, 2.9 (`gpuwm>=2.9.4,<2.10`), which pip resolves for you: the ArWen physics seam, and the bundle that carries the MPAS bridge binaries the doors drive (including `met_intermediate` for init-source and the renderers for products). The forecast runs on the installed engine; a git clone at `v2.9.0` is optional (receipts then name its commit). See *The engine pin*. gpuwm 2.8.9 cannot serve 0.4: it has no `met_intermediate`, its renderer knows none of the product windows, and it has no `rw_hex_points`. |
 | Platforms | Linux x86_64 with glibc 2.28 or newer installs the prebuilt wheel (`manylinux_2_28`: RHEL 8 and 9, Ubuntu 20.04 and later). Anywhere else pip builds the sdist, which needs a Rust toolchain (`cargo`) for the bundled helpers; the observation scorer is built only when `GPUWM_HEX_ENGINE_SOURCE` names a gpuwm source checkout, and otherwise `gpuwm-hex score` refuses by name and `doctor` reports the gap (forecasts are unaffected). There is no prebuilt Windows wheel. |
 | Assets | A mesh grid file, a matching static file, and (for the init door) a vertical-grid declaration, normally a `--vertical-spec` JSON; a native-minted init file as a capsule is the compatibility mode. `gpuwm-hex global` fetches its published meshes itself; otherwise **gpuwm-hex ships none of these**. See *Assets you must supply*. |
 | Rust binaries | The field engines (`rw_mpas_init`, `rw_mpas_static`, `rw_mpas_convert`, `rw_mpas_lbc`, `rw_wrfbatch` and the others) come from gpuwm's bridge bundle or a gpuwm source build. Eight of them ship in this wheel, with its own helpers: `rw_mpas_geometry`, `rw_mpas_stream`, `rw_mpas_static`, `rw_mpas_lbc` (native case-9 boundaries), `rw_igra2` (IGRA2 radiosondes for `gpuwm-hex score`) and the RRFS fork dycore's three programs. See *Getting the Rust engines*. |
@@ -489,10 +489,14 @@ required item is missing, so it works as a gate in a script.
   `gpuwm-hex sources` lists initialization sources and global rows.
 - `gpuwm-hex global-cycle` repeats a global row with schedule, retention
   and status records.
+- `gpuwm-hex moving-ensemble` runs the members of a prepared storm-following case,
+  each with its own SPPT/SKEB forcing ([moving-region ensembles](docs/moving-ensemble.md)).
+- `gpuwm-hex chem-sources` lists, fetches and prepares smoke, composition, dust and
+  sea-salt source files for aerosol transport ([chemistry sources](docs/chemistry-sources.md)).
 
 ### Kernel packs
 
-Kernel packs are pinned assets of the `kernel-packs-v0.4.1` release.
+Kernel packs are pinned assets of the `kernel-packs-v0.4.2` release.
 `gpuwm-hex fetch-assets --list` lists them. Run
 `gpuwm-hex fetch-assets` to stage them in the cache, or
 `gpuwm-hex fetch-assets --from DIR` to verify and stage an offline copy.
@@ -520,12 +524,12 @@ is unchanged.
 
 ### The engine pin
 
-gpuwm-hex 0.4.1 requires gpuwm 2.9 (`gpuwm>=2.9.2,<2.10`). The sixteen seam
+gpuwm-hex 0.4.2 requires gpuwm 2.9 (`gpuwm>=2.9.4,<2.10`). The sixteen seam
 files were measured against gpuwm 2.9.0 at its public tag `v2.9.0` (`0db04746`),
 from the three platform wheels PyPI serves
 (`verification/engine-verdicts/repin-290-20261014.json`).
 
-- **The range admits gpuwm 2.9.2 and newer patches below 2.10.** 0.3.3's one-patch range replaced
+- **The range admits gpuwm 2.9.4 and newer patches below 2.10.** 0.3.3's one-patch range replaced
   gpuwm 2.8.7 with 2.8.0; that is why the range changed.
 - **An engine inside the range whose radiation helper set this release has
   not measured is refused at the forecast door, by name:** the installed
@@ -1338,31 +1342,49 @@ statistics that match (peak updraft 11.49 vs 11.26 m/s; domain means within
 port and proves nothing wrong. The three above are one-signed and
 case-independent, which chaos cannot be, and each names a lane to fix.
 
-### What the limited-area lane does not do yet
+### Limited-area HRRR forecasts
 
-> **The published-engine gap this section used to open with is closed, and
-> this is what replaced it.** Through gpuwm 2.5.7 the lane could not be opened
-> from published artefacts at all: no published `rw_mpas_mesh` carried
-> `--cull-parent`, and `rw_mpas_lbc` was in no bundle and no published source
-> (measured 2026-08-27 against 2.5.7, and not restated here as current fact). The engine
-> then published 2.5.8, which this distribution required until it re-pinned
-> onto 2.6.0 and then 2.6.1.
->
-> Measured 2026-08-28 against the real published artefacts: `gpuwm
-> fetch-bridges` on a 2.5.8 install downloads
-> `gpuwm-bridges-v2.5.8-win-x86_64.zip` and stages 26 of 26 artifacts against
-> its packaged pins, `rw_mpas_lbc` among them; and `gpuwm-hex cull` drove the
-> **staged published** `rw_mpas_mesh` through two real cuts of the
-> 40,962-cell global parent — 338 and 606 cells, grid, static and initial
-> condition each written, 0.9 s.
->
-> **Still unmeasured from published artefacts:** a complete boundary set
-> written by the published `rw_mpas_lbc`, and a `--lbc-dir` forecast behind
-> it. That binary runs and refuses correctly by name on inputs that do not
-> satisfy it, and no parent history stream carrying the edge-normal wind over
-> a cullable region was to hand to drive it further. Every limited-area number
-> in this file was taken with a source-built engine, and none of them has been
-> reproduced from the published bundle.
+`gpuwm-hex regional` is the single command for a fine hex core at a point:
+
+```sh
+gpuwm-hex regional --point 36.5,-97.5 --cycle 2024-05-06T18 --hours 3 \
+    --work-dir RUN --geog /path/to/WPS_GEOG
+```
+
+It generates and culls the mesh, fetches HRRR, writes intermediates, init and
+hourly boundaries with `rw_mpas_lbc`, earns a fresh configuration's runtime
+mint, checks the contract on its rings, runs `forecast --lbc-dir`, and invokes
+the products door. Mesh rows and contract evidence are passed internally.
+The source and run shape are limited-area rows in the init-source and country
+tables. See [the point/HRRR guide](docs/hex-point-hrrr.md).
+
+Measured 2026-10-20 on an RTX PRO 6000: the command above completed a 43,360-cell,
+55-level forecast with 2,160 steps at 5 s and four history frames. The forecast
+stage took 1,908.79 s on a shared RTX PRO 6000 Blackwell Server Edition, with
+CUDA graphs disabled. This used the installed hex 0.4.1 native binaries and
+gpuwm 2.9.3 dependencies with this branch's Python overlay. The published
+`rw_mpas_lbc` wrote the complete hourly boundary set and the forecast consumed
+it. The maps rendered 70 products, skipped two expected hour-zero products
+and failed none, using only the refined-core view.
+
+Sampled forecast VRAM peaked at 6,508 MiB under a 9,000 MiB pool reservation.
+Stage walls were mesh 1,246.24 s, intermediate 328.85 s, init 3.44 s,
+boundaries 9.11 s, contract 85.19 s and forecast 1,908.79 s. These are shared
+host timings. The original command hung in the engine's `rw_hex_points`
+bridge after the forecast passed. The engine fix on
+`lane/improve-32b-hex-points-hang` (for 2.9.4) masks missing surface wind
+values and bounds raster work to the image canvas. The exact retained bridge
+invocation then completed in 0.53 s. Products-only recovery on
+the retained forecast completed in 13.81 s with 70 maps and
+6 point pictures, no failures and no global view. The merged regional
+receipt preserves the failed attempt and measured recovery separately. This
+was not an uninterrupted successful command wall, and the forecast was not
+repeated. F000 surface winds are unavailable, so point wind diagnostics show
+gaps or n/a; later frames have valid winds.
+
+The run's `regional-receipt.json` records stage start/end/wall, outcome, mesh
+and product counts. Runtime minting compares two independent strict dry
+forecasts; it does not establish full-physics accuracy or observation skill.
 
 The lane runs, and these are its edges rather than its promises.
 

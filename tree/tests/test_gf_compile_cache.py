@@ -6,6 +6,12 @@ from hexcore.mpasphys import gf_mpas_v842 as gf
 
 
 def test_direct_cache_reuses_only_matching_complete_images(monkeypatch, tmp_path):
+    from hexcore import kernel_warm
+    # The process-wide warm store (kernel_warm._STATE) serves raw NVRTC images it already holds; an earlier
+    # test that ran real CuPy with GPUWM_HEX_PREP_CACHE set installs it, and this test then never reaches
+    # its own cache or pack logic (G0 order: tests/test_contract_hostprep.py first). Measure without it.
+    monkeypatch.setattr(kernel_warm, "_STATE", None)
+    monkeypatch.setattr(kernel_warm, "install", lambda **_: None)
     compiled=[];loaded=[]
     class Device:
         compute_capability='120'

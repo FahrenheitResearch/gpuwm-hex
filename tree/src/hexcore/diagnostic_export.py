@@ -53,7 +53,10 @@ def diagnostic_export(seam, field_names, *, selective=False, resident=False):
         )
         return exported, inventory
     manifest = seam._restart_manifest()
-    wanted = {f"fields/{name}" for name in field_names}
+    # Engine-owned held diagnostics (including TOA OLR) are persisted under
+    # diag/, while surface state remains under fields/. Both are public
+    # committed-boundary exports and must reach the history capture.
+    wanted = {f"{group}/{name}" for name in field_names for group in ("fields", "diag")}
     selected = {key: value for key, value in manifest.items() if key in wanted}
     view = copy(seam)
     view._restart_manifest = lambda: selected

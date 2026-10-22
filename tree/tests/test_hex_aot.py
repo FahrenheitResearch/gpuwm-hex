@@ -249,6 +249,12 @@ def test_incremental_build_refuses_wrong_compiler_and_corrupt_reuse(tmp_path, mo
 def test_raw_physics_pack_and_fallback_keep_exact_nvrtc_options(tmp_path, monkeypatch):
     import sys
     from hexcore.cuda_backend import aot
+    from hexcore import kernel_warm
+    # The process-wide warm store (kernel_warm._STATE) serves raw NVRTC images it already holds; an earlier
+    # test that ran real CuPy with GPUWM_HEX_PREP_CACHE set installs it, and this test then never reaches
+    # its own cache or pack logic (G0 order: tests/test_contract_hostprep.py first). Measure without it.
+    monkeypatch.setattr(kernel_warm, "_STATE", None)
+    monkeypatch.setattr(kernel_warm, "install", lambda **_: None)
     from hexcore.kernel_pack import write
     entry = {**row(), "module_key": "nvrtc.raw." + source_hash("source"),
              "compile_request": {"route": "raw-nvrtc", "filename": "gf.cu"}}

@@ -17,7 +17,8 @@ identical at any width (``rrtmg_lw.batch_column_chunk`` and
 history field, boundary fingerprint and NetCDF variable before/after).
 This module picks the widest 256-column multiple whose whole-call transient,
 priced by the engine's own ``legacy_radiation_vram_bytes``, fits
-``RADIATION_CHUNK_BUDGET_FRACTION`` of the card, never narrower than the
+``RADIATION_CHUNK_BUDGET_FRACTION`` of the card or its mutex reservation,
+whichever is smaller, never narrower than the
 engine default.  Measured peak memory did not move (58.6 GB per card both
 ways at 30 km on 2 cards).
 
@@ -53,6 +54,19 @@ def _setting() -> str:
         raise ValueError("GPUWM_HEX_RADIATION_CHUNK must be auto, engine or a positive integer; "
                          "prevents an ambiguous radiation receipt")
     return str(value)
+
+
+def chunk_capacity(total_bytes: int) -> int:
+    """Memory this process may use when deciding whether to widen radiation.
+
+    Pool admission reserves a share of a card. Widening against the whole
+    card can exceed that reservation even on a small regional mesh.
+    Exclusive execution and execution without a pool use the card capacity.
+    """
+    if os.environ.get("GPU_MUTEX_MODE") != "pool":
+        return total_bytes
+    budget = int(os.environ.get("GPU_MUTEX_VRAM_MIB") or 0) * 2**20
+    return min(total_bytes, budget) if budget > 0 else total_bytes
 
 
 def choose_width(*, ncol: int, nz: int, p_top: float, total_bytes: int, price: Any,
@@ -146,12 +160,14 @@ def widen_radiation_chunk(seam: Any, *, cp: Any) -> dict[str, Any]:
             shortwave=bool(getattr(adapter, "shortwave", True)),
             o3input=int(getattr(adapter, "o3input", 2)),
             aer_opt=int(getattr(adapter, "aer_opt", 0))))
-        width = choose_width(ncol=ncol, nz=nz, p_top=float(p_top), total_bytes=total,
+        capacity = chunk_capacity(total)
+        width = choose_width(ncol=ncol, nz=nz, p_top=float(p_top), total_bytes=capacity,
                              price=price, default_bytes=default)
-        receipt.update(card_bytes=total, engine_default_transient_bytes=default,
+        receipt.update(card_bytes=total, chunk_capacity_bytes=capacity,
+                       engine_default_transient_bytes=default,
                        budget_fraction=RADIATION_CHUNK_BUDGET_FRACTION)
         if width is None:
-            receipt["reason"] = "card below the wide-chunk floor or no wider width fits the budget"
+            receipt["reason"] = "card or pool share below the wide-chunk floor or no wider width fits the budget"
             return receipt
         receipt["priced_transient_bytes"] = price(width)
     adapter.column_chunk = int(width)

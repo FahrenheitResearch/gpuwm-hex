@@ -152,7 +152,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 __all__ = [
     "CARD_TIER_ROWS",
@@ -225,6 +225,26 @@ CO_TENANCY_ROWS = (
 )
 
 
+def co_tenancy_limits(*, mesh_kind: str, cells: int, levels: int, card_bytes: int, free_bytes: int,
+                      solo_required_bytes: int, member_additional_bytes: Sequence[int] = ()) -> tuple[int, int]:
+    """``(table limit, memory limit)`` for resident members of one mesh on one card.
+
+    The ONE pricing both the ensemble planner (``global_ensemble.group_limit``) and the runtime
+    (:func:`admit_co_tenancy`) decide on.  Each member is charged its full solo floor plus its own
+    additional allocations (the stochastic arrays); the largest such member sets the memory limit.
+    THE BREAKAGE THIS PREVENTS (RTX 5090, 60 km x1.163842 GEFS members 1-2, 2026-10-20): the planner
+    read only the table (3 per 32 GB card) while the runtime charged 14.68 GB solo + 4.97 GB stochastic per
+    member, so every first group was refused and split; the refusal also printed "memory limit 2" because it
+    divided by the solo floor alone, when only 1 member fits.
+    """
+    rows = [row for row in CO_TENANCY_ROWS if row.mesh_kind == mesh_kind
+            and cells <= row.maximum_cells and levels <= row.maximum_levels
+            and card_bytes >= row.minimum_card_bytes]
+    table = max((row.maximum_members for row in rows), default=1)
+    per_member = solo_required_bytes + max(member_additional_bytes, default=0)
+    return table, free_bytes // per_member
+
+
 def admit_co_tenancy(*, mesh_kind: str, cells: int, levels: int,
                      members: int, card_bytes: int, free_bytes: int,
                      solo_required_bytes: int,
@@ -236,17 +256,16 @@ def admit_co_tenancy(*, mesh_kind: str, cells: int, levels: int,
     if member_additional_bytes and (len(member_additional_bytes) != members or
             any(type(value) is not int or value < 0 for value in member_additional_bytes)):
         raise ValueError("additional allocations need one nonnegative byte count per member")
-    rows = [row for row in CO_TENANCY_ROWS if row.mesh_kind == mesh_kind
-            and cells <= row.maximum_cells and levels <= row.maximum_levels
-            and card_bytes >= row.minimum_card_bytes]
-    limit = max((row.maximum_members for row in rows), default=1)
+    limit, memory_limit = co_tenancy_limits(
+        mesh_kind=mesh_kind, cells=cells, levels=levels, card_bytes=card_bytes, free_bytes=free_bytes,
+        solo_required_bytes=solo_required_bytes, member_additional_bytes=member_additional_bytes)
     additional = sum(member_additional_bytes)
     required = members * solo_required_bytes + additional
-    memory_limit = free_bytes // solo_required_bytes
     if members > limit or required > free_bytes:
         raise MemoryError(
             f"co-tenancy refuses {members} members: table limit {limit}, "
-            f"memory limit {memory_limit} at {solo_required_bytes} bytes per member, "
+            f"memory limit {memory_limit} at {solo_required_bytes} solo + "
+            f"{max(member_additional_bytes, default=0)} additional bytes per member, "
             f"required {required} bytes, available {free_bytes} bytes, "
             f"shortfall {max(0, required - free_bytes)} bytes; prevents "
             "CUDA out-of-memory during resident-member construction or the "

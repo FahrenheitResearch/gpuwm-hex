@@ -310,7 +310,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_dynamics_v841.py": {
         "recorded": "d050cabd1a1d199f014de0306f2987a68fb3184bf45291c57dafdb528569e9e7",
-        "current": "e5f63175b7eaae8bd1ab16ab3cfeeb2a2709d30f6eaf4f480ce6e00661e3162a",
+        "current": "189f312d65e508e496998fc1607fd3eeeecef0245dfb62872b6ebd77daac3636",
         "why": (
             "2026-10-19 current-source refresh after f65ab11c: immutable "
             "kernel dimensions are specialized and cache keys include shape. "

@@ -108,19 +108,21 @@ GPUWM_BRIDGE_SOURCE_REV=${rev} \\
 for b in ${OBS_BRIDGES}; do cp target/release/\$b /out/\$b; done
 bash /hex/tree/tools/build_sfc_series.sh /build /out/sfc-build
 cp /out/sfc-build/rw_sfc_series /out/rw_sfc_series
-bash /hex/tree/tools/build_s2s_renderer.sh /build /out/s2s-renderer-build
+bash /hex/tree/tools/build_s2s_diagnostics.sh /build /out/s2s-renderer-build
 cp /out/s2s-renderer-build/rw_wrfbatch /out/rw_wrfbatch
+cp /out/s2s-renderer-build/rw_ensbatch /out/rw_ensbatch
+cp /out/s2s-renderer-build/rw_s2s /out/rw_s2s
 RUSTFLAGS="-L native=/opt/netcdf4-static/lib" LIBRARY_PATH=/opt/netcdf4-static/lib \\
   bash /hex/tree/tools/build_surface_reader.sh /out/surface-reader-build --features static-netcdf
 cp /out/surface-reader-build/target/release/librw_surface.so /out/librw_surface.so
-for b in ${BRIDGES} ${OBS_BRIDGES} rw_sfc_series librw_surface.so rw_wrfbatch; do
+for b in ${BRIDGES} ${OBS_BRIDGES} rw_sfc_series librw_surface.so rw_wrfbatch rw_ensbatch; do
   ldd /out/\$b
   ! ldd /out/\$b | grep -E "not found|libnetcdf|libhdf5|libz\\." || { echo "\$b is not self-contained"; exit 1; }
 done
 /out/rw_mpas_geometry --abi > /out/rw_mpas_geometry.abi
 grep -q "hex-vertical-v1" /out/rw_mpas_geometry || { echo "rw_mpas_geometry lacks hex-vertical-v1"; exit 1; }
 rustc --version > /out/rustc.txt
-cd /out && sha256sum ${BRIDGES} ${OBS_BRIDGES} rw_sfc_series librw_surface.so rw_wrfbatch > SHA256SUMS
+cd /out && sha256sum ${BRIDGES} ${OBS_BRIDGES} rw_sfc_series librw_surface.so rw_wrfbatch rw_ensbatch > SHA256SUMS
 EOF
 chmod +x "$out/job.sh"
 "$engine_cli" run --rm -v "$tree/..:/hex:ro,Z" -v "$gpuwm:/gpuwm:ro,Z" -v "$out:/out:Z" "$image" /out/job.sh 2>&1 | tee "$out/build.log"

@@ -295,8 +295,12 @@ def _namespace(tmp_path: Path, **overrides) -> argparse.Namespace:
     static = tmp_path / "x1.40962.static.nc"
     init = tmp_path / "init.nc"
     checkout = tmp_path / "gpuwm"
-    for path in (grid, static, init):
+    for path in (grid, static):
         path.write_bytes(b"not really netcdf")
+    from netCDF4 import Dataset
+    with Dataset(init, "w") as dataset:
+        dataset.createDimension("nVertLevels", 55)
+        dataset.createDimension("nVertLevelsP1", 56)
     checkout.mkdir()
     parser = argparse.ArgumentParser()
     door.add_forecast_arguments(parser)

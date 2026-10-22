@@ -677,8 +677,14 @@ class RegionalContract:
 #: of package-data packs. Compiler checks, cubin checks, CUDA source and
 #: arithmetic are unchanged. This source-table refresh is not a new regional
 #: forecast mint; archived evidence retains its recorded scope.
+#: (19) 2026-10-20 (capabilities campaign landing, lane/hexcap-base):
+#: cuda_dynamics_v841.py keys unspecialized kernels by (cache, name) so the
+#: moving-LTS interface taps (b6ebb526) replace the same entry the step
+#: launches. A host-side cache key only; no CUDA source string or
+#: arithmetic changed. Re-derived by tools/repin_source_tables.py; not a
+#: new regional forecast mint, archived scope unchanged.
 MINTED_KERNEL_SET_SHA256 = (
-    "9076abfe661844a007a8825135918b109cfaf28e1f826a18b7150634d850b850"
+    "35ee7d92d00ab1e9ede724e2b11cd99f8cc96d96b77f93040fad20d0cc70a60d"
 )
 
 _DRY_MINT_CAVEAT = (
@@ -1405,14 +1411,20 @@ def contract_summary() -> str:
 def admitted_class(class_id: str | None) -> RegionalClass | None:
     if not class_id:
         return None
-    return ADMITTED_CLASSES.get(str(class_id))
+    held = ADMITTED_CLASSES.get(str(class_id))
+    if held is not None:
+        return held
+    from hexcore.regional_mint import presented_classes
+    return next((row for row in presented_classes() if row.class_id == str(class_id)), None)
 
 
 def admitted_class_for_key(key: RegionalClassKey) -> RegionalClass | None:
     # Exact matches first, then the banded ones, so a class that names a
     # measured edge to the millimetre is never out-ranked by a band around
     # a neighbour.
-    for row in ADMITTED_CLASSES.values():
+    from hexcore.regional_mint import presented_classes
+    rows = tuple(ADMITTED_CLASSES.values()) + tuple(presented_classes())
+    for row in rows:
         if row.key.matches(key):
             return row
     for row in ADMITTED_CLASSES.values():

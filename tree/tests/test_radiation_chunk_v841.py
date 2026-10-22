@@ -67,3 +67,29 @@ def test_other_radiation_schemes_are_untouched(monkeypatch):
     other = type("RRTMGPRadiation", (), {"column_chunk": None})()
     receipt = rc.widen_radiation_chunk(_Seam(other), cp=None)
     assert other.column_chunk is None and receipt["applied"] is False
+
+
+@pytest.mark.parametrize("mode,budget,expected", [
+    ("pool", "9000", 9000 * 2**20), ("pool", "200000", 96 * GIB),
+    ("exclusive", "9000", 96 * GIB), ("pool", "0", 96 * GIB),
+])
+def test_widening_uses_pool_reservation(monkeypatch, mode, budget, expected):
+    monkeypatch.setenv("GPU_MUTEX_MODE", mode)
+    monkeypatch.setenv("GPU_MUTEX_VRAM_MIB", budget)
+    assert rc.chunk_capacity(96 * GIB) == expected
+
+
+def test_small_pool_share_keeps_engine_width_on_large_card(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("GPU_MUTEX_MODE", "pool")
+    monkeypatch.setenv("GPU_MUTEX_VRAM_MIB", "9000")
+    monkeypatch.setenv("GPUWM_HEX_RADIATION_CHUNK", "auto")
+    monkeypatch.setitem(sys.modules, "gpuwm.core.rrtmg_legacy", SimpleNamespace(
+        legacy_radiation_vram_bytes=lambda **kwargs: _price(kwargs.get("column_chunk", 2816))))
+    cp = SimpleNamespace(cuda=SimpleNamespace(Device=lambda: SimpleNamespace(mem_info=(90 * GIB, 96 * GIB))))
+    adapter = RRTMGLegacyRadiation()
+    result = rc.widen_radiation_chunk(_Seam(adapter), cp=cp)
+    assert result["applied"] is False and adapter.column_chunk is None
+    assert result["chunk_capacity_bytes"] == 9000 * 2**20

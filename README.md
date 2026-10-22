@@ -16,7 +16,7 @@ capability contract: every claim with its scope) and the
 what it is matched against and how that is checked.
 
 **Install:** `pip install gpuwm-hex`. It requires the ArWen engine, gpuwm 2.9
-(`gpuwm>=2.9.0,<2.10`), and pip resolves it.
+(`gpuwm>=2.9.4,<2.10`), and pip resolves it.
 
 ---
 

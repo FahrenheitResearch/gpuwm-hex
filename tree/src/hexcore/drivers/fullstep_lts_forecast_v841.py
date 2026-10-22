@@ -57,13 +57,19 @@ RECEIPT_NAME = "fullstep-lts-receipt.json"
 _STATE = ("rho", "rho_theta", "rho_u", "rho_w")
 
 
+def require_stochastic_support(value) -> None:
+    """Shared admission for the driver and moving-ensemble orchestration.
+
+    Keep this check usable before CUDA preparation or subprocess launch. The
+    ensemble must not count a resolved metadata roster as an admitted forecast.
+    """
+    from hexcore.stochastic import StochasticConfig
+    StochasticConfig.parse(value)
+
+
 def _refuse_unsupported(*, host, cycling, park_physics_tier, local_timestep_classing_path) -> None:
     """Each refusal names what would break."""
-    from hexcore.stochastic import StochasticConfig
-    if StochasticConfig.parse(host.get("stochastic")).enabled:
-        raise ValueError("multi-class stochastic forcing needs a shared spectral clock, halo-aware "
-                         "curl and global dissipation reductions; these are not implemented, so "
-                         "class-local draws would disagree. Use fixed-step global members")
+    require_stochastic_support(host.get("stochastic"))
 
     # Retired 2026-10-12: --checkpoint-hours, --restart-from and --da-analysis
     # were refused because a single-stack checkpoint holds one state and one
@@ -188,6 +194,9 @@ def class_physics_host(host: Mapping[str, Any], layout: Any, *, base_dt: float, 
 
     class_dt = float(base_dt) * int(rate)
     local = dict(host)
+    # The member owns one global spectral process, never one per truncated
+    # class mesh. The synchronized executor supplies the held-tendency hook.
+    local["stochastic"] = None
     for name in ("prepared", "constructor_values", "gwdo_host", "f000_surface_diagnostics"):
         item = _prepared_attribute_view(host[name]) if name == "prepared" else host[name]
         local[name] = slice_prepared_host(item, layout)
@@ -542,6 +551,11 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
     events.update(_boundary_events(host, steps * base_dt))
     clock = require_class_clock(base_dt, [top], events)
     if devices is not None and len(devices) > 1:
+        from hexcore.stochastic import StochasticConfig
+        if StochasticConfig.parse(host.get("stochastic")).enabled:
+            raise ValueError("multi-card LTS stochastic forcing needs a cross-device owned-cell "
+                             "budget reduction; the one-card member runtime cannot publish "
+                             "that budget to other cards. Run each ensemble member on one card")
         if iau is not None or balance_series:
             raise ValueError(
                 "IAU forcing is wired into the one-card class executor; the multi-card block "
@@ -699,6 +713,19 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
         if moving_resume is not None and moving_weights is None:
             from hexcore.moving_checkpoint import restore_mailboxes
             restore_mailboxes(active,moving_resume)
+        from hexcore.stochastic import LtsStochasticPhysics, StochasticConfig
+        stochastic = None
+        if StochasticConfig.parse(host.get("stochastic")).enabled:
+            stochastic = LtsStochasticPhysics(mesh, prepared.vertical, host["stochastic"], layouts)
+            saved_stochastic = (moving_resume if moving_resume is not None else checkpoint)
+            if saved_stochastic is not None:
+                if saved_stochastic.get("stochastic") is None:
+                    raise ValueError("stochastic LTS restart lacks its member coefficients and "
+                                     "dissipation budget; redrawing would change the trajectory")
+                stochastic.restore(saved_stochastic["stochastic"])
+        elif ((moving_resume or checkpoint or {}).get("stochastic") is not None):
+            raise ValueError("stochastic LTS restart cannot disable the carried member forcing")
+        active.stochastic = stochastic
         construct_seconds = time.perf_counter() - construct_started
         interior_budget = None
         if host.get("regional") is not None:
@@ -769,6 +796,14 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             ticks = active.planes_per_step       # clock ticks per base step: 3 N
             end_step = (klass.step_start_tick + ticks * klass.step_length) // ticks
             try:
+                def member_forcing(held, start, length, **context):
+                    if stochastic is not None:
+                        stochastic.apply(index, held, state=context["state"],
+                                         rho_edge=context["rho_edge"],
+                                         normal_velocity=context["normal_velocity"],
+                                         time_seconds=start, dt=length, names=host["scalar_names"])
+                    if iau_forcing is not None:
+                        iau_forcing.add(index, held, start, length, **context)
                 with physics_scope.rank(index, int(cp.cuda.Device().id)), _class_step_length(seconds):
                     committed, next_dynamics = class_composite_step(
                         driver=stack["driver"], backend=stack["backend"], scalar_names=host["scalar_names"],
@@ -776,9 +811,8 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                         dt=seconds, previous_surface_updates=previous[index],
                         dynamics_tendencies=forcing[index], refl_10cm_due=(end_step in captures),
                         before_phase_two=klass.exchanger.round_physics_candidate,
-                        held_forcing=(None if iau_forcing is None else
-                                      (lambda held, start, length, **context:
-                                       iau_forcing.add(index, held, start, length, **context))))
+                        held_forcing=(member_forcing if stochastic is not None or iau_forcing is not None
+                                      else None))
             except Exception as error:
                 # Which rate class refused (a failure at a class's own dt is a different
                 # diagnosis from one at the base step); carried into the first-failure receipt.
@@ -988,6 +1022,8 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 base_dt=base_dt, top=top, rates=rates, n_cells=n_global_cells, n_edges=n_global_edges,
                 global_state={**active.gather(_STATE),
                               **({} if active.scalars is None else {"scalars": active.scalars.gather()})})
+            if stochastic is not None:
+                payload["stochastic"] = stochastic.snapshot(device=False)
             if iau is not None:
                 from hexcore.iau_native import IAU_WINDOW_KEY, window_record
 
@@ -1028,7 +1064,11 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 stream.synchronize()
                 mark = time.perf_counter()
                 try:
+                    if stochastic is not None:
+                        stochastic.begin_macro(clock_offset + done * base_dt, top * base_dt)
                     active.advance_macro(top)
+                    if stochastic is not None:
+                        stochastic.end_macro()
                     stream.synchronize()
                 except Exception as error:
                     failure = {"step": done + top, "last_committed_shared_step": done,
@@ -1161,6 +1201,7 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             "warm_seconds_per_forecast_hour": (
                 sum(row["seconds"] for row in warm) / (sum(row["base_steps"] for row in warm) * base_dt) * 3600.0
                 if warm else None),
+            "stochastic": None if stochastic is None else stochastic.receipt(),
             "iau": (None if iau_forcing is None else {**iau_receipt, **iau_forcing.receipt()}),
             "balance_series": (None if balance is None else str(balance.path)),
         }

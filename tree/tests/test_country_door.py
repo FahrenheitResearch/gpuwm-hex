@@ -89,6 +89,8 @@ def test_forecast_stage_leaves_destination_creation_to_driver(tmp_path, monkeypa
         assert Path(os.environ["GPUWM_HEX_OBSERVATION_CONFIG"]).is_file()
         return 0
     monkeypatch.setattr(cli, "main", handler)
+    # composing doors run the forecast through cli.run_stage (a child process); same stand-in
+    monkeypatch.setattr(cli, "run_stage", lambda argv, env=None, _door=(handler): _door(list(argv)))
     monkeypatch.setenv("GPUWM_HEX_OBSERVATION_CONFIG", "previous")
     assert run_country(args) == 0
     assert os.environ["GPUWM_HEX_OBSERVATION_CONFIG"] == "previous"
@@ -167,6 +169,8 @@ def test_country_partial_score_succeeds_only_when_card_is_verified(tmp_path, mon
     args.work_dir.mkdir()
     (args.work_dir / "mesh-rows.json").write_text('{}')
     monkeypatch.setattr(cli, "main", lambda argv: 3)
+    # composing doors run the forecast through cli.run_stage (a child process); same stand-in
+    monkeypatch.setattr(cli, "run_stage", lambda argv, env=None, _door=(lambda argv: 3): _door(list(argv)))
     calls = []
     def completed(run, config):
         calls.append(run)
@@ -197,6 +201,8 @@ def test_country_default_prepares_before_forecast_and_joins_one_scorer(tmp_path,
             args.init.touch()
         return 0
     monkeypatch.setattr(cli, "main", door)
+    # composing doors run the forecast through cli.run_stage (a child process); same stand-in
+    monkeypatch.setattr(cli, "run_stage", lambda argv, env=None, _door=(door): _door(list(argv)))
     monkeypatch.setattr(observation_scorecard, "completed_scorecard", lambda *args: None)
     monkeypatch.setattr(observation_scorecard, "join_automatic_scorer", lambda *args: {"note": "joined once", "status": "PARTIALLY_MEASURED"})
     assert country_door.run_country(args) == 0

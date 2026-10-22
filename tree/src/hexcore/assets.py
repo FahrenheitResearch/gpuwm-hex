@@ -373,7 +373,7 @@ def main(argv=None):
     generator.add_argument('--from', dest='from_directory', required=True, type=Path)
     generator.add_argument('--output', type=Path, default=PINS)
     generator.add_argument('--repository', default='FahrenheitResearch/gpuwm-hex')
-    generator.add_argument('--tag', default='kernel-packs-v0.4.1')
+    generator.add_argument('--tag', default='kernel-packs-v0.4.2')
     generator.set_defaults(handler=pin)
     args = parser.parse_args(argv)
     return args.handler(args)

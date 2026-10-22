@@ -60,7 +60,7 @@ class Dataset:
         pass
 
     def getncattr(self, name):
-        return {"s2s_climatology_source": "ERA5", "s2s_climatology_start_mmdd": "10-17"}[name]
+        return {"s2s_climatology_source": "ERA5", "s2s_climatology_start_mmdd": "10-17", "s2s_climatology_start_hour": 0}[name]
 
 
 @pytest.mark.parametrize("baseline", ["ERA5", "missing_terrain", "ensemble"])
@@ -71,6 +71,8 @@ def test_builder_uses_corrected_baseline_or_refuses(monkeypatch, tmp_path, basel
     normal = Dataset(XLAT=Variable(yy), XLONG=Variable(xx))
     for field, units in products.FIELDS.items():
         normal.variables["week_1_" + field] = Variable(np.full((2, 2), 290.), units)
+        for suffix in ("_tercile_lower", "_tercile_upper"):
+            normal.variables["week_1_" + field + suffix] = Variable(np.full((2, 2), 290.), units)
     if baseline == "ERA5":
         normal.variables["orography"] = Variable(np.zeros((2, 2)))
     datasets = {"init": Dataset(zgrid=Variable(np.stack([height, height + 10], axis=1))),
@@ -78,7 +80,9 @@ def test_builder_uses_corrected_baseline_or_refuses(monkeypatch, tmp_path, basel
                 "normal": normal}
     bridge = types.ModuleType("gpuwm.netcdf_bridge")
     bridge.open_dataset = lambda path: datasets[str(path)]
-    monkeypatch.setitem(sys.modules, "gpuwm", types.ModuleType("gpuwm"))
+    gpuwm = types.ModuleType("gpuwm")
+    gpuwm.rustwx = types.SimpleNamespace(run_ensemble_product_renderer=lambda *args, **kwargs: ([], "test-only"))
+    monkeypatch.setitem(sys.modules, "gpuwm", gpuwm)
     monkeypatch.setitem(sys.modules, bridge.__name__, bridge)
     monkeypatch.setattr(products, "product_grid", lambda *args: (yy, xx, np.arange(4)))
     monkeypatch.setattr(products, "climatology_path", lambda *args:
@@ -99,10 +103,17 @@ def test_builder_uses_corrected_baseline_or_refuses(monkeypatch, tmp_path, basel
 
     monkeypatch.setattr(products, "write_aggregate", write)
     monkeypatch.setattr(products.subprocess, "run", lambda *args, **kwargs:
-        types.SimpleNamespace(returncode=0, stdout="s2s-window global-ensemble-projection"))
+        types.SimpleNamespace(returncode=0, stdout="s2s-window global-ensemble-projection s2s-wind-terciles"))
     value = dict(start_time="2026-10-17_00:00:00", paths=dict(work=str(tmp_path), grid="grid"),
-                 members=[dict(init="init", run_id="m1")])
+                 members=[dict(init="init", run_id="m1")],
+                 # Every S2S plan carries its surface owner; prescribed keeps this on the
+                 # terrain path (the prognostic ocean response maps are tested on their own).
+                 surface=dict(ocean_mode="prescribed"))
     args = types.SimpleNamespace(days=7, history_hours=24, row="global-120km")
+    if baseline == "ensemble":
+        with pytest.raises(products.S2SError, match="require an ERA5 historical climatology"):
+            products.build_products(value, dict(attempts=[]), args, {})
+        return
     if baseline == "missing_terrain":
         with pytest.raises(products.S2SError, match="requires source orography"):
             products.build_products(value, dict(attempts=[]), args, {})
@@ -115,19 +126,15 @@ def test_builder_uses_corrected_baseline_or_refuses(monkeypatch, tmp_path, basel
         correction = result["temperature2_terrain_correction"]
         assert correction["applied"] == (baseline == "ERA5")
         assert correction["lapse_rate_K_per_m"] == (.0065 if baseline == "ERA5" else 0.)
-        if baseline == "ensemble":
-            assert "not a historical normal" in result["baseline"]
-            assert "6.5 K/km" not in result["baseline"]
-            assert "climatology_orography" not in written[0][1]
 
 
-def test_unavailable_auto_normal_retains_explicit_ensemble_fallback(monkeypatch, tmp_path):
+
+def test_unavailable_auto_normal_refuses_historical_products(monkeypatch, tmp_path):
     from hexcore import s2s_climatology, s2s_products
     def unavailable(*args):
         raise OSError("test archive unavailable")
     monkeypatch.delenv("GPUWM_HEX_S2S_ERA5_CLIMATOLOGY_URL", raising=False)
     monkeypatch.setattr(s2s_climatology, "fetch_normals", unavailable)
     args = types.SimpleNamespace(climatology=None)
-    path, label = s2s_products.climatology_path({"paths": {"work": str(tmp_path)}}, args, {})
-    assert path is None and "not a historical normal" in label
-    assert "test archive unavailable" in (tmp_path / "era5-climatology-unavailable.json").read_text()
+    with pytest.raises(OSError, match="test archive unavailable"):
+        s2s_products.climatology_path({"paths": {"work": str(tmp_path)}}, args, {})

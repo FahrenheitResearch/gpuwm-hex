@@ -82,22 +82,25 @@
     }
   },
   "rows": [
-    {"id": "global-120km", "mesh": "x1.40962", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
+    {"id": "global-120km", "mesh": "x1.40962", "physics": "arwen", "hours": 24, "history_every_minutes": 60,
      "about": "120 km quasi-uniform globe: the quick row, and the one that fits a 16 GB consumer card"},
-    {"id": "global-60km", "mesh": "x1.163842", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
+    {"id": "global-60km", "mesh": "x1.163842", "physics": "arwen", "hours": 24, "history_every_minutes": 60,
      "about": "60 km quasi-uniform globe"},
-    {"id": "global-30km", "mesh": "x1.655362", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
+    {"id": "global-30km", "mesh": "x1.655362", "physics": "arwen", "hours": 24, "history_every_minutes": 60,
      "about": "30 km quasi-uniform globe"},
     {"id": "global-15km", "mesh": "x1.2621442", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
      "about": "15 km quasi-uniform globe; on cards under about 64 GB the door spreads it over every visible card"},
-    {"id": "global-120km-morrison", "mesh": "x1.40962", "physics": "morrison", "hours": 24, "history_every_minutes": 180,
+    {"id": "global-120km-morrison", "mesh": "x1.40962", "physics": "morrison", "hours": 24, "history_every_minutes": 60,
      "about": "120 km globe on the gpuwm-global suite (Morrison)"},
-    {"id": "global-60km-morrison", "mesh": "x1.163842", "physics": "morrison", "hours": 24, "history_every_minutes": 180,
+    {"id": "global-60km-morrison", "mesh": "x1.163842", "physics": "morrison", "hours": 24, "history_every_minutes": 60,
      "about": "60 km globe on the gpuwm-global suite (Morrison)"},
-    {"id": "global-30km-morrison", "mesh": "x1.655362", "physics": "morrison", "hours": 24, "history_every_minutes": 180,
+    {"id": "global-30km-morrison", "mesh": "x1.655362", "physics": "morrison", "hours": 24, "history_every_minutes": 60,
      "about": "30 km globe on the gpuwm-global suite (Morrison)"},
     {"id": "global-15km-morrison", "mesh": "x1.2621442", "physics": "morrison", "hours": 24, "history_every_minutes": 180,
-     "about": "15 km globe on the gpuwm-global suite (Morrison)"}
+     "about": "15 km globe on the gpuwm-global suite (Morrison)"},
+    {"id": "global-120km-high-top", "mesh": "x1.40962", "physics": "arwen", "hours": 720, "history_every_minutes": 1440,
+     "vertical_spec": "countries/s2s80-v1.json", "s2s": true,
+     "about": "80 layers to 50 km (approximately 1 hPa), 750 m stratospheric spacing above 20 km, sponge above 40 km, RRTMG with monthly climatological ozone; one-member 30-day warming/reversal and measured card fit: docs/s2s/receipts/high-top-20180205.json; independent observed skill and multi-member fit are unqualified"}
   ],
   "measured_seconds_per_forecast_hour": [
     {"mesh": "x1.2621442", "cards": 8, "card": "RTX PRO 6000 Blackwell 96 GB", "card_match": "rtx pro 6000", "seconds": 52.2, "basis": "all-in, 8-card same-host, 2026-10-10"},

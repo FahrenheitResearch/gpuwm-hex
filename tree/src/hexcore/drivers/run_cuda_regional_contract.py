@@ -1530,6 +1530,18 @@ def main() -> int:
              "file before the earliest one that exists refuses the cull by "
              "name (default: the reference record set's own start)")
     args = parser.parse_args()
+    # THE DECK IS A BITWISE PROOF, so it compiles its kernels with strict
+    # numerics whatever the caller runs.  THE BREAKAGE THIS PREVENTS
+    # (gpuwm-hex regional, 2026-10-20): fast numerics became every door's
+    # default, a door that ran the deck passed it on, the device contracted
+    # multiply-adds the CPU authority does not, and 5 of 8 decks reported "not
+    # bitwise" on a correct 43,360-cell cull, so no fresh
+    # cull could be admitted.  The same cull passed 8 of 8 under strict.  The
+    # forecast it admits still runs the caller's numerics: the contract is keyed
+    # by the kernel-set source digest and the zone geometry, not compile flags.
+    from hexcore import numerics
+
+    numerics.set_mode("strict", source="the regional contract deck")
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     _LEDGER = str(out.parent / "timeline.jsonl")

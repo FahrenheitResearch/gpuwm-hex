@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.2
+
+Requires gpuwm>=2.9.4,<2.10.
+
+New:
+- `gpuwm-hex regional`: one-command limited-area forecasts from HRRR around a point, with mesh, boundaries, products and a stage receipt.
+- Limited-area runs over any named region through `gpuwm-hex country --region`.
+- Variable-resolution global meshes from `gpuwm-hex mesh-plan --global-mesh --generate --run`.
+- Storm-following regions authored from tracks, best tracks or IBTrACS with `gpuwm-hex moving case`, `run` and `products`.
+- Storm-following ensembles with `gpuwm-hex moving-ensemble`, including SPPT and SKEB under local time stepping.
+- Mixed-layer ocean and sea ice on the mesh columns, on by default in subseasonal runs.
+- Aerosol transport (advection, boundary-layer mixing, deposition, settling) in global forecasts, and `gpuwm-hex chem-sources` to prepare RAVE and GBBEPx smoke, GEOS-FP composition, dust and sea-salt sources.
+- Subseasonal products: weekly means, anomalies, climatology and terciles, member history export, MJO and BSISO indices, weekly scores against ERA5, and hub-height wind and solar energy tables.
+- An 80-level high-top row, `global-120km-high-top`, for stratospheric runs.
+- Keyless ERA5 initialization from the public ARCO store as `--source era5`; the CDS route is `era5-cds`. Lagged ERA5 analysis members for subseasonal ensembles.
+- IVT, freezing height and the 300 hPa jet in the default global products; 850 and 925 hPa winds in regional products.
+
+Fixed:
+- Observation scoring fetches the on-demand engine bridges (rw_asos, rw_prepbufr) before scoring.
+- Radiosonde cells at hours other than 00Z and 12Z are reported as not applicable.
+- An interrupted mesh download resumes.
+- Global ensembles pipeline member groups on each card, size groups by the card's memory, and name each member in its maps.
+- Subseasonal runs accept any length of 7 days or more; `--members` takes a total count.
+- `gpuwm-hex physics list` and `resolve` report the MPAS suite routes the forecast door uses; a suite named through `--forecast-arg` is the planned and recorded physics.
+- Storm-following members read the selected suite's sea-ice threshold.
+- `gpuwm-hex moving run --resume` redraws the products of a segment whose product step was interrupted.
+- PyPI uploads run only for version-tag releases.
+
 ## 0.4.1
 
 Requires gpuwm>=2.9.2,<2.10.

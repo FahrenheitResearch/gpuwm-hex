@@ -91,6 +91,8 @@ N_LEVELS = 55
 N_INTERFACES = 56
 N_SOIL_LEVELS = 4
 SCALAR_NAMES = ("qv", "qc", "qr", "qi", "qs", "qg")
+CHEMISTRY_CONFIG = None
+CHEMISTRY_CONFIG_SHA256 = None
 SOURCE_SCALAR_NAMES = ("qv", "qc", "qr")
 COLD_ZERO_SCALAR_NAMES = ("qi", "qs", "qg")
 DT_SECONDS = 120.0
@@ -240,14 +242,20 @@ NONCLAIMS = (
 # are the union of the parked misc and speed sides (batched complete export, atomic
 # writes and history-ready recovery); these two rows are the merged files' digests.
 # No card run for this merge.
+# Re-frozen 2026-10-20 (capabilities campaign landing, lane/hexcap-base) with
+# tools/repin_source_tables.py: diagnostic_export.py also exports engine-held
+# diag/ fields such as TOA OLR (c858be11), and cuda_arwen_physics_v841.py reads
+# those diag/ keys and carries the optional mixed-layer ocean state into the
+# surface restart (4ac577f7). Host-side export and restart plumbing; no CUDA
+# source changed. No card run for this re-freeze.
 EXECUTION_SOURCE_PINS: dict[str, str | None] = {
-    "src/hexcore/diagnostic_export.py": "6665cddccda8a968c1913f53ac804827bc4e6d9ee2ff5e457d7f0474dd6f8b36",
+    "src/hexcore/diagnostic_export.py": "ae6d360ae2b6a1deb5c8a5d10fe972b51f60b9784eb48b20e0cec925c7c66297",
     "src/hexcore/snapshot_transfer.py": "7064e74719933894c9d92dbfe06190b404801cd72ecc5e4fe2447b66124c5efb",
     "src/hexcore/history_ready.py": "287840b7ece3cb97185340f3e161c997bbfd9a11233ff5da4198cca42e1f9523",
     "src/hexcore/history_writer.py": "b0b6f8d27fce8478f0d78d3c4cc73bdc12bf5f4a625b7f45515b8f1206fd64a1",
     "src/hexcore/cuda_arwen_helper_scope_v2.py": "cf179cb9e5650d5db36ccb8d60905a88140b360da9d54c6d8f94a8e032e00e07",
     "src/hexcore/radiation_source_sets.json": "f0357c3b4613f2cd136d62f5cd2391d034d471acc59d6f956683082cc1fdc5a2",
-    "src/hexcore/data/profiles/engine-helper-sets.v1.json": "d4b070d3432951bf1f028419298762fd2901deda0a9374e3351757370ee1676a",
+    "src/hexcore/data/profiles/engine-helper-sets.v1.json": "f86f96bd257ad443abede893d46d7e15fac9f6c64364e385f263201efa7f5893",
     # Native upper damping: Rust and CUDA match compiled source blocks.
     "src/hexcore/native/upper_damping.rs": "5483b2c1e7da45317ffe4213c5879b583070d9e28d591ec52a9c697a052e81f1",
     "src/hexcore/upper_damping_v841.py": "c77cb8a360cb25f6eabf1aca6b9c50abb41e9fe603511aefc9c0c6df9117f4e1",
@@ -785,7 +793,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # Re-derived 2026-10-18 (parked-merge hex-speed): that file plus the
     # parked asynchronous history-ready seam; digest of the merged file.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "7ade3174e32558f6045be17927dfea3bd975f4483df479ed374d7239c53262ca"
+        "49b72c512239cff9e70d71c836754c0eb57455c472cafeed804ff1cf4aead0ef"
     ),
     # New pin 2026-10-05: the New Tiedtke row's seam (the frozen column-batch
     # class subclassed, driver built at cu_physics=16, raw cumulus momentum
@@ -948,7 +956,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "fb0aa7da49c1a5e7f5d6bacce6503214d1e550b9a60c4faaaeff237e2d719e4b"
         ),
         "adapter_contract_sha256": (
-            "cfa5beb4c4ea77df52bbeb23ef4bd14136b974a8d21d4d49903ec3de03c3d07f"
+            "b08a3d336df0c510f2224182c271d210c13655c253cb2e99f091d7fe1237ee34"
         ),
         "arwen_contract_surface_sha256": ARWEN_CONTRACT_SURFACE_SHA256,
         "arwen_glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
@@ -1655,35 +1663,35 @@ def negative_qv_fingerprint(logical_qv: Any) -> dict[str, Any]:
     }
 
 
-def augment_cold_scalars(state: Any, scalar_names: Sequence[str]) -> dict[str, Any]:
-    """Append native-cold +0 FP32 planes for every species of the ROW beyond
-    the init's qv/qc/qr, without touching qv/qc/qr.
+def augment_cold_scalars(state: Any, scalar_names: Sequence[str], *,
+                         source_names: Sequence[str] = SOURCE_SCALAR_NAMES) -> dict[str, Any]:
+    """Preserve the initialized scalar prefix and append cold FP32 storage.
 
-    The row-generic form of :func:`augment_exact_wsm6_scalars`: the init
-    carries exactly the three source species for every row this port
-    admits, and every other species the row declares -- ice classes, number
-    moments, rime carriers, a lane's declared extras -- starts at exact
-    +0 FP32, which is the native cold start.  A row whose leading three are
-    not the source three is refused: the init's block would be read under
-    the wrong names.
+    The default source is qv/qc/qr. Callers with initialized ice pass the
+    complete source prefix so adding aerosols cannot erase those fields.
+    All appended carriers start at +0; the chemistry provider then binds
+    its dated initial composition before the first history frame.
     """
 
     names = tuple(str(name) for name in scalar_names)
+    source_names = tuple(source_names)
+    if source_names[:3] != SOURCE_SCALAR_NAMES or names[:len(source_names)] != source_names:
+        raise ValueError("initialized scalars must be an ordered model prefix")
     if names[: len(SOURCE_SCALAR_NAMES)] != SOURCE_SCALAR_NAMES:
         raise ValueError(
             f"the row's leading species {names[:3]} are not the init's "
             f"source species {SOURCE_SCALAR_NAMES}; the cold-start "
             "augmentation would read the init's block under the wrong names"
         )
-    cold_names = names[len(SOURCE_SCALAR_NAMES):]
+    cold_names = names[len(source_names):]
     source = np.asarray(state.scalars)
-    expected = (len(SOURCE_SCALAR_NAMES), N_LEVELS, N_CELLS)
+    expected = (len(source_names), N_LEVELS, N_CELLS)
     if source.dtype != np.dtype(np.float32) or source.shape != expected:
         raise TypeError(f"source qv/qc/qr must be FP32 {expected}, got {source.dtype} {source.shape}")
     if not np.all(np.isfinite(source)):
         raise FloatingPointError("source qv/qc/qr contains non-finite values")
     source_hashes = {
-        name: array_sha256(source[index]) for index, name in enumerate(SOURCE_SCALAR_NAMES)
+        name: array_sha256(source[index]) for index, name in enumerate(source_names)
     }
     qv_fingerprint = negative_qv_fingerprint(source[0])
     cold = np.zeros((len(cold_names), N_LEVELS, N_CELLS), dtype=np.float32, order="C")
@@ -1694,7 +1702,7 @@ def augment_cold_scalars(state: Any, scalar_names: Sequence[str]) -> dict[str, A
         raise RuntimeError("row augmentation produced the wrong shape")
     state.scalars = np.ascontiguousarray(augmented, dtype=np.float32)
     return {
-        "source_present": list(SOURCE_SCALAR_NAMES),
+        "source_present": list(source_names),
         "source_absent": list(cold_names),
         "source_hashes": source_hashes,
         "cold_zero_plane_sha256": array_sha256(cold[0]) if cold.size else None,
@@ -4061,6 +4069,10 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             variable = dataset.createVariable(name, dtype, ("nEdges",))
             variable[:] = static[name]
         from hexcore.species_row import species_row_for_names
+        if CHEMISTRY_CONFIG is not None:
+            from hexcore.chem_transport import configure, history_metadata
+            dataset.setncattr("CHEMISTRY", history_metadata(CHEMISTRY_CONFIG, CHEMISTRY_CONFIG_SHA256))
+            configure(CHEMISTRY_CONFIG)
         species = species_row_for_names(SCALAR_NAMES)
         if species.engine_scheme != "wsm6":
             dataset.setncattr("refl10cm_provenance",
@@ -4088,13 +4100,22 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             "tsk": "K",
             "sst": "K",
             "sstsk": "K",
+            "ocean_depth": "m", "ocean_volume": "m", "ocean_area": "1",
+            "ocean_ice_temp": "K", "ocean_snow_water": "m", "ocean_melt": "kg m^{-2}",
+            "ocean_basal": "W m^{-2}", "ocean_net_flux": "W m^{-2}",
+            "ocean_energy": "J m^{-2}", "ocean_entrainment": "J m^{-2}",
+            "ocean_residual": "J m^{-2}", "ocean_initial_sst": "K", "ocean_initial_ice": "1",
             "tmn": "K",
             "t2": "K",
             "q2": "kg kg^{-1}",
             "refl10cm": "dBZ",
+            "swdown": "W m^{-2}",
             "hfx": "W m^{-2}",
             "qfx": "kg m^{-2} s^{-1}",
             "lh": "W m^{-2}",
+            "olr": "W m^{-2}",
+            "swdown": "W m^{-2}",
+            "glw": "W m^{-2}",
             "u10": "m s^{-1}",
             "v10": "m s^{-1}",
             "smois": "m3 m^{-3}",
@@ -4133,7 +4154,8 @@ def write_snapshot_netcdf(path: Path, snapshot: Mapping[str, Any], static: Mappi
             else:
                 continue
             variable = dataset.createVariable(name, "f4", dims, zlib=True, complevel=1)
-            variable.setncattr("units", units.get(name, ""))
+            from hexcore.chem_transport import history_units
+            variable.setncattr("units", units.get(name, history_units(name) or ""))
             write_variable(variable, payload)
     record = {"path": str(path), "bytes": path.stat().st_size}
     if _hash_file:

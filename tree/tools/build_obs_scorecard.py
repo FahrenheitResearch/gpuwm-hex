@@ -5,6 +5,7 @@ Run on a compute box, not on the desktop.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import tomllib
@@ -63,13 +64,19 @@ def main():
     root = args.engine.resolve() / "tools/rustwx"
     source = Path(__file__).resolve().parents[1] / "rust/obs-scorecard/main.rs"
     target = write_project(args.engine, args.out)
+    # Cargo's target override is used by lane/release builds to keep scratch
+    # off the source disk. Copy from that same location after compilation.
+    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", args.out.resolve() / "target"))
+    if not target_dir.is_absolute():
+        target_dir = root / target_dir
     code = subprocess.call(["cargo", "test" if args.test else "build", "--release", "--offline",
-                            "--jobs", "2", "--manifest-path", str(target)], cwd=root)
+                            "--jobs", os.environ.get("CARGO_BUILD_JOBS", "4"),
+                            "--target-dir", str(target_dir), "--manifest-path", str(target)], cwd=root)
     if code == 0 and args.install:
         destination = source.parents[2] / "src/hexcore/libexec"
         destination.mkdir(parents=True, exist_ok=True)
         executable = "hex_obs_scorecard.exe" if __import__("os").name == "nt" else "hex_obs_scorecard"
-        shutil.copyfile(args.out / "target/release" / executable, destination / executable)
+        shutil.copyfile(target_dir / "release" / executable, destination / executable)
         (destination / executable).chmod(0o755)
     return code
 

@@ -7,3 +7,5 @@ The codec retains dimension, variable and typed attribute order and matches SMIO
 The stream patch was checked and tested in a standalone single-source Cargo harness. The whole engine workspace build was not run.
 
 `rrtmg-lw-active-gpoints.patch` is a separate engine candidate, not applied by the hex build helper. It edits `gpuwm/core/rrtmg_lw.py` so that, in the per-g-point longwave band kernels, the padded lanes above the band g-point count return before the band coefficient arithmetic. Status: offline compile only (66 to 70 registers, no spills). Real-input words, loaded resources and an H60 wall pair have not been measured, so no build applies it until that qualification runs.
+
+`cf-physical-scale.patch` adds an optional validated physical-unit ladder to the generic CF product table in `rw_wrfbatch`. The hex ocean response table supplies signed SST and ice-fraction change ladders, preserving zero and small changes. Apply it to the engine, rebuild `rw_wrfbatch`, and set `GPUWM_HEX_RW_WRFBATCH`. Existing rows retain their current scale. Qualification evidence is in the capability lane report.

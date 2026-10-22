@@ -88,7 +88,7 @@ from .cuda_physics_v841 import (
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "570c503fbbfab6e076572d3e6386f41fccf56049"
+ARWEN_BUILD_COMMIT = "71e29c7aa413f669d6bbb793a0a1786fe1248624"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
@@ -108,7 +108,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "802a8bc9d8968d22f9500c4b2e9de60832f1e883d7f622452aee76cead5e7ce5"
         ),
         "gpuwm/core/physics.py": (
-            "5fddbd58b79a7fcdaced59836833c2e5075c8357cecd0f2a2ba19fc2efc682f4"
+            "e9eea0d1b4b9400744ab6301fb02a92c0243032e08a3bb66ec0542752492bd37"
         ),
         "gpuwm/core/microphysics.py": (
             "388f2018fa52e3b0d00523d55264221d239ad1251185fcb1f0d03f27cc2abb29"
@@ -120,22 +120,22 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "120dc7e606dae18cece64e1d1af899ec8930de339e82943dcab3457c9115532d"
         ),
         "gpuwm/core/rrtmg_legacy.py": (
-            "8d2bd2c20a7589563cf2587004ca4237c0f0c92c2d269263d74f5b92a98e80de"
+            "d63497754dd4b42c1b4562a8f2037aa73aa674a214a14ed9b11a7406ad3af888"
         ),
         "gpuwm/core/noahmp_runtime.py": (
-            "56f4f21f38583b9242fca8bad309260dda34bae98aabd698451eae663c3cd679"
+            "a25f24c8acc070908a83c1fbc75b4e61727b676962b86c90ed8816af6365cc97"
         ),
         "gpuwm/core/noahmp_glacier.py": (
-            "2ccbfbe25df23f77477427542696eb38cf9f5f6ae4fedfaf2d279da5618488eb"
+            "5b94145bc7122a2f6dd59ada85260cde9ae5fe2c038b16d65fe75328b795ae88"
         ),
         "gpuwm/core/noahmp_glacier_gpu.py": (
-            "55fc977ad3c5c0b14efa551bcbd40ac616164ffb4f4d066a17fc9fd8fdaf0234"
+            "81fe20b1fda560bc220c4a880639ee7fa1d5129a2fef1869cbb7c65e6a4057d0"
         ),
         "gpuwm/core/noahmp_kernel_sources.py": (
-            "a729e733c81f3bb49466cae645d6c46d6f6ab4635db8f90c01723279007306c1"
+            "6aff082a02f4ed5883e6c7086c712e30324d79fe8b2dbe9a16665051a564b708"
         ),
         "gpuwm/core/kernels/__init__.py": (
-            "0f1cff2281f0f46a66446c8030bb12791995d0af27fa282a28c745a242c73b70"
+            "737c3ca23a79c22b222c79ab7efee76e1fa8863593ef059ecd579bce99b41285"
         ),
         "gpuwm/core/kernels/noahmp_leaves.cu": (
             "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497"
@@ -144,10 +144,10 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "14c6e57f2a2df7926a05101c89f2a6778b150ce68af58c78996e288bda8cd954"
         ),
         "gpuwm/config.py": (
-            "ecceb5b1923b4ee809af86235664ac423de473c9adcd89a7b71d17c231a0549b"
+            "364d694ef55808fd6218f6d8ebed57e296dbceb9c1aa9b20f5d0c07b525c6ecb"
         ),
         "gpuwm/io/restart.py": (
-            "f0c96e15de62279d05683109ec4f1823292c776996874460559a3007196ccbe8"
+            "0105bde5b0cdb1d788e710caaeca69feeff3dbaefb14f75912630c60a8602b47"
         ),
         "docs/mpas-seam.md": (
             "4b734d8ebdf0686fe6bb40dd699c56dce6ae3460d32969c9056a1846b48f739e"
@@ -2279,6 +2279,8 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         selected_h2d_bytes = 0
         for name in names:
             key = f"fields/{name}"
+            if key not in export_arrays and f"diag/{name}" in export_arrays:
+                key = f"diag/{name}"
             if key not in export_arrays:
                 if name in _REQUIRED_ARWEN_EXPORT_FIELDS:
                     raise ValueError(f"frozen Arwen v2 public export lacks required {key!r}")
@@ -2380,6 +2382,11 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             surface.update({name: self._surface_updates.owned[name].copy()
                             for name in ("sst", "sstsk")})
             surface["tmn"] = cp.array(self._seam._driver.fields["tmn"].reshape(-1), copy=True)
+            ocean = getattr(self._surface_updates, "ocean", None)
+            if ocean is not None:
+                surface.update({"ocean_"+key: ocean.array(key).copy() for key in
+                    ("depth", "volume", "area", "ice_temp", "snow_water", "melt", "basal",
+                     "net_flux", "energy", "entrainment", "residual", "initial_sst", "initial_ice")})
         soil = {
             name: selected[name]
             for name in names

@@ -36,13 +36,13 @@ hdf5_version=1.14.6
 hdf5_sha256=e4defbac30f50d64e1556374aa49e574417c9e72c6b1de7a4ff88c4b1bea6e9b
 netcdf_version=4.9.3
 netcdf_sha256=a474149844e6144566673facf097fea253dc843c37bc0a7d3de047dc8adda5dd
-work=/tmp/gpuwm-hex-netcdf4-static
+work="$prefix/build-work"
 rm -rf "$work" && mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT
 # A fixed date (2025-02-07 00:00:00 UTC); GCC uses it for __DATE__ and __TIME__.
 export SOURCE_DATE_EPOCH=1738886400
 deps="$work/deps"
-jobs=$(nproc)
+jobs=${CARGO_BUILD_JOBS:-${MAX_JOBS:-8}}
 cd "$work"
 fetch() { curl -fsSL -o "$2" "$1"; echo "$3  $2" | sha256sum -c -; }
 fetch "https://zlib.net/fossils/zlib-$zlib_version.tar.gz" zlib.tar.gz "$zlib_sha256"

@@ -48,17 +48,20 @@ from collections.abc import Mapping
 import dataclasses
 
 
-def final_digest(stack, dynamics_tendencies, surface_accumulators, surface_updates):
-    # The production serializer owns dtype, byte-order and descriptor framing.
-    # This adapter only selects carriers; it never re-encodes field values.
-    from gpuwm.state_digest import _canonical_digest_document
+def final_carriers(stack, dynamics_tendencies, surface_accumulators, surface_updates, *, to_host=False):
+    """The committed carriers ``final_digest`` binds, as ``(manifest, scalars)``.
+
+    ``to_host`` copies every device carrier to the host first (``.get()``, the same native-endian bytes the
+    serializer's own ``.get()`` reads), so the hash can run after the card has been released
+    (hexcore.card_handoff).  The digest of the copies is the digest of the device carriers.
+    """
     from hexcore.cuda_dualrun import STATE_FIELDS, SIDECAR_FIELDS
 
     manifest, scalars = {}, {}
 
     def collect(path, value):
         if hasattr(value, "dtype") and hasattr(value, "shape"):
-            manifest[path] = value
+            manifest[path] = value.get() if to_host and hasattr(value, "get") and not isinstance(value, np.ndarray)                 else value
         elif isinstance(value, Mapping):
             for key, child in sorted(value.items()):
                 collect(f"{path}/{key}", child)
@@ -85,4 +88,17 @@ def final_digest(stack, dynamics_tendencies, surface_accumulators, surface_updat
     if dynamics_tendencies is not None:
         for name in ("rthdynten", "rqvdynten", "time_seconds"):
             collect(f"dynamics_forcing/{name}", getattr(dynamics_tendencies, name))
+    return manifest, scalars
+
+
+def final_digest_of(carriers):
+    # The production serializer owns dtype, byte-order and descriptor framing.
+    # This adapter only selects carriers; it never re-encodes field values.
+    from gpuwm.state_digest import _canonical_digest_document
+
+    manifest, scalars = carriers
     return _canonical_digest_document(manifest, scalars, "hex-committed-boundary")
+
+
+def final_digest(stack, dynamics_tendencies, surface_accumulators, surface_updates):
+    return final_digest_of(final_carriers(stack, dynamics_tendencies, surface_accumulators, surface_updates))

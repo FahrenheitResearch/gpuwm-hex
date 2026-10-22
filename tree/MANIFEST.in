@@ -46,6 +46,8 @@ prune rust/netcdf-copy/target
 # The history writer's parallel deflate library, built into hexcore/libexec by setup.py.
 graft rust/history-deflate
 prune rust/history-deflate/target
+graft rust/s2s-zarr
+prune rust/s2s-zarr/target
 
 # METIS 5.1.0 (Apache-2.0), which setup.py builds into hexcore/libexec/hex_gpmetis
 # for automatic multi-card partitions (tools/build_gpmetis.py).
@@ -101,3 +103,9 @@ prune tools/rustwx/target
 
 # Strict geometry also builds at first use from a checkout or an unpacked sdist.
 graft src/hexcore/data/mpasphys-maths
+
+# Chemistry source preparation is a source-built Rust data path.
+graft rust/chem-sources
+prune rust/chem-sources/target
+graft engine-patches
+prune rust/chemistry-converter-build

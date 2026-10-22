@@ -29,9 +29,11 @@ def _cpu_attrs(attrs, phase, t_mono):
 
 
 @contextmanager
-def member(run_id, *, card, root):
+def member(run_id, *, card, root, open_stages=()):
+    """``open_stages`` carries the stages a member opened on another thread (its device phase) into
+    this context, so the stage it ends here (``post.forecast``) closes the interval it began there."""
     state = {"run_id": run_id, "card": card, "root": Path(root),
-             "pending": [], "open": set()}
+             "pending": [], "open": set(open_stages)}
     token = _member.set(state)
     try:
         yield
@@ -130,6 +132,11 @@ def emit(stage, phase="mark", *, attrs=None, root=None, t_mono=None, t_unix=None
                 print(f"time ledger: cannot append {path}: {type(error).__name__}: {error}", file=sys.stderr)
         except BaseException:
             pass
+
+
+def open_stages():
+    state = _member.get()
+    return set(state["open"] if state is not None else _open)
 
 
 def end_if_open(stage):

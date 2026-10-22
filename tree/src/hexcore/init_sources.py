@@ -1,13 +1,16 @@
 """One table-driven path from any initial-condition source to a hex init.
 
-Every source hex can start from is a row of ``data/init-sources.v1.json``.
+Every source hex can start from is a row of ``data/init-sources.v1.json``
+or the generated-model extension ``earth2_init_rows.json``.
 The path is the same for all of them:
 
 1. **acquire** the row's declared products (whole files, or the records an
    index selects, optionally a member's records only), or take them from a
-   staging directory;
-2. **decode** them into ONE WPS intermediate through ``met_intermediate``
-   with the row's Vtable and map-source label;
+   staging directory, or generate the row's forecast through the shared
+   Earth-2 inference runner;
+2. **decode** them into ONE WPS intermediate through the Rust GRIB writer
+   or the engine's mapped composer, as declared by the row. Generated forecasts
+   use the shared Rust NetCDF composition and WPS export instead;
 3. **init** through the source-agnostic init door (:mod:`hexcore.init_door`)
    with the row's first-guess declarations and the table's run switches;
 4. optionally **order** the init for a mesh case and write a case JSON that
@@ -44,6 +47,7 @@ from .errors import MpasPortError
 
 TABLE_SCHEMA = "gpuwm-hex.init-sources/v1"
 TABLE_PATH = Path(__file__).with_name("data") / "init-sources.v1.json"
+GENERATED_TABLE_PATH = Path(__file__).with_name("earth2_init_rows.json")
 #: Vtable paths in the table are relative to the package's ``data/``
 #: directory, where ``vtables/`` lives and from where the wheel and the sdist
 #: carry it.  THE BREAKAGE THIS PREVENTS, measured on a clean pip install of
@@ -56,22 +60,32 @@ RECEIPT_SCHEMA = "gpuwm-hex.init-source-receipt/v1"
 
 _ROW_KEYS = {"id", "aliases", "engine_source_id", "display_name", "role", "license", "grid",
              "products", "decode", "vertical", "first_guess", "surface", "limits", "members",
-             "status", "refusal", "sets", "remap", "archive", "posting", "forecast", "surface_series"}
-_PRODUCT_KEYS = {"role", "transport", "filename", "url", "index", "cds", "codec", "fields", "reason",
-                 "id", "expand", "remap", "streams"}
+             "status", "refusal", "sets", "remap", "archive", "posting", "forecast", "surface_series",
+             "generation", "attribution", "coverage", "intermediate"}
+_PRODUCT_KEYS = {"role", "transport", "filename", "url", "index", "cds", "codec", "fields", "reason", "fetch_args",
+                 "id", "expand", "remap", "streams", "request"}
 _REMAP_KEYS = {"tool", "mesh_cells", "centre", "target", "coordinates", "about"}
 _REMAP_METHODS = {"idw4", "surface-idw4", "nearest", "soil-nearest", "seaice-nearest"}
 _CODECS = {"bz2"}
-_TRANSPORTS = {"https", "cds"}
+_TRANSPORTS = {"https", "cds", "engine-fetch", "zarr"}
 _INDEX_FORMATS = {"ecmwf-jsonl", "ncep-idx"}
 #: Parallel range requests a product takes when neither ``--jobs`` nor the
 #: product's own ``streams`` says otherwise (open-data hosts that throttle
 #: bursts answer 503 Slow Down, which the retry ladder absorbs).
 DEFAULT_STREAMS = 3
+# The inference runner derives its Torch/BLAS pools from CPU affinity, ignoring
+# OMP_NUM_THREADS. Bound its child affinity so a container exposing more CPUs
+# than its allocation cannot create hundreds of competing loader threads.
+DEFAULT_GENERATION_WORKERS = 14
 #: Largest single range request.  A selected or whole object is cut into
 #: pieces of this size so every stream stays busy; the bytes written are the
 #: same bytes in the same order whatever the piece size.
 RANGE_PIECE_BYTES = 4 << 20
+#: Where a source's meteorology exists.  A ``limited_area`` row (a projected
+#: regional product) initialises a limited-area cull through the regional door
+#: and its intermediate row; it never initialises a global mesh, which would
+#: have no meteorology outside the source's domain.
+COVERAGES = ("global", "limited_area")
 _RUN_SWITCHES = ("extrap_airtemp", "theta_adv_order", "coef_3rd_order", "virtual_factor",
                  "deep_soil_moisture", "landuse_table", "frac_seaice", "tsk_seaice_threshold",
                  "oned_underflow")
@@ -100,6 +114,15 @@ def load_table(path: Path | None = None) -> dict[str, Any]:
     if missing:
         _refuse(f"{table_path} run_switches lacks {', '.join(missing)}; the init door has no default "
                 "for them and two sources would be initialised under different run settings")
+    # Extension rows leave the shared physical-source registry append-only.
+    # Explicit alternate tables are self-contained (including test fixtures).
+    if path is None:
+        generated = json.loads(GENERATED_TABLE_PATH.read_text(encoding="utf-8"))
+        if generated.get("schema") != "gpuwm-hex.earth2-init-rows/v1":
+            _refuse(f"{GENERATED_TABLE_PATH}: unknown generated-source schema")
+        table["sources"].extend(generated["sources"])
+        table["_extensions"] = [{"path": str(GENERATED_TABLE_PATH),
+                                 "sha256": _sha256_file(GENERATED_TABLE_PATH)}]
     seen: dict[str, str] = {}
     for row in table["sources"]:
         validate_row(row)
@@ -137,6 +160,43 @@ def validate_row(row: dict[str, Any]) -> None:
         if not str(row.get("refusal", "")).strip():
             _refuse(f"source row {row['id']!r} is refused without naming the breakage")
         return
+    first_guess = row.get("first_guess", {})
+    for key in ("nfglevels", "nfgsoillevels", "use_spechumd"):
+        if key not in first_guess:
+            _refuse(f"{row['id']}: first_guess.{key} is required; the init door refuses without it")
+    if first_guess["use_spechumd"] not in ("yes", "no"):
+        _refuse(f"{row['id']}: first_guess.use_spechumd must be yes or no for the init door")
+    generation = row.get("generation")
+    if generation is not None:
+        if generation.get("backend") != "earth2studio":
+            _refuse(f"{row['id']}: unknown generation backend")
+        for key in ("model", "profile", "channels", "bindings", "weights_revision"):
+            if not generation.get(key):
+                _refuse(f"{row['id']}: generation.{key} is required")
+        step = generation.get("step_hours")
+        spinup = generation.get("spinup_hours")
+        if type(step) is not int or step < 1 or type(spinup) is not int or spinup < step or spinup % step:
+            _refuse(f"{row['id']}: generation needs positive whole forecast steps")
+        if [binding.get("channel") for binding in generation["bindings"]] != generation["channels"]:
+            _refuse(f"{row['id']}: every output channel needs one explicit hex binding or exclusion")
+        for key in ("decode", "first_guess", "license"):
+            if not row.get(key):
+                _refuse(f"{row['id']}: {key} is required")
+        donor = generation.get("global_donor")
+        if donor is not None and (donor.get("area") != [-90, -180, 90, 180]
+                or any(not donor.get(key) for key in ("provider", "acquisition_receipt", "data_role"))):
+            _refuse(f"{row['id']}: global_donor must declare the complete global extent and acquisition role")
+        return
+    coverage = row.get("coverage", "global")
+    if coverage not in COVERAGES:
+        _refuse(f"source row {row.get('id')!r}: coverage {coverage!r} is not one of {list(COVERAGES)}")
+    if coverage == "limited_area":
+        # A projected regional source travels its intermediate row, not the
+        # Vtable path, so it declares that row instead of products and decode.
+        if not str((row.get("intermediate") or {}).get("row", "")).strip():
+            _refuse(f"source row {row.get('id')!r} covers a limited area and names no intermediate.row; "
+                    "the regional door has no way to write its WPS intermediates")
+        return
     for key in ("products", "decode", "first_guess"):
         if not row.get(key):
             _refuse(f"source row {row.get('id')!r} declares no {key}; the path cannot run without it")
@@ -150,6 +210,14 @@ def validate_row(row: dict[str, Any]) -> None:
             _refuse(f"{row['id']}: an https product needs a url template")
         if product["transport"] == "cds" and not product.get("cds", {}).get("dataset"):
             _refuse(f"{row['id']}: a cds product needs cds.dataset")
+        if product["transport"] == "engine-fetch":
+            args = product.get("fetch_args")
+            if not isinstance(args, list) or not args or not all(isinstance(a, str) for a in args):
+                _refuse(f"{row['id']}: an engine-fetch product needs a nonempty fetch_args string list")
+        if product["transport"] == "zarr":
+            request = product.get("request", {})
+            if not request.get("store") or not request.get("fields"):
+                _refuse(f"{row['id']}: a zarr product needs a native request with store and fields")
         if product.get("codec") is not None and product["codec"] not in _CODECS:
             _refuse(f"{row['id']}: codec {product['codec']!r} is not one of {sorted(_CODECS)}")
         if product.get("expand") is not None and product["expand"] not in row.get("sets", {}):
@@ -218,25 +286,62 @@ def validate_row(row: dict[str, Any]) -> None:
                 _refuse(f"{row['id']}: remap.coordinates.{role} must name a product id of this row; the "
                         "plan is built from the mesh's own coordinate and land-fraction records")
     decode = row["decode"]
-    for key in ("vtable", "map_source"):
-        if not decode.get(key):
-            _refuse(f"{row['id']}: decode.{key} is required; met_intermediate has no default for it")
+    if "mapping" in decode:
+        if Path(decode["mapping"]).name != decode["mapping"] or not decode.get("composition"):
+            _refuse(f"{row['id']}: mapped decode needs a packaged mapping filename and composition")
+        if type(decode.get("workers")) is not int or decode["workers"] < 1:
+            _refuse(f"{row['id']}: mapped decode workers must be a positive integer")
+    if decode.get("format") == "regular-netcdf":
+        fields = decode.get("fields")
+        if (not isinstance(fields, list) or not fields
+                or any(not all(isinstance(f.get(k), str) and f[k] for k in ("name", "field", "units"))
+                       for f in fields)):
+            _refuse(f"{row['id']}: regular NetCDF decode requires name, field and units for each field")
+    else:
+        for key in ("vtable", "map_source"):
+            if not decode.get(key):
+                _refuse(f"{row['id']}: decode.{key} is required; met_intermediate has no default for it")
     first_guess = row["first_guess"]
     for key in ("nfglevels", "nfgsoillevels", "use_spechumd"):
         if key not in first_guess:
             _refuse(f"{row['id']}: first_guess.{key} is required; the init door refuses without it")
 
 
-def resolve_source(table: dict[str, Any], name: str) -> dict[str, Any]:
+def resolve_source(table: dict[str, Any], name: str, accepted_licences=(), *, coverage: str = "global") -> dict[str, Any]:
     wanted = _norm(name)
     for row in table["sources"]:
         if wanted in {_norm(n) for n in (row["id"], *row.get("aliases", ()))}:
             if row.get("status") == "refused":
                 _refuse(f"source {row['id']!r} is declared refused: {row['refusal']}")
+            require_source_licences(row, accepted_licences)
+            held = row.get("coverage", "global")
+            if held != coverage:
+                if held == "limited_area":
+                    _refuse(f"source {row['id']!r} covers a limited area ({row.get('display_name')}); a global "
+                            "mesh initialised from it would have no meteorology outside that domain.  Run it "
+                            f"with `gpuwm-hex regional --source {row['id']} --point LAT,LON ...`")
+                _refuse(f"source {row['id']!r} is a global source; the regional door takes a limited-area "
+                        "row (`gpuwm-hex sources` lists each row's coverage)")
             return row
     known = ", ".join(row["id"] for row in table["sources"])
     _refuse(f"no init source is named {name!r}; known: {known}")
     raise AssertionError("unreachable")
+
+
+def require_source_licences(row: dict[str, Any], accepted=()) -> None:
+    """Check model code AND weights before acquiring inputs or opening a card."""
+    if not row.get("generation"):
+        return
+    policy = row["license"]
+    permissive = {"Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "public domain"}
+    for role in ("code", "weights"):
+        grant = policy[role]
+        if not grant.get("source"):
+            _refuse(f"{row['id']}: {role} licence has no source citation")
+        restricted = grant["name"] not in permissive or (role == "weights" and not policy["default_enabled"])
+        if restricted and grant["name"] not in accepted:
+            _refuse(f"{row['id']}: research-only {role}, licence {grant['name']}; "
+                    f"explicitly opt in with --accept-licence {grant['name']!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +395,8 @@ def template_context(cycle: Cycle, row: dict[str, Any], member: int | None, lead
         context["member"] = 0
         return context
     control = members.get("control")
+    if member is None and row.get("generation") and control is not None:
+        member = control["number"]
     declared = ((f"control is {control['number']}, " if control else "no control member is published, ")
                 + f"perturbed {members['perturbed']['first']}..{members['perturbed']['last']}")
     if member is None:
@@ -334,6 +441,8 @@ class ProductPlan:
     remap: dict[str, str] | None = None
     index_format: str | None = None
     streams: int | None = None
+    fetch_args: list[str] | None = None
+    request: dict[str, Any] | None = None
 
 
 def plan_products(row: dict[str, Any], cycle: Cycle, member: int | None, lead_hours: int = 0) -> list[ProductPlan]:
@@ -353,6 +462,8 @@ def plan_products(row: dict[str, Any], cycle: Cycle, member: int | None, lead_ho
         index_urls = _templates(index["url"] if index else None, context)
         plans.append(ProductPlan(
             role=product["role"],
+            fetch_args=_templates(product.get("fetch_args"), context),
+            request=product.get("request"),
             transport=product["transport"],
             filename=product["filename"].format(**context),
             url=urls[0] if urls else None,
@@ -649,8 +760,28 @@ def acquire(plans: list[ProductPlan], dest: Path, cycle: Cycle, *, staged: list[
                 target.unlink(missing_ok=True)
                 os.symlink(found.resolve(), target)
             how = {"staged_from": str(found.resolve())}
-        elif target.is_file():
+        elif target.is_file() and plan.transport != "engine-fetch":
             how = {"reused": True}
+        elif plan.transport == "zarr":
+            from gpuwm.zarr_bridge import extract_regular_zarr
+            request = {**plan.request, "times": [cycle.when.strftime("%Y-%m-%dT%H:%M:%SZ")]}
+            native = extract_regular_zarr(request,
+                request_path=dest / (plan.filename + ".request.json"), output=target)
+            how = {"request": request, "native": native}
+        elif plan.transport == "engine-fetch":
+            workers = _streams(plan, jobs)
+            argv = [sys.executable, "-m", "gpuwm", "fetch", *plan.fetch_args,
+                    "--out", str(dest)]
+            env = {**os.environ, "GPUWM_RW_ZARR_WORKERS": str(workers)}
+            completed = subprocess.run(argv, env=env, text=True, capture_output=True)
+            log = dest / (plan.filename + ".fetch.log")
+            log.write_text(completed.stdout + completed.stderr, encoding="utf-8")
+            if completed.returncode:
+                _refuse(f"engine fetch refused (rc {completed.returncode}); see {log}: "
+                        f"{completed.stderr.strip()[-2000:]}")
+            if not target.is_file():
+                _refuse(f"engine fetch did not publish declared product {target}; see {log}")
+            how = {"argv": argv, "workers": workers, "log": str(log)}
         elif plan.transport == "cds":
             how = _fetch_cds(plan, target, cycle)
         elif plan.index_url is not None:
@@ -736,6 +867,21 @@ def resolve_writer(explicit: Path | None) -> Path:
     return resolve(MET_INTERMEDIATE, explicit)
 
 
+def _resolve_mapped_writer(spec: dict[str, Any], explicit: Path | None) -> Path:
+    """Check the packaged authority and WPS capability before acquiring bytes."""
+    import gpuwm
+    from gpuwm.mapped_engine_bridge import require_engine
+
+    mapping = Path(gpuwm.__file__).with_name("authorities") / spec["mapping"]
+    if not mapping.is_file():
+        _refuse(f"mapped authority {mapping} is missing; install an engine carrying this mapping")
+    writer = Path(explicit) if explicit else require_engine()
+    completed = subprocess.run([str(writer), "capabilities"], capture_output=True, text=True)
+    if completed.returncode or not json.loads(completed.stdout.splitlines()[-1]).get("wps_intermediate_v5"):
+        _refuse(f"{writer} lacks WPS intermediate v5 export; install a current mapped engine")
+    return writer
+
+
 def resolve_vtable(row: dict[str, Any], vtable_root: Path = VTABLE_ROOT) -> Path:
     vtable = (vtable_root / row["decode"]["vtable"]).resolve()
     if not vtable.is_file():
@@ -743,8 +889,185 @@ def resolve_vtable(row: dict[str, Any], vtable_root: Path = VTABLE_ROOT) -> Path
     return vtable
 
 
+def generation_preflight(row: dict[str, Any], accepted=()) -> None:
+    """Resolve the shared inference and Rust composition contracts before I/O."""
+    from gpuwm.earth2_run import model_declaration
+    from gpuwm.mapped_engine_bridge import require_engine
+    from gpuwm.source_authorities import packaged_authorities
+
+    require_source_licences(row, accepted)
+    declaration = row["generation"]
+    _, installed = model_declaration(declaration["model"])
+    for key, actual in (("channels", installed.get("channels")),
+                        ("profile", installed.get("profile")),
+                        ("weights_revision", installed.get("weights", {}).get("revision"))):
+        if declaration[key] != actual:
+            _refuse(f"{row['id']}: installed engine {key} differs from the hex binding; "
+                    "update the metadata against the installed model contract before inference")
+    if installed.get("weights", {}).get("licence") != row["license"]["weights"]["name"]:
+        _refuse(f"{row['id']}: installed weight licence differs from the cited hex grant")
+    mapping = json.loads(Path(packaged_authorities(declaration["profile"])["mapping"]).read_text())
+    for binding in declaration["bindings"]:
+        if binding.get("field") is None:
+            continue
+        source_field = mapping["fields"].get(binding["source_field"], {})
+        selectors = source_field.get("selectors", [])
+        selected = [selector for selector in selectors if binding["channel"] in selector.get("name", [])]
+        if not selected or ("pressure_pa" in binding and not any(
+                selector.get("level_value", -1) * 100 == binding["pressure_pa"] for selector in selected)):
+            _refuse(f"{row['id']}: {binding['channel']} differs from the installed Rust field/level mapping")
+    # run_model checks the inference runtime before acquisition. Verified
+    # forecast reuse needs the model contract and Rust reader, not that runtime.
+    engine = require_engine()
+    probe = subprocess.run([str(engine), "capabilities"], capture_output=True, text=True, check=True)
+    if not json.loads(probe.stdout.splitlines()[-1]).get("wps_intermediate_v5"):
+        _refuse(f"{engine}: missing Rust WPS intermediate export; refusing before inference")
+
+
+def generate(row: dict[str, Any], source_cycle: Cycle, lead: int, member: int | None,
+             out_dir: Path, accepted=(), workers: int | None = None) -> dict[str, Any]:
+    """One table-driven inference call; the requested hex clock is its valid time.
+
+    The positive spinup is intentional: a bare global source request consumes a
+    real forecast, including when the caller asks for source lead zero.
+    """
+    from gpuwm.earth2_licensing import licence_scope
+    from gpuwm.earth2_run import run_model
+
+    template_context(source_cycle, row, member, lead)
+    declaration = row["generation"]
+    spinup = declaration["spinup_hours"]
+    inference_cycle = source_cycle.when - timedelta(hours=spinup)
+    workers = workers or int(os.environ.get("RAYON_NUM_THREADS", DEFAULT_GENERATION_WORKERS))
+    if workers < 1:
+        _refuse("generated initialization needs a positive worker budget")
+    affinity = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else None
+    selected = set(sorted(affinity)[:workers]) if affinity else None
+    reused = False
+    cached = out_dir / "earth2-run.json"
+    if cached.is_file():
+        prior = json.loads(cached.read_text())
+        expected_members = [0 if member is None else member]
+        model = prior.get("model_row", {})
+        if (prior.get("model") != declaration["model"]
+                or prior.get("cycle") != inference_cycle.isoformat()
+                or prior.get("hours") != spinup + lead
+                or prior.get("members") != expected_members
+                or prior.get("initial_condition_source") != declaration["ic_source"]
+                or prior.get("forecast_start_hour") != 0
+                or model.get("channels") != declaration["channels"]
+                or model.get("profile") != declaration["profile"]
+                or model.get("weights", {}).get("revision") != declaration["weights_revision"]
+                or model.get("weights", {}).get("licence") != row["license"]["weights"]["name"]):
+            _refuse(f"{cached}: existing generation belongs to a different request")
+        files = prior["runner"]["files"]
+        if (not files or set(prior["forecast"]) != {f["path"] for f in files}
+                or not any(f.get("lead_hours") == spinup + lead
+                           and f.get("member") == expected_members[0] for f in files)):
+            _refuse(f"{cached}: forecast inventory differs from the runner receipt")
+        for product in files:
+            path = Path(product["path"])
+            if (not path.is_file() or path.stat().st_size != product["bytes"]
+                    or _sha256_file(path) != product["sha256"]):
+                _refuse(f"{cached}: generated forecast bytes changed: {path}")
+        receipt, reused = prior, True
+    try:
+        if selected is not None:
+            os.sched_setaffinity(0, selected)
+        if not reused:
+            with licence_scope(accepted):
+                receipt = run_model(model=declaration["model"], cycle=inference_cycle,
+                                    hours=spinup + lead, area=None, out=out_dir,
+                                    ic_source=declaration["ic_source"], member=member)
+    finally:
+        if affinity is not None:
+            os.sched_setaffinity(0, affinity)
+    receipt["hex_binding"] = {"inference_cycle": inference_cycle.isoformat(),
+                              "forecast_lead_hours": spinup + lead,
+                              "valid_time": Cycle(source_cycle.when + timedelta(hours=lead)).start_time,
+                              "workers": len(selected) if selected else workers,
+                              "cpu_affinity": sorted(selected) if selected else None,
+                              "reused_verified_forecast": reused,
+                              "bindings": declaration["bindings"]}
+    return receipt
+
+
+def global_surface_donor(row: dict[str, Any], generated: dict[str, Any], out_dir: Path) -> None:
+    """Keep a global donor global, without a string corner parser's dateline heuristic.
+
+    The engine's historical default (-180, 179.75) is interpreted as a narrow
+    dateline box by its corner parser. Reuse its declared native acquisition
+    request, selecting surface fields and the row's explicit full-band extent.
+    Rust owns all acquisition, field reads, derivation and writing.
+    """
+    spec = row["generation"].get("global_donor")
+    donor = generated["donor"]
+    if not spec or donor.get("provider") != spec["provider"]:
+        return
+    from gpuwm.zarr_bridge import extract_regular_zarr
+
+    acquisition = Path(donor["analysis"]).parent / spec["acquisition_receipt"]
+    original = json.loads(acquisition.read_text())
+    request = dict(original["request"]["native_request"])
+    request["area"] = spec["area"]
+    request["fields"] = [f for f in request["fields"] if not f.get("pressure")]
+    fields = {f["output"] for f in request["fields"]}
+    request["derived"] = [f for f in request.get("derived", [])
+                          if f.get("inputs") and set(f["inputs"]) <= fields]
+    root = out_dir / "global-donor"
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / "surface.nc"
+    receipt_path = root / "receipt.json"
+    started = time.perf_counter()
+    if receipt_path.is_file():
+        prior = json.loads(receipt_path.read_text())
+        if (prior["request"] != request or not target.is_file()
+                or target.stat().st_size != prior["bytes"]
+                or _sha256_file(target) != prior["sha256"]):
+            _refuse(f"{receipt_path}: existing global donor differs from the requested bytes")
+        result = prior
+    else:
+        native = extract_regular_zarr(request, request_path=root / "request.json", output=target)
+        result = {"request": request, "native": native, "path": str(target),
+                  "bytes": target.stat().st_size, "sha256": _sha256_file(target),
+                  "seconds": round(time.perf_counter() - started, 3),
+                  "parallelism": donor.get("parallelism")}
+        receipt_path.write_text(json.dumps(result, indent=2) + "\n")
+    donor["supplements"][spec["data_role"]] = str(target)
+    generated["hex_binding"]["global_donor"] = result
+
+
+def decode_generated(row: dict[str, Any], generated: dict[str, Any], cycle: Cycle,
+                     out_dir: Path, workers: int, accepted=()) -> dict[str, Any]:
+    """The existing mapped Rust engine owns NetCDF reads, transforms and WPS writes."""
+    global_surface_donor(row, generated, out_dir)
+    met = out_dir / f"MET:{cycle.when.strftime('%Y-%m-%d_%H')}"
+    argv = [sys.executable, "-m", "gpuwm", "source-intermediate",
+            "--source", row["engine_source_id"], "--profile", generated["profile"],
+            "--valid-time", cycle.when.strftime("%Y-%m-%dT%H:%M:%S"),
+            "--out", str(met), "--work-dir", str(out_dir / "composition"),
+            "--workers", str(workers)]
+    for licence in accepted:
+        argv += ["--accept-licence", licence]
+    for filename in generated["forecast"]:
+        argv += ["--input", str(filename)]
+    for role, filenames in generated["donor"]["supplements"].items():
+        for filename in ([filenames] if isinstance(filenames, str) else filenames):
+            argv += ["--supplement", f"{role}={filename}"]
+    with (out_dir / "source-intermediate.log").open("w", encoding="utf-8") as log:
+        completed = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT)
+    if completed.returncode:
+        _refuse(f"Rust source composition exited {completed.returncode}; "
+                f"see {out_dir / 'source-intermediate.log'}")
+    export = json.loads(met.with_name(met.name + ".receipt.json").read_text())
+    return {"argv": argv, "met": str(met), "met_sha256": _sha256_file(met),
+            "met_bytes": met.stat().st_size, "export": export}
+
+
 def decode(row: dict[str, Any], inputs: list[str], cycle: Cycle, out_dir: Path,
            writer: Path, vtable_root: Path = VTABLE_ROOT) -> dict[str, Any]:
+    if "mapping" in row["decode"]:
+        return _decode_mapped(row, inputs, cycle, out_dir, writer)
     vtable = resolve_vtable(row, vtable_root)
     met = out_dir / f"MET:{cycle.when.strftime('%Y-%m-%d_%H')}"
     argv = [str(writer), "--vtable", str(vtable), "--date", cycle.wps_date,
@@ -756,6 +1079,70 @@ def decode(row: dict[str, Any], inputs: list[str], cycle: Cycle, out_dir: Path,
         _refuse(f"met_intermediate refused {row['id']} (rc {completed.returncode}): "
                 f"{completed.stderr.strip()[-2000:]}")
     return {"argv": argv, "met": str(met), "vtable_sha256": _sha256_file(vtable),
+            "writer_sha256": _sha256_file(writer), "met_sha256": _sha256_file(met),
+            "met_bytes": met.stat().st_size}
+
+
+def _decode_mapped(row: dict[str, Any], inputs: list[str], cycle: Cycle,
+                   out_dir: Path, writer: Path) -> dict[str, Any]:
+    """Compose a declared mapping and export WPS, with all arrays kept in Rust."""
+    import gpuwm
+    from gpuwm.mapped_authoring import author_input_manifest
+    from gpuwm.mapped_engine_bridge import run_engine
+    from gpuwm.ingest.preparation_workers import worker_environment
+
+    spec = row["decode"]
+    mapping = Path(gpuwm.__file__).with_name("authorities") / spec["mapping"]
+    work = out_dir / "mapped"
+    work.mkdir(exist_ok=True)
+    packaged_mapping_sha256 = _sha256_file(mapping)
+    if spec.get("mapping_fields"):
+        metadata = json.loads(mapping.read_text(encoding="utf-8"))
+        metadata["fields"].update(spec["mapping_fields"])
+        mapping = work / "mapping.json"
+        mapping.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    composition = work / "composition.json"
+    composition.write_text(json.dumps(spec["composition"], indent=2) + "\n", encoding="utf-8")
+    supplements = {}
+    provenance = {}
+    in_band = work / "in-band-provenance.json"
+    if spec.get("in_band_supplements"):
+        in_band.write_text(json.dumps({"schema": "gpuwm-hex.in-band-inputs/v1",
+            "inputs": [{"path": name, "sha256": _sha256_file(Path(name))} for name in inputs],
+            "mapping_sha256": _sha256_file(mapping)}, indent=2) + "\n", encoding="utf-8")
+        for data_role, provenance_role in spec["in_band_supplements"].items():
+            supplements[data_role] = inputs
+            provenance[provenance_role] = in_band
+    manifest = author_input_manifest(work / "inputs.json", mapping_path=mapping,
+        composition_path=composition, primary_files=inputs,
+        supplement_files=supplements, provenance_files=provenance)
+    composed = run_engine("compose", mapping=mapping, files=inputs, composition=composition,
+        supplements=supplements, provenance=provenance,
+        input_manifest=manifest["manifest"]["path"],
+        input_manifest_sha256=manifest["manifest"]["sha256"], output=work / "composed",
+        engine=writer, threads=spec["workers"], lead_batch=True)
+    met = out_dir / f"MET:{cycle.when.strftime('%Y-%m-%d_%H')}"
+    pending = work / "intermediate.part"
+    pending.unlink(missing_ok=True)
+    contract = Path(gpuwm.__file__).with_name("authorities") / "wps-intermediate-fields.v1.json"
+    argv = [str(writer), "wps", "--frameset", str(work / "composed"),
+            "--composition", str(composition), "--contract", str(contract),
+            "--valid-time", cycle.when.strftime("%Y-%m-%dT%H:%M:%S"), "--out", str(pending)]
+    completed = subprocess.run(argv, capture_output=True, text=True,
+                               env=worker_environment(spec["workers"]))
+    (out_dir / "mapped-wps.stdout.json").write_text(completed.stdout, encoding="utf-8")
+    (out_dir / "mapped-wps.stderr.txt").write_text(completed.stderr, encoding="utf-8")
+    if completed.returncode:
+        _refuse(f"mapped WPS export refused {row['id']}: {completed.stderr.strip()[-2000:]}")
+    native = json.loads(completed.stdout.splitlines()[-1])
+    for key in ("nfglevels", "nfgsoillevels"):
+        if native[key] != row["first_guess"][key]:
+            _refuse(f"{row['id']}: WPS {key}={native[key]} disagrees with row {row['first_guess'][key]}")
+    pending.replace(met)
+    return {"argv": argv, "met": str(met), "mapping_sha256": _sha256_file(mapping),
+            "packaged_mapping_sha256": packaged_mapping_sha256,
+            "composition_sha256": _sha256_file(composition), "workers": spec["workers"],
+            "compose": composed["receipt"], "native": native,
             "writer_sha256": _sha256_file(writer), "met_sha256": _sha256_file(met),
             "met_bytes": met.stat().st_size}
 
@@ -821,6 +1208,8 @@ def add_init_source_parser(commands: Any) -> None:
                      "map-source label and first-guess declarations."),
     )
     parser.add_argument("--source", help="source id or alias (see --list)")
+    parser.add_argument("--accept-licence", action="append", default=[], metavar="LICENCE",
+                        help="research-only opt-in naming each exact model code/weight licence")
     parser.add_argument("--cycle", help="YYYY-MM-DDTHH")
     parser.add_argument("--lead-hours", type=int, default=0, help="forecast lead from source cycle; init clock is cycle + lead")
     parser.add_argument("--member", type=int, default=None, help="ensemble member (ensemble rows only)")
@@ -858,7 +1247,8 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
         if getattr(arguments, flag) is None:
             _refuse(f"--{flag.replace('_', '-')} is required")
     started = time.time()
-    row = resolve_source(table, arguments.source)
+    accepted = getattr(arguments, "accept_licence", ())
+    row = resolve_source(table, arguments.source, accepted)
     source_cycle = Cycle.parse(arguments.cycle)
     lead = getattr(arguments, "lead_hours", 0)
     cycle = Cycle(source_cycle.when + timedelta(hours=lead))
@@ -866,14 +1256,20 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
     # the download: a missing writer, remapper or Vtable found after the
     # acquire stage costs the user the whole transfer and then refuses.
     stop = arguments.stop_after
-    writer = resolve_writer(arguments.writer) if stop != "acquire" else None
+    generation = row.get("generation")
+    if generation:
+        generation_preflight(row, accepted)
+    if stop != "acquire" and not generation and "mapping" in row["decode"]:
+        writer = _resolve_mapped_writer(row["decode"], arguments.writer)
+    else:
+        writer = resolve_writer(arguments.writer) if stop != "acquire" and not generation else None
     remapper = (resolve_remapper(arguments.remapper)
                 if row.get("remap") and stop != "acquire" else None)
-    if stop != "acquire":
+    if stop != "acquire" and not generation:
         resolve_vtable(row)
     out_dir = arguments.out_dir.expanduser().absolute()
     out_dir.mkdir(parents=True, exist_ok=True)
-    plans = plan_products(row, source_cycle, arguments.member, lead)
+    plans = plan_products(row, source_cycle, arguments.member, lead) if not generation else []
     receipt: dict[str, Any] = {
         "schema": RECEIPT_SCHEMA,
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -881,7 +1277,11 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
         "source": row["id"], "member": arguments.member, "cycle": source_cycle.start_time,
         "source_cycle": source_cycle.start_time, "lead_hours": lead, "valid_time": cycle.start_time,
         "row": row, "run_switches": table["run_switches"],
+        "table_extensions": table.get("_extensions", []),
     }
+    if row.get("attribution"):
+        # Licence attribution the source requires (ERA5: Licence to Use Copernicus Products).
+        receipt["attribution"] = row["attribution"]
     stages: dict[str, float] = {}
 
     def write_receipt() -> None:
@@ -891,21 +1291,51 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
             json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     t0 = time.time()
-    receipt["products"] = acquire(plans, out_dir / "products", cycle,
-                                  staged=[p.expanduser().absolute() for p in arguments.staged],
-                                  jobs=arguments.jobs)
+    if generation:
+        if arguments.staged:
+            _refuse("generated initialization owns inference provenance; --staged is for downloaded products")
+        try:
+            receipt["generation"] = generate(row, source_cycle, lead, arguments.member,
+                                             out_dir / "generation", accepted, arguments.jobs)
+        except Exception as error:
+            stages["acquire"] = round(time.time() - t0, 3)
+            receipt["failed"] = f"{type(error).__name__}: {error}"
+            write_receipt()
+            raise
+        receipt["products"] = receipt["generation"]["runner"]["files"]
+    else:
+        receipt["products"] = acquire(plans, out_dir / "products", cycle,
+                                      staged=[p.expanduser().absolute() for p in arguments.staged],
+                                      jobs=arguments.jobs)
     stages["acquire"] = round(time.time() - t0, 3)
     if arguments.stop_after == "acquire":
         write_receipt()
         return 0
-    inputs = [product["file"] for product in receipt["products"]]
+    inputs = [product["file"] for product in receipt["products"]] if not generation else []
     if row.get("remap"):
         t0 = time.time()
         receipt["remap"] = remap(row, receipt["products"], cycle, out_dir, remapper)
         inputs = receipt["remap"].pop("outputs")
         stages["remap"] = round(time.time() - t0, 3)
     t0 = time.time()
-    receipt["decode"] = decode(row, inputs, cycle, out_dir, writer)
+    if generation:
+        workers = arguments.jobs or int(os.environ.get("RAYON_NUM_THREADS", DEFAULT_GENERATION_WORKERS))
+        try:
+            receipt["decode"] = decode_generated(row, receipt["generation"], cycle, out_dir, workers, accepted)
+        except Exception as error:
+            stages["decode"] = round(time.time() - t0, 3)
+            receipt["failed"] = f"{type(error).__name__}: {error}"
+            write_receipt()
+            raise
+        # These counts come from the actual Rust export, including its surface
+        # slab. A nominal pressure-level count can silently drop the top level.
+        export = receipt["decode"]["export"]
+        row = {**row, "first_guess": {**row["first_guess"],
+                                     "nfglevels": export["nfglevels"],
+                                     "nfgsoillevels": export["nfgsoillevels"]}}
+        receipt["effective_first_guess"] = row["first_guess"]
+    else:
+        receipt["decode"] = decode(row, inputs, cycle, out_dir, writer)
     if row.get("remap"):
         # The regular-grid copies are an intermediate step; their digests are
         # not needed once the WPS intermediate (hashed above) exists.

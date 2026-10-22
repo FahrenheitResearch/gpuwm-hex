@@ -1,0 +1,396 @@
+{
+  "schema": "gpuwm-hex.countries/v1",
+  "defaults": {
+    "init_source": "gfs",
+    "vertical_spec": "countries/tc55-v1.json",
+    "mesh": {
+      "id": "regional",
+      "point_deg": [
+        0,
+        0
+      ],
+      "fine_dx_m": 30000.0,
+      "background_km": 120.0,
+      "core_radius_km": 0.0,
+      "transition_km": 540.0,
+      "dt_seconds": 60.0,
+      "n_levels": 55
+    },
+    "scorecard": {
+      "region": {}
+    },
+    "product_set": "regional"
+  },
+  "product_sets": {
+    "east-africa": [
+      "--no-global",
+      "--no-mesh-view",
+      "--region",
+      "east-africa=region:0,37,3600,3600",
+      "--jobs",
+      "2",
+      "--frame-jobs",
+      "1"
+    ],
+    "philippines-lam": [
+      "--no-global",
+      "--no-mesh-view",
+      "--region",
+      "philippines-lam=region:13,122,3000,3000",
+      "--jobs",
+      "2",
+      "--frame-jobs",
+      "1"
+    ],
+    "india-bangladesh": [
+      "--no-global",
+      "--no-mesh-view",
+      "--region",
+      "india-bangladesh=region:23,83,4200,4200",
+      "--jobs",
+      "2",
+      "--frame-jobs",
+      "1"
+    ],
+    "japan": [
+      "--no-global",
+      "--no-mesh-view",
+      "--region",
+      "japan=region:37,138,3400,3400",
+      "--jobs",
+      "2",
+      "--frame-jobs",
+      "1"
+    ],
+    "mozambique-madagascar": [
+      "--no-global",
+      "--no-mesh-view",
+      "--region",
+      "mozambique-madagascar=region:-20,41,3600,3600",
+      "--jobs",
+      "2",
+      "--frame-jobs",
+      "1"
+    ],
+    "norwegian-sea": [
+      "--no-global",
+      "--no-mesh-view",
+      "--region",
+      "norwegian-sea=region:69,5,3000,3000",
+      "--jobs",
+      "2",
+      "--frame-jobs",
+      "1"
+    ],
+    "oceania": [
+      "--no-global",
+      "--no-mesh-view",
+      "--region",
+      "oceania=region:-24,159,4000,4000",
+      "--jobs",
+      "2",
+      "--frame-jobs",
+      "1"
+    ],
+    "southern-ocean": [
+      "--no-global",
+      "--no-mesh-view",
+      "--region",
+      "southern-ocean=region:-65,110,3600,3600",
+      "--jobs",
+      "2",
+      "--frame-jobs",
+      "1"
+    ]
+  },
+  "countries": [
+    {
+      "init_source": "gfs",
+      "vertical_spec": "countries/tc55-v1.json",
+      "mesh": {
+        "id": "east-africa-30km",
+        "point_deg": [
+          0,
+          37
+        ],
+        "fine_dx_m": 30000.0,
+        "background_km": 120.0,
+        "core_radius_km": 0.0,
+        "transition_km": 540.0,
+        "dt_seconds": 60.0,
+        "n_levels": 55
+      },
+      "scorecard": {
+        "region": {
+          "west": 17,
+          "east": 57,
+          "south": -17,
+          "north": 17,
+          "step_degrees": 0.25
+        }
+      },
+      "product_set": "east-africa",
+      "id": "east-africa",
+      "geometry": {
+        "kind": "cap",
+        "center_deg": [
+          0,
+          37
+        ],
+        "radius_km": 1800
+      }
+    },
+    {
+      "init_source": "gfs",
+      "vertical_spec": "countries/tc55-v1.json",
+      "mesh": {
+        "id": "philippines-lam-30km",
+        "point_deg": [
+          13,
+          122
+        ],
+        "fine_dx_m": 30000.0,
+        "background_km": 120.0,
+        "core_radius_km": 0.0,
+        "transition_km": 540.0,
+        "dt_seconds": 60.0,
+        "n_levels": 55
+      },
+      "scorecard": {
+        "region": {
+          "west": 102,
+          "east": 142,
+          "south": -4,
+          "north": 30,
+          "step_degrees": 0.25
+        }
+      },
+      "product_set": "philippines-lam",
+      "id": "philippines-lam",
+      "geometry": {
+        "kind": "cap",
+        "center_deg": [
+          13,
+          122
+        ],
+        "radius_km": 1500
+      }
+    },
+    {
+      "init_source": "gfs",
+      "vertical_spec": "countries/tc55-v1.json",
+      "mesh": {
+        "id": "india-bangladesh-30km",
+        "point_deg": [
+          23,
+          83
+        ],
+        "fine_dx_m": 30000.0,
+        "background_km": 120.0,
+        "core_radius_km": 0.0,
+        "transition_km": 540.0,
+        "dt_seconds": 60.0,
+        "n_levels": 55
+      },
+      "scorecard": {
+        "region": {
+          "west": 63,
+          "east": 103,
+          "south": 6,
+          "north": 40,
+          "step_degrees": 0.25
+        }
+      },
+      "product_set": "india-bangladesh",
+      "id": "india-bangladesh",
+      "geometry": {
+        "kind": "cap",
+        "center_deg": [
+          23,
+          83
+        ],
+        "radius_km": 2100
+      }
+    },
+    {
+      "init_source": "gfs",
+      "vertical_spec": "countries/tc55-v1.json",
+      "mesh": {
+        "id": "japan-30km",
+        "point_deg": [
+          37,
+          138
+        ],
+        "fine_dx_m": 30000.0,
+        "background_km": 120.0,
+        "core_radius_km": 0.0,
+        "transition_km": 540.0,
+        "dt_seconds": 60.0,
+        "n_levels": 55
+      },
+      "scorecard": {
+        "region": {
+          "west": 118,
+          "east": 158,
+          "south": 20,
+          "north": 54,
+          "step_degrees": 0.25
+        }
+      },
+      "product_set": "japan",
+      "id": "japan",
+      "geometry": {
+        "kind": "cap",
+        "center_deg": [
+          37,
+          138
+        ],
+        "radius_km": 1700
+      }
+    },
+    {
+      "init_source": "gfs",
+      "vertical_spec": "countries/tc55-v1.json",
+      "mesh": {
+        "id": "mozambique-madagascar-30km",
+        "point_deg": [
+          -20,
+          41
+        ],
+        "fine_dx_m": 30000.0,
+        "background_km": 120.0,
+        "core_radius_km": 0.0,
+        "transition_km": 540.0,
+        "dt_seconds": 60.0,
+        "n_levels": 55
+      },
+      "scorecard": {
+        "region": {
+          "west": 21,
+          "east": 61,
+          "south": -37,
+          "north": -3,
+          "step_degrees": 0.25
+        }
+      },
+      "product_set": "mozambique-madagascar",
+      "id": "mozambique-madagascar",
+      "geometry": {
+        "kind": "cap",
+        "center_deg": [
+          -20,
+          41
+        ],
+        "radius_km": 1800
+      }
+    },
+    {
+      "init_source": "gfs",
+      "vertical_spec": "countries/tc55-v1.json",
+      "mesh": {
+        "id": "norwegian-sea-30km",
+        "point_deg": [
+          69,
+          5
+        ],
+        "fine_dx_m": 30000.0,
+        "background_km": 120.0,
+        "core_radius_km": 0.0,
+        "transition_km": 540.0,
+        "dt_seconds": 60.0,
+        "n_levels": 55
+      },
+      "scorecard": {
+        "region": {
+          "west": -15,
+          "east": 25,
+          "south": 52,
+          "north": 86,
+          "step_degrees": 0.25
+        }
+      },
+      "product_set": "norwegian-sea",
+      "id": "norwegian-sea",
+      "geometry": {
+        "kind": "cap",
+        "center_deg": [
+          69,
+          5
+        ],
+        "radius_km": 1500
+      }
+    },
+    {
+      "init_source": "gfs",
+      "vertical_spec": "countries/tc55-v1.json",
+      "mesh": {
+        "id": "oceania-30km",
+        "point_deg": [
+          -24,
+          159
+        ],
+        "fine_dx_m": 30000.0,
+        "background_km": 120.0,
+        "core_radius_km": 0.0,
+        "transition_km": 540.0,
+        "dt_seconds": 60.0,
+        "n_levels": 55
+      },
+      "scorecard": {
+        "region": {
+          "west": 139,
+          "east": 179,
+          "south": -41,
+          "north": -7,
+          "step_degrees": 0.25
+        }
+      },
+      "product_set": "oceania",
+      "id": "oceania",
+      "geometry": {
+        "kind": "cap",
+        "center_deg": [
+          -24,
+          159
+        ],
+        "radius_km": 2000
+      }
+    },
+    {
+      "init_source": "gfs",
+      "vertical_spec": "countries/tc55-v1.json",
+      "mesh": {
+        "id": "southern-ocean-30km",
+        "point_deg": [
+          -65,
+          110
+        ],
+        "fine_dx_m": 30000.0,
+        "background_km": 120.0,
+        "core_radius_km": 0.0,
+        "transition_km": 540.0,
+        "dt_seconds": 60.0,
+        "n_levels": 55
+      },
+      "scorecard": {
+        "region": {
+          "west": 90,
+          "east": 130,
+          "south": -82,
+          "north": -48,
+          "step_degrees": 0.25
+        }
+      },
+      "product_set": "southern-ocean",
+      "id": "southern-ocean",
+      "geometry": {
+        "kind": "cap",
+        "center_deg": [
+          -65,
+          110
+        ],
+        "radius_km": 1800
+      }
+    }
+  ]
+}

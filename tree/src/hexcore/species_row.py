@@ -35,7 +35,9 @@ Two distinct ways that breaks on a non-WSM6 row:
   tag would have called it "mass" and silently double-counted it, which is
   a wrong answer that no shape check and no order assertion would catch.
 
-Hence four tags, and the loading set is named by :data:`MASS_LOADING`
+Aerosol mass has its own tag with mass units and no moisture loading.
+
+Hence the class tags, and the loading set is named by :data:`MASS_LOADING`
 alone.
 
 THE CONTIGUOUS-PREFIX INVARIANT.  The kernels sum a leading run of species,
@@ -70,6 +72,7 @@ from .errors import ConfigurationRefusal
 
 
 __all__ = [
+    "AEROSOL_MASS",
     "ENERGY",
     "MASS_COMPONENT",
     "MASS_LOADING",
@@ -116,6 +119,9 @@ VOLUME = "volume"
 # Specific turbulent kinetic energy, transported but never moisture loading.
 ENERGY = "energy"
 
+# Passive aerosol mass, excluded from moist loading.
+AEROSOL_MASS = "aerosol_mass"
+
 #: Every tag a species may carry.  Ordered so the loading class is first.
 SPECIES_CLASSES: tuple[str, ...] = (
     MASS_LOADING,
@@ -123,6 +129,7 @@ SPECIES_CLASSES: tuple[str, ...] = (
     NUMBER,
     VOLUME,
     ENERGY,
+    AEROSOL_MASS,
 )
 
 #: The classes that enter ``qtot``.  A frozenset of one, written as a set so
@@ -202,7 +209,7 @@ class SpeciesDeclaration:
     def units(self) -> str:
         return {MASS_LOADING: "kg kg^{-1}", MASS_COMPONENT: "kg kg^{-1}",
                 NUMBER: "kg^{-1}", VOLUME: "m^3 kg^{-1}",
-                ENERGY: "m^2 s^{-2}"}[self.species_class]
+                ENERGY: "m^2 s^{-2}", AEROSOL_MASS: "kg kg^{-1}"}[self.species_class]
 
 
 @dataclass(frozen=True, slots=True)

@@ -52,6 +52,8 @@ def export_boundary(path, *, active, stacks, previous, forcing, host, physics_sc
                         'pressure_perturbation','normal_velocity','vertical_velocity')}))
     payload = dict(schema="gpuwm-hex.moving-boundary/v1", time_seconds=times[0],
                    state=state, backends=backends,
+                   stochastic=(None if getattr(active, "stochastic", None) is None else
+                               _host_arrays(active.stochastic.snapshot(device=True), cp)),
                    local_atmospheres=local_atmospheres,
                    mailbox={name:cp.asnumpy(getattr(active,name)) for name in ('G_cell','G_face','G_edge')},
                    scalar_mailbox=(None if active.scalars is None else
@@ -72,6 +74,10 @@ LANE_MAILBOXES = ("G_cell", "G_face", "G_edge", "G_s", "hold")
 
 
 def _host_arrays(item, cp):
+    if isinstance(item, list):
+        return [_host_arrays(value, cp) for value in item]
+    if isinstance(item, tuple):
+        return tuple(_host_arrays(value, cp) for value in item)
     if isinstance(item, Mapping):
         return {key: _host_arrays(value, cp) for key, value in item.items()}
     if is_dataclass(item):
@@ -136,6 +142,8 @@ def export_boundary_blocks(path, *, active, stacks, previous, forcing, host, phy
     plan = active.plan
     payload = dict(schema="gpuwm-hex.moving-boundary/v1", time_seconds=times[0],
                    state=state, backends=backends,
+                   stochastic=(None if getattr(active, "stochastic", None) is None else
+                               _host_arrays(active.stochastic.snapshot(device=True), cp)),
                    local_atmospheres=local_atmospheres,
                    lane_mailboxes=lane_mailboxes,
                    previous=previous_host, forcing=forcing_host,

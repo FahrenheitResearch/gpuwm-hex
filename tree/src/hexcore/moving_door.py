@@ -7,6 +7,8 @@ state is carried onto the new member through the conservative, balanced
 remap.  The dycore is the MPAS-exact port; the physics is whatever the case's
 ``physics_args`` select through the forecast door.
 
+  gpuwm-hex moving case --tracks T --cycle UTC --out C   author from an analysis track fix
+  gpuwm-hex moving products R --best-track B             completed model track and intensity table
   gpuwm-hex moving check                       the reduced-mesh jolt check (no inputs needed)
   gpuwm-hex moving stage   --case C --casedir D   initial-condition source -> WPS intermediate
   gpuwm-hex moving prepare --case C --casedir D   the start member (and corridor frame/template)
@@ -53,6 +55,24 @@ def _check(arguments: argparse.Namespace) -> int:
     _print(table(receipt))
     _print(f"receipt: {Path(arguments.out).expanduser().absolute() / 'moving-check.json'}")
     return 0 if receipt["verdict"]["passed"] else 1
+
+
+def _author(arguments: argparse.Namespace) -> int:
+    from .moving_author import author_case
+
+    case = author_case(arguments.out, track=arguments.tracks or arguments.best_track,
+        cycle=arguments.cycle, storm=arguments.storm, best_track=arguments.best_track is not None,
+        template=arguments.template, fine_km=arguments.fine_km, background_km=arguments.background_km,
+        fine_radius_km=arguments.fine_radius_km, hours=arguments.hours, source=arguments.source,
+        dt_seconds=arguments.dt_seconds, physics_args=arguments.physics_arg)
+    _print(json.dumps(dict(case=str(arguments.out), storm=case['storm'], authoring=case['authoring']), indent=2))
+    return 0
+
+
+def _products(arguments: argparse.Namespace) -> int:
+    from .moving_products import products
+    _print(json.dumps(products(arguments.run, arguments.out, arguments.best_track), indent=2))
+    return 0
 
 
 def _stage(arguments: argparse.Namespace) -> int:
@@ -213,7 +233,7 @@ def _run_arguments(r: argparse.ArgumentParser) -> None:
                    help='an existing member within this distance of an anticipated centre is used instead')
     r.add_argument('--verdict-timeout', type=float, default=600.0)
     r.add_argument('--await-within-minutes', type=float, default=120.0)
-    r.add_argument('--hold-for-member-seconds', type=float, default=0.0,
+    r.add_argument('--hold-for-member-seconds', type=float, default=1800.0,
                    help='when a move is decided and its member is still being prepared, hold the forecast '
                         'at that frame up to this long so the move lands on the decided frame (0: do not hold)')
     r.add_argument('--segment-timeout', type=float, default=6 * 3600)
@@ -256,6 +276,24 @@ def add_moving_parser(commands) -> None:
         "moving", help="a moving fine region that follows a storm (check, stage, prepare, run, fixed)",
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = moving.add_subparsers(dest="moving_command", required=True)
+
+    author = sub.add_parser("case", help="author a case from tc-tracks JSON or a best-track analysis row")
+    tracks = author.add_mutually_exclusive_group(required=True)
+    tracks.add_argument('--tracks', type=Path, help='tc-tracks tracks.json (select --storm TRACK_ID)')
+    tracks.add_argument('--best-track', type=Path, help='best-track JSON rows/row, or IBTrACS CSV with --storm SID')
+    author.add_argument('--storm', help='track identifier or IBTrACS SID; required for multiple tracks')
+    author.add_argument('--cycle', required=True, help='UTC analysis time with an exact valid track position')
+    author.add_argument('--out', required=True, type=Path, help='new case JSON; never overwrites a case')
+    author.add_argument('--template', type=Path, help='existing case geometry/physics; event metadata is replaced')
+    author.add_argument('--source', default='gfs', help='init-source row for staging')
+    author.add_argument('--hours', type=float, default=12.0)
+    author.add_argument('--fine-km', type=float, default=3.0)
+    author.add_argument('--background-km', type=float, default=None,
+                        help='background spacing (default: a power-of-two multiple of fine spacing, at least 48 km)')
+    author.add_argument('--fine-radius-km', type=float, default=200.0)
+    author.add_argument('--dt-seconds', type=float, help='override spacing-derived step; must align all clocks')
+    author.add_argument('--physics-arg', action='append', default=None, help='forecast physics argument (repeatable)')
+    author.set_defaults(handler=_author)
 
     check = sub.add_parser("check", help="the reduced-mesh jolt check: moving vs fixed, with and without balance")
     check.add_argument("--out", type=Path, default=Path("moving-check"), help="receipt folder (default ./moving-check)")
@@ -325,6 +363,12 @@ def add_moving_parser(commands) -> None:
     fixed.add_argument("--engine", default=None, metavar="DIR")
     fixed.add_argument("--forecast-arg", action="append", default=[], metavar="ARG")
     fixed.set_defaults(handler=_fixed)
+
+    products = sub.add_parser('products', help='join moving-run track and intensity diagnostics across meshes')
+    products.add_argument('run', type=Path)
+    products.add_argument('--out', type=Path)
+    products.add_argument('--best-track', type=Path, help='best-track JSON, verification only')
+    products.set_defaults(handler=_products)
 
     summarize = sub.add_parser("summarize", help="rewrite a run's per-segment results and summary.json")
     summarize.add_argument("run", type=Path)

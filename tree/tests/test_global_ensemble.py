@@ -88,8 +88,76 @@ def test_one_member_and_a_one_state_source(tmp_path):
     value, _ = _plan(tmp_path, source="gefs", member=7)
     assert value["commands"]["init"][-2:] == ["--member", "7"]
     assert "member 7" in " ".join(value["commands"]["forecast"])
-    with pytest.raises(global_door.GlobalDoorError, match="publishes one state"):
-        _plan(tmp_path, members="1-3")
+    generated, _ = _plan(tmp_path, source="era5", members="1-3")
+    assert [m["run_id"] for m in generated["members"]] == ["mem001", "mem002", "mem003"]
+    assert all(m["member"] is None and "--member" not in m["init_argv"] for m in generated["members"])
+    assert len({m["stochastic"]["member"] for m in generated["members"]}) == 3
+    assert all(m["stochastic"]["sppt"] and m["stochastic"]["skeb"] for m in generated["members"])
+
+
+def test_generated_members_refuse_repeated_unperturbed_forecasts(tmp_path):
+    with pytest.raises(global_door.GlobalDoorError, match="repeated source input"):
+        _plan(tmp_path, source="era5", members="1-3", stochastic='{"sppt":false,"skeb":false}')
+
+
+def test_generated_members_share_acquisition_with_independent_forecast_binding(tmp_path, monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-test-allocation")
+    value, args = _plan(tmp_path, source="era5", members="1-3", lagged="0,6", devices="0", members_per_card=2)
+    assert len(value["members"]) == 6
+    assert len({m["init"] for m in value["members"]}) == 2
+    calls, launched = [], []
+    def command(argv, log, env):
+        if "--members" in argv:
+            launched.extend(json.loads(Path(argv[argv.index("--members") + 1]).read_text()))
+        else:
+            calls.append(argv)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("complete")
+        return 0
+    monkeypatch.setattr(global_ensemble, "_cli", command)
+    result = global_ensemble.run_inits(value, value["members"], args, _Status(), {})
+    assert result["built"] == result["source_inputs"] == len(calls) == 2
+    assert result["bound_members"] == 6
+    assert all(m["init_returncode"] == 0 for m in value["members"])
+    assert global_ensemble.run_forecasts(value, value["members"], args, _Status(), {})["failed"] == []
+    assert len({m["stochastic"]["member"] for m in launched}) == 6
+    assert {json.loads(m["init_source"])["generated_member"] for m in launched} == {1, 2, 3}
+    assert {json.loads(m["init_source"])["lag_hours"] for m in launched} == {0, 6}
+
+
+def test_analysis_lags_reach_forecast_with_private_clocks(tmp_path, monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-test-allocation")
+    from datetime import datetime, timedelta
+    value, args = _plan(tmp_path, source="era5", lagged="0,6,12,18", members_per_card=4, devices="0")
+    captured = []
+    def launch(argv, log, env):
+        captured.extend(json.loads(Path(argv[argv.index("--members") + 1]).read_text()))
+        log.write_text("complete")
+        return 0
+    monkeypatch.setattr(global_ensemble, "_cli", launch)
+    assert global_ensemble.run_forecasts(value, value["members"], args, _Status(), {})["failed"] == []
+    assert len(captured) == 4
+    for record, lag in zip(captured, (0, 6, 12, 18)):
+        p = json.loads(record["init_source"])
+        assert p["lead_hours"] == 0 and p["spinup_hours"] == lag
+        assert record["start_time"] == p["source_cycle"] == p["valid_time"]
+        start = datetime.strptime(record["start_time"], "%Y-%m-%d_%H:%M:%S")
+        assert start + timedelta(minutes=record["history_from_minutes"]) == datetime(2026, 10, 16)
+        assert start + timedelta(hours=record["hours"]) == datetime(2026, 10, 17)
+
+
+def test_postprocessing_refuses_different_analysis_lags(tmp_path):
+    original, _ = _plan(tmp_path, source="era5", lagged="0,6")
+    saved = []
+    for m in original["members"]:
+        forecast = tmp_path / "ensemble/g01" / m["run_id"]
+        forecast.mkdir(parents=True)
+        saved.append({**m, "forecast": str(forecast)})
+    (tmp_path / "ensemble.json").write_text(json.dumps({"source": "era5", "cycle": original["cycle"],
+        "row": original["row"]["id"], "members": saved}))
+    changed, _ = _plan(tmp_path, source="era5", lagged="0,12")
+    with pytest.raises(EnsembleDoorError, match="no matching forecast folder"):
+        global_ensemble.restore_forecasts(changed, changed["members"])
 
 
 def test_stochastic_member_defaults_are_decided_before_card_grouping(tmp_path):
@@ -127,11 +195,13 @@ class _Status:
 
 
 def test_a_group_the_card_refuses_is_split_and_every_member_runs(tmp_path, monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-pool-allocation")
     value, args = _plan(tmp_path, source="gefs", members="1-3", members_per_card=3, devices="0")
     members = value["members"]
     calls = []
 
     def fake(argv, log, env):
+        assert env["CUDA_VISIBLE_DEVICES"] == "GPU-pool-allocation"
         roster = json.loads(Path(argv[argv.index("--members") + 1]).read_text())
         calls.append([m["run_id"] for m in roster])
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +217,28 @@ def test_a_group_the_card_refuses_is_split_and_every_member_runs(tmp_path, monke
     assert calls[0] == ["mem001", "mem002", "mem003"] and sorted(sum(calls[1:], [])) == ["mem001", "mem002", "mem003"]
     assert result["failed"] == [] and any(g.get("split") for g in result["groups"])
     assert all(m["forecast"].endswith(m["run_id"]) for m in members)
+
+
+@pytest.mark.parametrize("mask,requested,expected", [
+    ("GPU-pool-allocation", "0", ["GPU-pool-allocation"]),
+    ("2,5", "1,0", ["5", "2"]),
+    ("GPU-a,GPU-b", None, ["GPU-a", "GPU-b"]),
+    ("GPU-a,GPU-b", "GPU-b", ["GPU-b"]),
+    ("MIG-pool-allocation", "0", ["MIG-pool-allocation"]),
+    (None, "2,0", ["2", "0"]),
+])
+def test_device_selection_preserves_inherited_allocation(mask, requested, expected):
+    environment = {} if mask is None else {"CUDA_VISIBLE_DEVICES": mask}
+    assert global_ensemble.forecast_devices(requested, environment) == expected
+
+
+@pytest.mark.parametrize("mask,requested", [
+    ("GPU-a", "1"), ("2,5", "5"), ("GPU-a", "GPU-other"),
+    ("GPU-a", "0,GPU-a"), ("", "0"), ("-1", "0"), ("GPU-a,GPU-a", None),
+])
+def test_device_selection_refuses_allocation_escape_or_duplicates(mask, requested):
+    with pytest.raises(EnsembleDoorError, match="allocation"):
+        global_ensemble.forecast_devices(requested, {"CUDA_VISIBLE_DEVICES": mask})
 
 
 def test_init_jobs_auto_is_bounded_by_cores_and_host_ram(monkeypatch):
@@ -222,3 +314,31 @@ def test_member_scores_only_complete_on_verified_measurements(tmp_path, monkeypa
     assert len(checked) == (2 if expected_rc == 0 else 1 if scorer_rc == 3 else 0)
     for (forecast, config), member in zip(checked, saved):
         assert forecast == member['forecast'] and config['init'] == member['init']
+
+
+def test_planner_prices_members_like_the_roster_admission(monkeypatch):
+    """2026-10-20: 60 km GEFS members 1-2 on an RTX 5090 planned 3 per group, the roster refused 2 and split.
+
+    The planner now charges the roster's own sum (solo floor + stochastic arrays) and plans 1; the refusal it
+    used to hit reports the true memory limit, 1, not the solo-floor-only 2."""
+    from types import SimpleNamespace
+    from hexcore import forecast_door
+    from hexcore.stochastic import member_options
+
+    monkeypatch.setattr(global_door, "_visible_cards", lambda: [32607 * 1024**2])
+    card = {"name": "NVIDIA GeForce RTX 5090", "free": 33_138_933_760, "total": 32607 * 1024**2,
+            "sms": 170, "threads": 1536}
+    monkeypatch.setattr(global_ensemble, "_probe_cards", lambda devices: [card])
+    cells = 163_842
+    members = [{"stochastic": member_options(n, source_members=2, ensemble_size=2)} for n in (1, 2)]
+    value = {"mesh": {"cells": cells}, "members": members,
+             "commands": {"forecast": ["forecast", "--mesh", "x1.163842"]}}
+    assert global_ensemble.group_limit(value, SimpleNamespace(members_per_card="auto", devices=None)) == 1
+    model = device_admission.model_for_card(device_admission.card_profile_from_attributes(
+        card["name"], {"MultiProcessorCount": 170, "MaxThreadsPerMultiProcessor": 1536}), "global")
+    solo = forecast_door.required_free_bytes(cells, model)
+    extra = tuple(forecast_door.stochastic_array_bytes(cells, m["stochastic"]) for m in members)
+    with pytest.raises(MemoryError, match="memory limit 1 "):
+        device_admission.admit_co_tenancy(mesh_kind="global", cells=cells, levels=55, members=2,
+                                          card_bytes=card["total"], free_bytes=card["free"],
+                                          solo_required_bytes=solo, member_additional_bytes=extra)

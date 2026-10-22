@@ -111,13 +111,13 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
 
     runner = _load_runner()
     assert runner.EXECUTION_SOURCE_PINS == {
-        "src/hexcore/diagnostic_export.py": "6665cddccda8a968c1913f53ac804827bc4e6d9ee2ff5e457d7f0474dd6f8b36",
+        "src/hexcore/diagnostic_export.py": "ae6d360ae2b6a1deb5c8a5d10fe972b51f60b9784eb48b20e0cec925c7c66297",
         "src/hexcore/snapshot_transfer.py": "7064e74719933894c9d92dbfe06190b404801cd72ecc5e4fe2447b66124c5efb",
         "src/hexcore/history_ready.py": "287840b7ece3cb97185340f3e161c997bbfd9a11233ff5da4198cca42e1f9523",
         "src/hexcore/history_writer.py": "b0b6f8d27fce8478f0d78d3c4cc73bdc12bf5f4a625b7f45515b8f1206fd64a1",
         "src/hexcore/cuda_arwen_helper_scope_v2.py": "cf179cb9e5650d5db36ccb8d60905a88140b360da9d54c6d8f94a8e032e00e07",
         "src/hexcore/radiation_source_sets.json": "f0357c3b4613f2cd136d62f5cd2391d034d471acc59d6f956683082cc1fdc5a2",
-        "src/hexcore/data/profiles/engine-helper-sets.v1.json": "d4b070d3432951bf1f028419298762fd2901deda0a9374e3351757370ee1676a",
+        "src/hexcore/data/profiles/engine-helper-sets.v1.json": "f86f96bd257ad443abede893d46d7e15fac9f6c64364e385f263201efa7f5893",
         "src/hexcore/step_anchors.py": (
             "31201be7d3692dc07ed2c9689c2a9d0211236e3f68d7484b68df018426dc4e0e"
         ),
@@ -228,7 +228,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # export became declinable (default armed).  The rationale lives
         # beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "7ade3174e32558f6045be17927dfea3bd975f4483df479ed374d7239c53262ca"
+            "49b72c512239cff9e70d71c836754c0eb57455c472cafeed804ff1cf4aead0ef"
         ),
         # New pin 2026-10-05 (New Tiedtke row); the rationale lives beside the
         # runner's pin.

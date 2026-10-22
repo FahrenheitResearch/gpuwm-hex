@@ -1,0 +1,29 @@
+--- a/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
++++ b/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
+@@ -10,7 +10,7 @@
+ use rustwx_render::{ContourLayer, LegendControls, LegendMode, LevelDensity, RenderDensity, advisory};
+ use crate::{panel::{PanelRequest, layout_path, render_panel, safe_component}, scales};
+ 
+-pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\tglobal-ensemble-projection\tRENDERED\tFAILED";
++pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\ts2s-energy-scales\tglobal-ensemble-projection\tRENDERED\tFAILED";
+ const CONTRACT: &str = "gpuwm-resident-ensemble-products.v1";
+ 
+ fn attr(file: &File, name: &str) -> Result<String, String> {
+@@ -333,7 +333,16 @@
+         for kind in ["mean", "spread", "min", "max", "pmm"] {
+             if !products.iter().any(|p| p == kind) || file.variable(&format!("{field}_{kind}")).is_none() { continue; }
+             let mut values = shaped(&file, &format!("{field}_{kind}"), &[ny, nx])?;
+-            let s2s = if is_s2s || field == "freezing_rain_rate" { s2s_scale(&field, kind) } else { None };
++            let energy_scale = file.attribute(&format!("{field}_s2s_display_max")).and_then(|a| a.as_f64())
++                .filter(|v| v.is_finite() && *v > 0.0).map(|v| {
++                    let anomaly = file.attribute(&format!("{field}_s2s_is_anomaly")).and_then(|a| a.as_f64()).unwrap_or(0.0) == 1.0;
++                    if anomaly && kind != "spread" {
++                        use rustwx_render::difference::{difference_scale, DifferenceTable};
++                        rustwx_render::ColorScale::Discrete(difference_scale(DifferenceTable::builtin(), v))
++                    } else { scales::spread_scale(v) }
++                });
++            let s2s = if is_s2s { energy_scale.or_else(|| s2s_scale(&field, kind)) }
++                else if field == "freezing_rain_rate" { s2s_scale(&field, kind) } else { None };
+             let (scale, display_units) = if is_ice(&field) {
+                 values.iter_mut().for_each(|v| *v /= 25.4);
+                 (if kind == "spread" { scales::spread_scale(0.5) } else { ice_scale() }, "in".into())

@@ -32,6 +32,30 @@ ROOT = Path(__file__).resolve().parents[1]
 PINS = ROOT / "src/hexcore/data/engine-bridges.json"
 
 
+def _renderer_row(directory, binary, **extra):
+    """A complete rw_wrfbatch receipt in setup.py's current contract.
+
+    tools/build_s2s_diagnostics.sh is the renderer recipe since the S2S diagnostics
+    lane: it builds rw_wrfbatch, its rw_ensbatch sibling and the rw_s2s reducer
+    together, and setup.py checks all three by SHA-256 with the reducer's sources.
+    """
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    sibling = directory / "rw_ensbatch"
+    sibling.write_bytes(b"ensemble renderer build")
+    reducer = directory / "rw_s2s"
+    reducer.write_bytes(b"native reducer build")
+    row = {"sha256": sha(binary), "recipe_sha256": sha(ROOT / "tools/build_s2s_diagnostics.sh"),
+           "patches": {p.name: sha(p) for p in sorted((ROOT / "docs/s2s/engine-patches").glob("*.patch"))},
+           "ensemble_renderer": {"sha256": sha(sibling)},
+           "diagnostics": {"rw_s2s_sha256": sha(reducer),
+                           "reducer_lock_sha256": sha(ROOT / "tools/rustwx/Cargo.lock"),
+                           "reducer_sources": {str(p.relative_to(ROOT)): sha(p) for p in
+                                               sorted((ROOT / "tools/rustwx/crates/rw-s2s").rglob("*.rs"))},
+                           "renderer_source_sha256": sha(ROOT / "tools/s2s_renderer/s2s_diagnostics.rs")}}
+    row.update(extra)
+    return row
+
+
 @pytest.fixture(scope="module")
 def hexsetup():
     import setuptools
@@ -141,6 +165,13 @@ def test_source_build_cannot_bundle_a_bridge_from_another_revision(hexsetup, tmp
     for name, data in files.items():
         (output / name).write_bytes(data)
     monkeypatch.delenv("GPUWM_HEX_ENGINE_BRIDGES", raising=False)
+    # Cargo emits into the lane scratch override, not workspace/target.
+    external = tmp_path / "scratch-target"
+    (external / "release").mkdir(parents=True)
+    for path in output.iterdir():
+        path.rename(external / "release" / path.name)
+    output = external / "release"
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(external))
     monkeypatch.setattr(hexsetup, "engine_source", lambda: engine)
     monkeypatch.setattr(hexsetup.subprocess, "run", lambda *a, **k: type("Built", (), {"returncode": 0})())
     assert {path.name for path in hexsetup.engine_bridges(root)} == set(files)
@@ -161,10 +192,7 @@ def test_s2s_renderer_prebuilt_rejects_stale_source_or_corrupt_bytes(hexsetup, t
     directory.mkdir()
     binary = directory / "rw_wrfbatch"
     binary.write_bytes(b"renderer build")
-    patches = ROOT / "docs/s2s/engine-patches"
-    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-    row = {"sha256": sha(binary), "recipe_sha256": sha(ROOT / "tools/build_s2s_renderer.sh"),
-           "patches": {p.name: sha(p) for p in sorted(patches.glob("*.patch"))}}
+    row = _renderer_row(directory, binary)
     receipt = directory / "provenance.json"
     receipt.write_text(json.dumps({"bridges": {"rw_wrfbatch": row}}))
     monkeypatch.setenv("GPUWM_HEX_ENGINE_BRIDGES", str(directory))
@@ -175,6 +203,52 @@ def test_s2s_renderer_prebuilt_rejects_stale_source_or_corrupt_bytes(hexsetup, t
     row["patches"] = {}
     receipt.write_text(json.dumps({"bridges": {"rw_wrfbatch": row}}))
     with pytest.raises(SystemExit, match="current S2S fixes"):
+        hexsetup.s2s_renderer_bridge(ROOT)
+
+
+def test_chemistry_converter_prebuilt_matches_source_and_binary(hexsetup, tmp_path, monkeypatch):
+    binary = tmp_path / "rw_mpas_convert"
+    binary.write_bytes(b"chemistry converter")
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    row = {"sha256": sha(binary),
+           "patch_sha256": sha(ROOT / "engine-patches/chemistry-products.patch"),
+           "recipe_sha256": sha(ROOT / "tools/build_chemistry_converter.sh")}
+    receipt = tmp_path / "provenance.json"
+    receipt.write_text(json.dumps({"chemistry_converter": row}))
+    monkeypatch.setenv("GPUWM_HEX_ENGINE_BRIDGES", str(tmp_path))
+    assert hexsetup.chemistry_converter_bridge(ROOT) == binary
+    binary.write_bytes(b"old converter")
+    with pytest.raises(SystemExit, match="current chemistry product provenance"):
+        hexsetup.chemistry_converter_bridge(ROOT)
+    binary.write_bytes(b"chemistry converter")
+    row["patch_sha256"] = "0" * 64
+    receipt.write_text(json.dumps({"chemistry_converter": row}))
+    with pytest.raises(SystemExit, match="current chemistry product provenance"):
+        hexsetup.chemistry_converter_bridge(ROOT)
+
+
+def test_integrated_renderer_recipe_can_supply_its_actual_provenance(hexsetup, tmp_path, monkeypatch):
+    binary = tmp_path / "rw_wrfbatch"
+    binary.write_bytes(b"integrated renderer build")
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    row = _renderer_row(tmp_path, binary, patches={},
+                        source_copy="unchanged integrated engine source; no patches applied")
+    receipt = tmp_path / "provenance.json"
+
+    def write_receipt():
+        receipt.write_text(json.dumps({"bridges": {"rw_wrfbatch": row}}))
+
+    monkeypatch.setenv("GPUWM_HEX_ENGINE_BRIDGES", str(tmp_path))
+    write_receipt()
+    assert hexsetup.s2s_renderer_bridge(ROOT) == binary
+    row["recipe_sha256"] = "0" * 64
+    write_receipt()
+    with pytest.raises(SystemExit, match="current S2S fixes"):
+        hexsetup.s2s_renderer_bridge(ROOT)
+    row["recipe_sha256"] = sha(ROOT / "tools/build_s2s_diagnostics.sh")
+    write_receipt()
+    binary.write_bytes(b"corrupt integrated renderer")
+    with pytest.raises(SystemExit, match="hash mismatch"):
         hexsetup.s2s_renderer_bridge(ROOT)
 
 
@@ -251,14 +325,28 @@ def test_source_prebuilts_match_this_tree_so_publish_can_build():
     """
     pins = json.loads(PINS.read_text(encoding="utf-8"))
     files = pins["source_prebuilts"]["files"]
-    assert set(files) == {"rw_wrfbatch", "rw_sfc_series"}
+    # setup.py s2s_renderer_bridge also requires rw_ensbatch and rw_s2s beside rw_wrfbatch.
+    assert set(files) == {"rw_wrfbatch", "rw_ensbatch", "rw_s2s", "rw_sfc_series", "rw_mpas_convert"}
+    # setup.py chemistry_converter_bridge refuses a converter whose patch or recipe differs from the tree;
+    # publish.yml cannot build it from the sparse engine checkout, so it rides the bridge release too.
+    converter = files["rw_mpas_convert"]["provenance"]
+    assert converter["patch_sha256"] == hashlib.sha256((ROOT / "engine-patches/chemistry-products.patch").read_bytes()).hexdigest()
+    assert converter["recipe_sha256"] == hashlib.sha256((ROOT / "tools/build_chemistry_converter.sh").read_bytes()).hexdigest()
     sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
     for name, row in files.items():
         assert re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) and row["provenance"]["sha256"] == row["sha256"]
         assert isinstance(row["bytes"], int) and row["bytes"] > 0
     renderer = files["rw_wrfbatch"]["provenance"]
-    assert renderer["recipe_sha256"] == sha(ROOT / "tools/build_s2s_renderer.sh")
+    # The recipe setup.py checks and build_engine_bridges.sh runs.
+    assert renderer["recipe_sha256"] == sha(ROOT / "tools/build_s2s_diagnostics.sh")
     assert renderer["patches"] == {p.name: sha(p) for p in sorted((ROOT / "docs/s2s/engine-patches").glob("*.patch"))}
+    assert renderer["ensemble_renderer"]["sha256"] == files["rw_ensbatch"]["sha256"]
+    diagnostics = renderer["diagnostics"]
+    assert diagnostics["rw_s2s_sha256"] == files["rw_s2s"]["sha256"]
+    assert diagnostics["reducer_lock_sha256"] == sha(ROOT / "tools/rustwx/Cargo.lock")
+    assert diagnostics["reducer_sources"] == {
+        str(p.relative_to(ROOT)): sha(p) for p in sorted((ROOT / "tools/rustwx/crates/rw-s2s").rglob("*.rs"))}
+    assert diagnostics["renderer_source_sha256"] == sha(ROOT / "tools/s2s_renderer/s2s_diagnostics.rs")
     crate = ROOT / "tools/rustwx/crates/rw-sfc-series"
     assert files["rw_sfc_series"]["provenance"]["sources"] == {
         str(p.relative_to(crate)).replace(os.sep, "/"): sha(p) for p in sorted(crate.rglob("*")) if p.is_file()}

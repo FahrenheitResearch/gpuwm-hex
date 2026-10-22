@@ -121,6 +121,10 @@ EARTH_RADIUS_KM = 6371.229
 #: A card is a row here; a card with no generator row is priced by the
 #: admission surface alone and the receipt says so.
 CARD_ALIASES: Mapping[str, tuple[str, str | None, int]] = {
+    "96gb": ("96gib-188sm", None, 97_887),
+    "96gib": ("96gib-188sm", None, 97_887),
+    "rtx-pro-6000": ("96gib-188sm", None, 97_887),
+    "96gib-188sm": ("96gib-188sm", None, 97_887),
     "32gb": ("32gib-170sm", "rtx-5090", 32_607),
     "32gib": ("32gib-170sm", "rtx-5090", 32_607),
     "rtx-5090": ("32gib-170sm", "rtx-5090", 32_607),

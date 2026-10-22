@@ -219,6 +219,49 @@ def test_an_archive_that_is_not_the_pinned_one_is_removed_and_refused(tmp_path):
     assert not list((tmp_path / "cache").rglob("*.tar.gz"))
 
 
+def test_a_cut_off_download_is_resumed_not_refused_as_a_wrong_archive(tmp_path, monkeypatch):
+    # The measured failure: the link dropped part way (Content-Length set, body short), http.client returned an
+    # empty block, and the short file was hashed and refused as "not the published mesh".  Here every
+    # answer is cut after 4,000 bytes; the door must resume with Range requests and stage the grid.
+    import http.server
+    import socket
+    import threading
+
+    grid_bytes = os.urandom(20_000)  # incompressible, so the archive spans several cuts
+    table = _local_table(tmp_path, grid_bytes)
+    body = (tmp_path / "x1.42.tar.gz").read_bytes()
+    ranges = []
+
+    class Cut(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            first = int((self.headers.get("Range") or "bytes=0-")[6:].split("-")[0])
+            ranges.append(first)
+            self.send_response(206 if first else 200)
+            if first:
+                self.send_header("Content-Range", f"bytes {first}-{len(body) - 1}/{len(body)}")
+            self.send_header("Content-Length", str(len(body) - first))
+            self.end_headers()
+            self.wfile.write(body[first:first + 4000])
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_RDWR)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Cut)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(global_door.time, "sleep", lambda seconds: None)
+    try:
+        value = _mesh_plan(tmp_path, table)
+        value["mesh"]["url"] = f"http://127.0.0.1:{server.server_port}/x1.42.tar.gz"
+        status = run_status.StatusWriter(tmp_path / "run", "global", stages=("mesh",))
+        result = global_door.stage_mesh(value, status)
+    finally:
+        server.shutdown()
+    assert Path(result["grid"]).read_bytes() == grid_bytes
+    assert len(ranges) > 1 and ranges == sorted(ranges) and ranges[1] == 4000
+
+
 def test_a_grid_that_is_not_the_pinned_one_is_removed_and_refused(tmp_path):
     table = _local_table(tmp_path, b"grid", grid_pin="1" * 64)
     value = _mesh_plan(tmp_path, table)
@@ -503,13 +546,17 @@ def test_a_bare_forecast_with_no_suite_reads_the_engine_seams_ysu():
 def test_a_short_run_takes_a_cadence_that_divides_it(tmp_path, monkeypatch):
     # Unified-image check 2026-10-16: --hours 1 on global-60km kept the row's 180 min and was refused rc 2.
     monkeypatch.setattr(global_door, "_visible_cards", lambda: [])
-    value = global_door.plan(_args(tmp_path, "--hours", "1"))
+    row = ("--row", "global-15km-morrison")  # a 3-hourly row: the cheap rows now store hourly
+    value = global_door.plan(_args(tmp_path, *row, "--hours", "1"))
     assert value["history_every_minutes"] == 60
     assert value["history_cadence"]["row_default"] == 180
     assert "divides the 1 h run" in value["history_cadence"]["source"]
     forecast = value["commands"]["forecast"]
     assert forecast[forecast.index("--history-every-minutes") + 1] == "60"
-    assert global_door.plan(_args(tmp_path))["history_every_minutes"] == 180  # 24 h keeps the row default
+    assert global_door.plan(_args(tmp_path, *row))["history_every_minutes"] == 180  # 24 h keeps the row default
+    # The default product set's hourly windows (qpf_1h, run-max wind, daily temperature extremes) need
+    # hourly frames, which the 120/60/30 km rows store by default.
+    assert global_door.plan(_args(tmp_path))["history_every_minutes"] == 60
     assert global_door.history_cadence(0.5, None, 180, {300.0, 360.0}, "r")["minutes"] == 30
     assert global_door.history_cadence(1.75, None, 180, {300.0}, "r")["minutes"] == 15
 
@@ -519,7 +566,7 @@ def test_an_explicit_cadence_that_does_not_divide_the_run_is_refused_before_any_
     with pytest.raises(global_door.GlobalDoorError, match="does not divide the 1 h run"):
         global_door.plan(_args(tmp_path, "--hours", "1", "--history-every-minutes", "180"))
     value = global_door.plan(_args(tmp_path, "--hours", "1", "--history-every-minutes", "30"))
-    assert value["history_cadence"] == {"minutes": 30, "source": "--history-every-minutes", "row_default": 180}
+    assert value["history_cadence"] == {"minutes": 30, "source": "--history-every-minutes", "row_default": 60}
 
 
 @pytest.mark.parametrize('accepted', [True, False])

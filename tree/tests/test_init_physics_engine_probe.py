@@ -56,6 +56,18 @@ def _physics(lsm, mp="mp_wsm6"):
     return {"selectors": {"config_lsm_scheme": lsm, "config_microp_scheme": mp}}
 
 
+def test_engine_only_thompson_needs_no_legacy_carried_metadata(monkeypatch, tmp_path):
+    from hexcore import init_physics
+
+    init = _init(tmp_path / "init.nc")
+    calls = _engine(monkeypatch, tmp_path, NEW_USAGE)
+    monkeypatch.setattr(init_physics, "_synthetic_source",
+                        lambda path: pytest.fail("non-aerosol Thompson asked for climatology"))
+    assert init_physics.prepare_forecast_init(
+        init, tmp_path / "out.nc", _physics("sf_noahmp", "mp_thompson"), None) == (init, None)
+    assert [c[1] for c in calls] == ["--aerosol-status"]
+
+
 def test_noahmp_on_an_older_engine_runs_without_the_category_check_and_says_so(monkeypatch, tmp_path, capsys):
     from hexcore.init_physics import prepare_forecast_init
 

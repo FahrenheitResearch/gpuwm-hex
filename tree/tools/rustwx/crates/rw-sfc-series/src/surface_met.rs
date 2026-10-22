@@ -222,6 +222,120 @@ pub(crate) fn read_surface_file(path: &Path) -> MpasResult<Vec<SurfaceSlab>> {
     Ok(out)
 }
 
+/// Read native regular-forcing output, preserving signed latitude spacing and
+/// translating fractional land cover to the case-8 categorical mask.
+pub(crate) fn read_regular_netcdf(
+    path: &Path,
+    date: chrono::NaiveDateTime,
+    fields: &serde_json::Value,
+) -> crate::Result<Vec<SurfaceSlab>> {
+    let file = netcrust::File::open(path)?;
+    let coordinate = |name: &str, units: &str| -> crate::Result<Vec<f64>> {
+        let variable = file
+            .variable(name)
+            .ok_or_else(|| format!("missing {name}"))?;
+        if variable.attribute("units").and_then(|a| a.as_string()) != Some(units) {
+            return Err(format!("incorrect coordinate units for {name}").into());
+        }
+        Ok(file.read_array_f64(name)?.into_values())
+    };
+    let latitude = coordinate("latitude", "degrees_north")?;
+    let longitude = coordinate("longitude", "degrees_east")?;
+    let time = coordinate("time", "seconds since 1970-01-01 00:00:00")?;
+    if time != [date.and_utc().timestamp() as f64] {
+        return Err("surface timestamp mismatch".into());
+    }
+    let spacing = |values: &[f64]| -> crate::Result<f64> {
+        if values.len() < 2 || values.iter().any(|x| !x.is_finite()) {
+            return Err("invalid surface coordinates".into());
+        }
+        let delta = values[1] - values[0];
+        if delta == 0.
+            || values
+                .windows(2)
+                .any(|w| ((w[1] - w[0]) - delta).abs() > 1e-6)
+        {
+            return Err("surface coordinates must be regular and monotonic".into());
+        }
+        Ok(delta)
+    };
+    let dy = spacing(&latitude)?;
+    let dx = spacing(&longitude)?;
+    if latitude.iter().any(|y| y.abs() > 90.) || dx <= 0. {
+        return Err("invalid surface latitude or longitude ordering".into());
+    }
+    let nx = longitude.len();
+    let ny = latitude.len();
+    let mut out = Vec::new();
+    for spec in fields.as_array().ok_or("regular NetCDF needs fields")? {
+        let name = spec["name"].as_str().ok_or("surface variable name")?;
+        let field = spec["field"].as_str().ok_or("surface field")?;
+        let units = spec["units"].as_str().ok_or("surface units")?;
+        let variable = file
+            .variable(name)
+            .ok_or_else(|| format!("missing {name}"))?;
+        if variable.shape() != [1, ny, nx]
+            || variable
+                .dimensions()
+                .iter()
+                .map(|d| d.name())
+                .collect::<Vec<_>>()
+                != ["time", "latitude", "longitude"]
+        {
+            return Err(format!("wrong surface dimensions for {name}").into());
+        }
+        if variable.attribute("units").and_then(|a| a.as_string()) != Some(units) {
+            return Err(format!("wrong surface units for {name}").into());
+        }
+        let values = file
+            .read_array_f64(name)?
+            .into_values()
+            .into_iter()
+            .map(|v| {
+                if !v.is_finite() {
+                    -1e30
+                } else if field == "LANDSEA" {
+                    if v >= 0.5 { 1. } else { 0. }
+                } else {
+                    v as f32
+                }
+            })
+            .collect();
+        out.push(SurfaceSlab {
+            met: MetSlab {
+                format_version: 5,
+                xfcst: 0.,
+                start_i: 1.,
+                start_j: 1.,
+                wind_grid_rel: false,
+                dx: 0.,
+                dy: 0.,
+                stdlon: 0.,
+                truelat1: 0.,
+                truelat2: 0.,
+                iproj: 0,
+                polar: None,
+                hdate: date.format("%Y-%m-%d_%H:%M:%S").to_string(),
+                map_source: "regular-forcing".into(),
+                field: field.into(),
+                units: units.into(),
+                desc: name.into(),
+                xlvl: 200100.,
+                nx,
+                ny,
+                start_lat: latitude[0] as f32,
+                start_lon: longitude[0] as f32,
+                delta_lat: dy as f32,
+                delta_lon: dx as f32,
+                earth_radius_km: 6370.,
+                values,
+            },
+            projection: Projection::LatLon,
+        });
+    }
+    Ok(out)
+}
+
 // Host data path uses the host's glibc routines, matching strict gfortran.
 #[link(name = "m")]
 unsafe extern "C" {

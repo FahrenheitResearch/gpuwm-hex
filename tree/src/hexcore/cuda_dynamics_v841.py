@@ -524,7 +524,8 @@ def _kernel(name: str, kernel_cache: Any | None = None, dimensions=()) -> Any:
         if _CACHE is None:
             _CACHE = KernelCache(capability=require_cuda(min_compute=(12, 0)))
         selected = _CACHE
-    key = (selected, name, dimensions)
+    # Unspecialized LTS interface taps replace kernels through this key.
+    key = (selected, name, dimensions) if dimensions else (selected, name)
     if key not in _KERNELS:
         if dimensions:
             from .cuda_shape import resolve

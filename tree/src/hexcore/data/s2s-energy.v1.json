@@ -1,0 +1,11 @@
+{
+  "schema": "gpuwm-hex.s2s-energy-rows/v1",
+  "license": "Apache-2.0",
+  "description": "Authored illustrative conversion rows, not a manufacturer's curve or a calibrated plant forecast. PV is a horizontal-array irradiance and temperature proxy.",
+  "rows": [
+    {"id": "hub_wind", "kind": "wind", "units": "m s-1", "display_max": 30},
+    {"id": "solar_irradiance", "kind": "ghi", "units": "W m-2", "display_max": 600},
+    {"id": "wind_power_generic", "kind": "turbine", "units": "MW", "rated_mw": 1.0, "cut_out_ms": 25.0, "curve": [[0,0],[3,0],[5,0.08],[8,0.35],[12,1],[24.999,1]], "display_max": 1},
+    {"id": "pv_power_horizontal", "kind": "pv", "units": "MW", "rated_mw": 1.0, "dc_ac_ratio": 1.2, "loss_fraction": 0.14, "inverter_efficiency": 0.96, "noct_c": 45, "temperature_coefficient_per_k": -0.004, "display_max": 1}
+  ]
+}

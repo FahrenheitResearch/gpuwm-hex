@@ -33,6 +33,7 @@ from .vertical import (
 )
 
 SCHEMA = "gpuwm-hex.vertical-spec/v1"
+RUNTIME_SCHEMA = "gpuwm-hex.vertical-spec/v2"
 ARTIFACT_SCHEMA = "gpuwm-hex.native-free-vertical-artifact/v1"
 RECEIPT_SCHEMA = "gpuwm-hex.native-free-vertical-receipt/v1"
 
@@ -155,6 +156,7 @@ class VerticalSpec:
     rayleigh_damping_start_m: float = 22_000.0
     theta_adv_order: int = 3
     coef_3rd_order: float = 0.25
+    runtime: dict[str, Any] | None = None
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "VerticalSpec":
@@ -190,9 +192,9 @@ class VerticalSpec:
         return cls.from_mapping(raw)
 
     def validate(self) -> None:
-        if self.schema != SCHEMA:
+        if self.schema not in (SCHEMA, RUNTIME_SCHEMA):
             raise VerticalSpecError(
-                f"vertical spec schema {self.schema!r} is unsupported; expected {SCHEMA!r}"
+                f"vertical spec schema {self.schema!r} is unsupported; expected {SCHEMA!r} or {RUNTIME_SCHEMA!r}"
             )
         if isinstance(self.n_vert_levels, bool) or not isinstance(self.n_vert_levels, int):
             raise VerticalSpecError("n_vert_levels must be an integer")
@@ -256,10 +258,64 @@ class VerticalSpec:
             raise VerticalSpecError(
                 "specified_interfaces_m is only valid when scheme='specified'; remove it or select that branch"
             )
+        if self.runtime is not None:
+            if self.schema != RUNTIME_SCHEMA:
+                raise VerticalSpecError("runtime settings require vertical-spec/v2")
+            self._validate_runtime()
+        elif self.schema == RUNTIME_SCHEMA:
+            raise VerticalSpecError("vertical-spec/v2 requires runtime settings")
+
+    def _validate_runtime(self) -> None:
+        runtime = self.runtime
+        required = {"cam_coefficient", "cam_damping_levels", "rayleigh_u", "rayleigh_u_levels",
+                    "rayleigh_u_timescale_days", "radiation_seconds", "radiation_lw", "radiation_sw",
+                    "ozone"}
+        if not isinstance(runtime, dict) or set(runtime) != required:
+            raise VerticalSpecError(f"runtime must declare exactly {sorted(required)}")
+        for name in ("cam_damping_levels", "rayleigh_u_levels"):
+            if type(runtime[name]) is not int or not 1 <= runtime[name] <= self.n_vert_levels:
+                raise VerticalSpecError(f"runtime {name} must be in 1..n_vert_levels")
+        for name in ("cam_coefficient", "rayleigh_u_timescale_days", "radiation_seconds"):
+            value = runtime[name]
+            if type(value) not in (float, int) or not np.isfinite(value) or value <= 0:
+                raise VerticalSpecError(f"runtime {name} must be finite and positive")
+        if runtime["cam_coefficient"] > 1:
+            raise VerticalSpecError("runtime cam_coefficient must be at most 1")
+        if type(runtime["rayleigh_u"]) is not bool:
+            raise VerticalSpecError("runtime rayleigh_u must be a boolean")
+        # This is the existing engine's pressure/latitude/month-dependent
+        # ozone authority. Naming it pins the radiation route, not a new
+        # ozone implementation or a fixed mixing ratio in the stratosphere.
+        if (runtime["ozone"], runtime["radiation_lw"], runtime["radiation_sw"]) != (
+                "monthly-climatology", "rrtmg_lw", "rrtmg_sw"):
+            raise VerticalSpecError("monthly-climatology ozone requires rrtmg_lw and rrtmg_sw")
+        if self.rayleigh_xnutr <= 0 or not 0 <= self.rayleigh_damping_start_m < self.ztop_m:
+            raise VerticalSpecError("runtime sponge requires positive rayleigh_xnutr and 0 <= start < top")
+
+    def forecast_arguments(self) -> list[str]:
+        """Bind one versioned declaration to the existing forecast controls."""
+        self.validate()
+        if self.runtime is None:
+            return []
+        runtime = self.runtime
+        argv = ["--cam-coefficient", str(runtime["cam_coefficient"]),
+                "--cam-damping-levels", str(runtime["cam_damping_levels"]),
+                "--damping-start-m", str(self.rayleigh_damping_start_m),
+                "--dynamics", f"config_xnutr={self.rayleigh_xnutr}",
+                "--dynamics", f"config_number_rayleigh_damp_u_levels={runtime['rayleigh_u_levels']}",
+                "--dynamics", f"config_rayleigh_damp_u_timescale_days={runtime['rayleigh_u_timescale_days']}",
+                "--radiation-seconds", str(runtime["radiation_seconds"]),
+                "--physics", f"config_radt_lw_scheme={runtime['radiation_lw']}",
+                "--physics", f"config_radt_sw_scheme={runtime['radiation_sw']}"]
+        if runtime["rayleigh_u"]:
+            argv.append("--rayleigh-u")
+        return argv
 
     def to_mapping(self) -> dict[str, Any]:
         self.validate()
         raw = asdict(self)
+        if self.runtime is None:
+            raw.pop("runtime")  # Preserve every v1 declaration's canonical digest.
         if self.specified_interfaces_m is not None:
             raw["specified_interfaces_m"] = list(self.specified_interfaces_m)
         return raw

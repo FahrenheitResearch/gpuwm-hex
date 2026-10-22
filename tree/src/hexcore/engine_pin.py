@@ -3,7 +3,7 @@ Current public pin: gpuwm 2.9.2 at public engine commit
 570c503fbbfab6e076572d3e6386f41fccf56049, tag v2.9.2. The measurement
 repin-292-20261020.json verifies all published platform wheels, the complete
 sixteen-path seam, composed glacier digest, contract surface and helper set.
-The dependency remains gpuwm>=2.9.2,<2.10. The sealed 2.9.3 public packet has
+The dependency is gpuwm>=2.9.4,<2.10 (release installation minimum). The sealed 2.9.3 public packet has
 its own complete measured PACKET_ENGINES row, recorded separately in
 verification/engine-verdicts/prepared-engines.json. Historical pin records
 below remain measurements of their original inputs.
@@ -1003,7 +1003,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
             "gpuwm/core/kernels/gf.cu",
             "gpuwm/core/microphysics.py",
             "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/noahmp_glacier.py",
             "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
             "gpuwm/core/noahmp_runtime.py",
             "gpuwm/core/physics.py",
             "gpuwm/core/rrtmg_legacy.py",
@@ -1013,6 +1015,37 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
     ),
     PublishedEngine(
         version="2.9.2",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/noahmp_glacier.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_kernel_sources.py",
+            "gpuwm/core/noahmp_runtime.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.9.3",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/noahmp_glacier.py",
+            "gpuwm/core/noahmp_glacier_gpu.py",
+            "gpuwm/core/noahmp_runtime.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.9.4",
         on_pypi=True,
         moved=(),
         offline_build_road=True,
@@ -1085,43 +1118,7 @@ ADMITTED_ENGINES: tuple[AdmittedEngine, ...] = ()
 #: wheel and its public source commit. All sixteen paths and the exact version
 #: must match; these rows never change the published table or dependency floor.
 # --- BEGIN GENERATED: PACKET_ENGINES ---
-PACKET_ENGINES: tuple[AdmittedEngine, ...] = (
-    AdmittedEngine(
-        version="2.9.3",
-        base="2.9.3",
-        build_commit="4b155e8935c4d943cfd104c4d4c5c522d8281dc5",
-        digests=(
-            ("docs/mpas-seam.md", "4b734d8ebdf0686fe6bb40dd699c56dce6ae3460d32969c9056a1846b48f739e"),
-            ("gpuwm/config.py", "ecceb5b1923b4ee809af86235664ac423de473c9adcd89a7b71d17c231a0549b"),
-            ("gpuwm/core/gf.py", "acf8ec46f8596f562f8de85de0281ca6de0b9bbb7a0897fac105d3884dcd03d8"),
-            ("gpuwm/core/kernels/__init__.py", "6fa9bb4fa91503b62c9d9614a4cf86187430c8574375f9e20b0008f1b69c7511"),
-            ("gpuwm/core/kernels/gf.cu", "120dc7e606dae18cece64e1d1af899ec8930de339e82943dcab3457c9115532d"),
-            ("gpuwm/core/kernels/noahmp_glacier.cu", "14c6e57f2a2df7926a05101c89f2a6778b150ce68af58c78996e288bda8cd954"),
-            ("gpuwm/core/kernels/noahmp_leaves.cu", "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497"),
-            ("gpuwm/core/microphysics.py", "388f2018fa52e3b0d00523d55264221d239ad1251185fcb1f0d03f27cc2abb29"),
-            ("gpuwm/core/mpas_column_batch.py", "802a8bc9d8968d22f9500c4b2e9de60832f1e883d7f622452aee76cead5e7ce5"),
-            ("gpuwm/core/noahmp_glacier.py", "2ccbfbe25df23f77477427542696eb38cf9f5f6ae4fedfaf2d279da5618488eb"),
-            ("gpuwm/core/noahmp_glacier_gpu.py", "55fc977ad3c5c0b14efa551bcbd40ac616164ffb4f4d066a17fc9fd8fdaf0234"),
-            ("gpuwm/core/noahmp_kernel_sources.py", "6aff082a02f4ed5883e6c7086c712e30324d79fe8b2dbe9a16665051a564b708"),
-            ("gpuwm/core/noahmp_runtime.py", "85cdbe5042b3e56c7f4de23b0807e1cfc5f1820fdd2a37e5e76d2780fb1cfb82"),
-            ("gpuwm/core/physics.py", "65ba2904334c6a16b4a9be8e1d8aac4f5771211e9ee71730caf9cbdcc38a1822"),
-            ("gpuwm/core/rrtmg_legacy.py", "6270ca552b88fb6bdfd7e31018b1de2cad311db30245f3075160be979f90a240"),
-            ("gpuwm/io/restart.py", "bdad04396c594d8c4c461ce197f5cd8604c75b371c86ae604119d34979892db4"),
-        ),
-        glacier_composed_tu_sha256="8b0589436845fbec04711b14b8f2a865062f018ad3108df969fe38749e4c78f1",
-        moved_from_base=(
-            "gpuwm/core/kernels/__init__.py",
-            "gpuwm/core/noahmp_kernel_sources.py",
-            "gpuwm/core/noahmp_runtime.py",
-            "gpuwm/core/physics.py",
-            "gpuwm/core/rrtmg_legacy.py",
-            "gpuwm/io/restart.py",
-        ),
-        artifacts=(
-            ("gpuwm-2.9.3-py3-none-manylinux_2_28_x86_64.whl", "e20d0c16bf77eb6d26f6252bca5548877176a063eb2d54c4e47dd606981caf55"),
-        ),
-    ),
-)
+PACKET_ENGINES: tuple[AdmittedEngine, ...] = ()
 # --- END GENERATED: PACKET_ENGINES ---
 
 
@@ -1285,7 +1282,7 @@ def engine(version: str) -> PublishedEngine | None:
     return None
 
 
-GPUWM_INSTALL_MINIMUM = "2.9.2"
+GPUWM_INSTALL_MINIMUM = "2.9.4"
 
 
 def measured_gpuwm_floor() -> str:

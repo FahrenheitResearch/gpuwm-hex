@@ -53,12 +53,18 @@ Each is the difference or the extreme of several stored frames, so each view
 imports its whole series into ONE renderer store (`gpuwm-hex render
 --series`) and the renderer closes each window from the frames it holds:
 6 h precipitation at f012 is the stored total at f012 minus the one at f006,
-filed at f012. A window the history cannot close is named, with the
-renderer's reason: a 3-hourly history has no 1 h precipitation ("missing
-stored hour(s) F047"), a snapshot every 6 h is not a daily maximum
-temperature, and a frame before the first window closes carries a skip in
-its view's manifest. The same store also means one renderer start per view
-instead of two per frame.
+filed at f012. The door requests a window only when the stored frames can
+close it: 1 h precipitation, the run-maximum wind and the daily temperature
+extremes need every hour stored, 6 h precipitation every 6 h, and the 0-24 h
+windows a day of run. A window the frames cannot close is not requested; the
+manifest's `windows_not_requested` names it with the cadence that rules it out
+(a 3-hourly history has no 1 h precipitation, and a snapshot every 3 h is not a
+daily maximum temperature). The global rows store hourly frames by default
+(`global-120km`, `global-60km`, `global-30km`), so every default product draws;
+`global-15km` stores every 3 h, where hourly frames would cost about 125 GB a
+day, and `--history-every-minutes 60` adds the hourly windows. A frame before
+the first window closes carries a skip in its view's manifest. The same store
+also means one renderer start per view instead of two per frame.
 
 The set is the renderer's own slugs (`products_door.py`
 `GLOBAL_PRODUCTS` / `REGIONAL_PRODUCTS`). A member a history cannot draw is

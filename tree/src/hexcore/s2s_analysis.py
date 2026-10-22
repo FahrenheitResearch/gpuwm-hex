@@ -100,8 +100,8 @@ def verify_analyses(value, state, args, env):
     start = datetime.strptime(value["start_time"], TIME_FORMAT)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     supplied = supplied_references(getattr(args, "analysis_reference", []))
-    jobs = [(source, start + timedelta(days=day)) for day in range(11) for source in ("gfs", "era5")]
-    available = sum(valid <= now and source == "gfs" for source, valid in jobs)
+    jobs = [(source, start + timedelta(days=day)) for day in range(min(10, value["days"]) + 1) for source in ("gfs", "era5")]
+    available = sum(valid <= now for source, valid in jobs)
     workers = min(cores(), 4, max(1, available))
     threads = max(1, cores() // workers)
 
@@ -118,21 +118,20 @@ def verify_analyses(value, state, args, env):
         if path is not None:
             validate_reference(path, source, valid)
             return {**row, "path": str(path), "owned": False, "status": "ready"}
-        if source == "era5":
-            return {**row, "status": "missing", "reason": "no prepared ERA5 analysis supplied; no credential access"}
-        folder = work / "inits" / ("analysis-gfs-" + valid.strftime("%Y%m%d%H"))
+        # ERA5 is keyless (ARCO) by default, so it is prepared like GFS.
+        folder = work / "inits" / (f"analysis-{source}-" + valid.strftime("%Y%m%d%H"))
         path = folder / "init.nc"
         if path.is_file():
             validate_reference(path, source, valid)
             return {**row, "path": str(path), "owned": True, "status": "ready"}
         argv = list(value["commands"]["init"])
-        for flag, text in (("--source", "gfs"), ("--cycle", valid.strftime("%Y-%m-%dT%H")),
+        for flag, text in (("--source", source), ("--cycle", valid.strftime("%Y-%m-%dT%H")),
                            ("--out-dir", str(folder))):
             argv[argv.index(flag) + 1] = text
-        log = output / ("gfs-" + valid.strftime("%Y%m%d%H") + ".log")
+        log = output / (f"{source}-" + valid.strftime("%Y%m%d%H") + ".log")
         rc = _cli(argv, log, {**env, "RAYON_NUM_THREADS": str(threads)})
         if rc:
-            return {**row, "status": "missing", "reason": f"GFS analysis preparation exited {rc}",
+            return {**row, "status": "missing", "reason": f"{source.upper()} analysis preparation exited {rc}",
                     "argv": argv, "log": str(log)}
         validate_reference(path, source, valid)
         return {**row, "path": str(path), "owned": True, "status": "ready", "argv": argv, "log": str(log)}

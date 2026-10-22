@@ -18,6 +18,8 @@ def test_trapezoids_and_cumulative_precipitation():
     samples = [{"temperature2": np.array([t * 2.]), "z500": np.array([5000. + t]),
                 "mslp": np.array([1000.]), "precipitation_rate": np.array([10. + t * 3.])}
                for t in range(8)]
+    for sample in samples:
+        sample.update({f"{component}{level}": np.array([1.]) for component in ("u", "v") for level in (925, 850, 200)})
     result = integrate_window(np, samples, 24, 7)
     np.testing.assert_allclose(result["temperature2"], 7)
     np.testing.assert_allclose(result["precipitation_rate"], 3)
@@ -79,7 +81,7 @@ def test_verification_combines_restart_history_on_common_lag_clock(tmp_path, mon
     calls = []
     monkeypatch.setattr(global_ensemble, "_cli", lambda argv, log, env: calls.append(argv) or 3)
     value = {"paths": {"work": str(tmp_path), "grid": "grid.nc"}, "score_config": {"mesh": "mesh"},
-             "start_time": "2026-10-01_00:00:00", "members": [{"run_id": "mem001", "init": "older-init.nc"}]}
+             "start_time": "2026-10-01_00:00:00", "days": 30, "members": [{"run_id": "mem001", "init": "older-init.nc"}]}
     result = verify_first_ten_days(value, {"attempts": attempts}, SimpleNamespace(), {})
     row = result["members"][0]
     assert row["frames"] == 3
@@ -120,7 +122,7 @@ def test_verification_recovers_interrupted_history_link(tmp_path, monkeypatch, d
     monkeypatch.setattr(global_ensemble, "_cli", lambda argv, log, env: calls.append(argv) or 3)
     monkeypatch.setattr(s2s_analysis, "verify_analyses", lambda *args: {"metric_rows": 0})
     value = {"paths": {"work": str(tmp_path), "grid": "grid.nc"}, "score_config": {},
-             "start_time": "2026-10-01_00:00:00",
+             "start_time": "2026-10-01_00:00:00", "days": 30,
              "members": [{"run_id": "mem001", "init": "init.nc"}]}
     attempts = [{"out": str(tmp_path / folder), "state": state, "members": ["mem001"]}
                 for folder, state in (("old", "interrupted"), ("new", "complete"))]

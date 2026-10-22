@@ -1,0 +1,25 @@
+{
+  "schema": "gpuwm-hex.card-fit-observations/v1",
+  "observations": [
+    {
+      "id": "global-vr-216189-55l-188sm-whole-18h",
+      "status": "complete",
+      "card": "96gib-188sm",
+      "levels": 55,
+      "cells": 216189,
+      "hours": 18,
+      "dt_seconds": 90,
+      "peak_process_vram_mib": 25272.0,
+      "forecast_wall_seconds": 1982.519,
+      "receipt_sha256": "0060ebd27123ace395117e55cb58269918a4d63f60c3af6b01a6837a86269efe",
+      "mesh_spec_sha256": "b531e0cc954fcc9f40719a88053dbbd91b7e8b9bb776919f7edfb8bbd666f3f8",
+      "grid_sha256": "0a6f55872cff05751f5d0e2fc0517956f2290c52385e19f31d40e7f7b68b6aa1",
+      "engine_version": "2.9.3",
+      "engine_commit": "4b155e8935c4d943cfd104c4d4c5c522d8281dc5",
+      "numerics": "fast",
+      "cuda_graph_replay": false,
+      "evidence": "global-vr-receipt.json (18 h variable-resolution forecast, 2026-10-20)",
+      "instrument": "process-group compute-app samples; subsecond peaks can be missed; shared GPU; one size measured, other sizes derived"
+    }
+  ]
+}

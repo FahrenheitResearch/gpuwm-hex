@@ -85,6 +85,33 @@
           "tuned-lw-replay-fast-timing.json": "abe9c6a8af3dd88d9d0d431f0a2dfcf4745d87575181069829f5770d041d9cc8"
         }
       }
+    },
+    {
+      "id": "engine-2.9.3-high-top-buffer-source",
+      "sources": {
+        "gpuwm/core/rrtmg_lw.py": "e899ce92bb2e09ed8d70a5368795fed21eb1bbd0c4faf8d3cd0195d3182bc6cd",
+        "gpuwm/core/rrtmg_sw.py": "4521cad52318b43c2fac6813c0a685bc092918084660ae5a348aa75530862997",
+        "gpuwm/core/rrtmg_mcica.py": "3947f739003363e0902d1c058e80ca0111545c4e0b2acc0548891041fa0be7de",
+        "gpuwm/core/rrtmg_legacy_prep.py": "08a915dc840b72608dfb00e984e8c9f3937d92aa5eaf14f9c153498ea3ca63e6",
+        "gpuwm/core/kernels/rrtmg_sw.cu": "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+        "gpuwm/ingest/wrf_ozone.py": "8594158cb44e65a2bbd25fa861c3ede4ff379f45251a4e45cb03ac2d9ebcd69c"
+      },
+      "description": "Exact gpuwm 2.9.3 helper set plus the high-top longwave clear-buffer fix. Source identity only; below 2 hPa one clear buffer is retained rather than allocating fewer layers than the prep contract. Whole-run SSW qualification is separate.",
+      "engine_patch": "docs/s2s/engine-patches/0003-rrtmg-high-top-clear-buffer.patch",
+      "engine_patch_sha256": "87d2ead92764488b5648cc43d04d517a0f9ae97da12ed707146991f8663d9dfa"
+    },
+    {
+      "id": "engine-2.9.4-source",
+      "engine_commit": "2147c15faf63511b673d22d12c5656e3270c5176",
+      "description": "Exact gpuwm 2.9.4 radiation helpers, measured by the engine repin at 2147c15fa. Admission establishes source identity only; it does not claim unchanged forecast numerics.",
+      "sources": {
+        "gpuwm/core/kernels/rrtmg_sw.cu": "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+        "gpuwm/core/rrtmg_legacy_prep.py": "ae3aa96f7edf7658ffb538190d45a9f93f05aaecf1da3e8d5a3b3599b0b21e9f",
+        "gpuwm/core/rrtmg_lw.py": "ab2a44d4735a760789e1624b3a0d1182a0041423be5efd78864439ca0e2d1c21",
+        "gpuwm/core/rrtmg_mcica.py": "13590052f23ae46531cd8b8f2105ab1500fb0cada229054fdcc1103f6dd6181d",
+        "gpuwm/core/rrtmg_sw.py": "4b39c6bb656918978f511293c5cf635d871455656958a81ad5830bd8383ceb3d",
+        "gpuwm/ingest/wrf_ozone.py": "c05c30d1ce7f193354cd7c4dbde68dfaf61a9b7d7834440d4691c33f11259947"
+      }
     }
   ]
 }

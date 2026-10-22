@@ -7,12 +7,12 @@ from hexcore.published_vertical import materialize
 from hexcore.init_door import _COMPATIBILITY_VARIABLES
 
 
-def source_files(tmp_path):
+def source_files(tmp_path, levels=2):
     grid, source = tmp_path / 'grid.nc', tmp_path / 'invariant.nc'
     for path in (grid, source):
         with Dataset(path, 'w') as nc:
             for name, length in (('Time', None), ('nCells', 2), ('nEdges', 3),
-                                 ('nVertLevels', 2), ('nVertLevelsP1', 3),
+                                 ('nVertLevels', levels), ('nVertLevelsP1', levels + 1),
                                  ('maxEdges', 2), ('TWO', 2), ('R3', 3)):
                 nc.createDimension(name, length)
             for name in ('latCell', 'lonCell', 'edgesOnCell', 'nEdgesOnCell'):
@@ -24,6 +24,36 @@ def source_files(tmp_path):
                                          'coeffs_reconstruct')):
                     nc.createVariable(name, 'f4', ('nCells',))[:] = [i + .25, i + .5]
     return source, grid
+
+
+def test_published_low_top_cannot_be_relabelled_as_high_top(tmp_path):
+    from hexcore.global_door import DATA
+    source, grid = source_files(tmp_path, levels=55)
+    output = tmp_path / 'artifact.nc'
+    with pytest.raises(ValueError, match='level count'):
+        materialize(source, grid, output, {'config_nvertlevels': 80})
+    with pytest.raises(ValueError, match='level count'):
+        materialize(source, grid, output, {}, vertical_spec=DATA / 'countries/s2s80-v1.json')
+    assert not output.exists()
+
+
+def test_published_binding_checks_the_top_and_receipts_the_spec(tmp_path):
+    from hexcore.global_door import DATA
+    from hexcore.vertical_spec import VerticalSpec
+    spec_path = DATA / 'countries/s2s80-v1.json'
+    source, grid = source_files(tmp_path, levels=80)
+    output = tmp_path / 'artifact.nc'
+    with Dataset(source, 'r+') as nc:
+        nc.config_ztop = 30000.
+    with pytest.raises(ValueError, match='vertical top'):
+        materialize(source, grid, output, {}, vertical_spec=spec_path)
+    assert not output.exists()
+    with Dataset(source, 'r+') as nc:
+        nc.config_ztop = 50000.
+    declarations = {'config_start_time': '2018-02-05_00:00:00'}
+    receipt = materialize(source, grid, output, declarations, vertical_spec=spec_path)
+    assert receipt['vertical_binding']['sha256'] == VerticalSpec.from_file(spec_path).sha256()
+    assert materialize(source, grid, output, declarations, vertical_spec=spec_path) == receipt
 
 
 def test_public_geometry_is_byte_identical_and_source_is_unchanged(tmp_path):

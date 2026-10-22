@@ -1,4 +1,17 @@
 {
+  "limited_area_default": "point-937m",
+  "limited_area": [
+    {
+      "id": "point-937m",
+      "about": "A fine hex core at any point a limited-area source covers: the registered 937.5 m ladder moved to the point, culled at the 1.35x pad, initialised and driven at its boundary hourly from the source (docs/hex-point-hrrr.md).",
+      "init_source": "hrrr",
+      "fine_dx_m": 937.5,
+      "radius_km": 100.0,
+      "vertical_spec": "countries/tc55-v1.json",
+      "hours": 3,
+      "history_every_minutes": 60
+    }
+  ],
   "schema": "gpuwm-hex.countries/v1",
   "product_sets": {
     "country-standard": ["--no-global", "--no-mesh-view", "--region", "country=region:12.8,121.8,1900,2200", "--points", "Manila@14.5995,120.9842;Tacloban@11.244,125.004;Davao@7.19,125.455", "--jobs", "2", "--frame-jobs", "1"]

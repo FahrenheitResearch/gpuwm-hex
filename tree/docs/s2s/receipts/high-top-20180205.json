@@ -1,0 +1,506 @@
+{
+  "schema": "gpuwm-hex.high-top-qualification/v1",
+  "status": "PASS",
+  "scope": "One 30-day deterministic global integration across the February 2018 warming; measured single-card fit on RTX PRO 6000; simulated warming and reversal, not independent observed skill",
+  "row": "global-120km-high-top",
+  "mesh": {
+    "cells": 40962,
+    "dt_seconds": 600.0,
+    "dt_selection": {
+      "cap_retired": {
+        "arm": "arwen",
+        "cap_seconds": 300.0,
+        "engine_identities": [
+          "new-tiedtke-wrf461-cumastrn-donor-bound-v2",
+          "ysu-wrf-v4.8.0-entrainment-courant-v2"
+        ]
+      },
+      "citation": "Registry.xml:74 -- 720 s for the default 120 km x1.40962 mesh, i.e. 6 s per km of grid spacing",
+      "dt_seconds": 600.0,
+      "nominal_dx_m": 120000.0,
+      "radiation_seconds": 1800.0,
+      "registered_row_dt_seconds": 600.0,
+      "rejected_for_clock_closure": [],
+      "rule": "6 s per km of nominalMinDc (120000 m -> 720 s), rounded down to divide the 1800 s radiation interval (3 steps)",
+      "source": "mesh",
+      "target_seconds": 720.0
+    },
+    "grid": "<work>/cache/meshes/x1.40962/x1.40962.grid.nc",
+    "name": "hex-x1.40962-native-v0c534f1cdd08",
+    "static": "<work>/cache/meshes/x1.40962/x1.40962.native.static.nc"
+  },
+  "vertical_spec": {
+    "schema": "gpuwm-hex.vertical-spec/v2",
+    "n_vert_levels": 80,
+    "ztop_m": 50000.0,
+    "scheme": "specified",
+    "specified_interfaces_m": [
+      0,
+      40,
+      100,
+      180,
+      280,
+      400,
+      550,
+      730,
+      940,
+      1180,
+      1450,
+      1750,
+      2080,
+      2440,
+      2830,
+      3250,
+      3700,
+      4180,
+      4690,
+      5230,
+      5800,
+      6400,
+      7030,
+      7690,
+      8380,
+      9100,
+      9850,
+      10600,
+      11350,
+      12100,
+      12850,
+      13600,
+      14350,
+      15100,
+      15850,
+      16600,
+      17350,
+      18100,
+      18850,
+      19450,
+      20000,
+      20750,
+      21500,
+      22250,
+      23000,
+      23750,
+      24500,
+      25250,
+      26000,
+      26750,
+      27500,
+      28250,
+      29000,
+      29750,
+      30500,
+      31250,
+      32000,
+      32750,
+      33500,
+      34250,
+      35000,
+      35750,
+      36500,
+      37250,
+      38000,
+      38750,
+      39500,
+      40250,
+      41000,
+      41750,
+      42500,
+      43250,
+      44000,
+      44750,
+      45500,
+      46250,
+      47000,
+      47750,
+      48500,
+      49250,
+      50000
+    ],
+    "interface_projection": "linear_interpolation",
+    "terrain_smoothing_passes": 1,
+    "smooth_surfaces": true,
+    "surface_smoothing_passes": 30,
+    "minimum_layer_fraction": 0.3,
+    "hybrid_coordinate": true,
+    "hybrid_transition_height_m": 20000.0,
+    "rayleigh_xnutr": 0.2,
+    "rayleigh_damping_start_m": 40000.0,
+    "theta_adv_order": 3,
+    "coef_3rd_order": 0.25,
+    "runtime": {
+      "cam_coefficient": 0.2,
+      "cam_damping_levels": 8,
+      "rayleigh_u": true,
+      "rayleigh_u_levels": 6,
+      "rayleigh_u_timescale_days": 5.0,
+      "radiation_seconds": 1800,
+      "radiation_lw": "rrtmg_lw",
+      "radiation_sw": "rrtmg_sw",
+      "ozone": "monthly-climatology"
+    }
+  },
+  "engine_prerequisite": {
+    "patch": "../engine-patches/0003-rrtmg-high-top-clear-buffer.patch",
+    "source_receipt": {
+      "copy_wall_seconds": 0.5055716240312904,
+      "source": "<venv>/lib/python3.12/site-packages/gpuwm",
+      "candidate": "<work>/engine-candidate/gpuwm",
+      "sources": {
+        "gpuwm/core/rrtmg_lw.py": "e899ce92bb2e09ed8d70a5368795fed21eb1bbd0c4faf8d3cd0195d3182bc6cd",
+        "gpuwm/core/rrtmg_sw.py": "4521cad52318b43c2fac6813c0a685bc092918084660ae5a348aa75530862997",
+        "gpuwm/core/rrtmg_mcica.py": "3947f739003363e0902d1c058e80ca0111545c4e0b2acc0548891041fa0be7de",
+        "gpuwm/core/rrtmg_legacy_prep.py": "08a915dc840b72608dfb00e984e8c9f3937d92aa5eaf14f9c153498ea3ca63e6",
+        "gpuwm/core/kernels/rrtmg_sw.cu": "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+        "gpuwm/ingest/wrf_ozone.py": "8594158cb44e65a2bbd25fa861c3ede4ff379f45251a4e45cb03ac2d9ebcd69c"
+      },
+      "changed": "gpuwm/core/rrtmg_legacy_prep.py:compute_lw_nlayers",
+      "before_sha256": "5a507453c1331209ce4c9a0762270c57685cad5d6a6c786dd4ed35333dcc952a",
+      "after_sha256": "08a915dc840b72608dfb00e984e8c9f3937d92aa5eaf14f9c153498ea3ca63e6"
+    },
+    "installation": "gpuwm 2.9.3 with private source correction; engine landing required"
+  },
+  "run": {
+    "cycle": "2018-02-05T00:00:00Z",
+    "end": "2018-03-07T00:00:00Z",
+    "members": 1,
+    "days": 30,
+    "steps_executed": 4320,
+    "steps_requested": 4320,
+    "finite_all_step_health": true,
+    "history_frames": 31,
+    "command": [
+      "<venv>/bin/python",
+      "-m",
+      "hexcore.cli",
+      "s2s",
+      "--row",
+      "global-120km-high-top",
+      "--source",
+      "cfs",
+      "--cycle",
+      "2018-02-05T00",
+      "--days",
+      "30",
+      "--members",
+      "1",
+      "--lagged",
+      "0",
+      "--work-dir",
+      "<work>/ssw-whole",
+      "--cache-dir",
+      "<work>/cache",
+      "--geog",
+      "<geog>",
+      "--surface-source",
+      "cfs",
+      "--surface-series",
+      "<work>/ssw-cfs/surface-analysis.nc",
+      "--prepared-init",
+      "2018-02-05T00=<work>/ssw-cfs/inits/2018020500-v0c534f1cdd08/init.nc"
+    ],
+    "mutex_command": [
+      "<gpu queue>",
+      "--cards",
+      "1",
+      "--vram-mib",
+      "24576",
+      "--wait",
+      "1800",
+      "high-top-run",
+      "--",
+      "<venv>/bin/python",
+      "<work>/whole_run.py",
+      "--payload"
+    ],
+    "cuda_graphs": false,
+    "cpu_affinity_cores": 16,
+    "stages": {
+      "forecast": {
+        "parallelism": {
+          "backend": "GPU",
+          "devices": "all visible",
+          "members_per_card": "auto"
+        },
+        "seconds": 3073.248
+      },
+      "init": {
+        "parallelism": {
+          "backend": "parallel member processes / Rust threads",
+          "cores": 16
+        },
+        "seconds": 0.002
+      },
+      "mesh": {
+        "parallelism": {
+          "backend": "Rust",
+          "threads": 16
+        },
+        "seconds": 0.07
+      },
+      "products": {
+        "parallelism": {
+          "backend": "GPU reductions / Rust renderer",
+          "history_reader_threads": 4,
+          "reduction_gpus": 1,
+          "renderer_threads": 16,
+          "threads": 16
+        },
+        "seconds": 21.979
+      },
+      "static": {
+        "parallelism": {
+          "backend": "Rust",
+          "threads": 16
+        },
+        "seconds": 0.145
+      },
+      "surface": {
+        "parallelism": {
+          "backend": "Rust",
+          "threads": 16
+        },
+        "seconds": 0.0
+      },
+      "verify": {
+        "parallelism": {
+          "analysis": {
+            "history_reader_threads": 4,
+            "metrics": "GPU",
+            "preparation_processes": 4,
+            "rust_threads_per_process": 4
+          },
+          "backend": "observation scorecard",
+          "coverage_days": 10,
+          "score_processes": 1,
+          "threads_per_score_process": 16
+        },
+        "seconds": 3.215
+      }
+    },
+    "walls": {
+      "boundary_fingerprint_seconds": 0.0,
+      "first_step_note": "the first step carries cold NVRTC kernel compilation for this cache root",
+      "first_step_seconds": 25.000917294004466,
+      "forecast_seconds": 2592000.0,
+      "health_gate_seconds": 0.2700950722210109,
+      "history_write_seconds": 18.03834877803456,
+      "history_write_wait_after_loop_seconds": 0.0695241360226646,
+      "integration_note": "sum of the accepted per-step composite transactions, closed by the predecessor numeric gate event; EXCLUDES host preparation, device stack construction, snapshot capture, history writing, boundary fingerprinting and the per-step health gate",
+      "integration_seconds": 3008.518188394606,
+      "integration_seconds_excluding_first_step": 2983.5172711006016,
+      "loop_seconds_including_io": 3054.8894429130014,
+      "seconds_per_step_after_first": 0.6907889027785602,
+      "snapshot_capture_pipeline": {
+        "backpressure": "previous materialization before the next history boundary",
+        "event_wait_thread": "forecast",
+        "finish_seconds": 37.10597359208623,
+        "hash_threads": 16,
+        "max_materializing_frames": 0,
+        "max_writer_frames": 2,
+        "mode": "synchronous capture",
+        "note": "enqueue and worker durations overlap integration; neither is device kernel time"
+      },
+      "snapshot_capture_seconds": 9.698870293039363,
+      "steps": 4320
+    }
+  },
+  "card_fit": {
+    "measured": true,
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "capability": {
+      "cache_directory": "<work>/ssw-whole/scratch/a0004/mem001",
+      "compute_capability": "12.0",
+      "cupy_version": "14.2.0",
+      "device_id": 0,
+      "driver_version": 13000,
+      "multiprocessor_count": 188,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "nvrtc_version": [
+        12,
+        9
+      ],
+      "runtime_version": 12090,
+      "sm": "sm_120",
+      "total_memory_bytes": 101974081536
+    },
+    "cards": 1,
+    "members": 1,
+    "sampled_peak_own_gpu_mib": 15288,
+    "sample_interval_seconds": 2,
+    "reserved_mib": 24576,
+    "wall_including_shared_pool_wait_seconds": 3534.458,
+    "limits": "Sampled peak, not an allocation-instrumented maximum. Shared-card operational wall. No 5090 forecast timing or multi-member fit measured."
+  },
+  "stratosphere": {
+    "level_count": 80,
+    "isobar_Pa": 1000,
+    "diagnostic": "existing CUDA log-pressure interpolation",
+    "polar_temperature": "native-cell area-weighted 60-90N",
+    "wind": "native-cell area-weighted 59-61N zonal wind, a finite-width approximation to 60N",
+    "reference": {
+      "valid": "2018-02-05T00:00:00Z",
+      "polar_cap_60_90N_t10_K": 217.38158614519295,
+      "latitude_band_59_61N_u10_m_s": 44.828491917271826,
+      "top_midpoint_pressure_min_hPa": 0.4612443447113037,
+      "top_midpoint_pressure_max_hPa": 0.9625496864318848,
+      "finite_columns": 40962,
+      "columns": 40962
+    },
+    "event_peak_Feb10_15": {
+      "valid": "2018-02-15T00:00:00Z",
+      "polar_cap_60_90N_t10_K": 241.55589742054914,
+      "latitude_band_59_61N_u10_m_s": -10.446998519054649,
+      "top_midpoint_pressure_min_hPa": 0.5075229406356812,
+      "top_midpoint_pressure_max_hPa": 0.9110652208328247,
+      "finite_columns": 40962,
+      "columns": 40962
+    },
+    "event_polar_warming_K": 24.17431127535619,
+    "event_minimum_u10_m_s": -20.901350902690854,
+    "initial_westerly": true,
+    "event_easterly": true,
+    "rows": 31,
+    "render_palette": "production upper-air temperature palette reused via CF metadata; plotted fields and titles are 10 hPa",
+    "grid_remap": "existing CUDA nearest-cell global 1-degree product grid",
+    "wall_seconds": 17.734539112076163,
+    "limitations": [
+      "one deterministic member",
+      "retrospective analysis SST/ice",
+      "wind latitude-band approximation; no independent observed SSW score"
+    ],
+    "cuda_graphs": false
+  },
+  "first_daily_reversal": {
+    "valid": "2018-02-12T00:00:00Z",
+    "polar_cap_60_90N_t10_K": "236.2717840193689",
+    "latitude_band_59_61N_u10_m_s": "-3.204209504463435",
+    "top_midpoint_pressure_min_hPa": "0.4220849573612213",
+    "top_midpoint_pressure_max_hPa": "0.9363005757331848",
+    "finite_columns": "40962",
+    "columns": "40962"
+  },
+  "top_midpoint_pressure_all_frames_hPa": {
+    "min": 0.391327828168869,
+    "max": 1.0001955032348633
+  },
+  "diagnostics": {
+    "command": [
+      "<host path>",
+      "--cards",
+      "1",
+      "--vram-mib",
+      "4096",
+      "high-top-run",
+      "--",
+      "<host path>",
+      "<host path>",
+      "--work",
+      "<host path>",
+      "--grid",
+      "<host path>",
+      "--out",
+      "<host path>"
+    ],
+    "returncode": 0,
+    "wall_seconds_including_pool_wait": 20.479050925001502,
+    "transfer_wait_seconds": 1.3106620172038674,
+    "sampled_peak_own_gpu_mib": 654,
+    "budget_mib": 4096,
+    "budget_basis": "less than 2 GiB calculated array workspace plus 2 GiB context/compile allowance",
+    "sample_interval_seconds": 2,
+    "before_compute_apps": [
+      {
+        "pid": 3804227,
+        "gpu_uuid": "GPU-e302d74f-28a9-33cb-8853-ae03ac17c249",
+        "memory_mib": 12860
+      }
+    ],
+    "after_compute_apps": [
+      {
+        "pid": 3804227,
+        "gpu_uuid": "GPU-e302d74f-28a9-33cb-8853-ae03ac17c249",
+        "memory_mib": 12860
+      }
+    ],
+    "cuda_graphs": false,
+    "python": "<host path>",
+    "engine_source": "<host path>",
+    "note": "Diagnostic environment differs from the forecast; native fields are read losslessly by Rust; existing hex CUDA interpolation is reused"
+  },
+  "final_renderer": {
+    "command": "PYTHONPATH=own/engine-candidate RAYON_NUM_THREADS=4 python evidence/render_stratosphere.py",
+    "renderer": "<host path>",
+    "renderer_sha256": "68f7812d1e211da7693aafa8d9795ffb2ea33936f67b2c3ab039e75662f1e69b",
+    "source": "private rebuild <work>/renderer-target/release/rw_wrfbatch; read-only source tree 7140806ba562bfd2b60f5e30644ae8c5f9f350ab",
+    "gpu_used": false,
+    "parallelism": "Rust CPU rendering, Rayon 4 threads",
+    "wall_seconds": 0.8684681225568056
+  },
+  "pictures": {
+    "count": 122,
+    "weather_renderer": "rw_wrfbatch through gpuwm.rustwx",
+    "all_inspected": true,
+    "manifest": "evidence/picture-inspection/all-pictures.json",
+    "stratosphere": [
+      "pictures/stratosphere-initial.png",
+      "pictures/stratosphere-event.png"
+    ],
+    "palette_limits_degC": [
+      -70,
+      -30
+    ]
+  },
+  "verification": {
+    "analysis_measured_references": 0,
+    "analysis_missing_references": 22,
+    "scorecard_returncode": 3,
+    "climatology": "numcodecs unavailable; explicit ensemble-relative fallback, no historical-normal skill"
+  },
+  "single_core": {
+    "near_one_core_30_second_intervals": 24,
+    "forecast_process_peak_cpu_cores": 1.457,
+    "gpu_idle_established": false,
+    "finding": "Recorded host-dispatch diagnostic; sampler collected device memory, not GPU utilization. No conclusion about idle GPU time."
+  },
+  "tests": [
+    {
+      "log": "evidence/admission-tests-final.log",
+      "passed": 159,
+      "skipped": 20
+    },
+    {
+      "log": "evidence/covering-tests-final.log",
+      "passed": 100,
+      "skipped": 1
+    },
+    {
+      "log": "evidence/binding-tests-final.log",
+      "passed": 73,
+      "skipped": 0
+    },
+    {
+      "log": "evidence/radiation-tests-final.log",
+      "passed": 52,
+      "skipped": 4
+    },
+    {
+      "log": "evidence/high-top-engine-tests.log",
+      "passed": 2,
+      "skipped": 0
+    }
+  ],
+  "limitations": [
+    "Retrospective CFS analysis SST and sea ice, not a pure forecast-only boundary.",
+    "Finite-width area-weighted 59-61N wind approximates 60N; no independent observed SSW score.",
+    "One member cannot qualify ensemble probabilities or spread.",
+    "No hydro coupling claim is established by this hex atmosphere qualification.",
+    "Generic 55-level timing and member-capacity claims are not transferred to 80 levels."
+  ],
+  "evidence_sha256": {
+    "evidence/attempt-04/whole-summary.json": "1c9a761bc1a3856c2f3a7ec1fa855d51d8c68fc0a1e506b7977b37b3ab0b4634",
+    "evidence/attempt-04/forecast-receipt.json": "908078fe95eb98a26b4568de06c7217f45bc2707600af8a802d6fb6e1e8f9355",
+    "evidence/stratosphere/stratosphere-daily.csv": "b5b97b5c9b41e9767f754bbb4e6f7582e739c5c5d70a6dc0742eb9952e8dab13",
+    "evidence/stratosphere-rerender-receipt.json": "ba4e53c70229e5e51cf38f5f47932faf9df87bcbab960f49348863f8a12a0a97"
+  }
+}

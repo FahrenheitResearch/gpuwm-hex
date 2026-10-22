@@ -388,9 +388,18 @@ def build_parser() -> argparse.ArgumentParser:
     add_s2s_parser(commands)
     add_run_plan_parser(commands)
     add_sources_parser(commands)
+    from .chem_emissions import add_parser as add_chem_sources_parser
+
+    add_chem_sources_parser(commands)
     from .global_cycle import add_global_cycle_parser
 
     add_global_cycle_parser(commands)
+    # The limited-area counterpart of `global`: mesh-plan --point --generate,
+    # intermediate, init, lbc, the contract deck and forecast --lbc-dir from
+    # one limited-area row and a point.
+    from .regional_door import add_regional_parser
+
+    add_regional_parser(commands)
     _add_numerics_option(commands)
     return parser
 
@@ -440,6 +449,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (MpasPortError, OSError, ValueError) as error:
         print(f"gpuwm-hex: {error}", file=sys.stderr)
         return 2
+
+
+#: Door commands that hold the device.  Composing doors (global, regional, country) run these in a child
+#: process so the CUDA context and every pooled byte end with the stage.  THE BREAKAGE THIS PREVENTS
+#: (rolling 2.9.4 run, hex global-60km 24 h, 2026-10-21): the in-process forecast kept 11.6 GB of the card
+#: through products, export and observation fetches for scoring, more than 10 min at 0 % GPU, so no other
+#: job could admit on the card.  The stages after it are host work (Rust renderer, NetCDF export, scorer).
+DEVICE_COMMANDS = frozenset({"forecast"})
+
+
+def run_stage(argv: Sequence[str], env: dict[str, str] | None = None) -> int:
+    """Run one door command for a composing door: device commands in a child process, the rest in-process."""
+
+    argv = [str(item) for item in argv]
+    if argv and argv[0] in DEVICE_COMMANDS:
+        import os
+        import subprocess
+        child = {**os.environ, **(env or {})}
+        return subprocess.run([sys.executable, "-m", "hexcore.cli", *argv], env=child).returncode
+    return int(main(argv))
 
 
 if __name__ == "__main__":

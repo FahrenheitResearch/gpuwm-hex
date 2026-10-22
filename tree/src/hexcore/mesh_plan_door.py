@@ -138,6 +138,11 @@ def _report(spec: Mapping[str, Any], receipt: Mapping[str, Any]) -> list[str]:
 def run_mesh_plan(arguments: argparse.Namespace) -> int:
     from .swath.sizing import dry_run
 
+    if getattr(arguments, "global_mesh", False):
+        return run_global_mesh(arguments)
+    if getattr(arguments, "run", False):
+        raise MpasPortError("--run requires --global-mesh --generate")
+
     if getattr(arguments, "point", None) is not None and arguments.spec is not None:
         raise MpasPortError(
             "--spec and --point were both given; a plan prices one request. "
@@ -205,7 +210,226 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
     from .mesh_point import add_point_arguments
 
     add_point_arguments(parser)
+    global_group = parser.add_argument_group("generated global variable-resolution forecast")
+    global_group.add_argument("--global-mesh", action="store_true",
+                              help="price/build the whole global mesh, without a limited-area cull")
+    global_group.add_argument("--run", action="store_true",
+                              help="with --global-mesh --generate: init-source, forecast and Rust products")
+    global_group.add_argument("--source", default=None, help="an init-source table row")
+    global_group.add_argument("--cycle", default=None, help="YYYY-MM-DDTHH")
+    global_group.add_argument("--hours", type=float, default=12.0)
+    global_group.add_argument("--history-every-minutes", type=int, default=180)
+    global_group.add_argument("--staged", type=Path, action="append", default=[])
+    global_group.add_argument("--source-table", type=Path, default=None)
+    global_group.add_argument("--member", type=int, default=None)
+    global_group.add_argument("--jobs", type=int, default=8)
+    global_group.add_argument("--region", action="append", default=[],
+                              help="products view NAME=region:CLAT,CLON,W_KM,H_KM")
     parser.set_defaults(handler=run_mesh_plan)
 
 
 __all__ = ["add_mesh_plan_parser", "run_mesh_plan"]
+
+
+def run_global_mesh(arguments: argparse.Namespace) -> int:
+    """A generated spec to a bound global forecast through existing doors.
+
+    No per-event registry edits, source adapters, boundary inventing or
+    replacement data processing. The Rust generator and static builder make
+    the mesh; init-source supplies meteorology; forecast rechecks admissions.
+    """
+    import datetime
+    import os
+    import sys
+    import time
+    from . import card_fit, mesh_point, mesh_rows
+    from .engines import MESH, STATIC, resolve
+    from .swath.sizing import dry_run
+    from .vertical_spec import VerticalSpec
+
+    if arguments.point is not None and arguments.spec is not None:
+        raise MpasPortError("--spec and --point are mutually exclusive")
+    if arguments.spec is not None:
+        spec = dict(_load(arguments.spec))
+    elif arguments.point is not None:
+        spec = mesh_point.ladder_spec(
+            mesh_point.parse_point(arguments.point), fine_dx_m=arguments.fine_dx_m,
+            radius_km=arguments.radius_km, background_km=arguments.background_km,
+            transition_factor=arguments.transition_factor, ring_factor=arguments.ring_factor,
+            name=arguments.name)
+    else:
+        raise MpasPortError("--global-mesh requires --spec or --point")
+    regions = spec.get("regions") or []
+    finest = min([float(spec["background_km"])] + [float(r["spacing_km"]) for r in regions]) * 1000
+    if not math.isfinite(finest) or finest <= 0:
+        raise MpasPortError("the finest mesh spacing must be finite and positive")
+    card = mesh_point.resolve_card(arguments.card)
+    if card is None:
+        raise MpasPortError("--global-mesh requires --card to price the whole forecast")
+    vertical = (arguments.vertical_spec or
+                Path(__file__).with_name("data") / "countries" / "tc55-v1.json").resolve()
+    levels = VerticalSpec.from_file(vertical).n_vert_levels
+    from .mpas_defaults import default_dt_seconds
+    dt = float(default_dt_seconds(finest)["dt_seconds"])
+    if arguments.run:
+        if not arguments.generate or arguments.out_dir is None:
+            raise MpasPortError("--run requires --generate --out-dir")
+        if not arguments.source or not arguments.cycle:
+            raise MpasPortError("--run requires --source and --cycle")
+        from .init_sources import Cycle, load_table, resolve_source, resolve_writer, resolve_vtable
+        cycle = Cycle.parse(arguments.cycle)
+        source_table = load_table(arguments.source_table)
+        source = resolve_source(source_table, arguments.source)
+        resolve_writer(None)
+        resolve_vtable(source)
+        seconds = arguments.hours * 3600
+        cadence = arguments.history_every_minutes * 60
+        if (not math.isfinite(seconds) or seconds <= 0 or cadence <= 0 or
+                abs(seconds / cadence - round(seconds / cadence)) > 1e-8 or
+                abs(cadence / dt - round(cadence / dt)) > 1e-8):
+            raise MpasPortError("history cadence must divide the positive run length in whole timesteps")
+    engine = resolve(MESH, arguments.mesh_exe)
+    sizing = dry_run(spec, engine=engine)
+    fit = card_fit.predict(
+        sizing["predicted_cells"], card=card, levels=levels, dt_seconds=dt, hours=arguments.hours,
+        budget_mib=None if arguments.vram_gib is None else arguments.vram_gib * 1024)
+    receipt: dict[str, Any] = {
+        "schema": "gpuwm-hex.global-vr/v1", "status": "planned", "spec": spec,
+        "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "sizing": sizing, "prediction_before_generation": fit,
+        "vertical_spec": str(vertical), "stages": [],
+    }
+    if arguments.json:
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+    else:
+        print(f"global mesh: {fit['cells']:,} predicted cells, "
+              f"{fit['predicted_peak_mib']:,.1f} MiB peak, "
+              f"{fit['required_free_mib']:,.1f} MiB required, fits={fit['fits']}; "
+              f"forecast runtime {fit['runtime']['seconds']} s (extrapolated)", flush=True)
+    if arguments.out is not None:
+        arguments.out.parent.mkdir(parents=True, exist_ok=True)
+        arguments.out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    if not arguments.generate:
+        return 0
+    if not fit["fits"]:
+        raise MpasPortError(
+            f"whole global mesh requires {fit['required_free_mib']:,.1f} MiB; "
+            f"budget {fit['budget_mib']:,.1f} MiB. Coarsen or shrink the refinement region")
+    if arguments.out_dir is None:
+        raise MpasPortError("--global-mesh --generate requires --out-dir")
+    root = arguments.out_dir.expanduser().absolute()
+    root.mkdir(parents=True, exist_ok=True)
+    receipt_path = root / "global-vr-receipt.json"
+    if receipt_path.exists():
+        raise MpasPortError(f"{receipt_path} exists; use a fresh --out-dir to preserve its evidence")
+    spec_path, grid, static = [root / name for name in ("resolution-spec.json", "mesh.grid.nc", "mesh.static.nc")]
+    rows_file = root / mesh_rows.MESH_ROWS_FILENAME
+    for path in (spec_path, grid, static, rows_file):
+        if path.exists():
+            raise MpasPortError(f"{path} exists; use a fresh --out-dir")
+    spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+    receipt["spec_sha256"] = mesh_rows.sha256_file(spec_path)
+    receipt["vertical_spec_sha256"] = mesh_rows.sha256_file(vertical)
+    receipt["rows_file"] = str(rows_file)
+    env = dict(os.environ)
+    receipt["numerics_environment"] = {k: env.get(k) for k in ("GPUWM_HEX_NUMERICS", "GPUWM_WRF_EXACT", "GPUWM_HEX_CUDA_GRAPHS")}
+    started = time.monotonic()
+
+    def save() -> None:
+        receipt["wall_seconds"] = round(time.monotonic() - started, 3)
+        pending = receipt_path.with_suffix(".json.pending")
+        pending.write_text(json.dumps(receipt, indent=2, sort_keys=True, default=str) + "\n")
+        pending.replace(receipt_path)
+
+    def stage(name: str, argv: list[Any]) -> dict[str, Any]:
+        receipt["status"] = "running"
+        receipt["active_stage"] = name
+        save()
+        print(f"STAGE {name}", flush=True)
+        result = card_fit.run_stage([str(a) for a in argv], name=name, directory=root / "logs", env=env)
+        receipt["stages"].append(result)
+        save()
+        if result["returncode"]:
+            raise MpasPortError(f"{name} exited {result['returncode']}; log {result['log']}")
+        return result
+
+    try:
+        static_engine = resolve(STATIC, arguments.static_exe)
+        geog = mesh_point.resolve_geog(arguments.geog)
+        generator_receipt = root / "mesh-generator.json"
+        static_receipt = root / "mesh-static.json"
+        receipt["engines"] = {
+            "mesh": {"path": str(engine), "sha256": mesh_rows.sha256_file(engine)},
+            "static": {"path": str(static_engine), "sha256": mesh_rows.sha256_file(static_engine)}}
+        stage("mesh", [engine, "--spec", spec_path, "--out", grid, "--receipt", generator_receipt])
+        stage("static", [static_engine, "--grid", grid, "--out", static, "--geog", geog,
+                         "--nominal-dx-m", finest, "--native-init", "--native-gwd-static",
+                         "--receipt", static_receipt])
+        errors = mesh_point.static_coordinate_errors(grid, static)
+        if errors:
+            raise MpasPortError(errors[0])
+        admission = mesh_point.admit_pair(grid, static, fine_dx_m=finest)
+        dt = admission["timestep_choice"]["dt_seconds"]
+        # The point fields remain descriptive legacy metadata. The complete
+        # authored spec, rather than an invented cap, is the row's authority.
+        shape = min(regions, key=lambda region: float(region["spacing_km"]))["shape"] if regions else {}
+        point = tuple(shape.get("center_deg", [0.0, 0.0]))
+        row = mesh_rows.describe_resolution_spec(
+            spec=spec, name=f"hex-vr-{receipt['spec_sha256'][:16]}-{admission['n_cells']}",
+            grid=grid, static=static, spec_path=spec_path,
+            generator_receipt=generator_receipt, static_receipt=static_receipt,
+            point_deg=point, fine_dx_m=finest, core_radius_km=float(shape.get("radius_km", 0)),
+            background_km=float(spec["background_km"]), dt_seconds=dt,
+            n_levels=levels, admission=admission)
+        mesh_rows.write_rows(rows_file, [row])
+        receipt["mesh_row"] = row.as_dict()
+        measured_fit = card_fit.predict(
+            row.n_cells, card=card, levels=levels, dt_seconds=dt, hours=arguments.hours,
+            budget_mib=None if arguments.vram_gib is None else arguments.vram_gib * 1024)
+        receipt["prediction_on_generated_mesh"] = measured_fit
+        save()
+        if not measured_fit["fits"]:
+            raise MpasPortError("the emitted global mesh exceeds its card budget; see prediction_on_generated_mesh")
+        if arguments.run:
+            cadence = arguments.history_every_minutes * 60
+            if abs(cadence / dt - round(cadence / dt)) > 1e-8:
+                raise MpasPortError(f"history cadence does not divide the measured mesh timestep {dt} s")
+            env[mesh_rows.MESH_ROWS_ENVIRONMENT] = os.pathsep.join(
+                [str(rows_file), *[str(p) for p in mesh_rows.row_files()]])
+            prefix = [sys.executable, "-m", "hexcore.cli"]
+            init_argv = [*prefix, "init-source", "--source", arguments.source,
+                         "--cycle", arguments.cycle, "--out-dir", root / "init",
+                         "--grid", grid, "--static", static, "--vertical-spec", vertical,
+                         "--jobs", arguments.jobs]
+            for path in arguments.staged:
+                init_argv += ["--staged", path]
+            if arguments.source_table:
+                init_argv += ["--table", arguments.source_table]
+            if arguments.member is not None:
+                init_argv += ["--member", arguments.member]
+            stage("init-source", init_argv)
+            init_receipt = root / "init" / "init-source-receipt.json"
+            receipt["source_binding"] = json.loads(init_receipt.read_text())
+            run = root / "forecast"
+            measured = stage("forecast", [*prefix, "forecast", "--mesh", row.name,
+                "--grid", grid, "--static", static, "--init", root / "init" / "init.nc",
+                "--init-source", f"{arguments.source} {arguments.cycle}; spec {receipt['spec_sha256']}",
+                "--start-time", cycle.start_time, "--hours", arguments.hours,
+                "--dt", dt, "--history-every-minutes", arguments.history_every_minutes,
+                "--out", run, "--scratch", root / "scratch", "--no-products"])
+            receipt["predicted_vs_measured"] = card_fit.comparison(measured_fit, measured)
+            products = [*prefix, "products", run, "--out", root / "products", "--jobs", arguments.jobs]
+            for region in arguments.region:
+                products += ["--region", region]
+            stage("products", products)
+            receipt["products_manifest"] = str(root / "products")
+        receipt["status"] = "complete" if arguments.run else "generated"
+        receipt.pop("active_stage", None)
+        save()
+    except Exception as error:
+        receipt["status"] = "failed"
+        receipt["error"] = str(error)
+        save()
+        raise
+    print(f"RECEIPT {receipt_path}", flush=True)
+    return 0

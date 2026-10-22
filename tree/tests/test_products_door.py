@@ -176,6 +176,8 @@ def _stand_in_engines(monkeypatch, tmp_path, *, uniform: bool, seen: list):
 
 
 def _points_stand_in(monkeypatch, seen: list):
+    # Stand-in history bytes do not carry real NetCDF headers.
+    monkeypatch.setattr(products_door, "histories_without_surface_pressure", lambda histories: [])
     class Done:
         returncode, stderr = 0, ""
         stdout = "POINT\tx\nFINISHED\tpoints=1\n"
@@ -293,7 +295,9 @@ def test_a_refined_mesh_gets_global_core_context_and_points_in_the_ruled_layout(
     manifest = json.loads((case / "products-manifest.json").read_text())
     core = next(v for v in manifest["views"] if v["view"] == "refined-core")
     assert "precipitation_type" in core["products_unavailable"]
-    assert "requires forecast hour >= 24" in core["products_unavailable"]["qpf_24h"]
+    # a window the run is too short for is not requested, and named with the reason in the manifest
+    assert "qpf_24h" not in core["products_unavailable"]
+    assert "needs 24 h" in manifest["windows_not_requested"]["qpf_24h"]
     assert "categorical_rain_surface" in core["products_unavailable"]["precipitation_type"]
     # the door's one history-header read also runs through subprocess.run, which this stand-in records
     points = [c for stage, c in seen if stage == "POINTS" and Path(str(c[0])).name == "rw_hex_points"][0]
@@ -574,3 +578,75 @@ def test_after_a_forecast_the_run_folder_is_the_whole_command(monkeypatch, tmp_p
     (run / "forecast-receipt.json").unlink()
     with pytest.raises(MpasPortError, match="no mesh: --mesh was not given"):
         products_door.run_products(parser.parse_args([str(run)]))
+
+
+def test_completed_chemistry_run_adds_species_to_normal_products(monkeypatch, tmp_path):
+    """No extra product flags are required after a completed aerosol forecast."""
+    histories = _histories(tmp_path)
+    args = _arguments(tmp_path, histories, case="aerosols")
+    args.forecast_dir = str(tmp_path)
+    args.no_points = args.no_mesh_view = True
+    species = [dict(name=name, dry_deposition_m_s=0., settling_m_s=0.,
+                    mass_extinction_m2_kg=1.) for name in ("dust_bin_7", "salt_fine")]
+    (tmp_path / "chemistry-receipt.json").write_text(json.dumps({
+        "schema": "gpuwm-hex.chemistry/v1", "species": species}))
+    seen = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=True, seen=seen)
+    renderer = render_door._run
+    # Real Rust raw-plane import uses wrf_ store names, never NetCDF names.
+    stored = {
+        "var:wrf_dust_bin_7_column_mass", "var:wrf_dust_bin_7_surface_concentration",
+        "var:wrf_dust_bin_7_aod550", "var:wrf_dust_bin_7_dry_deposition",
+        "var:wrf_dust_bin_7_settled_mass", "var:wrf_salt_fine_column_mass",
+        "var:wrf_salt_fine_surface_concentration", "var:wrf_salt_fine_aod550",
+        "var:wrf_salt_fine_dry_deposition", "var:wrf_salt_fine_settled_mass",
+        "var:wrf_aod550",
+    }
+    def with_chemistry_catalog(command, *, log_prefix, env=None):
+        result = renderer(command, log_prefix=log_prefix, env=env)
+        if log_prefix == "CATALOG":
+            result.stdout += "".join(f"PRODUCT\t{slug}\tdirect\trenderable\tready\t\n"
+                for slug in sorted(stored))
+        return result
+    monkeypatch.setattr(render_door, "_run", with_chemistry_catalog)
+    assert products_door.run_products(args) == 0
+    commands = [command for label, command in seen if label == "RENDER"]
+    assert commands
+    drawn = commands[0][commands[0].index("--products")+1].split(",")
+    assert stored <= set(drawn)
+    assert "var:dust_bin_7_column_mass" not in drawn
+    manifest = json.loads((tmp_path / "out/aerosols/products-manifest.json").read_text())
+    assert "var:wrf_dust_bin_7_dry_deposition" in manifest["chemistry_products"]
+
+
+def test_limited_area_products_only_convert_the_domain(monkeypatch, tmp_path):
+    seen = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=False, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    monkeypatch.setattr(products_door, "forecast_receipt", lambda path: {
+        "admission": {"configuration": "limited-area"}})
+    args = _arguments(tmp_path, _histories(tmp_path))
+    args.no_points = True
+    assert products_door.run_products(args) == 0
+    converts = [command for stage, command in seen if stage == "CONVERT"]
+    assert [command[command.index("--window") + 1] for command in converts] == ["mesh"]
+    manifest = json.loads(next((tmp_path / "out").rglob("products-manifest.json")).read_text())
+    assert [view["view"] for view in manifest["views"]] == ["refined-core"]
+    assert manifest["maps_rendered"] > 0 and manifest["failed_views"] == []
+
+
+def test_window_products_follow_the_stored_frames(tmp_path):
+    """Rolling 2.9.4 run: a 3-hourly global history was asked for hourly windows it cannot close."""
+    def frames(hours, step):
+        return [tmp_path / f"cuda-history.2024-10-{8 + (12 + h) // 24:02d}_{(12 + h) % 24:02d}.00.00.nc"
+                for h in range(0, hours + 1, step)]
+    start = "2024-10-08_12:00:00"
+    hourly, withheld = products_door.windowed_for_history(frames(24, 1), start)
+    assert hourly == products_door.WINDOWED_PRODUCTS and withheld == {}
+    three, withheld = products_door.windowed_for_history(frames(24, 3), start)
+    assert three == ("qpf_6h", "qpf_24h")
+    assert set(withheld) == {"qpf_1h", "10m_wind_run_max", "2m_temp_0_24h_max", "2m_temp_0_24h_min"}
+    assert "every 1 h" in withheld["qpf_1h"] and "F001" in withheld["qpf_1h"]
+    short, withheld = products_door.windowed_for_history(frames(6, 1), start)
+    assert short == ("qpf_1h", "qpf_6h", "10m_wind_run_max")
+    assert "needs 24 h" in withheld["qpf_24h"]

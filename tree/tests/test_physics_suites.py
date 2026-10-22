@@ -769,9 +769,19 @@ def test_the_physics_door_lists_resolves_and_imports(tmp_path, capsys):
 
     assert main(["physics", "resolve", "--physics-suite", "arwen_thompson_column"]) == 0
     assert json.loads(capsys.readouterr().out)["backend_row"] == "thompson_aero_column"
+    # A name in a suite_routes table runs the forecast door's MPAS suite route (forecast_v842.native_route),
+    # and these verbs report that route.  convection_permitting (bl_mynn with cld_fraction) was refused
+    # here on the engine-MYNN pairing while the door ran it on driver_v842.
     assert main(["physics", "resolve", "--physics-suite", "hrrrv5"]) == 0
     resolved = json.loads(capsys.readouterr().out)
-    assert resolved["selectors"]["config_microp_scheme"] == "mp_tempo"
+    assert (resolved["route"], resolved["backend_row"]) == ("mpas_suite", "mpasphys_rrfs")
+    assert resolved["selectors"]["microphysics"] == "mp_tempo"
+    assert main(["physics", "resolve", "--physics-suite", "convection_permitting",
+                 "--physics-mode", "exact"]) == 0
+    resolved = json.loads(capsys.readouterr().out)
+    assert (resolved["backend_row"], resolved["default_backend"], resolved["physics_mode"]) == (
+        "mpasphys_v842", "hex-cuda", "exact")
+    assert resolved["selectors"]["cloudiness"] == "cld_fraction"
     assert main(["physics", "list"]) == 0
     listing = json.loads(capsys.readouterr().out)
     assert {item["name"] for item in listing["suites"]} >= set(ps.suite_names())

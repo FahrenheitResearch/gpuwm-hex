@@ -135,12 +135,23 @@ def stage_case(case_path: Path, casedir: Path, *, source: str | None = None, sta
     source_id = source or case.get("init_source") or "gfs"
     row = init_sources.resolve_source(table, source_id)
     cycle = init_sources.Cycle.parse(cycle_of(case))
+    source_member = case.get("init_member")
+    if source_member is not None and (type(source_member) is not int or source_member < 0):
+        raise MovingCaseError("init_member must be a nonnegative integer source-member number")
+    # Validate against the source table before either fetching or reusing a stage.
+    plans = init_sources.plan_products(row, cycle, source_member)
     out_dir = casedir / "source"
     previous = casedir / STAGE_FILE
     if previous.is_file():
         stage = json.loads(previous.read_text())
-        if stage.get("source") == row["id"] and stage.get("cycle") == cycle.start_time \
-                and Path(stage.get("met", "")).is_file():
+        same_source = (stage.get("source") == row["id"]
+                       and stage.get("cycle") == cycle.start_time
+                       and stage.get("source_member") == source_member)
+        if not same_source and (casedir / "family.json").is_file():
+            raise MovingCaseError(
+                f"{casedir}: prepared family belongs to another source, cycle or member; "
+                "use a separate casedir so its initial conditions cannot be mislabeled")
+        if same_source and Path(stage.get("met", "")).is_file():
             log(f"stage: {row['id']} {cycle.start_time} already staged ({stage['met']})")
             if best_track and not (casedir / "obs" / "best-track.json").is_file():
                 stage["best_track"] = _best_track(case, casedir, ibtracs_subset, ibtracs_file, log)
@@ -150,7 +161,7 @@ def stage_case(case_path: Path, casedir: Path, *, source: str | None = None, sta
     init_sources.resolve_vtable(row)
     began = time.monotonic()
     log(f"stage: acquiring {row['id']} for {cycle.start_time}")
-    products = init_sources.acquire(init_sources.plan_products(row, cycle, None), out_dir / "products", cycle,
+    products = init_sources.acquire(plans, out_dir / "products", cycle,
                                     staged=[Path(p).expanduser().absolute() for p in staged], jobs=jobs)
     inputs = [product["file"] for product in products]
     remap = None
@@ -160,7 +171,8 @@ def stage_case(case_path: Path, casedir: Path, *, source: str | None = None, sta
     log("stage: decoding to a WPS intermediate")
     decoded = init_sources.decode(row, inputs, cycle, out_dir, writer)
     stage = dict(schema="gpuwm-hex.moving-stage/v1", created_utc=_now(), case=case["_path"],
-                 source=row["id"], cycle=cycle.start_time, met=decoded["met"], products=products,
+                 source=row["id"], source_member=source_member, cycle=cycle.start_time,
+                 met=decoded["met"], products=products,
                  decode=decoded, remap=remap, seconds=round(time.monotonic() - began, 1))
     if best_track:
         stage["best_track"] = _best_track(case, casedir, ibtracs_subset, ibtracs_file, log)
@@ -509,3 +521,536 @@ def build_zone(source_grid, target_grid, source_static, target_static, source_in
     zone.save(tmp)
     tmp.replace(out)
     return dict(out=str(out), seconds=time.monotonic() - began)
+
+
+# Mesh-family members above are geometry. Each ensemble member below owns
+# an entire moving controller, including its private physics/restart state.
+ENSEMBLE_SCHEMA = "gpuwm-hex.moving-ensemble/v1"
+ROSTER_SCHEMA = "gpuwm-hex.moving-ensemble-roster/v1"
+
+
+def moving_roster(case_path, casedir, *, manifest=None, count=8, seed=53):
+    """Resolve weighted metadata rows to independent moving forecasts."""
+    import math
+    import re
+    from .stochastic import member_number, member_options
+    from .init_sources import Cycle
+    if type(count) is not int or count < 2:
+        raise MovingCaseError("moving ensemble needs at least two members to estimate spread")
+    case = load_case(case_path)
+    default = json.loads((Path(__file__).with_name("data") / "moving-ensemble.v1.json").read_text())
+    if manifest is None:
+        body = dict(schema=ROSTER_SCHEMA, source_members=1, members=[
+            dict(id=f"member-{i+1:03d}", weight=1.0,
+                 physics=default["physics"][i % len(default["physics"])]["id"],
+                 forecast_flags=default["physics"][i % len(default["physics"])]["forecast_flags"])
+            for i in range(count)])
+        base = Path(case["_path"]).parent
+    else:
+        manifest = Path(manifest).expanduser().resolve()
+        body = json.loads(manifest.read_text())
+        base = manifest.parent
+    if body.get("schema") != ROSTER_SCHEMA:
+        raise MovingCaseError(f"roster schema must be {ROSTER_SCHEMA}; untyped rows can mix clocks")
+    records = body.get("members", [])
+    if len(records) != count:
+        raise MovingCaseError(f"roster contains {len(records)} rows but --count is {count}; selection must be explicit")
+    blocked = {"--out", "--scratch", "--hours", "--init", "--grid", "--static",
+               "--mesh", "--members", "--start-time", "--init-source", "--stochastic",
+               "--history-every-minutes", "--history-from-minutes", "--dt", "--receipt",
+               "--restart-from", "--preflight", "--cards", "--gpuwm-checkout",
+               "--fullstep-local-timestep", "--fullstep-lts-mode", "--fullstep-lts-max-rate"}
+    import argparse
+    from .forecast_door import add_forecast_arguments
+    # Manifest argv must spell options in full. argparse abbreviations could
+    # otherwise bypass the controller-owned option check (for example --hour).
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    add_forecast_arguments(parser)
+    for action in parser._actions:
+        if blocked.intersection(action.option_strings):
+            blocked.update(action.option_strings)
+    ids, identities, hashes, recipes = set(), set(), {}, set()
+    resolved = []
+    for raw in records:
+        row = dict(raw)
+        name = row.get("id")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or name in ids:
+            raise MovingCaseError(f"unsafe or duplicate ensemble member id {name!r}")
+        weight = row.get("weight", 1.0)
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(weight) or weight <= 0:
+            raise MovingCaseError(f"member {name}: weight must be finite and positive")
+        if not isinstance(body.get("forecast_flags", []), list) or not isinstance(row.get("forecast_flags", []), list):
+            raise MovingCaseError(f"member {name}: forecast_flags must be argv lists")
+        flags = [*body.get("forecast_flags", []), *row.get("forecast_flags", [])]
+        if any(not isinstance(a, str) or a.split("=", 1)[0] in blocked or a.startswith("--samehost")
+               for a in flags):
+            raise MovingCaseError(f"member {name}: flags would replace controller state, clock or device assignment")
+        try:
+            parser.parse_args(flags)
+        except SystemExit as error:
+            raise MovingCaseError(f"member {name}: invalid forecast flags {flags}") from error
+        identity = member_number(name)
+        options = dict(body.get("stochastic", {}), **row.get("stochastic", {}))
+        if "member" in options or "seed" in options:
+            raise MovingCaseError(f"member {name}: identity and seed are owned by the roster")
+        stochastic = member_options(identity, seed=seed,
+            source_members=body.get("source_members", 1), ensemble_size=count, **options)
+        if identity in identities:
+            raise MovingCaseError(f"member {name}: stochastic identity collision")
+        source_dir = Path(row.get("casedir", casedir)).expanduser()
+        if "casedir" in row and not source_dir.is_absolute():
+            source_dir = base / source_dir
+        source_dir = source_dir.resolve()
+        source = read_stage(source_dir)
+        if Cycle.parse(source["cycle"]).when != Cycle.parse(cycle_of(case)).when:
+            raise MovingCaseError(f"member {name}: prepared cycle {source['cycle']} differs from {cycle_of(case)}")
+        start = row.get("start_member", "start")
+        family = json.loads((source_dir / "family.json").read_text())
+        member = next((m for m in family if m["name"] == start), None)
+        if member is None:
+            raise MovingCaseError(f"member {name}: {source_dir}/family.json has no {start}")
+        for key in ("grid", "static", "init", "mesh_rows"):
+            if not Path(member[key]).is_file():
+                raise MovingCaseError(f"member {name}: prepared {key} missing: {member[key]}")
+        if float(member["dt_seconds"]) != float(case["dt_seconds"]):
+            raise MovingCaseError(f"member {name}: prepared time step differs from the moving case")
+        init = str(Path(member["init"]).resolve())
+        if init not in hashes:
+            hashes[init] = _sha256(Path(init))
+        recipe = (hashes[init], json.dumps(flags), json.dumps(stochastic, sort_keys=True)
+                  if stochastic["sppt"] or stochastic["skeb"] else "no stochastic forcing")
+        if recipe in recipes:
+            raise MovingCaseError(f"member {name}: identical input and forcing would duplicate a forecast")
+        recipes.add(recipe)
+        ids.add(name); identities.add(identity)
+        resolved.append(dict(row, id=name, weight=float(weight), casedir=str(source_dir),
+            start_member=start, forecast_flags=flags, stochastic=stochastic,
+            provenance=dict(source=source["source"], cycle=source["cycle"],
+                source_member=source.get("source_member"),
+                stage_sha256=_sha256(source_dir / STAGE_FILE), init_sha256=hashes[init],
+                prepared_member=member,
+                perturbation=dict(sppt=stochastic["sppt"], skeb=stochastic["skeb"]),
+                physics=row.get("physics", "explicit forecast flags"))))
+    scale = max(row["weight"] for row in resolved)
+    total = math.fsum(row["weight"] / scale for row in resolved)
+    for row in resolved:
+        row["weight"] = (row["weight"] / scale) / total
+        if row["weight"] == 0:
+            raise MovingCaseError(f"member {row['id']}: weight ratio is too small to represent")
+    return resolved
+
+
+def moving_ensemble_products(rows, output):
+    """Aggregate tracker receipt scalars at coincident valid times.
+
+    No fields on different moving grids are ever averaged. Missing fixes and
+    intensities remain missing, with included counts and weights reported.
+    The track mean is spherical so dateline crossings do not create jumps.
+    """
+    import math
+    from .ensemble import write_json
+    from .moving_case import great_circle_km
+    leads, tracks = {}, []
+    for row in rows:
+        state_path = Path(row.get("out", ".")) / "controller.json"
+        if not state_path.is_file():
+            continue
+        controller = json.loads(state_path.read_text())
+        for frame in controller["frames"]:
+            fix = frame["fix"]
+            record = dict(id=row["id"], weight=row["weight"], seconds=frame["model_seconds"],
+                **{k: fix.get(k) for k in ("ok", "lat", "lon", "mslp_min_hpa", "vmax10_ms")})
+            tracks.append(record)
+            leads.setdefault(record["seconds"], []).append(record)
+    summaries = []
+    def quantile(records, key, fraction):
+        ordered = sorted((r[key], r["weight"]) for r in records)
+        total, cumulative = sum(w for _, w in ordered), 0.0
+        for value, weight in ordered:
+            cumulative += weight
+            if cumulative >= fraction * total:
+                return value
+        return None
+    for seconds, records in sorted(leads.items()):
+        good = [r for r in records if r["ok"] and r["lat"] is not None and r["lon"] is not None]
+        summary = dict(seconds=seconds, fixes=len(good), members_expected=len(rows),
+                       included_weight=sum(r["weight"] for r in good))
+        if good:
+            vectors = [(math.cos(math.radians(r["lat"]))*math.cos(math.radians(r["lon"])),
+                        math.cos(math.radians(r["lat"]))*math.sin(math.radians(r["lon"])),
+                        math.sin(math.radians(r["lat"]))) for r in good]
+            centre = [sum(v[i]*r["weight"] for v, r in zip(vectors, good)) for i in range(3)]
+            norm = math.sqrt(sum(v*v for v in centre))
+            if norm > 1e-12:
+                lat = math.degrees(math.asin(max(-1, min(1, centre[2]/norm))))
+                lon = math.degrees(math.atan2(centre[1], centre[0]))
+                distances = [great_circle_km((lat, lon), (r["lat"], r["lon"])) for r in good]
+                summary.update(lat=lat, lon=lon, track_rms_km=math.sqrt(
+                    sum(r["weight"]*d*d for r, d in zip(good, distances))/summary["included_weight"]))
+        for key in ("mslp_min_hpa", "vmax10_ms"):
+            available = [r for r in good if r[key] is not None and math.isfinite(r[key])]
+            summary[key] = dict(count=len(available), included_weight=sum(r["weight"] for r in available),
+                p10=quantile(available, key, .1), p50=quantile(available, key, .5),
+                p90=quantile(available, key, .9))
+        summaries.append(summary)
+    product = dict(schema=ENSEMBLE_SCHEMA, diagnostic="model-state tracker; research spread, uncalibrated",
+                   members=rows, tracks=tracks, leads=summaries)
+    write_json(Path(output) / "ensemble-products.json", product)
+    return product
+
+
+def render_moving_tracks(product, output, analysis_time):
+    """Drive the native renderer over tracker receipt scalars, retaining gaps."""
+    from datetime import timedelta
+    from gpuwm import rustwx
+    from .init_sources import Cycle
+    from .render_door import resolve_renderer_exe, resolve_basemap_dir, renderer_environment
+    from .ensemble import write_json
+
+    root = Path(output)
+    origin = Cycle.parse(analysis_time).when
+    seconds = sorted({row["seconds"] for row in product["tracks"]})
+    records = {(row["id"], row["seconds"]): row for row in product["tracks"]}
+    members, tracks = [], []
+    for member in product["members"]:
+        metadata = dict(member_id=member["id"], weight=member["weight"])
+        members.append(metadata)
+        fixes = []
+        for lead in seconds:
+            row = records.get((member["id"], lead))
+            if row is None or not row["ok"]:
+                fixes.append(None)
+                continue
+            pressure = row["mslp_min_hpa"]
+            fixes.append(dict(valid=(origin + timedelta(seconds=lead)).isoformat(),
+                lat=row["lat"], lon=row["lon"],
+                mslp_pa=None if pressure is None else pressure * 100,
+                max_wind10_ms=row["vmax10_ms"]))
+        tracks.append(dict(metadata, track_id=member["id"], fixes=fixes))
+    manifest, picture = root / "native-tracks.json", root / "track-plume.png"
+    write_json(manifest, dict(schema="gpuwm.tc-tracks.v1", members=members, tracks=tracks))
+    renderer = resolve_renderer_exe()
+    env = rustwx.renderer_env()
+    env.update(renderer_environment(resolve_basemap_dir(renderer)))
+    command = [str(renderer), "--tc-track-plume", str(manifest), str(picture)]
+    started = time.monotonic()
+    result = subprocess.run(command, text=True, capture_output=True, env=env, timeout=180)
+    write_json(root / "track-render-receipt.json", dict(command=command,
+        renderer_sha256=_sha256(renderer), wrapper="gpuwm.rustwx", parallelism="native Rust",
+        wall_seconds=time.monotonic()-started, returncode=result.returncode,
+        stdout=result.stdout, stderr=result.stderr))
+    if result.returncode or not picture.is_file():
+        raise MovingCaseError(f"native track plume failed: {result.stderr.strip()}; "
+                              f"receipt {root / 'track-render-receipt.json'}")
+    return str(picture)
+
+
+def plot_moving_ensemble(product, output):
+    """Analysis charts of receipt scalars; weather-field maps use the Rust door."""
+    import math
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9), constrained_layout=True)
+    colours = plt.get_cmap("tab20")
+    positioned = [r for r in product["tracks"] if r["ok"] and r["lat"] is not None and r["lon"] is not None]
+    origin = min(positioned, key=lambda r: (r["seconds"], r["id"])) if positioned else None
+    for i, member in enumerate(product["members"]):
+        track = sorted((r for r in product["tracks"] if r["id"] == member["id"] and r["ok"]),
+                       key=lambda r: r["seconds"])
+        for key, ax in (("mslp_min_hpa", axes[1, 0]), ("vmax10_ms", axes[1, 1])):
+            values = [r for r in track if r[key] is not None]
+            ax.plot([r["seconds"]/3600 for r in values], [r[key] for r in values],
+                    label=member["id"], color=colours(i % 20), lw=1)
+        points = [r for r in track if r["lat"] is not None and r["lon"] is not None]
+        if points:
+            x = [6371.229*math.cos(math.radians(origin["lat"]))*math.radians(
+                (r["lon"]-origin["lon"]+180)%360-180) for r in points]
+            y = [6371.229*math.radians(r["lat"]-origin["lat"]) for r in points]
+            axes[0, 0].plot(x, y, marker=".", label=member["id"], color=colours(i % 20))
+    leads = product["leads"]
+    axes[0, 1].plot([r["seconds"]/3600 for r in leads if "track_rms_km" in r],
+                    [r["track_rms_km"] for r in leads if "track_rms_km" in r])
+    for key, ax in (("mslp_min_hpa", axes[1, 0]), ("vmax10_ms", axes[1, 1])):
+        valid = [r for r in leads if r[key]["count"]]
+        ax.fill_between([r["seconds"]/3600 for r in valid], [r[key]["p10"] for r in valid],
+                        [r[key]["p90"] for r in valid], color="grey", alpha=.2, label="weighted P10-P90")
+        ax.set_xlabel("Forecast hour")
+        ax.legend(fontsize=6)
+    axes[0, 0].set(xlabel="East displacement from common first fix (km)",
+                   ylabel="North displacement from common first fix (km)", title="Member tracks")
+    axes[0, 0].legend(fontsize=7)
+    axes[0, 1].set(xlabel="Forecast hour", ylabel="Weighted RMS spread (km)", title="Track spread")
+    axes[1, 0].set(ylabel="Central MSLP (hPa)", title="Intensity plume")
+    axes[1, 1].set(ylabel="Maximum 10 m wind (m/s)", title="Intensity plume")
+    for ax in axes.flat:
+        ax.grid(alpha=.2)
+    fig.suptitle("Moving-region ensemble | model tracker | research spread, uncalibrated")
+    path = Path(output) / "track-intensity.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return str(path)
+
+
+RAW_SUFFIXES = (".nc", ".pkl", ".npz", ".npy", ".grib", ".grb", ".bin")
+
+
+def member_products_settled(run_dir, alive=None) -> bool:
+    """True once no product stage of this member can still read its raw files.
+
+    Each closed segment's forecast starts its product door detached, and those
+    stages keep drawing after the member's controller has exited: they read the
+    segment histories and the member grids.  A segment is settled when its
+    products.log has the door's ``PRODUCTS done`` line, or when it has no
+    products.log, or when no live process is its product door (a stage that
+    died will never read again; ``moving run --resume`` redraws those).
+    """
+    from .moving_run import product_stage_alive
+    alive = alive or product_stage_alive
+    state_path = Path(run_dir) / "controller.json"
+    if not state_path.is_file():
+        return False
+    for record in json.loads(state_path.read_text()).get("segments", []):
+        fc = Path(record.get("path", "")) / "fc"
+        log = fc / "products.log"
+        if not log.is_file():
+            continue
+        if any(line.startswith("PRODUCTS done ") for line in log.read_text(errors="replace").splitlines()):
+            continue
+        if alive(fc):
+            return False
+    return True
+
+
+def retire_member_raw(run_dir, *, min_bytes=10_000_000, alive=None):
+    """Delete a passed member's raw arrays once its product stages are settled.
+
+    THE BREAKAGE THIS PREVENTS: the ensemble launchers deleted each member's raw
+    netCDF (histories, member grids) as soon as its receipt row said passed.
+    The member's last detached product stage was still drawing, so on a rented box
+    (2026-10-21, ensemble-08) members 002, 003 and 005 lost their last
+    segment's refined-context maps: "--mesh names a missing file
+    .../members/<member>.grid.nc".  Returns None while a stage still runs,
+    else the deleted files.  The ensemble products need only controller.json.
+    """
+    if not member_products_settled(run_dir, alive=alive):
+        return None
+    deleted = []
+    for folder, _dirs, files in os.walk(run_dir, followlinks=False):
+        for name in files:
+            path = Path(folder) / name
+            if path.is_symlink() or path.suffix not in RAW_SUFFIXES:
+                continue
+            size = path.stat().st_size
+            if size < min_bytes:
+                continue
+            path.unlink()
+            deleted.append(dict(path=str(path), bytes=size))
+    return deleted
+
+def run_moving_ensemble(args):
+    """One independent controller process per granted card, queued by card."""
+    from concurrent.futures import ThreadPoolExecutor
+    import math
+    import threading
+    from .ensemble import write_json
+
+    if args.hours <= 0 or not math.isfinite(args.hours):
+        raise MovingCaseError("--hours must be positive and finite")
+    cards = (args.devices or os.environ.get("CUDA_VISIBLE_DEVICES", "0")).split(",")
+    if not cards or any(not c.strip() for c in cards) or len(set(cards)) != len(cards):
+        raise MovingCaseError("--devices must name distinct granted cards")
+    if args.prep_threads < 1:
+        raise MovingCaseError("--prep-threads must be positive")
+    output = Path(args.out).expanduser().resolve()
+    rows = moving_roster(args.case, args.casedir, manifest=args.manifest, count=args.count, seed=args.seed)
+    from .drivers.fullstep_lts_forecast_v841 import require_stochastic_support
+    for row in rows:
+        try:
+            require_stochastic_support(row["stochastic"])
+        except ValueError as error:
+            raise MovingCaseError(f"member {row['id']}: {error}") from error
+    case = load_case(args.case)
+    case["vertical_spec"] = str(resolve_vertical_spec(case))
+    case.pop("_path", None)
+    output.mkdir(parents=True, exist_ok=False)
+    receipt = dict(schema=ENSEMBLE_SCHEMA, status="running", started_utc=_now(),
+                   command=sys.argv, cards=cards, members=rows,
+                   cuda_graphs=False,
+                   parallelism=dict(controllers=len(cards), members_per_card=1,
+                                    preparation_threads=args.prep_threads),
+                   peak_vram_mib=None, stages=[],
+                   case_sha256=_sha256(Path(args.case)),
+                   manifest_sha256=_sha256(Path(args.manifest)) if args.manifest else None)
+    write_json(output / "ensemble-receipt.json", receipt)
+    began, stop = time.monotonic(), threading.Event()
+    def descendants(pid):
+        found = {pid}
+        try:
+            children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+        except OSError:
+            children = []
+        for child in children:
+            found.update(descendants(int(child)))
+        return found
+    def retire_settled():
+        for row in rows:
+            if row.get("status") != "passed" or row.get("raw_retired") is not None:
+                continue
+            deleted = retire_member_raw(row["out"])
+            if deleted is not None:
+                with receipt_lock:
+                    row["raw_retired"] = dict(files=len(deleted), bytes=sum(d["bytes"] for d in deleted),
+                        rule="after every segment product stage is done or gone")
+                checkpoint()
+    def sample():
+        peak = 0
+        while not stop.is_set():
+            try:
+                card = subprocess.run(["nvidia-smi", "-i", ",".join(cards),
+                    "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+                    text=True, capture_output=True, timeout=5)
+                applications = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                    "--format=csv,noheader,nounits"], text=True, capture_output=True, timeout=5)
+                allocations = {}
+                for line in applications.stdout.splitlines():
+                    pid, memory = (v.strip() for v in line.split(","))
+                    allocations[int(pid)] = allocations.get(int(pid), 0) + int(memory)
+                with receipt_lock:
+                    for row in rows:
+                        if row.get("pid") and row.get("returncode") is None:
+                            memory = sum(allocations.get(pid, 0) for pid in descendants(row["pid"]))
+                            row["peak_sampled_vram_mib"] = max(row.get("peak_sampled_vram_mib", 0), memory)
+                peak = max(peak, sum(int(v) for v in card.stdout.splitlines()))
+                receipt["peak_vram_mib"] = peak
+                receipt["vram_scope"] = "whole granted cards, includes other pool owners; not allocator peak"
+            except (ValueError, OSError, subprocess.TimeoutExpired):
+                pass
+            if getattr(args, "retire_member_raw", False):
+                try:
+                    retire_settled()
+                except (OSError, ValueError, KeyError):
+                    pass  # the next sample retries; a raw file left is disk, not a result
+            stop.wait(5)
+    # SIGINT lets each controller execute its child-tree cleanup in finally.
+    # Killing only the ensemble parent would leave forecast grandchildren alive.
+    import signal
+    previous_handlers = {}
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.signal(signum, lambda *_: stop.set())
+    receipt_lock = threading.Lock()
+    def checkpoint():
+        with receipt_lock:
+            write_json(output / "ensemble-receipt.json", receipt)
+    monitor = threading.Thread(target=sample, daemon=True)
+    monitor.start()
+    def worker(device, assigned):
+        for row in assigned:
+            if stop.is_set():
+                row["status"] = "cancelled"
+                continue
+            shared = row
+            row = dict(row)
+            root = output / row["id"]
+            root.mkdir()
+            local = dict(case)
+            local["init_source"] = row["provenance"]["source"]
+            local.pop("init_member", None)
+            if row["provenance"]["source_member"] is not None:
+                local["init_member"] = row["provenance"]["source_member"]
+            local["physics_args"] = [*case.get("physics_args", []), *row["forecast_flags"],
+                "--stochastic", json.dumps(row["stochastic"], sort_keys=True)]
+            case_file = root / "case.json"
+            write_json(case_file, local)
+            row["out"] = str(root / "run")
+            command = [sys.executable, "-m", "hexcore.cli", "moving", "run",
+                "--case", str(case_file), "--casedir", row["casedir"], "--start-member", row["start_member"],
+                "--out", row["out"], "--hours", str(args.hours), "--device", device,
+                "--prep-threads", str(args.prep_threads), "--prep-tile-workers", str(args.prep_threads)]
+            if args.engine:
+                command += ["--engine", str(args.engine)]
+            if args.geog:
+                command += ["--geog", str(args.geog)]
+            row.update(command=command, device=device, log=str(root / "controller-launch.log"))
+            start = time.monotonic()
+            with Path(row["log"]).open("w") as stream:
+                proc = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
+                                        env=dict(os.environ, GPUWM_HEX_CUDA_GRAPHS="0",
+                                                 GPUWM_HEX_CUDA_GRAPHS_REQUIRE_REPLAY="0"),
+                                        start_new_session=True)
+                row["pid"] = proc.pid
+                with receipt_lock:
+                    shared.update(row)
+                checkpoint()
+                while True:
+                    try:
+                        row["returncode"] = proc.wait(timeout=1)
+                        break
+                    except subprocess.TimeoutExpired:
+                        if stop.is_set():
+                            proc.send_signal(signal.SIGINT)
+                            try:
+                                row["returncode"] = proc.wait(timeout=120)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                row["returncode"] = proc.wait()
+                            break
+            row["wall_seconds"] = time.monotonic()-start
+            state_path = Path(row["out"]) / "controller.json"
+            if state_path.is_file():
+                state = json.loads(state_path.read_text())
+                row["summary"] = state.get("summary")
+                row["stage_parallelism"] = dict(atmosphere="GPU", controller="CPU coordinator",
+                    member_preparation=dict(rust_threads=args.prep_threads, tile_workers=args.prep_threads),
+                    tracker="existing CPU tracker; per-frame timings in controller.json")
+                row["vram_scope"] = "sampled controller descendants; 5 s cadence, not allocator peak"
+                row["stages"] = [dict(segment=s.get("path"), wall_seconds=s.get("wall_seconds"),
+                    integration_seconds=s.get("integration_seconds")) for s in state.get("segments", [])]
+            row["status"] = "passed" if row["returncode"] == 0 and (row.get("summary") or {}).get("status") == "passed" else "failed"
+            with receipt_lock:
+                shared.update(row)
+            checkpoint()
+    try:
+        with ThreadPoolExecutor(max_workers=len(cards)) as pool:
+            futures = [pool.submit(worker, card, rows[i::len(cards)]) for i, card in enumerate(cards)]
+            for future in futures:
+                future.result()
+        receipt["status"] = "passed" if all(r.get("status") == "passed" for r in rows) else "failed"
+        completed = [r for r in rows if (Path(r.get("out", ".")) / "controller.json").is_file()]
+        if completed:
+            started = time.monotonic()
+            product = moving_ensemble_products(rows, output)
+            receipt["pictures"] = [render_moving_tracks(product, output, cycle_of(case)),
+                                   plot_moving_ensemble(product, output)]
+            receipt["stages"].append(dict(name="receipt-analysis-products", wall_seconds=time.monotonic()-started,
+                                           parallelism="native Rust track map; CPU scalar receipt analysis chart"))
+        return 0 if receipt["status"] == "passed" else 1
+    except BaseException as error:
+        receipt.update(status="failed", error=f"{type(error).__name__}: {error}")
+        raise
+    finally:
+        stop.set()
+        monitor.join(timeout=12)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        receipt["wall_seconds"] = time.monotonic()-began
+        write_json(output / "ensemble-receipt.json", receipt)
+
+
+def add_moving_ensemble_arguments(parser):
+    parser.add_argument("--case", type=Path, required=True)
+    parser.add_argument("--casedir", type=Path, required=True, help="shared staged/prepared moving case")
+    parser.add_argument("--manifest", type=Path, help=f"weighted roster ({ROSTER_SCHEMA})")
+    parser.add_argument("--count", type=int, default=8)
+    parser.add_argument("--seed", type=int, default=53)
+    parser.add_argument("--hours", type=float, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--devices", help="granted device IDs; default inherited visible cards")
+    parser.add_argument("--engine", type=Path)
+    parser.add_argument("--geog", type=Path)
+    parser.add_argument("--prep-threads", type=int, default=max(1, (os.cpu_count() or 1)//4))
+    parser.add_argument("--retire-member-raw", action="store_true",
+                        help="delete each passed member's raw netCDF once its product stages finish")
+    parser.set_defaults(handler=run_moving_ensemble)

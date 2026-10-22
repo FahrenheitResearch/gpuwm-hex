@@ -331,6 +331,7 @@ def run_cull(arguments: argparse.Namespace) -> int:
             out,
             graph=graph,
             clobber=bool(getattr(arguments, "clobber", False)),
+            provenance_grid=Path(rows["grid"]["out"]) if role == "static" else None,
         )
         cells = rows[role].get("receipt", {}).get("region_cells")
         parent_cells = rows[role].get("receipt", {}).get("parent_cells")

@@ -11,7 +11,7 @@
   "platform": "manylinux_2_28_x86_64",
   "release_assets": {
     "repository": "FahrenheitResearch/gpuwm-hex",
-    "tag": "engine-bridges-3313936f"
+    "tag": "engine-bridges-v0.4.2"
   },
   "bridges": {
     "rw_mpas_geometry": {
@@ -128,38 +128,100 @@
   "cargo_lock_sha256": "65cb80ace48beef36853104c73338086c8ee240f24b0e2b87cda2e97401d58f5",
   "retire_when": "a released gpuwm bundles rw_mpas_geometry with hex-vertical-v1, a self-contained rw_mpas_stream and an rw_mpas_static built from 46c8a71513e or newer; then this file, setup.py engine_bridges() and the hexcore.engines libexec rung (bundled_candidate) go; the three RRFS programs go when a released gpuwm bundles them; rw_mpas_lbc goes when a released gpuwm bundles the case-9 port; rw_igra2 goes when a released gpuwm wheel installs it; rw_mpas_mesh and the parallel rw_mpas_geometry go when a released gpuwm bundles gpuwm 3313936ffb2 or newer",
   "source_prebuilts": {
-    "breakage": "publish.yml checks out the public engine tag the floor names (v2.9.2), and that tree has no S2S renderer source (no s2s-window ABI in tools/rustwx), so tools/build_s2s_renderer.sh cannot build rw_wrfbatch there and setup.py stopped the public build with \"rw_wrfbatch prebuilt lacks the current S2S fixes\" after the tag and the release existed (hex 0.4.1 fix workflow, 2026-10-20). The renderer and the surface-series producer are built once by the release recipe in the pinned image from the gpuwm source below, published beside the bridges, and downloaded by SHA-256 with the provenance setup.py checks.",
-    "gpuwm_source_rev": "aaec6b4be30ddc8f416f44cbc0fecf9244459f5e",
-    "recipe": "tools/build_s2s_renderer.sh and tools/build_sfc_series.sh against that gpuwm source, LIBRARY_PATH=/opt/netcdf4-static/lib",
+    "breakage": "publish.yml checks out the public engine tag the floor names (v2.9.2), and that tree has no S2S renderer source (no s2s-window ABI in tools/rustwx), so the S2S renderer recipe cannot build rw_wrfbatch there and setup.py stopped the public build with \"rw_wrfbatch prebuilt lacks the current S2S fixes\" after the tag and the release existed (hex 0.4.1 fix workflow, 2026-10-20). The renderer and the surface-series producer are built once by the release recipe in the pinned image from the gpuwm source below, published beside the bridges, and downloaded by SHA-256 with the provenance setup.py checks.",
+    "gpuwm_source_rev": "40406ef515e6799fd39f1c2069c0f7279df42eaf",
+    "recipe": "tools/build_s2s_diagnostics.sh (rw_wrfbatch, rw_ensbatch, rw_s2s) and tools/build_chemistry_converter.sh (rw_mpas_convert) against gpuwm_source_rev and tools/build_sfc_series.sh against its row's own gpuwm_source_rev, LIBRARY_PATH=/opt/netcdf4-static/lib, in the publish.yml image with its RUST_TOOLCHAIN (the source_prebuilts lines of tools/build_engine_bridges.sh)",
     "retire_when": "the public engine tag the floor names carries the S2S renderer source (s2s-window); then publish.yml builds both from it",
     "files": {
       "rw_wrfbatch": {
-        "bytes": 22548272,
-        "sha256": "ac95170dcfad79abbefb611d783b1b6032c00423d8d29c15731c676f753d011b",
+        "bytes": 33863856,
+        "sha256": "283e81ffc58d917473c6072a2da58499bb77210dda5e8f7dbcea7f9f8eb2505f",
         "provenance": {
-          "sha256": "ac95170dcfad79abbefb611d783b1b6032c00423d8d29c15731c676f753d011b",
+          "abi": "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\ts2s-energy-scales\tglobal-ensemble-projection\ts2s-wind-terciles\tRENDERED\tFAILED",
+          "bytes": 33863856,
+          "diagnostics": {
+            "abi": "rw-wrfbatch-s2s-diagnostics/v1 phase longitude-time latitude-time fixed-eof",
+            "engine_renderer_library_sha256": "964a2a58efa3ae5e4ade5e4580755107f109d8aabe508bf7c181946a19ff6a7c",
+            "engine_renderer_main_sha256": "d58d9d21947da17d792bf5f1bc27678f539fb6df403949ad266afc29b2a6cf3a",
+            "engine_version_declaration_sha256": "3923b5e79d35542c2e548a31dc0ea1261f181a454846e15ab239017725313a7d",
+            "ensemble_products_source_sha256": "a95c758c1de5df44dc203cdc4fd07925e0ab300b4b6a3c0f07b6abea242fb00f",
+            "reducer_lock_sha256": "2482ec99715c6fd78ee755ade539d972285f63ae54b88b40ff85bd93569a9cd2",
+            "reducer_sources": {
+              "tools/rustwx/crates/rw-s2s/src/extract.rs": "7a25055b3476c5c262838fcd2a1dcb7fc92fde76fd8fad930d2043851bb8137b",
+              "tools/rustwx/crates/rw-s2s/src/lib.rs": "5889c1dcef0df2fb62474709d0c15ca6a55ebeef80a47289f34c0ab21a1a932a",
+              "tools/rustwx/crates/rw-s2s/src/main.rs": "312a85f2da8594f6248ed87bb349e1c99b410168b4c85bc25f77a257deecf956",
+              "tools/rustwx/crates/rw-s2s/src/mjo.rs": "abf7777f995c90c49c5c32bf0518155b389a3a00c095302d7700f361260cdfdc",
+              "tools/rustwx/crates/rw-s2s/src/nc.rs": "37e59618c05284ba29fed7656116de6f05179ed8075d309da4b33e72f3909af8",
+              "tools/rustwx/crates/rw-s2s/src/scores.rs": "9f230eb2a6e97bb44210ea01f3c9932b91d8c275c6b727cd87b0aecf98d40be0"
+            },
+            "renderer_source_sha256": "4dd6ea0c7df187a96a7b02c5e4ee0cc6d623fe64604c2e8f0922304748cc4f1e",
+            "rw_s2s_sha256": "66d67b973148730f119d8d1e78a5fb3b87da26d9b0ebb97441d9b3231f3b99a3",
+            "rw_wrfbatch_sha256": "283e81ffc58d917473c6072a2da58499bb77210dda5e8f7dbcea7f9f8eb2505f",
+            "schema": "gpuwm-hex.s2s-diagnostics-build/v1"
+          },
+          "ensemble_renderer": {
+            "abi": "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\ts2s-energy-scales\tglobal-ensemble-projection\ts2s-wind-terciles\tRENDERED\tFAILED",
+            "bytes": 454608,
+            "filename": "rw_ensbatch",
+            "sha256": "4f5982d7e515b8cad0869af8248ae8bd6b2457fac2fb18fb76932b790d9fa8b0"
+          },
           "patches": {
             "0001-rw-wrfbatch-s2s-window-scales.patch": "6c5ecb84642ca887a0e0b8addad6ade5f84d3a83caed7e0bcc25e3e0d2450316",
-            "0002-rw-wrfbatch-global-ensemble-projection.patch": "2d5831d1e64d155f31fa9744e30e5198626592f173335523cabe97197de54d1a"
+            "0002-rw-wrfbatch-global-ensemble-projection.patch": "2d5831d1e64d155f31fa9744e30e5198626592f173335523cabe97197de54d1a",
+            "0002-s2s-energy-scales.patch": "e4e3c6056a0cf81eed85228e2c1d5e5d0c9766ccf6a59d401d9318621d0c28f4",
+            "0003-rrtmg-high-top-clear-buffer.patch": "87d2ead92764488b5648cc43d04d517a0f9ae97da12ed707146991f8663d9dfa",
+            "0003-rw-wrfbatch-s2s-wind-terciles.patch": "99ed35a39032bc4110771f7068dc7ca7f17b4f9a67880a2572c85794e11523af"
           },
-          "recipe_sha256": "86d606b158a8658312d768e41e5e23e2fa0df2092ef56ebee158117030883641"
+          "recipe_sha256": "62956efb138d31917b0273be0d5fe083bd210d30343cb7a396625ca56b0ab3b5",
+          "schema": "gpuwm-hex.s2s-renderer-build/v1",
+          "sha256": "283e81ffc58d917473c6072a2da58499bb77210dda5e8f7dbcea7f9f8eb2505f"
+        }
+      },
+      "rw_ensbatch": {
+        "bytes": 454608,
+        "sha256": "4f5982d7e515b8cad0869af8248ae8bd6b2457fac2fb18fb76932b790d9fa8b0",
+        "provenance": {
+          "sha256": "4f5982d7e515b8cad0869af8248ae8bd6b2457fac2fb18fb76932b790d9fa8b0",
+          "built_with": "tools/build_s2s_diagnostics.sh beside rw_wrfbatch, whose provenance carries this sha256"
+        }
+      },
+      "rw_s2s": {
+        "bytes": 6999168,
+        "sha256": "66d67b973148730f119d8d1e78a5fb3b87da26d9b0ebb97441d9b3231f3b99a3",
+        "provenance": {
+          "sha256": "66d67b973148730f119d8d1e78a5fb3b87da26d9b0ebb97441d9b3231f3b99a3",
+          "built_with": "tools/build_s2s_diagnostics.sh beside rw_wrfbatch, whose provenance carries this sha256"
         }
       },
       "rw_sfc_series": {
-        "bytes": 12839424,
-        "sha256": "54337d39a6742b4ae1bbf925e547f2a8fb08b14b63b575a465a8e4a757da3a0f",
+        "bytes": 12913000,
+        "sha256": "e4bd7727cc08b5a8b4b53fc6ed5ca97076e4f90ef377a26088cf3ce0e921d5d7",
         "provenance": {
-          "sha256": "54337d39a6742b4ae1bbf925e547f2a8fb08b14b63b575a465a8e4a757da3a0f",
+          "sha256": "e4bd7727cc08b5a8b4b53fc6ed5ca97076e4f90ef377a26088cf3ce0e921d5d7",
           "sources": {
             "Cargo.lock": "7f15076f2f7c5eaa56b029b0b864f0ec11d675f557808fbe52e4f021949e7d1c",
             "Cargo.toml": "71a92000d6f960622375ac512ed7b3e446d4e0bd8e10f1bb909db237ac2c531e",
             "LICENSE-MPAS-BSD-3-Clause.txt": "de7271e2e28110a83553f5dc36e53d93c8db422085f26bf98d0910ff5b21d20d",
             "NOTICE": "16e906e8822e5b6da9dcabd9640749127c104347e494fc3860245bd24bff6ba8",
             "src/intermediate.rs": "b9e7f145dce69593f2e90211ea2dcd54522ae82b1c0a122e32a169208e4d3fff",
-            "src/main.rs": "79f8bf46795a090f04e0cd6bdb127479596a82a1fe7838635786cbb1787e9011",
-            "src/remap.rs": "49ef7bc545533ab130e525b6127ddfcbe15a4a8fef36b623ce2621033c215eef",
-            "src/surface_met.rs": "47c8b08a740285c3f2fad226d31e502961806f92a80bcc81693f94bff81d66fc"
+            "src/main.rs": "8fe00aba79c6a9bbb6dac2b59d7116aea3a1a8b07e5f6ed3896f848ab6e99b2c",
+            "src/remap.rs": "4b67ce4c15bb2376c4d3aa8676453a761a73dd57269a9866431cc7a7fbdf428a",
+            "src/surface_met.rs": "2b2cf764e080e43e75edc6622b9c275efd6d6c77e45175149c8874b0720a57fc"
           }
+        },
+        "gpuwm_source_rev": "aaec6b4be30ddc8f416f44cbc0fecf9244459f5e"
+      },
+      "rw_mpas_convert": {
+        "bytes": 3662720,
+        "sha256": "f83af673932f5e043a7ed7890e01269e45976cc47874eb6b8cf39b76f0624c82",
+        "provenance": {
+          "schema": "gpuwm-hex.chemistry-converter-build/v1",
+          "engine_source": "gpuwm 40406ef515e6799fd39f1c2069c0f7279df42eaf",
+          "sha256": "f83af673932f5e043a7ed7890e01269e45976cc47874eb6b8cf39b76f0624c82",
+          "bytes": 3662720,
+          "patch_sha256": "b6e480226617fb4a2c6b5e9cb1de98f590f24c252698a4f0c71ba2c796b5a742",
+          "recipe_sha256": "1e4eb4aa937ebbf1d99a9b3ab6ec335dbd649012d51582280c0bdf0f1063062c",
+          "engine_version_declaration_sha256": "3923b5e79d35542c2e548a31dc0ea1261f181a454846e15ab239017725313a7d"
         }
       }
     }

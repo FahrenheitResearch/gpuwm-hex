@@ -40,10 +40,16 @@ def aerosol_status(engine, init):
                                         completed.stdout, completed.stderr)
 
 
+def _engine_requirement() -> str:
+    from .engine_pin import gpuwm_requirement
+
+    return gpuwm_requirement()
+
+
 def _predates_suite_init(engine, need: str) -> str:
     return (f"{need} needs gpuwm 2.9.0's suite-aware native initializer, and the installed "
             f"rw_mpas_init ({engine}) predates it (its usage lists no {SUITE_INIT_FLAG}). "
-            "Install gpuwm 2.9.0 (pip install 'gpuwm>=2.9.0,<2.9.1') or build the init for the suite "
+            f"Install an engine inside this release's range (pip install '{_engine_requirement()}') or build the init for the suite "
             "with an engine that carries it")
 
 
@@ -84,7 +90,7 @@ def init_selection(suite, land_surface):
     selectors = suite_row(suite)["selectors"]
     land = table["options"]["config_lsm_scheme"][selectors["config_lsm_scheme"]]["carried"]["land_surface_scheme"]
     names = species_row_for_scheme(selectors["config_microp_scheme"]).names()
-    required = table["options"]["config_microp_scheme"][selectors["config_microp_scheme"]]["carried"].get("requires_aerosol_climatology", False)
+    required = table["options"]["config_microp_scheme"][selectors["config_microp_scheme"]].get("carried", {}).get("requires_aerosol_climatology", False)
     return {"land_surface": land_surface or land, "scalar_names": names, "requires_climatology": required}
 
 
@@ -199,7 +205,9 @@ def prepare_forecast_init(init, destination, physics, start_time):
     if land is None:
         return init, None
     names = species_row_for_scheme(selectors["config_microp_scheme"]).names()
-    required = load_table()["options"]["config_microp_scheme"][selectors["config_microp_scheme"]]["carried"].get("requires_aerosol_climatology", False)
+    # Engine-only rows (including non-aerosol Thompson) have no legacy
+    # carried block. Aerosol requirements remain explicit metadata, as for TEMPO.
+    required = load_table()["options"]["config_microp_scheme"][selectors["config_microp_scheme"]].get("carried", {}).get("requires_aerosol_climatology", False)
     synthetic_source = required and _synthetic_source(init)
     with Dataset(init) as ds:
         soil = len(ds.dimensions["nSoilLevels"])

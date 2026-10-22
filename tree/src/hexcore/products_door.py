@@ -56,31 +56,86 @@ GLOBAL_PRODUCTS = (
     "250mb_height_winds",
     "total_qpf",
     "precipitable_water",
+    # The model-column vapour transport this door's history feeds.  THE BREAKAGE THIS PREVENTS (rolling 2.9.4
+    # run, hex global-60km, 2026-10-21): the renderer's plain "ivt" became the 1000-300 hPa product of the
+    # isobaric lanes when the capability landing joined both, and a hex history stores no isobaric IVT
+    # ("not stored: ivt_1000_300_entire_atmosphere"), so the default IVT map was never drawn.
+    "ivt_column",
+    "ivt_vectors",
+    "isotherm_height_0c",
+    "300mb_height_winds",
     "simulated_ir_satellite",
     "sbcape",
     "composite_reflectivity",
     "precipitation_type",
 )
 #: Interval products: each is the difference (or the extreme) of several
-#: stored frames, so each needs the frames its window spans -- ``qpf_1h``
-#: an hourly history, ``qpf_24h`` a run of a day.  A run that cannot close a
-#: window has that member named unavailable with the renderer's own reason.
-WINDOWED_PRODUCTS = (
-    "qpf_1h",
-    "qpf_6h",
-    "qpf_24h",
-    "10m_wind_run_max",
-    "2m_temp_0_24h_max",
-    "2m_temp_0_24h_min",
-)
-GLOBAL_PRODUCTS = GLOBAL_PRODUCTS + WINDOWED_PRODUCTS
-REGIONAL_PRODUCTS = GLOBAL_PRODUCTS + (
+#: stored frames, so each needs the frames its window spans.  The value is
+#: (the spacing in hours every stored frame inside the window must keep, the
+#: run length in hours the window needs): ``qpf_1h`` and the run/daily extremes
+#: need every hour stored, ``qpf_6h`` every 6 h, ``qpf_24h`` a day of run.
+#: THE BREAKAGE THIS PREVENTS (rolling 2.9.4 run, hex global-60km 24 h,
+#: 2026-10-21): the default set asked for hourly windows from the row's
+#: 3-hourly history, so every global run reported qpf_1h, 10m_wind_run_max
+#: and the 0-24 h temperature extremes unavailable.  The door now requests a
+#: window only when the stored frames can close it (windowed_for_history) and
+#: names every window it did not request, with the cadence that rules it out,
+#: in the manifest; the global rows store hourly where that is cheap.
+WINDOWED_REQUIREMENTS = {
+    "qpf_1h": (1, 1),
+    "qpf_6h": (6, 6),
+    "qpf_24h": (24, 24),
+    "10m_wind_run_max": (1, 1),
+    "2m_temp_0_24h_max": (1, 24),
+    "2m_temp_0_24h_min": (1, 24),
+}
+WINDOWED_PRODUCTS = tuple(WINDOWED_REQUIREMENTS)
+BASE_GLOBAL_PRODUCTS = GLOBAL_PRODUCTS
+REGIONAL_EXTRA_PRODUCTS = (
     "2m_dewpoint_10m_winds",
     "500mb_height_winds",
     "850mb_temperature_height_winds",
+    "850mb_height_winds",
+    "925mb_height_winds",
     "mucape",
     "cloud_cover_levels",
 )
+GLOBAL_PRODUCTS = BASE_GLOBAL_PRODUCTS + WINDOWED_PRODUCTS
+REGIONAL_PRODUCTS = GLOBAL_PRODUCTS + REGIONAL_EXTRA_PRODUCTS
+
+
+def windowed_for_history(histories: list[Path], start: str) -> tuple[tuple[str, ...], dict[str, str]]:
+    """The window products the stored frames can close, and why each other one is not requested.
+
+    A frame's lead hour is its valid time minus the run start.  A window with spacing S and length L is
+    requested when the run reaches L hours and every multiple of S up to the last stored lead is stored,
+    so the renderer's every-hour / every-6-hour differencing never meets a gap.  Frames without a
+    valid-time stamp leave the full set requested (the renderer names its own reasons).
+    """
+
+    from datetime import datetime
+
+    def parse(stamp: str) -> datetime:
+        return datetime.strptime(stamp.replace("T", "_").replace(".", ":")[:19], "%Y-%m-%d_%H:%M:%S")
+
+    stamps = [frame_stamp(path) for path in histories]
+    if not histories or any(stamp is None for stamp in stamps):
+        return WINDOWED_PRODUCTS, {}
+    origin = parse(start)
+    leads = {round((parse(stamp) - origin).total_seconds() / 3600.0, 6) for stamp in stamps}
+    whole = {int(lead) for lead in leads if float(lead).is_integer() and lead >= 0}
+    end = max(whole) if whole else 0
+    requested, withheld = [], {}
+    for slug, (spacing, length) in WINDOWED_REQUIREMENTS.items():
+        missing = [h for h in range(0, end + 1, spacing) if h not in whole]
+        if end < length:
+            withheld[slug] = f"the run's stored frames reach F{end:03d}; this window needs {length} h"
+        elif missing:
+            withheld[slug] = (f"the history does not store every {spacing} h (first missing F{missing[0]:03d}); "
+                              "store hourly frames (--history-every-minutes 60) to draw it")
+        else:
+            requested.append(slug)
+    return tuple(requested), withheld
 
 #: Where a mesh WITHOUT a refined region is also drawn regionally.  A view,
 #: not a case: ground extents in km, dx from the mesh cells inside it.
@@ -419,14 +474,15 @@ def auto_frame_jobs(histories: list[Path], view_jobs: int, *,
 
 def _render_view(*, histories, mesh, init, start, out_case, scratch_root, view,
                  window, products, size, model_label, remap, exes, basemap_dir,
-                 keep_scratch, frame_jobs=1) -> tuple[int, dict | None, str | None]:
+                 keep_scratch, frame_jobs=1, source_label=None) -> tuple[int, dict | None, str | None]:
     """One view through the render door in standard-set mode."""
 
     args = argparse.Namespace(
         history=[str(p) for p in histories], mesh=str(mesh),
         init=str(init) if init else None, compose=None, compose_base_only=False,
         out=str(out_case), products=",".join(products), frames="all",
-        window=window, view=view, model_label=model_label, field_set="full",
+        window=window, view=view, model_label=model_label, source_label=source_label,
+        field_set="full",
         label=None, simulation_start=start, size=size, heavy=False,
         nc_format="cdf5", scratch=str(Path(scratch_root) / f"render-{view}"),
         keep_scratch=keep_scratch, basemap_dir=basemap_dir,
@@ -611,6 +667,8 @@ def run_products(args) -> int:
             f"{named}); the door draws one run")
     forecast_dir = Path(named or positional) if (named or positional) else None
     receipt = forecast_receipt(forecast_dir)
+    from .chem_transport import product_slugs
+    chemistry_products = product_slugs(forecast_dir)
     if args.history:
         histories = [Path(p) for p in args.history]
     elif forecast_dir is not None:
@@ -646,6 +704,11 @@ def run_products(args) -> int:
             f"heights behind the pressure-level maps and the soundings, lives "
             f"there; pass --init INIT.nc.")
     start = simulation_start(args.simulation_start, forecast_dir, histories)
+    windowed, windows_not_requested = windowed_for_history(histories, start)
+    global_products = BASE_GLOBAL_PRODUCTS + windowed
+    regional_products = global_products + REGIONAL_EXTRA_PRODUCTS
+    for slug, reason in windows_not_requested.items():
+        print(f"PRODUCTS window not requested: {slug}: {reason}", flush=True)
     case = case_token(args.case, mesh, start,
                       receipt_text(receipt, "mesh_binding", "mesh")
                       or receipt_text(receipt, "admission", "mesh"))
@@ -674,10 +737,10 @@ def run_products(args) -> int:
         rc, manifest, refusal = _render_view(
             histories=histories, mesh=mesh, init=init, start=start,
             out_case=out_case, scratch_root=scratch_root, view=name,
-            window=window, products=products, size=size,
+            window=window, products=tuple(products) + chemistry_products, size=size,
             model_label=args.model_label, remap=args.remap, exes=exes,
             basemap_dir=args.basemap_dir, keep_scratch=args.keep_scratch,
-            frame_jobs=frame_jobs)
+            frame_jobs=frame_jobs, source_label=getattr(args, "source_label", None))
         record = {"view": name, "window": window, "rc": rc, "refusal": refusal,
                   "elapsed_seconds": round(time.monotonic() - view_started, 3)}
         if refusal is not None and "no refined region" not in refusal:
@@ -726,12 +789,24 @@ def run_products(args) -> int:
           flush=True)
     pool = ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="view")
     pending = []
-    if not args.no_global:
-        pending.append(pool.submit(view, "global", "global", GLOBAL_PRODUCTS, args.global_size))
+    # A LIMITED-AREA run holds data inside its own domain only, and the mesh
+    # view frames all of it.  THE BREAKAGE THIS PREVENTS (gpuwm-hex regional,
+    # 2026-10-20, a 43,360-cell cull, 3 h, 4 frames): the
+    # global view converted every frame onto a whole-globe window at the
+    # cull's own spacing (35 GB per frame, 1,444 s for the conversion) and
+    # the 1,500 km context view another 550 s, together 131 GB of scratch,
+    # to draw maps that are empty outside a 270 km domain; the mesh view of
+    # the same frames took 61 s.  Named --region views are still drawn.
+    limited_area = receipt_text(receipt, "admission", "configuration") == "limited-area"
+    if limited_area:
+        print("PRODUCTS limited-area run: the mesh view frames the whole domain; "
+              "no global or context view", flush=True)
+    if not args.no_global and not limited_area:
+        pending.append(pool.submit(view, "global", "global", global_products, args.global_size))
     refined_centre = None
     if not args.no_mesh_view:
         rc, manifest, refusal = pool.submit(
-            view, "refined-core", "mesh", REGIONAL_PRODUCTS, args.regional_size).result()
+            view, "refined-core", "mesh", regional_products, args.regional_size).result()
         if refusal is not None and "no refined region" in refusal:
             # A uniform mesh has no refined region: the converter refuses
             # --window mesh by that name.  Not a failure of this run.
@@ -744,7 +819,7 @@ def run_products(args) -> int:
             regions = {}
             if manifest is not None:
                 refined_centre = window_centre(manifest)
-            if refined_centre is not None:
+            if refined_centre is not None and not limited_area:
                 lat, lon, half = refined_centre
                 extent = max(1500.0, 8.0 * half)
                 regions["refined-context"] = f"region:{lat:.3f},{lon:.3f},{extent:.0f},{0.7 * extent:.0f}"
@@ -752,7 +827,7 @@ def run_products(args) -> int:
         regions = {}
     regions.update(extra_regions)
     for name, spec in regions.items():
-        pending.append(pool.submit(view, name, spec, REGIONAL_PRODUCTS, args.regional_size))
+        pending.append(pool.submit(view, name, spec, regional_products, args.regional_size))
 
     def draw_points() -> dict:
         points_started = time.monotonic()
@@ -791,7 +866,7 @@ def run_products(args) -> int:
         print("POINTS $ " + " ".join(command), flush=True)
         result = subprocess.run(command, capture_output=True, text=True, errors="replace")
         for line in (result.stdout or "").splitlines():
-            if line.startswith(("POINT\t", "METEOGRAM\t", "FINISHED\t")):
+            if line.startswith(("POINT\t", "METEOGRAM\t", "FINISHED\t", "POINTS MISSING\t")):
                 print(f"POINTS {line}", flush=True)
         points_record = {"rc": result.returncode, "points": points, "invocation": command,
                          "elapsed_seconds": round(time.monotonic() - points_started, 3)}
@@ -838,6 +913,8 @@ def run_products(args) -> int:
         "frame_jobs": frame_jobs,
         "views": views,
         "points": points_record,
+        "chemistry_products": list(chemistry_products),
+        "windows_not_requested": windows_not_requested,
         "maps_rendered": rendered,
         "failed_views": failed_views,
         "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -887,6 +964,10 @@ def add_products_arguments(parser) -> None:
                         help="see `gpuwm-hex render --help`; default: product (linear state, "
                              "conservative precipitation)")
     parser.add_argument("--model-label", default=render_door.DEFAULT_MODEL_LABEL)
+    parser.add_argument("--source-label", default=None, metavar="TEXT",
+                        help="source credit printed on each map (1-160 printable ASCII "
+                             "characters), e.g. which ensemble member it came from; default: "
+                             "Hex forecast where the renderer supports it")
     parser.add_argument("--global-size", default="1800x1000")
     parser.add_argument("--regional-size", default="1400x1000")
     parser.add_argument("--jobs", type=int, default=3, metavar="N",

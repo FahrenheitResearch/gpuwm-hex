@@ -504,6 +504,7 @@ tests/test_prep_store.py
 # the convection-permitting LTS hold (6 km ring crash fix) and the multi-card LTS
 # third-stage theta capture -- all host-only.
 tests/test_engine_290_helper_set.py
+tests/test_engine_294_helper_set.py
 tests/test_fullstep_lts_convective_hold.py
 tests/test_fullstep_lts_multi_matched.py
 # G3 (tools/mpas_nightly.sh): the native reference rebuild and its word compare -- host-only.
@@ -977,3 +978,29 @@ tests/test_strict_geometry_math.py
 tests/test_native_step.py
 tests/test_record_hex_aot_recipes.py
 tests/test_vertical_array_receipts.py
+
+# Capabilities campaign landing (lane/hexcap-base, 2026-10-20): test files the 16 hex
+# capability lanes added without a tier row. All run with no card, assets or network
+# (measured: 220 pass on a CPU-only host; the ocean device member skips here and is
+# tier 3). Breakage it prevents: an untiered file runs on no leg at all.
+tests/test_chem_emissions.py
+tests/test_chem_transport.py
+tests/test_earth2_init_sources.py
+tests/test_global_vr_mesh_plan.py
+tests/test_high_top_vertical.py
+tests/test_ivt_products.py
+tests/test_lts_stochastic.py
+tests/test_moving_author.py
+tests/test_moving_checkpoint_stochastic.py
+tests/test_moving_ensemble.py
+tests/test_ocean_mixed_layer.py
+tests/test_region_door.py
+tests/test_s2s_energy.py
+tests/test_s2s_mjo_scores.py
+tests/test_s2s_products_part_a.py
+tests/test_s2s_renderer_packaging.py
+tests/test_scorer_build_target.py
+# One-command regional door (HRRR limited area): stage composition, receipts, class minting from
+# measured runs; stand-in engines, no card, no network.
+tests/test_regional_door.py
+tests/test_regional_mint.py

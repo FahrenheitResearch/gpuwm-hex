@@ -355,7 +355,7 @@ def admission_verdict(
 
     model = model or FOOTPRINT_MODEL
     margin = model.margin_bytes() if headroom_bytes is None else int(headroom_bytes)
-    arrays = stochastic_array_ledger(cells, stochastic)
+    arrays = stochastic_array_ledger(cells, stochastic, levels=model.levels)
     basis_bytes = arrays.get("harmonic_basis", 0)
     array_bytes = sum(arrays.values())
     predicted = int(round(model.predict_bytes(cells))) + array_bytes
@@ -369,7 +369,7 @@ def admission_verdict(
         low, high = 0, fitted_cells
         while low < high:
             middle = (low + high + 1) // 2
-            arrays_at_middle = stochastic_array_bytes(max(4, middle), stochastic)
+            arrays_at_middle = stochastic_array_bytes(max(4, middle), stochastic, levels=model.levels)
             if required_free_bytes(middle, model, margin) + arrays_at_middle <= int(free_bytes):
                 low = middle
             else:
@@ -797,6 +797,7 @@ class ForecastRequest:
     #: A point-source table the selected row's seam releases from.  ``None``
     #: is no release; a row that carries no point source refuses one.
     source_table: Path | None = None
+    chemistry_config: Path | None = None
     #: Input problems collected rather than raised, preflight only.  Always
     #: empty on a real run, because there the same conditions refuse.
     input_problems: tuple[str, ...] = ()
@@ -1236,11 +1237,27 @@ def resolve_admission_model(request: "ForecastRequest") -> ShapedFootprintModel:
     # a bare run does not hold (device_admission.ROLLBACK_ARMED_BYTES_PER_CELL).
     armed = bool(getattr(request, "stop_on_refusal", False))
     supplied = request.model
-    if isinstance(supplied, _SuppliedRow):
-        return supplied.with_card(card, configuration, rollback_armed=armed)
     if isinstance(supplied, ShapedFootprintModel):
         return supplied
-    return model_for_card(card, configuration, rollback_armed=armed)
+    from dataclasses import replace
+    interfaces = _vertical_interfaces(request.init) if getattr(request, "init", None) is not None else None
+    levels = 55 if interfaces is None else interfaces - 1
+    if isinstance(supplied, _SuppliedRow):
+        return replace(supplied.with_card(card, configuration, rollback_armed=armed), levels=levels)
+    model = model_for_card(card, configuration, rollback_armed=armed)
+    if levels == model.levels:
+        return model
+    # The measured per-cell floor includes column state and scratch. Charge
+    # every such byte at the larger column extent, in addition to the tiled
+    # workspace formulas which already consume model.levels. This is a
+    # conservative derived floor until this shape has its own measured row.
+    scale = max(1.0, levels / model.levels)
+    return replace(model, levels=levels, measured=False,
+        bytes_per_cell=model.bytes_per_cell * scale,
+        restated_bytes_per_cell=model.restated_bytes_per_cell * scale,
+        rollback_bytes_per_cell=model.rollback_bytes_per_cell * scale,
+        stage_peak_fits=(), derived_from=model.provenance,
+        provenance=f"{model.provenance}; column extent {model.levels} -> {levels}, conservative derived floor")
 
 
 def _schedule(hours: float, history_every_minutes: float, dt_seconds: float,
@@ -1296,6 +1313,12 @@ def _schedule(hours: float, history_every_minutes: float, dt_seconds: float,
 def resolve_physics_backend(arguments: argparse.Namespace):
     """The backend row a request selects, or a refusal naming what exists."""
 
+    if getattr(arguments, "chemistry_config", None) is not None:
+        from .chem_transport import configure, admit_arguments
+        admit_arguments(arguments)
+        selected = configure(arguments.chemistry_config)
+        arguments.physics_backend = selected.name
+        return selected
     name = getattr(arguments, "physics_backend", None) or DEFAULT_BACKEND
     try:
         return resolve_backend(str(name))
@@ -2238,6 +2261,7 @@ def resolve_request(
         lbc_dir=lbc_dir,
         physics_backend=backend_row.name,
         source_table=source_table,
+        chemistry_config=getattr(arguments, "chemistry_config", None),
         input_problems=tuple(collected or ()),
         preset=preset.name,
         pbl_cadence_source=pbl_cadence_source,
@@ -2604,6 +2628,7 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
     One number, computed once, enforced twice.
     """
 
+    floor_model = _driver_floor_model(request)
     argv = [
         "--grid", str(request.grid),
         "--static", str(request.static),
@@ -2617,9 +2642,10 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
         "--convection", request.convection,
         "--pbl-cadence", request.pbl_cadence,
         "--required-free-bytes",
-        str(required_free_bytes(request.cells, _driver_floor_model(request),
+        str(required_free_bytes(request.cells, floor_model,
                                 request.headroom_bytes) +
-            stochastic_array_bytes(request.cells, request.stochastic)),
+            stochastic_array_bytes(request.cells, request.stochastic,
+                                   levels=floor_model.levels if floor_model is not None else 55)),
     ]
     if request.stochastic is not None:
         argv += ["--stochastic", request.stochastic]
@@ -2646,6 +2672,8 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
             argv += ["--physics", f"{key}={_override_text(value)}"]
     if request.orographic_statistics is not None:
         argv += ["--orographic-statistics", str(request.orographic_statistics)]
+    if request.chemistry_config is not None:
+        argv += ["--chemistry-config", str(request.chemistry_config)]
     if request.source_table is not None:
         argv += ["--source-table", str(request.source_table)]
     if request.start_time:
@@ -3997,6 +4025,8 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
         help="the mesh's GSL drag statistics (<mesh>.ugwp_oro_data.nc), read "
              "when the physics selects config_gwdo_scheme='bl_ugwp_gwdo' "
              "(default: the file of that name beside --grid)")
+    parser.add_argument("--chemistry-config", type=Path, default=None,
+                        help="N aerosol species and GPU mixing/deposition/settling inputs (chemistry/v1 JSON)")
     parser.add_argument(
         "--source-table", type=Path, default=None, metavar="FILE",
         help="a point-source table the selected row's seam releases from "
