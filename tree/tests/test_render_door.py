@@ -667,3 +667,27 @@ def test_split_native_streams_are_pinned_and_require_one_history(tmp_path, monke
                 {'histories': []}, {'histories': [Path('a'), Path('b')]}):
         with pytest.raises(rd.RenderDoorError, match='requires one history'):
             rd.convert_frames(Path('convert'), **{**kwargs, **bad})
+
+
+def test_an_open_ocean_window_gets_a_labelled_graticule():
+    """The AL10 storm-following box (GFS 2026-10-22 18Z) sat over open ocean
+    and its maps carried no geography at all; every hex map now carries
+    latitude/longitude lines and labels inside the frame."""
+
+    import numpy as np
+    from hexcore.render_door import graticule_overlays
+
+    lat, lon = np.meshgrid(np.linspace(38.0, 42.5, 160), np.linspace(-69.0, -63.0, 160), indexing="ij")
+    overlays = graticule_overlays(lat, lon)
+    texts = [label["text"] for label in overlays["labels"]]
+    assert overlays["step_deg"] == 1.0
+    assert "40\u00b0N" in texts and "66\u00b0W" in texts
+    for label in overlays["labels"]:
+        assert 38.0 <= label["lat"] <= 42.5 and -69.0 <= label["lon"] <= -63.0
+    # Across the antimeridian the lines stay on one side of the seam.
+    lat, lon = np.meshgrid(np.linspace(40.0, 45.0, 80), np.linspace(178.0, 184.0, 80), indexing="ij")
+    overlays = graticule_overlays(lat, ((lon + 180.0) % 360.0) - 180.0)
+    assert {"180\u00b0", "179\u00b0E", "179\u00b0W"} <= {label["text"] for label in overlays["labels"]}
+    # The whole globe is drawn every 30 degrees.
+    lat, lon = np.meshgrid(np.linspace(-89.5, 89.5, 90), np.linspace(-179.5, 179.5, 180), indexing="ij")
+    assert graticule_overlays(lat, lon)["step_deg"] == 30.0

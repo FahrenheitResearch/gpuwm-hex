@@ -611,9 +611,12 @@ def run_ensemble(value: dict[str, Any], args: argparse.Namespace, stages: list[s
                     if name == "products":
                         # Every member draws the same titles; the credit names the member
                         # so two members' maps differ on the picture, not only by folder.
+                        from .products_door import label_argv
+
                         argv = ["products", forecast, "--out", str(out / "products"),
                                 "--source-label",
-                                f"Hex forecast, member {member['run_id']} of {len(members)}"]
+                                f"Hex forecast, member {member['run_id']} of {len(members)}",
+                                *label_argv(args)]
                     elif name == "export":
                         argv = ["export", forecast, "--out", str(out / "export"), "--window", "global",
                                 "--field-set", args.export_field_set, "--overwrite"]

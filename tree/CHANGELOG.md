@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.4
+
+Requires gpuwm>=2.9.4,<2.10.
+
+New:
+- Global and variable-resolution forecasts draw their first maps the moment the forecast writes its first frame, instead of after the whole forecast.
+- 1 km limited-area runs start faster: a regional target of a global parent reads only the parent cells around it, boundary frames are remapped concurrently, and a premade variable-resolution mesh and its static are fetched instead of rebuilt.
+- First maps open on 2 m temperature, 10 m wind and CAPE, and on reflectivity from its first echo.
+
+Fixed: every hex map carries a labelled latitude and longitude graticule.
+
+Fixed: `gpuwm-hex global`, `mesh-plan`, `regional`, `country`, `moving` and `forecast` take `--model-label` and `--brand` and pass them to the point soundings and meteograms; with gpuwm 2.9.6 or later the brand is drawn in bold at the top right.
+
 ## 0.4.3
 
 Requires gpuwm>=2.9.4,<2.10.

@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 import datetime as _dt
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -847,13 +848,146 @@ def refuse_uncovered_products(products: str, rows: dict, history: Path,
 SERIES_TAG = "series"
 
 
+#: Graticule spacings, degrees, smallest first.
+GRATICULE_STEPS = (0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0)
+#: Most lines across a regional window's longer side.
+GRATICULE_MAX_LINES = 6
+GRATICULE_LINE_COLOUR = "#4a525c80"
+
+
+def _wrap180(value):
+    return ((value + 180.0) % 360.0) - 180.0
+
+
+def _degree_text(value: float, step: float, positive: str, negative: str) -> str:
+    number = f"{abs(value):.0f}" if step >= 1.0 else f"{abs(value):g}"
+    if abs(value) < 1e-9 or abs(abs(value) - 180.0) < 1e-9:
+        return f"{number}°"
+    return f"{number}°{positive if value > 0 else negative}"
+
+
+def graticule_overlays(lat, lon) -> dict | None:
+    """Latitude/longitude lines and their labels for one converted frame,
+    in the renderer's ``--overlays`` schema (degrees).
+
+    THE BREAKAGE THIS PREVENTS (hex storm-following AL10, GFS 2026-10-22
+    18Z, f012): a 3 km moving region over open ocean was drawn as
+    reflectivity on ocean fill with no line of geography at all, so a
+    reader could not tell where the storm was.  The renderer draws
+    coastlines and borders, but a window with no land in it had nothing
+    else; every hex map now carries a labelled graticule.  ``lat``/``lon``
+    are the frame's XLAT/XLONG (2-D, south row first)."""
+
+    import numpy as np
+
+    lat = np.asarray(lat, dtype=float)
+    lon = np.asarray(lon, dtype=float)
+    if lat.ndim != 2 or lat.shape != lon.shape or min(lat.shape) < 4:
+        return None
+    ny, nx = lat.shape
+    centre = float(lon[ny // 2, nx // 2])
+    offset = _wrap180(lon - centre)
+    if not (np.isfinite(lat).all() and np.isfinite(offset).all()):
+        return None
+    south, north = float(lat.min()), float(lat.max())
+    west, east = float(offset.min()), float(offset.max())
+    whole_globe = east - west > 300.0
+    if whole_globe:
+        step = 30.0
+    else:
+        mid = math.radians(0.5 * (south + north))
+        span = max(north - south, (east - west) * max(0.2, math.cos(mid)))
+        step = next((s for s in GRATICULE_STEPS if span / s <= GRATICULE_MAX_LINES),
+                    GRATICULE_STEPS[-1])
+    edge = 1e-3
+    west, east = west + edge, east - edge
+    parallels = [k * step for k in range(math.ceil(south / step), math.floor(north / step) + 1)
+                 if south < k * step < north and abs(k * step) < 90.0]
+    meridians = [k * step for k in range(math.ceil((centre + west) / step),
+                                         math.floor((centre + east) / step) + 1)
+                 if west < k * step - centre < east]
+    densify = 2.0 if whole_globe else step / 10.0
+    lines, labels = [], []
+    for value in parallels:
+        count = max(2, int(math.ceil((east - west) / densify)) + 1)
+        points = [(value, _wrap180(centre + west + (east - west) * i / (count - 1)))
+                  for i in range(count)]
+        lines.append({"points": points, "color": GRATICULE_LINE_COLOUR, "width": 1})
+    for value in meridians:
+        count = max(2, int(math.ceil((north - south) / densify)) + 1)
+        points = [(south + (north - south) * i / (count - 1), _wrap180(value))
+                  for i in range(count)]
+        lines.append({"points": points, "color": GRATICULE_LINE_COLOUR, "width": 1})
+    # Labels sit on the lines just inside the west and south edges (on a
+    # whole globe: between the first two meridians and two parallels).
+    if whole_globe:
+        label_lon = _wrap180(centre - 165.0)
+        label_lat = -45.0
+        for value in parallels:
+            labels.append({"lat": value, "lon": label_lon,
+                           "text": _degree_text(value, step, "N", "S")})
+        for value in meridians:
+            labels.append({"lat": label_lat, "lon": _wrap180(value),
+                           "text": _degree_text(_wrap180(value), step, "E", "W")})
+    else:
+        column = min(nx - 1, max(1, nx // 20))
+        row = min(ny - 1, max(1, ny // 20))
+        for value in parallels:
+            j = int(np.argmin(np.abs(lat[:, column] - value)))
+            if abs(lat[j, column] - value) > 0.5 * step or j in (0, ny - 1):
+                continue
+            labels.append({"lat": value, "lon": float(lon[j, column]),
+                           "text": _degree_text(value, step, "N", "S")})
+        for value in meridians:
+            i = int(np.argmin(np.abs(offset[row, :] - (value - centre))))
+            if abs(offset[row, i] - (value - centre)) > 0.5 * step or i in (0, nx - 1):
+                continue
+            labels.append({"lat": float(lat[row, i]), "lon": _wrap180(value),
+                           "text": _degree_text(_wrap180(value), step, "E", "W")})
+    if not lines:
+        return None
+    return {"lines": lines, "labels": labels, "step_deg": step}
+
+
+def write_graticule_overlays(frame: Path, scratch: Path) -> tuple[Path | None, dict | None]:
+    """Write :func:`graticule_overlays` for ``frame`` (a converted
+    wrfout-shaped file) into ``scratch``; ``(None, None)`` when the frame
+    carries no usable XLAT/XLONG."""
+
+    import netCDF4
+
+    from .netcdf_lock import NETCDF
+
+    try:
+        with NETCDF, netCDF4.Dataset(str(frame)) as dataset:
+            if "XLAT" not in dataset.variables or "XLONG" not in dataset.variables:
+                return None, None
+            lat = dataset.variables["XLAT"][:]
+            lon = dataset.variables["XLONG"][:]
+    except OSError as error:
+        # The renderer reads the same file and names its own failure.
+        print(f"GRATICULE unreadable frame {frame}: {error}", flush=True)
+        return None, None
+    while getattr(lat, "ndim", 0) > 2:
+        lat, lon = lat[0], lon[0]
+    overlays = graticule_overlays(lat, lon)
+    if overlays is None:
+        return None, None
+    step = overlays.pop("step_deg")
+    path = Path(scratch) / "graticule-overlays.json"
+    path.write_text(json.dumps(overlays) + "\n", encoding="utf-8")
+    return path, {"step_deg": step, "lines": len(overlays["lines"]),
+                  "labels": len(overlays["labels"])}
+
+
 def render_frame(renderer_exe: Path, wrfout: Path | list[Path], *, scratch: Path,
                  index: int, products: str, frames: str, width: int,
                  height: int, heavy: bool,
                  env: dict[str, str] | None = None,
                  tag: str | None = None,
                  import_jobs: int = 1,
-                 source_label: str | None = None
+                 source_label: str | None = None,
+                 overlays: Path | None = None
                  ) -> tuple[list[tuple[str, Path]], list[dict[str, str]],
                             list[str], list[str]]:
     """One renderer invocation over one store: a per-frame store (campaign
@@ -883,6 +1017,8 @@ def render_frame(renderer_exe: Path, wrfout: Path | list[Path], *, scratch: Path
         command.extend(("--import-jobs", str(import_jobs)))
     if source_label is not None:
         command.extend(("--source-label", source_label))
+    if overlays is not None:
+        command.extend(("--overlays", str(overlays)))
     if isinstance(wrfout, (list, tuple)):
         command.extend(str(item) for item in wrfout)
     else:
@@ -1160,6 +1296,14 @@ def run_render(args) -> int:
                   "there is one frame); one store per frame, so no windowed "
                   "product", flush=True)
     series_outputs = [Path(meta["output"]) for meta in frames_meta]
+    # Every map carries a labelled latitude/longitude graticule (see
+    # graticule_overlays).  One window per render, so the first frame's
+    # coordinates hold for the series.
+    overlays_path, graticule = None, None
+    if frames_meta and engine_accepts(renderer_exe, "--overlays"):
+        overlays_path, graticule = write_graticule_overlays(
+            Path(frames_meta[0]["output"]), scratch)
+    print(f"GRATICULE {graticule if graticule else 'none'}", flush=True)
     if leads is not None:
         rows, catalog_summary, catalog_invocation = list_catalog(
             renderer_exe, series_outputs, scratch=scratch, heavy=args.heavy,
@@ -1222,7 +1366,8 @@ def run_render(args) -> int:
             renderer_exe, series_outputs, scratch=scratch, index=0,
             products=products_effective, frames=args.frames, width=width,
             height=height, heavy=args.heavy, env=renderer_env, tag=SERIES_TAG,
-            import_jobs=import_jobs, source_label=source_label)
+            import_jobs=import_jobs, source_label=source_label,
+            overlays=overlays_path)
         invocations.append(invocation)
         by_lead = {lead: index for index, lead in enumerate(leads)}
         names = sorted(((str(path), index) for index, path in enumerate(series_outputs)),
@@ -1267,7 +1412,7 @@ def run_render(args) -> int:
                 renderer_exe, Path(meta["output"]), scratch=scratch, index=index,
                 products=products_effective, frames=args.frames, width=width,
                 height=height, heavy=args.heavy, env=renderer_env,
-                source_label=source_label)
+                source_label=source_label, overlays=overlays_path)
             invocations.append(invocation)
             raw_out = Path(scratch) / f"raw-{index:03d}"
         frame.skipped = skipped
@@ -1319,6 +1464,7 @@ def run_render(args) -> int:
         "model_label": model_label,
         "source_label": source_label,
         "grid_label": grid_label,
+        "graticule": graticule,
         "convert": {
             "schema": report.get("schema"),
             "engine": report.get("engine"),

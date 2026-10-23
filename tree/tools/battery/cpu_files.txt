@@ -45,6 +45,8 @@ tests/test_init_door.py
 tests/test_init_sources.py
 tests/test_render_door.py
 tests/test_products_door.py
+tests/test_first_look.py
+tests/test_first_maps.py
 
 # doctor and the doors agree about a staged bridge that is present and not
 # executable: a gap with its chmod, never a find the door then refuses

@@ -140,6 +140,14 @@ def card_arguments(cards: int, case, extra=()) -> list[str]:
     return ['--samehost-devices', ','.join(str(card) for card in range(cards))]
 
 
+def label_argv(arguments) -> list[str]:
+    """The run's ``--model-label``/``--brand``, for every segment's product stage."""
+
+    from .products_door import label_argv as product_labels
+
+    return product_labels(arguments)
+
+
 def segment_command(case, member, seg: Path, hours: float, history_minutes: float, engine=None, *,
                     init_source: str, extra=(), cards: int = 1) -> list[str]:
     """One forecast segment on one member: the forecast door with the moving run's fixed flags.
@@ -788,7 +796,7 @@ class Controller:
         hours = (self.duration - begin) / 3600.0
         cmd = segment_command(self.case, member, seg, hours, self.a.check_minutes, self.a.engine,
                               init_source=f'{self.init_source} analysis; moving run member {member["name"]}',
-                              extra=self.a.forecast_arg, cards=getattr(self.a, 'cards', 1))
+                              extra=[*self.a.forecast_arg, *label_argv(self.a)], cards=getattr(self.a, 'cards', 1))
         env = self.segment_env(member, control, seg / 'boundary.pkl', checkpoint_in, operator, source_grid)
         if prelaunch:
             # Started before the move: the real begin is the (later) stop frame, so the

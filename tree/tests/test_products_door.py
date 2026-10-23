@@ -322,6 +322,28 @@ def test_a_uniform_mesh_draws_global_and_the_default_regions(monkeypatch, tmp_pa
     assert "Tokyo@" in points[points.index("--points") + 1]
 
 
+@pytest.mark.parametrize("takes_brand", [True, False])
+def test_the_model_label_and_brand_reach_the_point_pictures(monkeypatch, tmp_path, capsys, takes_brand):
+    # WOOF sounding labels (2026-10-23): a host names the model top left and the brand top right.
+    seen: list = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=True, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    monkeypatch.setattr(products_door, "points_take_brand", lambda exe: takes_brand)
+    histories = _histories(tmp_path)
+    brand = "WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z"
+    args = _arguments(tmp_path, histories, model_label="WOOF Hex", brand=brand)
+    assert products_door.run_products(args) == 0
+    points = [c for stage, c in seen if stage == "POINTS" and Path(str(c[0])).name == "rw_hex_points"][0]
+    assert points[points.index("--model-label") + 1] == "WOOF Hex"
+    if takes_brand:
+        assert points[points.index("--brand") + 1] == brand
+    else:
+        # an older rw_hex_points refuses unknown flags, so it draws without the brand and says so
+        assert "--brand" not in points
+        assert "POINTS brand not drawn" in capsys.readouterr().out
+    assert points.index("--history") > points.index("--json")
+
+
 def test_a_missing_points_engine_is_refused_by_name(monkeypatch, tmp_path):
     from hexcore import engines
 

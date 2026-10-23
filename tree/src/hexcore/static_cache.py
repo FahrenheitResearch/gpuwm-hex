@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import hashlib
+import sys
 import json
 import os
 from pathlib import Path
@@ -77,7 +78,13 @@ def _json(value):
 
 
 def _version(stat):
-    return [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
+    # THE BREAKAGE THIS PREVENTS (hex fast start, 2026-10-23): a fresh g7e box from the WOOF image
+    # spent 506 s of a 744 s 1 km static re-hashing all 30.9 GB of WPS_GEOG, cold from the snapshot,
+    # to form the cache key.  st_dev is the block device's number, which a new box (another instance
+    # type, another NVMe enumeration) can change for the very same file system, so a memo baked into
+    # the image could never hit.  The path (the memo's own key), inode, size, mtime and ctime still
+    # pin one file version; with a filled memo the digest takes 1.35 s.
+    return [stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
 
 
 def _write(path, data):
@@ -306,8 +313,28 @@ def build_static(*, engine, grid, geog, out, receipt, cache=None, options=(), ve
     return cache_result
 
 
+def warm_geography(geog, cache=None):
+    """Fill the digest memo for one geography tree (an image bake runs this once), return its key."""
+    root = Path(cache) if cache is not None else cache_dir()
+    if root is None:
+        raise ValueError('no static cache: set GPUWM_HEX_STATIC_CACHE or GPUWM_HEX_CACHE_ROOT, or pass --cache')
+    started = time.monotonic()
+    manifest = geography(geog, Path(root) / 'digests')
+    return dict(geography_sha256=manifest['sha256'], files=len(manifest['files']),
+                bytes=sum(item['bytes'] for item in manifest['files']),
+                digests=str(Path(root) / 'digests'), seconds=round(time.monotonic() - started, 3))
+
+
 if __name__ == '__main__':
     import argparse
+    if sys.argv[1:2] == ['warm-geography']:
+        warm = argparse.ArgumentParser(prog='python -m hexcore.static_cache warm-geography',
+                                       description=warm_geography.__doc__)
+        warm.add_argument('geog', type=Path)
+        warm.add_argument('--cache', type=Path)
+        options = warm.parse_args(sys.argv[2:])
+        print(json.dumps(warm_geography(options.geog, options.cache), indent=2))
+        raise SystemExit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('engine', 'grid', 'geog', 'out', 'receipt'):
         parser.add_argument('--' + name, type=Path, required=True)

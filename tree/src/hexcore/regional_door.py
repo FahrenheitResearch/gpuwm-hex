@@ -372,7 +372,9 @@ def _stage_products(args, value, status) -> dict[str, Any]:
     forecast = Path(value["paths"]["forecast"])
     request = argparse.Namespace(out=forecast, grid=Path(generated["cull"]["grid"]),
                                  init=Path(value["paths"]["init"]), start_time=value["start_time"])
-    command = products_command_for_this_install(request, history_files(forecast))
+    from .products_door import label_argv
+
+    command = products_command_for_this_install(request, history_files(forecast), label_argv(args))
     released = release_device_memory()
     if released is not None:
         status.note(f"device memory before products: {released}")
@@ -519,6 +521,9 @@ def add_regional_parser(commands: argparse._SubParsersAction) -> None:
     parser.add_argument("--gpuwm-checkout", type=Path, default=None,
                         help="gpuwm tree whose seam files the forecast runs (default: the installed engine)")
     parser.add_argument("--no-products", action="store_true", help="end at the history frames")
+    from .products_door import add_label_arguments
+
+    add_label_arguments(parser)
     parser.add_argument("--stage", choices=("plan", "all", *STAGES), default="all",
                         help="run all stages (default), one named stage, or print the plan")
     parser.add_argument("--skip", action="append", default=[], choices=STAGES, metavar="STAGE",

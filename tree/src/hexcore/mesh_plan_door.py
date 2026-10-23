@@ -211,6 +211,9 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
 
     add_point_arguments(parser)
     global_group = parser.add_argument_group("generated global variable-resolution forecast")
+    from .products_door import add_label_arguments
+
+    add_label_arguments(global_group)
     global_group.add_argument("--global-mesh", action="store_true",
                               help="price/build the whole global mesh, without a limited-area cull")
     global_group.add_argument("--run", action="store_true",
@@ -361,10 +364,24 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
         receipt["engines"] = {
             "mesh": {"path": str(engine), "sha256": mesh_rows.sha256_file(engine)},
             "static": {"path": str(static_engine), "sha256": mesh_rows.sha256_file(static_engine)}}
-        stage("mesh", [engine, "--spec", spec_path, "--out", grid, "--receipt", generator_receipt])
-        stage("static", [static_engine, "--grid", grid, "--out", static, "--geog", geog,
-                         "--nominal-dx-m", finest, "--native-init", "--native-gwd-static",
-                         "--receipt", static_receipt])
+        # The mesh and its static depend on the spec and the geography alone, never the cycle: a premade library
+        # entry (hexcore.prep_store, GPUWM_HEX_PREP_STORE: a directory or an S3 ticket) is fetched instead of built,
+        # byte-identical by its SHA-256. Measured on a g7e box 2026-10-23: the 60->15 km globe's mesh and static
+        # took minutes to build and a library fetch takes seconds.
+        from . import prep_store
+
+        def stored_stage(name: str, argv: list[Any]) -> None:
+            got = prep_store.run_or_fetch(argv, runner=lambda a: stage(name, a))
+            if got.get("source") == "store":
+                receipt["stages"].append({"name": name, "source": "store", "key": got.get("key"),
+                                          **{k: v for k, v in got.items() if k in ("bytes", "seconds", "transfer_seconds", "store")}})
+                save()
+                print(f"STAGE {name} from the library ({got.get('key', '')[:12]})", flush=True)
+
+        stored_stage("mesh", [engine, "--spec", spec_path, "--out", grid, "--receipt", generator_receipt])
+        stored_stage("static", [static_engine, "--grid", grid, "--out", static, "--geog", geog,
+                                "--nominal-dx-m", finest, "--native-init", "--native-gwd-static",
+                                "--receipt", static_receipt])
         errors = mesh_point.static_coordinate_errors(grid, static)
         if errors:
             raise MpasPortError(errors[0])
@@ -411,14 +428,27 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
             init_receipt = root / "init" / "init-source-receipt.json"
             receipt["source_binding"] = json.loads(init_receipt.read_text())
             run = root / "forecast"
+            # The f000 maps the moment the first frame is written, not after the whole forecast (first_look.py);
+            # both passes name the same case, so the full pass replaces the first look's pictures in place.
+            from .first_look import FirstLook
+            from .products_door import label_argv
+            case = f"{row.name}-{cycle.start_time[:13].replace('-', '').replace('_', '')}"
+            look = FirstLook(run, grid=grid, init=root / "init" / "init.nc", start_time=cycle.start_time,
+                             out=root / "products", case=case,
+                             extra=[*(a for region in arguments.region for a in ("--region", region)),
+                                    *label_argv(arguments)],
+                             log=root / "logs" / "first-look.log")
+            look.start()
             measured = stage("forecast", [*prefix, "forecast", "--mesh", row.name,
                 "--grid", grid, "--static", static, "--init", root / "init" / "init.nc",
                 "--init-source", f"{arguments.source} {arguments.cycle}; spec {receipt['spec_sha256']}",
                 "--start-time", cycle.start_time, "--hours", arguments.hours,
                 "--dt", dt, "--history-every-minutes", arguments.history_every_minutes,
                 "--out", run, "--scratch", root / "scratch", "--no-products"])
+            receipt["first_look"] = look.finish()
             receipt["predicted_vs_measured"] = card_fit.comparison(measured_fit, measured)
-            products = [*prefix, "products", run, "--out", root / "products", "--jobs", arguments.jobs]
+            products = [*prefix, "products", run, "--out", root / "products", "--case", case, "--jobs", arguments.jobs,
+                        *label_argv(arguments)]
             for region in arguments.region:
                 products += ["--region", region]
             stage("products", products)

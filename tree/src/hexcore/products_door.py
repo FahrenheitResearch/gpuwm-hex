@@ -32,6 +32,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import threading
 import time
 
 from .errors import MpasPortError
@@ -113,11 +114,7 @@ def windowed_for_history(histories: list[Path], start: str) -> tuple[tuple[str, 
     valid-time stamp leave the full set requested (the renderer names its own reasons).
     """
 
-    from datetime import datetime
-
-    def parse(stamp: str) -> datetime:
-        return datetime.strptime(stamp.replace("T", "_").replace(".", ":")[:19], "%Y-%m-%d_%H:%M:%S")
-
+    parse = _parse_stamp
     stamps = [frame_stamp(path) for path in histories]
     if not histories or any(stamp is None for stamp in stamps):
         return WINDOWED_PRODUCTS, {}
@@ -168,6 +165,56 @@ DEFAULT_GLOBAL_POINT_COUNT = 6
 EARTH_RADIUS_KM = 6371.229
 
 POINTS_ENV = engines.POINTS.env_names[0]
+
+
+def add_label_arguments(parser) -> None:
+    """``--model-label`` and ``--brand`` on a door that ends in the product
+    stage, forwarded to ``gpuwm-hex products`` by :func:`label_argv`.
+
+    THE BREAKAGE THIS PREVENTS (WOOF sounding labels, 2026-10-23): the
+    products door took ``--model-label`` but ``gpuwm-hex global`` (and the
+    region, variable-resolution, storm-following and ensemble doors) had no
+    way to pass it, so every point sounding a host launched through a door
+    said "hex 121 km" top left with nothing top right, whatever the host
+    called the model.  Unset, nothing is forwarded and the products door
+    keeps its own defaults."""
+
+    parser.add_argument(
+        "--model-label", default=None, metavar="NAME",
+        help="the model the maps and soundings name, top left (e.g. 'WOOF Hex'; "
+             "the mesh spacing is added); forwarded to the product stage. Default: hex")
+    parser.add_argument(
+        "--brand", default=None, metavar="TEXT",
+        help="bold text at the top right of every sounding and meteogram (e.g. "
+             "'WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z'); forwarded "
+             "to the product stage. Default: none")
+
+
+def label_argv(args) -> list[str]:
+    """The ``gpuwm-hex products`` flags a door forwards for its labels."""
+
+    argv: list[str] = []
+    if getattr(args, "model_label", None):
+        argv += ["--model-label", str(args.model_label)]
+    if getattr(args, "brand", None):
+        argv += ["--brand", str(args.brand)]
+    return argv
+
+
+def points_take_brand(points_exe: Path) -> bool:
+    """Whether this ``rw_hex_points`` draws ``--brand``.
+
+    THE BREAKAGE THIS PREVENTS: a ``rw_hex_points`` built before the flag
+    refuses any flag it does not know ("unknown flag --brand"), so passing
+    it unconditionally would cost every point picture on an older engine.
+    Such a build draws without the brand and the products log says so."""
+
+    try:
+        probe = subprocess.run([str(points_exe), "--help"], capture_output=True,
+                               text=True, errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "--brand" in (probe.stdout or "") + (probe.stderr or "")
 
 
 def great_circle_km(lat1, lon1, lat2, lon2) -> float:
@@ -259,6 +306,90 @@ def frame_stamp(path: Path) -> str | None:
     return f"{y}-{mo}-{d}_{h}:{mi}:{s}"
 
 
+#: The maps a viewer opens on, in this order: fields that have content in every frame, the start included.
+#: THE BREAKAGE THIS PREVENTS (hex 1 km LAM fast start, GFS 2025-05-19 18Z over Oklahoma City, 2026-10-23): a
+#: cold start carries no hydrometeors, so the f000 composite reflectivity -- drawn 12.7 s into the forecast and
+#: the map a viewer showed first -- was an empty map.  Reflectivity joins the opening maps from the first frame
+#: that has echoes (``first_maps``), and a viewer that opens it starts on that frame.
+FIRST_MAPS = ("2m_temperature_10m_winds", "10m_wind_speed_and_direction", "sbcape")
+ECHO_MAP = "composite_reflectivity"
+#: The weakest reflectivity that counts as an echo (dBZ): the first step of the renderer's reflectivity scale.
+ECHO_DBZ = 10.0
+#: Reflectivity as a history stores it: the 2-D column maximum where the run writes one, else the 3-D field.
+ECHO_FIELDS = ("refl10cm_max", "refl10cm")
+#: Values per read of the reflectivity scan, so a fine global mesh is read in cell blocks, not in one array.
+ECHO_BLOCK_VALUES = 16_000_000
+
+
+def _parse_stamp(stamp: str) -> _dt.datetime:
+    return _dt.datetime.strptime(stamp.replace("T", "_").replace(".", ":")[:19], "%Y-%m-%d_%H:%M:%S")
+
+
+def frame_echo_dbz(path: Path) -> float | None:
+    """The strongest reflectivity in one history frame (dBZ), read by the Rust reader; None when none is stored."""
+
+    import numpy as np
+    from gpuwm.netcdf_bridge import open_dataset
+
+    dataset = open_dataset(Path(path))
+    for name in ECHO_FIELDS:
+        variable = dataset.variables.get(name)
+        if variable is None or variable.size == 0:
+            continue
+        if variable.ndim < 2 or variable.size <= ECHO_BLOCK_VALUES:
+            blocks = [np.asarray(variable[...], dtype=float)]
+        else:
+            # (Time, nCells, nVertLevels): blocks of cells, every level, so the peak is the column maximum.
+            rows, columns = variable.shape[-2], variable.shape[-1]
+            outer = max(1, variable.size // (rows * columns))
+            step = max(1, ECHO_BLOCK_VALUES // (columns * outer))
+            blocks = (np.asarray(variable.read_window(i0=0, ni=columns, j0=j0, nj=min(step, rows - j0)), dtype=float)
+                      for j0 in range(0, rows, step))
+        peak = None
+        for block in blocks:
+            finite = block[np.isfinite(block)]
+            if finite.size:
+                peak = float(finite.max()) if peak is None else max(peak, float(finite.max()))
+        return peak
+    return None
+
+
+def first_maps(histories: list[Path], start: str, drawn) -> dict:
+    """The maps a viewer opens on: ``FIRST_MAPS`` that were drawn, then reflectivity from its first echo.
+
+    Frames are read in valid-time order and the scan stops at the first frame with an echo of ``ECHO_DBZ`` or
+    more, so a run with storms at the start reads one frame.  A frame that cannot be read ends the scan with a
+    note; nothing here can fail the products.
+    """
+
+    from .render_door import lead_token
+
+    drawn = set(drawn or ())
+    record: dict = {"maps": [slug for slug in FIRST_MAPS if slug in drawn], "echo_map": ECHO_MAP,
+                    "echo_dbz": ECHO_DBZ, "reflectivity_from": None, "reflectivity_frame": None,
+                    "reflectivity_peak_dbz": None}
+    if ECHO_MAP not in drawn:
+        return record
+    for path in histories:
+        try:
+            peak = frame_echo_dbz(path)
+        except Exception as error:  # the scan only orders the opening maps; the maps themselves are drawn
+            record["note"] = f"reflectivity scan stopped at {Path(path).name}: {type(error).__name__}: {error}"
+            break
+        if peak is None or peak < ECHO_DBZ:
+            continue
+        stamp = frame_stamp(path)
+        if stamp is None:
+            record["note"] = f"{Path(path).name} has echoes but no valid-time stamp in its name"
+            break
+        seconds = (_parse_stamp(stamp) - _parse_stamp(start)).total_seconds()
+        record.update(reflectivity_from=lead_token(int(round(seconds)), Path(path).name),
+                      reflectivity_frame=Path(path).name, reflectivity_peak_dbz=round(peak, 1))
+        record["maps"].append(ECHO_MAP)
+        break
+    return record
+
+
 #: The receipt the forecast door writes beside its frames.
 FORECAST_RECEIPT = "forecast-receipt.json"
 
@@ -297,6 +428,25 @@ def forecast_receipt(forecast_dir: Path | None) -> dict:
     if start:
         synthesized["schedule"] = {"start_time": str(start)}
     return synthesized
+
+
+def mesh_is_limited_area(mesh) -> bool:
+    """A mesh with boundary rings (bdyMaskCell > 0) is a limited-area mesh.
+
+    THE BREAKAGE THIS PREVENTS (hex fast start, 2026-10-23): the first map of a 937.5 m LAM, drawn
+    from its f000 frame with --history while the forecast ran (no receipt yet), also rendered a 2,030 km
+    context view of a 405 km domain: 152 s (a 10.9 GB conversion) beside the 19 s mesh view.
+    """
+    if mesh is None:
+        return False
+    try:
+        from netCDF4 import Dataset
+
+        from .netcdf_lock import NETCDF
+        with NETCDF, Dataset(mesh) as grid:
+            return "bdyMaskCell" in grid.variables and int(grid["bdyMaskCell"][:].max()) > 0
+    except (OSError, ValueError, KeyError):
+        return False
 
 
 def receipt_text(receipt: dict, *keys: str) -> str | None:
@@ -566,6 +716,7 @@ nav select{width:100%;padding:6px;font:inherit;margin-bottom:8px;background:var(
 </section>
 </main>
 <script>
+const FIRST = __FIRST__;
 const DATA = __DATA__;
 const el = id => document.getElementById(id);
 let view = Object.keys(DATA)[0], product = null, index = 0, timer = null;
@@ -583,6 +734,11 @@ function pick(name){
   product = name;
   const at = frames().findIndex(x => x[0] === keepLead);
   index = at >= 0 ? at : 0;
+  // Reflectivity opens on its first frame with echoes: an earlier one (a cold start's f000) is an empty map.
+  if (name === FIRST.echo_map && FIRST.reflectivity_from) {
+    const echo = frames().findIndex(x => x[0] === FIRST.reflectivity_from);
+    if (echo > index) index = echo;
+  }
   for (const b of el('products').children) b.setAttribute('aria-pressed', b.dataset.name === name);
   show();
 }
@@ -633,24 +789,35 @@ def index_tree(out_case: Path) -> dict[str, dict[str, list[list[str]]]]:
     return tree
 
 
-def write_index(out_case: Path, case: str, start: str) -> Path | None:
+def write_index(out_case: Path, case: str, start: str, first: dict | None = None) -> Path | None:
     """``<case>/index.html``: a one-file viewer over every delivered
     picture -- view, product, a frame slider and play.  Built from the tree
     as it is on disk, so it shows what was delivered and nothing else; the
     links are relative and the page loads nothing from the network, so the
-    case folder can be copied anywhere and still open."""
+    case folder can be copied anywhere and still open.  It lists and opens
+    on the ``first`` maps (``first_maps``) and opens reflectivity on its
+    first frame with echoes."""
 
     tree = index_tree(out_case)
     if not tree:
         return None
+    first = first or {"maps": list(FIRST_MAPS), "echo_map": ECHO_MAP, "reflectivity_from": None}
+    leading = list(first.get("maps") or [])
+    if first.get("echo_map") and first["echo_map"] not in leading:
+        leading.append(first["echo_map"])  # no echoes yet: still listed right after the opening maps
+    rank = {slug: position for position, slug in enumerate(leading)}
     # "global" first, then the mesh's own views, points last.
     order = sorted(tree, key=lambda name: (name == "points", name != "global", name))
-    data = {name: tree[name] for name in order}
+    data = {name: {product: tree[name][product]
+                   for product in sorted(tree[name], key=lambda p: (rank.get(p, len(rank)), p))}
+            for name in order}
+    opening = {"echo_map": first.get("echo_map"), "reflectivity_from": first.get("reflectivity_from")}
     total = sum(len(rows) for products in tree.values() for rows in products.values())
     page = (_INDEX_PAGE
             .replace("__TITLE__", _html.escape(case))
             .replace("__START__", _html.escape(start))
             .replace("__TOTAL__", str(total))
+            .replace("__FIRST__", json.dumps(opening).replace("</", "<\\/"))
             .replace("__DATA__", json.dumps(data).replace("</", "<\\/")))
     path = Path(out_case) / "index.html"
     path.write_text(page, encoding="utf-8")
@@ -729,6 +896,12 @@ def run_products(args) -> int:
     renderer_exe = render_door.resolve_renderer_exe(args.renderer_exe)
     exes = (str(convert_exe), str(renderer_exe))
     print(f"PRODUCTS case={case} frames={len(histories)} start={start} out={out_case}", flush=True)
+    # The opening maps (first_maps): the reflectivity scan reads frames beside the views, off their path.
+    opening: dict = {}
+    opening_scan = threading.Thread(
+        target=lambda: opening.update(first_maps(histories, start, (*FIRST_MAPS, ECHO_MAP))),
+        name="first-maps", daemon=True)
+    opening_scan.start()
 
     views: list[dict] = []
 
@@ -797,7 +970,8 @@ def run_products(args) -> int:
     # the 1,500 km context view another 550 s, together 131 GB of scratch,
     # to draw maps that are empty outside a 270 km domain; the mesh view of
     # the same frames took 61 s.  Named --region views are still drawn.
-    limited_area = receipt_text(receipt, "admission", "configuration") == "limited-area"
+    limited_area = (receipt_text(receipt, "admission", "configuration") == "limited-area"
+                    or mesh_is_limited_area(mesh))
     if limited_area:
         print("PRODUCTS limited-area run: the mesh view frames the whole domain; "
               "no global or context view", flush=True)
@@ -862,7 +1036,14 @@ def run_products(args) -> int:
                    "--model-label", args.model_label,
                    "--sounding-every-hours", str(args.sounding_every_hours),
                    "--points", ";".join(f"{n}@{la},{lo}" for n, la, lo in points),
-                   "--json", str(receipt), "--history", *[str(p) for p in histories]]
+                   "--json", str(receipt)]
+        brand = getattr(args, "brand", None)
+        if brand and points_take_brand(points_exe):
+            command += ["--brand", brand]
+        elif brand:
+            print(f"POINTS brand not drawn: {points_exe} predates --brand; "
+                  "install the gpuwm release that carries it", flush=True)
+        command += ["--history", *[str(p) for p in histories]]
         print("POINTS $ " + " ".join(command), flush=True)
         result = subprocess.run(command, capture_output=True, text=True, errors="replace")
         for line in (result.stdout or "").splitlines():
@@ -898,6 +1079,17 @@ def run_products(args) -> int:
         shutil.rmtree(scratch_root, ignore_errors=True)
 
     rendered = sum((v.get("counts") or {}).get("rendered", 0) for v in views)
+    opening_scan.join()
+    drawn = set()
+    for v in views:
+        listed = v.get("products_drawn") or ()
+        drawn.update(p.strip() for p in (listed.split(",") if isinstance(listed, str) else listed) if p)
+    if opening:
+        opening["maps"] = [slug for slug in opening["maps"] if slug in drawn]
+        if opening["reflectivity_from"]:
+            print(f"PRODUCTS reflectivity has echoes from {opening['reflectivity_from']} "
+                  f"({opening['reflectivity_peak_dbz']} dBZ)", flush=True)
+        print(f"PRODUCTS opening maps: {', '.join(opening['maps']) or 'none'}", flush=True)
     failed_views = [v["view"] for v in views if v.get("rc") not in (0, None)]
     manifest = {
         "schema": MANIFEST_SCHEMA,
@@ -916,10 +1108,11 @@ def run_products(args) -> int:
         "chemistry_products": list(chemistry_products),
         "windows_not_requested": windows_not_requested,
         "maps_rendered": rendered,
+        "first_maps": opening or None,
         "failed_views": failed_views,
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }
-    index = write_index(out_case, case, start)
+    index = write_index(out_case, case, start, opening or None)
     manifest["index"] = index.name if index is not None else None
     path = out_case / "products-manifest.json"
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
@@ -963,7 +1156,13 @@ def add_products_arguments(parser) -> None:
     parser.add_argument("--remap", default=render_door.REMAP_AUTO, choices=render_door.REMAP_CHOICES,
                         help="see `gpuwm-hex render --help`; default: product (linear state, "
                              "conservative precipitation)")
-    parser.add_argument("--model-label", default=render_door.DEFAULT_MODEL_LABEL)
+    parser.add_argument("--model-label", default=render_door.DEFAULT_MODEL_LABEL,
+                        help="the model the maps and soundings name, top left (the mesh "
+                             "spacing is added, e.g. 'hex 121 km'); default: hex")
+    parser.add_argument("--brand", default=None, metavar="TEXT",
+                        help="bold text at the top right of every sounding and meteogram, "
+                             "e.g. 'WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z' "
+                             "(at most 120 characters); default: none")
     parser.add_argument("--source-label", default=None, metavar="TEXT",
                         help="source credit printed on each map (1-160 printable ASCII "
                              "characters), e.g. which ensemble member it came from; default: "

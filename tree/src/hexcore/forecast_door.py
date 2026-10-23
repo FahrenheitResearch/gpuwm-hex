@@ -2744,15 +2744,17 @@ def render_command(request: ForecastRequest, history: Sequence[Path]) -> list[st
     return command
 
 
-def products_command(request: ForecastRequest, history: Sequence[Path]) -> list[str]:
-    """The ``gpuwm-hex products`` command for this run's output."""
+def products_command(request: ForecastRequest, history: Sequence[Path],
+                     labels: Sequence[str] = ()) -> list[str]:
+    """The ``gpuwm-hex products`` command for this run's output; ``labels``
+    are the door's forwarded ``--model-label``/``--brand`` flags."""
 
     command = ["gpuwm-hex", "products", "--forecast", str(request.out),
                "--mesh", str(request.grid), "--init", str(request.init),
                "--out", str(request.out / "products")]
     if request.start_time:
         command += ["--simulation-start", request.start_time]
-    return command
+    return [*command, *labels]
 
 
 def release_device_memory() -> dict[str, Any] | None:
@@ -2791,7 +2793,8 @@ def release_device_memory() -> dict[str, Any] | None:
 
 
 def products_command_for_this_install(request: ForecastRequest,
-                                      history: Sequence[Path]) -> list[str]:
+                                      history: Sequence[Path],
+                                      labels: Sequence[str] = ()) -> list[str]:
     """The default product stage's command, without point pictures when this
     install has no ``rw_hex_points``.
 
@@ -2807,7 +2810,7 @@ def products_command_for_this_install(request: ForecastRequest,
     from .products_door import ProductDoorError, resolve_points_exe
     from . import render_door
 
-    command = products_command(request, history)
+    command = products_command(request, history, labels)
     try:
         convert_exe = render_door.resolve_convert_exe(None)
     except MpasPortError:
@@ -2856,9 +2859,9 @@ def run_default_products(request: ForecastRequest, history: Sequence[Path],
     """Draw the standard product set into ``<out>/products``; returns the
     product door's exit code (2 for a named refusal)."""
 
-    from .products_door import add_products_arguments, run_products
+    from .products_door import add_products_arguments, label_argv, run_products
 
-    command = products_command_for_this_install(request, history)
+    command = products_command_for_this_install(request, history, label_argv(arguments))
     # Detached is the default.  THE BREAKAGE IT PREVENTS (hex, a rented box,
     # 2026-10-13): the 20 -> 2.5 km global forecast finished at 02:13Z on
     # four same-host cards and its in-command product stage (CPU-only Rust)
@@ -4260,6 +4263,9 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "draw (the default). --no-products-detached runs it inside this "
              "command instead, which keeps this process -- and every card it "
              "holds -- alive until the products are on disk")
+    from .products_door import add_label_arguments
+
+    add_label_arguments(parser)
 
 
 def add_forecast_parser(commands: Any) -> None:

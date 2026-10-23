@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import re
 import time
@@ -114,6 +115,101 @@ def wait_parent(record, timeout):
         time.sleep(1.)
 
 
+# THE BREAKAGE THIS PREVENTS (hex fast start, 2026-10-23): the boundary series of a 937.5 m,
+# 96,912-cell cull from the 773,478-cell 80->5 km VR parent took ~62 s per frame on one core
+# (25 frames: ~26 min on a 16-core box), because every frame cold-loaded and remapped the WHOLE
+# parent, of which the target can reach 2 %.  The parent is now cut to a cap around the target
+# (grid, static and analysis by rw_mpas_mesh --cull-parent; HDF5 history frames by position, all
+# cores) and the frames run concurrently.
+SUBSET_MARGIN_KM = 120.0
+from hexcore.netcdf_lock import NETCDF as _NETCDF
+
+
+EARTH_RADIUS_KM = 6371.229
+
+
+def target_cap(grid, margin_km=SUBSET_MARGIN_KM):
+    """The cap (centre, radius) that holds every target cell plus the margin."""
+    with Dataset(grid) as d:
+        lat = np.asarray(d['latCell'][:], dtype=np.float64)
+        lon = np.asarray(d['lonCell'][:], dtype=np.float64)
+    xyz = np.stack([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)], axis=1)
+    centre = xyz.mean(axis=0)
+    centre /= np.linalg.norm(centre)
+    radius = float(np.arccos(np.clip(xyz @ centre, -1, 1)).max()) * EARTH_RADIUS_KM
+    clat, clon = np.degrees(np.arcsin(centre[2])), np.degrees(np.arctan2(centre[1], centre[0]))
+    return dict(kind='cap', center_deg=[round(float(clat), 6), round(float(clon), 6)],
+                radius_km=round(radius + float(margin_km), 3))
+
+
+def _position_index(culled, parent):
+    """Parent index of every culled cell, edge and vertex (the cull reindexes ids 1..n)."""
+    out = {}
+    with Dataset(culled) as g, Dataset(parent) as q:
+        for dim, loc in (('nCells', 'Cell'), ('nEdges', 'Edge'), ('nVertices', 'Vertex')):
+            def keys(d):
+                xyz = np.stack([np.asarray(d[c + loc][:], dtype=np.float64) for c in 'xyz'], axis=1)
+                return np.ascontiguousarray(xyz).view(np.dtype((np.void, 24))).ravel()
+            pk, ck = keys(q), keys(g)
+            order = np.argsort(pk)
+            index = order[np.minimum(np.searchsorted(pk[order], ck), len(pk) - 1)]
+            if not np.array_equal(pk[index], ck):
+                raise ValueError(f'parent subset: {dim} of {culled} has entries with no exact parent position')
+            out[dim] = index
+    return out
+
+
+def _cut_history(job):
+    source, destination, index = job
+    temporary = Path(str(destination) + '.partial')
+    with Dataset(source) as s, Dataset(temporary, 'w', format='NETCDF3_64BIT_DATA') as d:
+        for name, dim in s.dimensions.items():
+            d.createDimension(name, len(index[name]) if name in index else (None if dim.isunlimited() else len(dim)))
+        d.setncatts({k: s.getncattr(k) for k in s.ncattrs()})
+        for name, var in s.variables.items():
+            dtype = np.int32 if var.dtype == np.int64 else var.dtype
+            v = d.createVariable(name, dtype if dtype != str else 'S1', var.dimensions)
+            v.setncatts({k: var.getncattr(k) for k in var.ncattrs() if k != '_FillValue'})
+            data = var[:]
+            for axis, dimension in enumerate(var.dimensions):
+                if dimension in index:
+                    data = np.take(data, index[dimension], axis=axis)
+            if name in ('indexToCellID', 'indexToEdgeID', 'indexToVertexID'):
+                data = np.arange(1, data.shape[-1] + 1, dtype=np.int32)  # the cull's contiguous ids
+            v[:] = data
+    temporary.replace(destination)
+    return destination
+
+
+def parent_subset(args, histories, workdir, jobs):
+    """Cut the parent to the target's cap; return (grid, static, analysis, histories, receipt)."""
+    import subprocess
+    from concurrent.futures import ProcessPoolExecutor
+    from hexcore.engines import MESH, resolve
+    started = time.monotonic()
+    workdir.mkdir(parents=True, exist_ok=True)
+    region = target_cap(args.target_grid, args.parent_subset_margin_km)
+    (workdir / 'region.json').write_text(json.dumps(region))
+    engine = resolve(MESH, None)
+    grid = workdir / 'parent.grid.nc'
+    cut = {'grid': grid, 'static': workdir / 'parent.static.nc', 'analysis': workdir / 'parent.analysis.nc'}
+    for role, source in (('grid', args.source_grid), ('static', args.source_static), ('analysis', args.analysis)):
+        argv = [str(engine), '--cull-parent', str(source), '--region', str(workdir / 'region.json'),
+                '--out', str(cut[role]), '--clobber']
+        if role != 'grid':
+            argv += ['--cull-provenance-grid', str(grid)]
+        subprocess.run(argv, check=True, stdout=subprocess.DEVNULL)
+    index = _position_index(grid, args.source_grid)
+    folder = workdir / 'history'
+    folder.mkdir(exist_ok=True)
+    work = [(Path(h), folder / Path(h).name, index) for h in histories]
+    with ProcessPoolExecutor(max_workers=max(1, min(len(work), jobs))) as pool:
+        cut_histories = list(pool.map(_cut_history, work))
+    receipt = dict(region=region, cells=int(len(index['nCells'])), frames=len(cut_histories),
+                   seconds=round(time.monotonic() - started, 2))
+    return cut['grid'], cut['static'], cut['analysis'], cut_histories, receipt
+
+
 def produce(args):
     output = args.output.resolve()
     if output.exists():
@@ -121,6 +217,7 @@ def produce(args):
     start = valid_time(args.analysis)
     manifest = getattr(args, 'parent_manifest', None)
     expected = {}
+    subset_receipt = None
     if manifest is not None:
         if args.history:
             raise ValueError('choose --parent-manifest or --history')
@@ -133,6 +230,12 @@ def produce(args):
             raise ValueError('parent history manifest repeats a file')
         timeline = [(start, args.analysis)] + [(datetime.strptime(row['valid_time'], FORMAT), Path(row['path'])) for row in entries]
     else:
+        if getattr(args, 'parent_subset', 'off') == 'auto':
+            # A history frame keeps its clock in xtime, so the cut frames are timed like the originals.
+            grid, static, analysis, histories, subset_receipt = parent_subset(
+                args, args.history, output.with_name(output.name + '.parent-subset'), args.jobs)
+            args.source_grid, args.source_static, args.analysis, args.history = grid, static, analysis, histories
+            print('PARENT SUBSET', json.dumps(subset_receipt), flush=True)
         timeline = [(start, args.analysis)] + [(valid_time(path), path) for path in args.history]
     timeline.sort(key=lambda item: item[0])
     if len(timeline) < 2 or timeline[0][0] != start:
@@ -150,21 +253,45 @@ def produce(args):
         valid_times=[moment.strftime(FORMAT) for moment,_ in timeline],
         target_grid_sha256=sha256(args.target_grid), target_init_sha256=sha256(args.target_init)))
     records = []
-    try:
-        for moment, path in timeline:
-            if path in expected:
-                wait_parent(expected[path], args.wait_parent_seconds)
-                if valid_time(path) != moment:
-                    raise ValueError(f'parent clock differs from source manifest: {path}')
-            parent = source if path == args.analysis else load_history(path, args.analysis, source, transfer.SPECIES)
-            state, saved, receipt = transfer.remap(parent, target, sg, tg, args.operator, transfer.SPECIES)
-            provenance = dict(parent=str(path), parent_sha256=sha256(path), remap=receipt,
-                              parent_representation='native analysis' if path==args.analysis else 'public history rehydrated by native cold loader')
+
+    def frame(item):
+        moment, path = item
+        if path in expected:
+            wait_parent(expected[path], args.wait_parent_seconds)
+            if valid_time(path) != moment:
+                raise ValueError(f'parent clock differs from source manifest: {path}')
+        if path == args.analysis:
+            parent = source
+        else:
+            with _NETCDF:
+                parent = load_history(path, args.analysis, source, transfer.SPECIES)
+        state, saved, receipt = transfer.remap(parent, target, sg, tg, args.operator, transfer.SPECIES)
+        provenance = dict(parent=str(path), parent_sha256=sha256(path), remap=receipt,
+                          parent_representation='native analysis' if path==args.analysis else 'public history rehydrated by native cold loader')
+        with _NETCDF:
             document = publish_frame(output, moment, state, saved, target.vertical, transfer.SPECIES, provenance)
-            records.append(document)
-            print('READY',output/document['path'],flush=True)
+        print('READY',output/document['path'],flush=True)
+        return document
+
+    try:
+        # The first frame builds (or reads) the remap operator; the rest share it and run concurrently,
+        # each published with its own ready marker, which is all the consumer orders by.  A streamed
+        # parent (--parent-manifest) stays in order, frame by frame, as its endpoints arrive.
+        records.append(frame(timeline[0]))
+        rest = timeline[1:]
+        jobs = int(getattr(args, 'jobs', 1) or 1)
+        if jobs > 1 and not expected and rest:
+            # Threads with every netCDF4/HDF5 call under _NETCDF: the netCDF C library is not
+            # thread-safe (unlocked threads segfaulted, exit 139) and forked workers deadlocked on
+            # locks held at fork; the remap compute, which dominates, runs concurrently.
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(jobs, len(rest)), thread_name_prefix='lbc-frame') as pool:
+                records.extend(pool.map(frame, rest))
+        else:
+            records.extend(frame(item) for item in rest)
         atomic_json(output/'lbc-door-receipt.json', dict(schema='hex.parent-lbc.v1', files=records,
-                    interval_seconds=int(interval), species=list(transfer.SPECIES)))
+                    interval_seconds=int(interval), species=list(transfer.SPECIES),
+                    parent_subset=subset_receipt))
     except BaseException as error:
         atomic_json(output/'lbc-failed.json', dict(error=str(error)))
         raise
@@ -179,6 +306,11 @@ def main():
     parser.add_argument('--history', action='append', default=[], type=Path, help='later timestamped parent history; repeat in any order')
     parser.add_argument('--parent-manifest', type=Path, help='source hashes, sizes and clocks for endpoints arriving during the forecast')
     parser.add_argument('--wait-parent-seconds', type=float, default=3600.)
+    parser.add_argument('--parent-subset', choices=('auto', 'off'), default='auto',
+                        help='cut the parent to a cap around the target before remapping (--history mode)')
+    parser.add_argument('--parent-subset-margin-km', type=float, default=SUBSET_MARGIN_KM)
+    parser.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) // 2)),
+                        help='boundary frames remapped at once')
     args = parser.parse_args()
     produce(args)
 

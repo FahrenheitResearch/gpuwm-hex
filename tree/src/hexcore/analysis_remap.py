@@ -30,6 +30,8 @@ from types import SimpleNamespace
 import numpy as np
 
 SPECIES = ('qv', 'qc', 'qr', 'qi', 'qs', 'qg')
+#: hydrometeors a cold-start init may omit; they are zero at a cold start
+COLD_START_ZERO_SPECIES = frozenset(('qc', 'qr', 'qi', 'qs', 'qg'))
 
 
 def digest(path):
@@ -75,14 +77,24 @@ def load(grid, static, init, species):
     from netCDF4 import Dataset
     with Dataset(init) as d:
         absent = sorted(set(species) - set(d.variables))
-        if absent:
-            raise ValueError(f'analysis/template lacks species: {absent}: {init}')
+    # A cold-start init (GFS/IFS through init-source, MPAS init_atmosphere) writes vapour and at most
+    # cloud/rain; the ice species start at zero in the forecast.  Only those may be absent here.
+    if absent and ('qv' in absent or not set(absent) <= COLD_START_ZERO_SPECIES):
+        raise ValueError(f'analysis/template lacks species: {absent}: {init}')
+    present = tuple(name for name in species if name not in absent)
     result = load_geometry(grid, static, init)
     state, reference, saved = load_mpas_initial_state(
-        init, result.mesh, result.vertical, scalar_names=tuple(species),
+        init, result.mesh, result.vertical, scalar_names=present,
         terrain_metrics=result.terrain_metrics, return_saved_diagnostics=True,
         cold_start=True, allow_regional_sentinels=bool(result.mesh.is_regional))
+    if absent:
+        full = np.zeros((len(species), *state.scalars.shape[1:]), dtype=state.scalars.dtype)
+        for index, name in enumerate(species):
+            if name in present:
+                full[index] = state.scalars[present.index(name)]
+        state.scalars = full
     result.state, result.reference, result.saved_diagnostics = state, reference, saved
+    result.zero_species = tuple(absent)
     return result
 
 
@@ -184,6 +196,16 @@ def write_fields(dataset, values):
         variable[index] = data
 
 
+def _regional_target_of_global(args):
+    """True for a regional target (boundary rings) remapped from a global source (none)."""
+    from netCDF4 import Dataset
+
+    def regional(path):
+        with Dataset(path) as d:
+            return 'bdyMaskCell' in d.variables and int(np.max(d['bdyMaskCell'][:])) > 0
+    return regional(args.target_grid) and not regional(args.source_grid)
+
+
 def transfer(args):
     from netCDF4 import Dataset
     from hexcore.moving_remap import SphericalCells
@@ -204,6 +226,22 @@ def transfer(args):
     species = tuple(args.species.split(','))
     if not set(SPECIES).issubset(species) or len(set(species)) != len(species):
         raise ValueError('species must include qv,qc,qr,qi,qs,qg exactly once each')
+    # THE BREAKAGE THIS PREVENTS (hex fast start, 2026-10-23): a 96,912-cell 937.5 m LAM init from the
+    # 773,478-cell 80->5 km VR parent took 155.6 s, mostly on one core, loading and reconstructing the
+    # whole parent.  A regional target of a global parent reads only the parent cells in a cap around
+    # it (hexcore.nest_boundary.parent_subset); the analysis frame it makes is bit-identical.
+    subset = None
+    if getattr(args, 'parent_subset', 'auto') == 'auto' and _regional_target_of_global(args):
+        from hexcore.nest_boundary import SUBSET_MARGIN_KM, parent_subset
+        whole = {name: str(getattr(args, name)) for name in ('source_grid', 'source_static', 'analysis')}
+        cut_grid, cut_static, cut_analysis, _, subset = parent_subset(
+            SimpleNamespace(target_grid=args.target_grid, source_grid=args.source_grid,
+                            source_static=args.source_static, analysis=args.analysis,
+                            parent_subset_margin_km=getattr(args, 'parent_subset_margin_km', SUBSET_MARGIN_KM)),
+            [], args.output.with_name(args.output.name + '.parent-subset'), 1)
+        subset['whole_parent'] = whole
+        args = SimpleNamespace(**{**vars(args), 'source_grid': cut_grid, 'source_static': cut_static,
+                                  'analysis': cut_analysis})
     source = load(args.source_grid, args.source_static, args.analysis, species)
     construct = getattr(args, 'template_kind', 'initialized') == 'vertical'
     if construct:
@@ -248,7 +286,7 @@ def transfer(args):
                    operator_sha256=None if identity else digest(args.operator),
                    wall_seconds=time.perf_counter()-began, cold_load_roundtrip=roundtrip,
                    template_fields_retained=retained,
-                   lateral_boundary_forcing=False, forecast_verified=False,
+                   lateral_boundary_forcing=False, forecast_verified=False, parent_subset=subset,
                    vertical_balance=('mapped parent mass continuity and target terrain conversion' if
                        receipt.get('continuity_balance') else 'target terrain kinematic conversion; no divergence projection'))
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
@@ -422,6 +460,8 @@ def main():
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--species', default=','.join(SPECIES))
     p.add_argument('--template-kind', choices=('initialized', 'vertical'), default='initialized')
+    p.add_argument('--parent-subset', choices=('auto', 'off'), default='auto',
+                   help='a regional target of a global parent reads only the parent cells around it')
     args = p.parse_args()
     print(json.dumps(transfer(args), indent=2))
 

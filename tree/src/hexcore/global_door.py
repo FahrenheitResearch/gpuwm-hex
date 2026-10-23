@@ -512,7 +512,9 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
         forecast_argv += ["--stochastic", args.stochastic]
     for extra in args.forecast_arg or []:
         forecast_argv.append(extra)
-    products_argv = ["products", str(forecast), "--out", str(work / "products")]
+    from .products_door import label_argv
+
+    products_argv = ["products", str(forecast), "--out", str(work / "products"), *label_argv(args)]
     export_argv = ["export", str(forecast), "--out", str(work / "export"), "--window", "global",
                    "--field-set", args.export_field_set, "--overwrite"]
     score_config = work / "observation-scorecard.config.json"
@@ -902,8 +904,24 @@ def run_global(args: argparse.Namespace) -> int:
                         continue
                 status.stage(name, eta_s=(value["wall_estimate"] or {}).get("seconds") if name == "forecast" else None)
                 status.note("gpuwm-hex " + " ".join(value["commands"][name]))
+                look = None
+                if name == "forecast" and "products" in stages:
+                    # The f000 maps the moment the first frame is written, not after the whole forecast (first_look.py).
+                    from .first_look import FirstLook
+                    paths = value["paths"]
+                    # The full pass's labels too, so its pictures replace the first look's in place.
+                    products_command = [str(a) for a in value["commands"]["products"]]
+                    labels = [a for flag in ("--model-label", "--brand") if flag in products_command
+                              for a in (flag, products_command[products_command.index(flag) + 1])]
+                    look = FirstLook(Path(paths["forecast"]), grid=paths["grid"], init=paths["init"],
+                                     start_time=value["start_time"], out=paths["products"], extra=labels,
+                                     case=f"{runtime_mesh_name(value['mesh']['id'])}-{value['cycle'].replace('-', '').replace('T', '')}")
+                    look.start()
                 rc = _run_door(value["commands"][name], env)
                 result = {"returncode": rc}
+                if look is not None:
+                    result["first_look"] = look.finish()
+                    status.note(f"first look: {result['first_look'].get('status')}")
                 if name == "score" and rc == 3:
                     completed = completed_scorecard(value["paths"]["forecast"], score_config)
                     if completed is not None:
@@ -994,6 +1012,9 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--forecast-arg", action="append", default=[], metavar="ARG",
                         help="one extra forecast-door argument, repeatable (e.g. --forecast-arg=--checkpoint-hours=6)")
     parser.add_argument("--table", type=Path, default=None, help="alternative table (tests)")
+    from .products_door import add_label_arguments
+
+    add_label_arguments(parser)
     from .global_cycle import add_cycle_arguments
     from .global_ensemble import add_ensemble_arguments
 

@@ -123,6 +123,20 @@ def test_devices_and_extra_forecast_arguments_reach_the_forecast_door(tmp_path):
     assert value["cards"] == {"selected_cards": 2, "basis": "--devices names the cards"}
 
 
+def test_the_model_label_and_brand_reach_the_product_stage(tmp_path, monkeypatch):
+    # WOOF sounding labels (2026-10-23): the door forwards what the host calls the model to its soundings.
+    monkeypatch.setattr(global_door, "_visible_cards", lambda: [])
+    brand = "WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z"
+    value = global_door.plan(_args(tmp_path, "--model-label", "WOOF Hex", "--brand", brand))
+    products = value["commands"]["products"]
+    assert products[products.index("--model-label") + 1] == "WOOF Hex"
+    assert products[products.index("--brand") + 1] == brand
+    build_parser().parse_args(products)
+    # unset, nothing is forwarded and the products door keeps its own default
+    bare = global_door.plan(_args(tmp_path))["commands"]["products"]
+    assert "--model-label" not in bare and "--brand" not in bare
+
+
 def test_a_wall_estimate_needs_the_same_card(monkeypatch):
     table = global_door.load_table()
     on_5070 = global_door.wall_estimate(table, "x1.40962", 1, 24.0, card_names=["NVIDIA GeForce RTX 5070 Ti"])

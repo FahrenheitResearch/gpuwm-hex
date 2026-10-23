@@ -37,11 +37,9 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.4.3", (
-        "0.4.3 is the hotfix cut on gpuwm 2.9.4 (approved as 0.4.2.1 on 2026-10-22; three-part because the "
-        "release checks read three-part versions): 0.4.2 plus the s2s fix "
-        "(one sea-ice owner per column, rw_s2s_energy in the wheel); moving it is a release "
-        "decision, not an edit"
+    assert declared == "0.4.4", (
+        "0.4.4 is the fix cut beside gpuwm 2.9.6 (2026-10-23): 0.4.3 plus every point-sounding door "
+        "forwarding --model-label and --brand; moving it is a release decision, not an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")

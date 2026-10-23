@@ -225,7 +225,10 @@ def plan(args):
     for key in ("samehost_devices", "samehost_layouts", "samehost_part"):
         if getattr(args, key, None) is not None:
             forecast += ["--" + key.replace("_", "-"), str(getattr(args, key))]
-    product_argv = ["products", str(root / "forecast"), "--out", str(root / "products"), *products]
+    from .products_door import label_argv
+
+    product_argv = ["products", str(root / "forecast"), "--out", str(root / "products"), *products,
+                    *label_argv(args)]
     # Explicit regional views do not discover a refined-core centre in the
     # products door. Bind point products to this row instead of global cities.
     if "--points" not in products and "--no-points" not in products:
@@ -428,6 +431,9 @@ def add_country_parser(commands):
     parser.add_argument("--observation-config", type=Path)
     parser.add_argument("--hours", type=float, default=6.0)
     parser.add_argument("--history-every-minutes", type=int, default=60)
+    from .products_door import add_label_arguments
+
+    add_label_arguments(parser)
     parser.add_argument("--samehost-devices")
     parser.add_argument("--samehost-layouts", type=Path)
     parser.add_argument("--samehost-part", type=Path)

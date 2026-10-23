@@ -154,7 +154,7 @@ def _fixed(arguments: argparse.Namespace) -> int:
 
     from .moving_case import load_case
     from .moving_members import read_stage
-    from .moving_run import RUN_STATE_VARIABLES, segment_command
+    from .moving_run import RUN_STATE_VARIABLES, label_argv, segment_command
 
     case = load_case(arguments.case)
     casedir = Path(arguments.casedir).expanduser().absolute()
@@ -164,7 +164,7 @@ def _fixed(arguments: argparse.Namespace) -> int:
     out.mkdir(parents=True, exist_ok=False)
     cmd = segment_command(case, member, out, arguments.hours, arguments.history_every_minutes, arguments.engine,
                           init_source=f"{stage['source']} analysis; fixed-region control on member {member['name']}",
-                          extra=arguments.forecast_arg, cards=arguments.cards)
+                          extra=[*arguments.forecast_arg, *label_argv(arguments)], cards=arguments.cards)
     env = {k: v for k, v in os.environ.items() if k not in RUN_STATE_VARIABLES}
     # The shock series is recorded so a moving run can be compared against the same times.
     env.update(GPUWM_HEX_MOVING_SHOCK="1", GPUWM_WRF_EXACT="0", GPUWM_HEX_MESH_ROWS=member["mesh_rows"])
@@ -215,6 +215,9 @@ def _run_arguments(r: argparse.ArgumentParser) -> None:
     r.add_argument('--geog', default=None, metavar='DIR', help='WPS_GEOG root for member statics')
     r.add_argument('--forecast-arg', action='append', default=[], metavar='ARG',
                    help='one extra forecast-door argument for every segment (repeatable)')
+    from .products_door import add_label_arguments
+
+    add_label_arguments(r)
     r.add_argument('--tracker-module', help='path of a staged hexcore/storm_tracker.py (default: import it)')
     r.add_argument('--tracker-config', help='JSON TrackerConfig overrides (mode, tc, motion, placement)')
     r.add_argument('--scripted-track', help='[[model seconds, lat, lon], ...]: replaces fixes, never the policy')
@@ -362,6 +365,9 @@ def add_moving_parser(commands) -> None:
                        help="split the region across the first K visible cards of this host (default 1)")
     fixed.add_argument("--engine", default=None, metavar="DIR")
     fixed.add_argument("--forecast-arg", action="append", default=[], metavar="ARG")
+    from .products_door import add_label_arguments
+
+    add_label_arguments(fixed)
     fixed.set_defaults(handler=_fixed)
 
     products = sub.add_parser('products', help='join moving-run track and intensity diagnostics across meshes')
