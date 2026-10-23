@@ -582,11 +582,18 @@ fn write_window(
         json!({"name":window.name,"file":path,"days":[window.low,window.high],"field_summary":summary}),
     )
 }
+/// The s2s door's own minimum (hexcore.s2s_door.MIN_DAYS = 7: week-1 is the shortest window) and no
+/// ceiling, as the door has none. Breakage: the old 30..=90 bound refused every s2s run of 7 to 29 days
+/// at the products stage ("invalid S2S energy request"; a 7-day GEFS run, 2026-10-23) and every run
+/// past 90 days.
+fn days_supported(days: usize) -> bool {
+    days >= 7
+}
 fn run(req: Request) -> Result<()> {
     let started = Instant::now();
     let start = NaiveDateTime::parse_from_str(&req.start, FORMAT)?;
     if req.cadence_hours != 6
-        || !(30..=90).contains(&req.days)
+        || !days_supported(req.days)
         || req.members.is_empty()
         || req.members.len() > 1000
         || ![0.5, 1.].contains(&req.step_degrees)
@@ -761,6 +768,13 @@ fn main() -> Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_request_bound_is_the_door_minimum() {
+        assert!(!super::days_supported(6));
+        for days in [7, 14, 29, 30, 46, 90, 120] {
+            assert!(super::days_supported(days), "days {days}");
+        }
+    }
     use super::*;
     #[test]
     fn native_s1_and_classic_clock_encodings() {

@@ -32,6 +32,7 @@ PHYSICS_TABLES = ({"win32": "lookup_decode.dll", "darwin": "liblookup_decode.dyl
 POOL_READER = "rw_mpas_physics_pool" + _EXE
 OBS_SCORER = "hex_obs_scorecard" + (".exe" if sys.platform == "win32" else "")
 CHEM_SOURCES = "rw_hex_chem_sources" + (".exe" if sys.platform == "win32" else "")
+S2S_ENERGY = "rw_s2s_energy" + (".exe" if sys.platform == "win32" else "")
 NETCDF_COPY = "gpuwm-hex-netcdf-copy" + (".exe" if sys.platform == "win32" else "")
 # The history writer's parallel deflate (hexcore.history_deflate binds this name).
 HISTORY_DEFLATE = "libhex_history_deflate.so"
@@ -192,6 +193,9 @@ class BuildPy(build_py):
                                 "--install"], check=True)
         if scorer.is_file():
             shutil.copy2(scorer, destination.parent / OBS_SCORER)
+        energy = s2s_energy_bridge(root)
+        if energy is not None:
+            shutil.copy2(energy, destination.parent / S2S_ENERGY)
         # THE BREAKAGE THIS PREVENTS (verify-final-hex item 4, 2026-10-12):
         # the vertical door's CDF-5 template copier was looked up only beside
         # a source checkout, so no pip install had it.  Every install then
@@ -395,6 +399,29 @@ class BuildPy(build_py):
         return None
 
 
+
+
+def s2s_energy_bridge(root: Path) -> Path | None:
+    """The S2S energy tables' reducer, built like the scorer from the gpuwm source checkout.
+
+    THE BREAKAGE THIS PREVENTS (hex 0.4.2, 2026-10-23): the s2s products stage draws
+    the hub-height wind and solar tables with rw_s2s_energy, which no wheel carried, so
+    every default `gpuwm-hex s2s` run from pip stopped at products ("rw_s2s_energy is
+    missing").  It links the engine's netcrust and rw-store, which exist only in a gpuwm
+    SOURCE checkout; a build without one installs everything else and the energy step
+    refuses by name (hexcore.s2s_energy).
+    """
+    installed = root / "src/hexcore/libexec" / S2S_ENERGY
+    if installed.is_file():
+        return installed
+    engine = engine_source()
+    if engine is None:
+        print("gpuwm-hex: rw_s2s_energy NOT BUILT: set GPUWM_HEX_ENGINE_SOURCE to a gpuwm source checkout; "
+              "the s2s energy tables will refuse by name", file=sys.stderr)
+        return None
+    output = root / "rust/s2s-energy-build"
+    subprocess.run(["bash", str(root / "tools/build_s2s_energy.sh"), str(engine), str(output)], check=True)
+    return output / S2S_ENERGY
 
 
 def surface_series_bridge(root: Path) -> Path | None:
@@ -662,6 +689,7 @@ def bundled_helpers(root: Path) -> tuple[Path, ...]:
     return (root / "src/hexcore/libexec" / OBS_SCORER,
             root / "rust/chemistry-converter-build" / ("rw_mpas_convert" + _EXE),
             root / "rust/chem-sources/target/release" / CHEM_SOURCES,
+            root / "rust/s2s-energy-build" / S2S_ENERGY,
             root / "rust/netcdf-copy/target/release" / NETCDF_COPY,
             (Path(os.environ["GPUWM_HEX_ENGINE_BRIDGES"]) / ("rw_wrfbatch" + _EXE)
              if os.environ.get("GPUWM_HEX_ENGINE_BRIDGES") else

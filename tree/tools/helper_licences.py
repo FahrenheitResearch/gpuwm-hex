@@ -61,7 +61,8 @@ PROGRAMS = (("S", "hex_obs_scorecard", "the observation scorer (rust/obs-scoreca
             # serde, serde_json and chrono at versions no other helper links, while this notice said the remaining
             # helpers link the Rust standard library only, so those versions' texts did not travel with the wheel.
             ("R", "rw_s2s", "the subseasonal reducer (crate rw-s2s, this tree's tools/rustwx)"),
-            ("H", "rw_hex_chem_sources", "the chemistry source preparer (rust/chem-sources)"))
+            ("H", "rw_hex_chem_sources", "the chemistry source preparer (rust/chem-sources)"),
+            ("E", "rw_s2s_energy", "the S2S energy tables' reducer (crate rw-s2s-energy, this tree's tools/rustwx)"))
 
 
 def cargo_tree(cwd: Path, *args: str, linked: bool, target: str = "all") -> list[tuple[str, str, str | None]]:
@@ -99,6 +100,16 @@ def closures(engines: dict[str, Path], work: Path) -> dict[str, dict[str, list]]
     text = text.replace('"src/main.rs"', '"' + str(TREE / "tools/rustwx/crates/rw-sfc-series/src/main.rs") + '"')
     (sfc / "Cargo.toml").write_text(text)
     (sfc / "Cargo.lock").write_bytes((TREE / "tools/rustwx/crates/rw-sfc-series/Cargo.lock").read_bytes())
+    energy = work / "energy"
+    energy.mkdir()
+    crate = TREE / "tools/rustwx/crates/rw-s2s-energy"
+    text = (crate / "Cargo.toml").read_text()
+    for old, new in (("../../vendor/netcrust", "tools/rustwx/vendor/netcrust"),
+                     ("../rw-store", "tools/rustwx/crates/rw-store")):
+        text = text.replace('"' + old + '"', '"' + str(engines["E"] / new) + '"')
+    text = text.replace('"src/main.rs"', '"' + str(crate / "src/main.rs") + '"')
+    (energy / "Cargo.toml").write_text(text)
+    (energy / "Cargo.lock").write_bytes((crate / "Cargo.lock").read_bytes())
     out = {}
     for key, args, locked in (("S", ("--manifest-path", str(manifest)), ()),
                               ("B", ("-p", "rw-mpas"), ("--locked",)),
@@ -108,10 +119,13 @@ def closures(engines: dict[str, Path], work: Path) -> dict[str, dict[str, list]]
                               ("F", ("--manifest-path", str(sfc / "Cargo.toml")), ("--locked",)),
                               ("P", ("--manifest-path", str(TREE / "rust/physics-pool/Cargo.toml")), ("--locked",)),
                               ("R", ("-p", "rw-s2s"), ("--locked",)),
-                              ("H", ("--manifest-path", str(TREE / "rust/chem-sources/Cargo.toml")), ("--locked",))):
+                              ("H", ("--manifest-path", str(TREE / "rust/chem-sources/Cargo.toml")), ("--locked",)),
+                              ("E", ("--manifest-path", str(energy / "Cargo.toml")), ("--locked",))):
+        # E resolves from the engine workspace directory so its vendored sources apply, exactly as
+        # tools/build_s2s_energy.sh builds it.
         root = {"F": sfc, "P": TREE / "rust/physics-pool", "R": TREE / "tools/rustwx",
                 "H": TREE / "rust/chem-sources"}.get(key, engines[key] / "tools/rustwx")
-        target = "x86_64-unknown-linux-gnu" if key in ("F", "P", "R", "H") else "all"
+        target = "x86_64-unknown-linux-gnu" if key in ("F", "P", "R", "H", "E") else "all"
         linked = cargo_tree(root, *locked, *args, linked=True, target=target)
         every = cargo_tree(root, *locked, *args, linked=False, target=target)
         out[key] = {"linked": linked,
@@ -366,7 +380,7 @@ def render(engines: dict[str, Path], notice_sha: str, notice: dict, sets: dict, 
                "ArWen crates below are the rustwx workspace's own under MIT; its text ships as\n"
                "hexcore/data/licenses/rustwx-LICENSE-MIT.\n\n")
     out.append("rw-sfc-series is project code with MPAS-derived portions under Apache-2.0\n"
-               "AND BSD-3-Clause. The Registry pool reader is MIT. rw-s2s and\n"
+               "AND BSD-3-Clause. The Registry pool reader is MIT. rw-s2s, rw-s2s-energy and\n"
                "rust/chem-sources (hex-chem-sources) are this project's own code (Apache-2.0).\n\n")
     out += [f"  {name} {version}\n" for name, version in sorted(own)]
     if two:
@@ -436,6 +450,8 @@ def main(argv: list[str] | None = None) -> int:
     # engine source than the bridges (source_prebuilts); listing their crates from the bridges' source would
     # ship texts for crates the renderer no longer links and none for those it now does.
     engines["W"] = engines["C"] = (args.prebuilt_engine or args.engine).resolve()
+    # rw_s2s_energy is built by setup.py against the same engine source as the scorer.
+    engines["E"] = engines["S"]
     rev = identity(engine)[0]
     notice_bytes = (args.source_notice or engine / SOURCE_NOTICE).read_bytes()
     with tempfile.TemporaryDirectory(prefix="helper-licences-") as scratch:
@@ -459,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
                            "licence": (notice["inventory"][(n, v)][0] if (n, v) in notice["inventory"] else
                                        ("Apache-2.0" if n == "hex-obs-scorecard" else
                                         "Apache-2.0 AND BSD-3-Clause" if n == "rw-sfc-series" else
-                                        "Apache-2.0" if n in ("rw-s2s", "hex-chem-sources") else
+                                        "Apache-2.0" if n in ("rw-s2s", "rw-s2s-energy", "hex-chem-sources") else
                                         crate_source(n, v, s, engines)[1].get("license", "UNKNOWN")))}
                           for n, v, s in closure["linked"]] for key, closure in sets.items()}
             args.closures_json.write_text(json.dumps({"engine": identity(engine), "programs": rows}, indent=2) + "\n")

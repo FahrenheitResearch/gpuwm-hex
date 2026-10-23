@@ -213,6 +213,7 @@ jobs:
             --policy "${MANYLINUX_POLICY}" \
             --require-libexec hex_contract_hostprep \
             --require-libexec hex_obs_scorecard \
+            --require-libexec rw_s2s_energy \
             --require-libexec gpuwm-hex-netcdf-copy \
             --require-libexec rw_mpas_physics_pool \
             --require-libexec librw_surface.so \
@@ -307,6 +308,7 @@ jobs:
             --policy "${MANYLINUX_POLICY}" \
             --require-libexec hex_contract_hostprep \
             --require-libexec hex_obs_scorecard \
+            --require-libexec rw_s2s_energy \
             --require-libexec gpuwm-hex-netcdf-copy \
             --require-libexec rw_mpas_physics_pool \
             --require-libexec librw_surface.so \

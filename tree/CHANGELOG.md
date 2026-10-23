@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3
+
+Requires gpuwm>=2.9.4,<2.10.
+
+Fixed: global and subseasonal forecasts with sea ice no longer stop at their first step on gpuwm 2.9.4, and `gpuwm-hex s2s` runs of any length finish their energy products.
+
 ## 0.4.2
 
 Requires gpuwm>=2.9.4,<2.10.

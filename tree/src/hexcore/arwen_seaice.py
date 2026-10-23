@@ -21,6 +21,7 @@ def install_noahmp_seaice(backend, seam):
     driver = seam._driver
     if driver.noahmp_params is None:
         return
+    retire_engine_seaice(seam)
     if int(seam._cfg.sf_sfclay_physics) not in (1, 91):
         raise ValueError("Noah-MP sea ice requires the routed MM5 surface layer (1 or 91)")
     f = driver.fields
@@ -52,6 +53,44 @@ def install_noahmp_seaice(backend, seam):
                 _energy_balance(self, atmosphere, cfg, rain)
 
     driver.__class__ = NoahmpSeaiceDriver
+
+
+def retire_engine_seaice(seam):
+    """Leave this seam's ocean sea ice to the hex owner installed here.
+
+    THE BREAKAGE THIS PREVENTS: gpuwm 2.9.4 turned on its own prognostic
+    zero-layer sea ice by default (RunConfig.seaice_prognostic, seeded by
+    gpuwm.ocean.seaice.initialize inside the seam's physics initialization),
+    and its ice_step rewrites XICE after the land call. On the ArWen route the
+    MPAS Noah sea-ice solver below (and, in subseasonal runs, the hex mixed
+    layer ocean) already owns those columns, so two owners changed the ice
+    cover and the next step's Noah-MP census disagreed with the classification
+    the surface owner sealed: every 46-day s2s run on hex 0.4.2 + gpuwm 2.9.4
+    stopped at its first composite step ("Arwen NoahMP census/provenance
+    differs from sealed constructor authority", sea_ice 2078 vs 2157). The
+    engine model is active exactly when its state is in the field dictionary
+    (gpuwm.ocean.seaice.step and the Noah sea-ice call test "ice_volume"), so
+    removing that state, and the freezing-point floor its seed put on SST over
+    its mask (SST was the skin-temperature copy), restores the single owner
+    gpuwm 2.9.3 had. Runs before the first step, so no rollback or restart
+    snapshot carries the engine state.
+    """
+    import dataclasses
+
+    import cupy as cp
+
+    f = seam._driver.fields
+    if "ice_volume" not in f:
+        return
+    from gpuwm.ocean.seaice import COLD_SEEDED
+
+    mask = f["ice_ocean_mask"] > 0
+    f["sst"][...] = cp.where(mask, f["tsk"], f["sst"])
+    for name in COLD_SEEDED:
+        f.pop(name, None)
+    cfg = getattr(seam, "_cfg", None)
+    if dataclasses.is_dataclass(cfg) and getattr(cfg, "seaice_prognostic", False):
+        seam._cfg = dataclasses.replace(cfg, seaice_prognostic=False)
 
 
 def _ice_mask(f, threshold):
