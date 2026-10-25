@@ -343,11 +343,14 @@ class MPASShortwave(CudaSW):
             # MPAS mpas_atmphys_driver_radiation_sw.F:911-916 initializes
             # zero before the two independent string comparisons.
             idcor = int(decor == "latitude_varying")
-        times = self.cp.empty(2, dtype=self.cp.float32)
+        # One host read for the four scalars (was two). THE BREAKAGE THIS PREVENTS: each read is a
+        # full stream sync on the radiation step (G2).
+        words = self.cp.empty(4, dtype=self.cp.float32)
         self._launch("mpas_sw_driver_times", 1,
-                     (np.float32(xtime_s), np.float32(dt_radtsw), times))
-        xtime, radt = times.get()
-        declin, solcon = self.radconst(curr_julday, degrad, dpd).get()
+                     (np.float32(xtime_s), np.float32(dt_radtsw), words[:2]))
+        self._launch("mpas_sw_radconst", 1,
+                     (np.float32(curr_julday), np.float32(degrad), np.float32(dpd), words[2:]))
+        xtime, radt, declin, solcon = words.get()
         return dict(xtime=xtime, radt=radt, declin=declin, solcon=solcon,
                     degrad=np.float32(degrad), cldovrlp=cldovrlp, idcor=idcor,
                     o3input=2 if configs["config_o3climatology"] else 0)
@@ -424,8 +427,13 @@ class MPASShortwave(CudaSW):
     def _check_kiss_pressure(self, play, icld, irng):
         if icld != 0 and irng == 0 and play.shape[1] >= 2:
             pmid = play[:, :2] * np.float32(100)
-            if bool(self.cp.any(pmid[:, 0] < pmid[:, 1])):
-                raise ValueError("module_ra_rrtmg_sw.F:1742-1744 KISS requires bottom-to-top layer pressure")
+            # Inside a forecast the word is read off the step path, at most one step later
+            # (deferred_checks_v842); elsewhere at once. THE BREAKAGE THIS PREVENTS: an immediate
+            # read was a full stream sync on every radiation step (G2).
+            from .deferred_checks_v842 import defer
+            defer(self.cp.any(pmid[:, 0] < pmid[:, 1]).astype(self.cp.int32),
+                  "module_ra_rrtmg_sw.F:1742-1744 KISS requires bottom-to-top layer pressure",
+                  error=ValueError)
 
     #: Most sunlit columns in one SW wrapper batch, on any card. Bounds the
     #: batch's McICA slab at 4096 x 200,704 B = 0.77 GiB (nl=56).
@@ -455,6 +463,39 @@ class MPASShortwave(CudaSW):
         if inner >= 1 and width >= inner:
             width = width // inner * inner
         return max(1, min(int(nd), width))
+
+    # MPAS module_ra_rrtmg_sw.F:1403-2012 with the wrapper's irng=0, permuteseed=1.
+    def _wrapper_mcica(self, n, nl, cldovrlp, idcor, julday, layers, height, latitude):
+        """The (8, n, nl, 112) McICA slab: cloud, ice, liquid and snow paths from the generator,
+        then the band optics slots at their clear values (tau 0, ssa 1, asym 0, fsf 0) that the
+        solver's cloud-property step fills. icld 0 leaves the generator slots zero, as native's
+        early return over cleared arrays."""
+        cp = self.cp
+        m = cp.empty((8, n, nl, 112), dtype=cp.float32)
+        m[4].fill(0)
+        m[5].fill(1)
+        m[6:].fill(0)
+        if not 1 <= cldovrlp <= 5:
+            # icld 0 returns before any slot is written; other selectors keep the per-column
+            # kernel's own handling of native's unset CDF.
+            m[:4].fill(0)
+            self._launch("mpas_sw_mcica", n,
+                         tuple(np.int32(v) for v in (n, nl, cldovrlp, idcor, julday, 0, 1))
+                         + (layers[0], layers[8], layers[9], layers[10], layers[11], height,
+                            latitude, m, m))
+            return m
+        from .rrtmg_lw_v842 import mcica_draws_per_gpoint, xorshift_jump_table
+        seeds = cp.empty((n, 4), dtype=cp.uint32)
+        weights = cp.empty((n, nl) if cldovrlp >= 4 else (1,), dtype=cp.float32)
+        self._launch("mpas_sw_mcica_seeds", n,
+                     tuple(np.int32(v) for v in (n, nl, cldovrlp, idcor, julday, 1))
+                     + (layers[0], height, latitude, seeds, weights))
+        draws = mcica_draws_per_gpoint(cldovrlp, nl)
+        self._launch("mpas_sw_mcica_gpoint", n * 112,
+                     tuple(np.int32(v) for v in (n, nl, cldovrlp, draws))
+                     + (layers[8], layers[9], layers[10], layers[11], seeds, weights,
+                        xorshift_jump_table(draws, 112), m))
+        return m
 
     # MPAS module_ra_rrtmg_sw.F:10026-10664, rrtmg_swrad.
     def rrtmg_swrad(self, fields, surface, p8w, t8w, *, xtime, gmt, julday, radt,
@@ -514,52 +555,20 @@ class MPASShortwave(CudaSW):
             # Sunlit columns go through the wrapper in batches: the McICA
             # slab is (8, columns, nl, 112) float32, 200,704 B per column at
             # nl=56, and taken for every sunlit column at once it was the
-            # largest per-column item on this route (HEX-MEMORY-2026-10-14
-            # CENSUS item 1; ~650 GB at 15 km). Each column has its own KISS
+            # largest per-column item on this route (the 2026-10-14 memory
+            # census, item 1; ~650 GB at 15 km). Each column has its own KISS
             # stream seeded from its own pressures (mpas_sw_mcica, irng=0)
             # and the solver is column-independent, so per-column words do
             # not depend on the batch.
             width = self.sunlit_column_chunk(nd, nl, sources is not None, column_chunk)
-            for first in range(0, nd, width):
-                cols = day[first:first + width]
-                n = int(cols.size)
-                l = cp.ascontiguousarray(layers[:, cols, :])
-                it = cp.ascontiguousarray(interfaces[:, cols, :])
-                m = cp.zeros((8, n, nl, 112), dtype=cp.float32)
-                m[5].fill(1)
-                self._launch("mpas_sw_mcica", n,
-                             tuple(np.int32(v) for v in (n, nl, cldovrlp, idcor, julday, 0, 1))
-                             + (l[0], l[8], l[9], l[10], l[11], cp.ascontiguousarray(height[cols]),
-                                cp.ascontiguousarray(s[0, cols]), m, m))
-                optics = None
-                if sources is not None:
-                    # MPAS module_ra_rrtmg_sw.F:10562-10572 copies only model
-                    # levels, then sets the added top layer to tau=asy=0, ssa=1.
-                    # A caller may retain its source halo, but it is not optical input.
-                    slabs = []
-                    for value, top in sources:
-                        slab = cp.full((n, 14, nl), top, dtype=cp.float32)
-                        slab[:, :, :nz] = value[cols, :, :nz]
-                        slabs.append(slab)
-                    optics = tuple(slabs)
-                    del slabs
-                albedo = cp.ascontiguousarray(s[2, cols])
-                # icld=0 inatm clears the same optical slabs supplied here; bypass
-                # the legacy launcher's campaign-only refusal without changing it.
-                out = self.rrtmg_sw_batched_device(
-                    n, nl, max(1, cldovrlp), l[0], it[0], l[1], it[1], cp.ascontiguousarray(s[3, cols]),
-                    l[2], l[3], l[4], l[5], l[6], l[7], albedo, albedo, albedo, albedo,
-                    cp.ascontiguousarray(cosine[cols]), cp.ones(n, dtype=cp.float32), 0,
-                    cp.full(n, solcon, dtype=cp.float32), cloudflag, iceflag, 1,
-                    m[0], m[4], m[5], m[6], m[7], m[1], m[2], m[3], l[12], l[13], l[14],
-                    aer_opt=3 if optics is not None else 0, column_chunk=column_chunk, mcica_layout="column", aerosol=optics)
-                for target, name in zip(profiles, ("swuflx", "swuflxc", "swdflx", "swdflxc")):
-                    target[cols] = out[name]
-                direct[cols] = out["swdkdir"]
-                heat[cols] = out["swhr"]
-                # Retire this batch's inputs, slab and solver outputs before
-                # the next batch allocates its own.
-                del cols, l, it, m, optics, albedo, out
+            # The legacy solver's per-chunk guards are read once when this scope closes, with the
+            # same verdicts in the same order (gpuwm.core.deferred_device_checks). THE BREAKAGE
+            # THIS PREVENTS: each chunk's guard reads were full stream syncs (G2).
+            from gpuwm.core.deferred_device_checks import deferred as _deferred_guards
+            with _deferred_guards():
+                self._sunlit_batches(day, nd, width, layers, interfaces, height, s, sources, nz, nl,
+                                     cldovrlp, idcor, julday, cloudflag, iceflag, solcon,
+                                     cosine, column_chunk, profiles, direct, heat)
             del sources
             # The batched chain's workspace is used on radiation calls only;
             # hand it back so it is not held through the steps in between
@@ -573,6 +582,52 @@ class MPASShortwave(CudaSW):
         result.update(zip(PROFILE_OUTPUTS, (profiles[0], profiles[1], profiles[2], profiles[3])))
         result["rthratensw"] = tendency
         return result
+
+    def _sunlit_batches(self, day, nd, width, layers, interfaces, height, s, sources, nz, nl,
+                        cldovrlp, idcor, julday, cloudflag, iceflag, solcon, cosine, column_chunk,
+                        profiles, direct, heat):
+        """MPAS module_ra_rrtmg_sw.F:10026-10664: the sunlit wrapper batches of rrtmg_swrad."""
+        cp = self.cp
+        for first in range(0, nd, width):
+            cols = day[first:first + width]
+            n = int(cols.size)
+            l = cp.ascontiguousarray(layers[:, cols, :])
+            it = cp.ascontiguousarray(interfaces[:, cols, :])
+            m = self._wrapper_mcica(n, nl, cldovrlp, idcor, julday, l,
+                                    cp.ascontiguousarray(height[cols]),
+                                    cp.ascontiguousarray(s[0, cols]))
+            optics = None
+            if sources is not None:
+                # MPAS module_ra_rrtmg_sw.F:10562-10572 copies only model
+                # levels, then sets the added top layer to tau=asy=0, ssa=1.
+                # A caller may retain its source halo, but it is not optical input.
+                slabs = []
+                for value, top in sources:
+                    slab = cp.full((n, 14, nl), top, dtype=cp.float32)
+                    slab[:, :, :nz] = value[cols, :, :nz]
+                    slabs.append(slab)
+                optics = tuple(slabs)
+                del slabs
+            albedo = cp.ascontiguousarray(s[2, cols])
+            # The solver takes the whole sunlit batch as one chunk (column_chunk or n): its
+            # per-column kernels otherwise ran ~2,500 columns at a time. Chunk width is workspace
+            # shape only; per-column words are the same at any width.
+            # icld=0 inatm clears the same optical slabs supplied here; bypass
+            # the legacy launcher's campaign-only refusal without changing it.
+            out = self.rrtmg_sw_batched_device(
+                n, nl, max(1, cldovrlp), l[0], it[0], l[1], it[1], cp.ascontiguousarray(s[3, cols]),
+                l[2], l[3], l[4], l[5], l[6], l[7], albedo, albedo, albedo, albedo,
+                cp.ascontiguousarray(cosine[cols]), cp.ones(n, dtype=cp.float32), 0,
+                cp.full(n, solcon, dtype=cp.float32), cloudflag, iceflag, 1,
+                m[0], m[4], m[5], m[6], m[7], m[1], m[2], m[3], l[12], l[13], l[14],
+                aer_opt=3 if optics is not None else 0, column_chunk=column_chunk or n, mcica_layout="column", aerosol=optics)
+            for target, name in zip(profiles, ("swuflx", "swuflxc", "swdflx", "swdflxc")):
+                target[cols] = out[name]
+            direct[cols] = out["swdkdir"]
+            heat[cols] = out["swhr"]
+            # Retire this batch's inputs, slab and solver outputs before
+            # the next batch allocates its own.
+            del cols, l, it, m, optics, albedo, out
 
     # MPAS module_ra_rrtmg_sw.F:9625-9649, Earth/Sun orbital factor.
     def earth_sun(self, idn):
@@ -3207,6 +3262,77 @@ extern "C" __global__ void mpas_sw_mcica(int nc,int nl,int icld,int idcor,int ju
    O(1,k,g)=cloudy?X(iw,k):0.f;O(2,k,g)=cloudy?X(lw,k):0.f;O(3,k,g)=cloudy?X(sw,k):0.f;
    prev=r;prev_cf=frac;
   }
+ }
+ #undef X
+ #undef O
+}
+// MPAS module_ra_rrtmg_sw.F:2016-2048. KISS jump-ahead, component by component:
+// the LCG by its affine n-step map, the xorshift by a host GF(2) table, and each
+// multiply-with-carry s=a*(s&65535)+(s>>16), once in its canonical range
+// s <= m = a*65536-1 (reached within three steps from any word), by
+// multiplication with a^n modulo m (s = 0 and s = m are fixed points).
+__device__ unsigned int mpas_sw_lcg_jump(unsigned int s,unsigned int n){
+ unsigned int ra=1u,rc=0u,pa=69069u,pc=1327217885u;
+ while(n){if(n&1u){rc=pa*rc+pc;ra=pa*ra;}pc=pa*pc+pc;pa=pa*pa;n>>=1;}
+ return ra*s+rc;
+}
+__device__ unsigned int mpas_sw_mwc_jump(unsigned int s,unsigned int a,unsigned int n){
+ const unsigned long long m=(unsigned long long)a*65536ull-1ull;
+ while(n&&(unsigned long long)s>m){s=a*(s&65535u)+(s>>16);--n;}
+ if(!n||(unsigned long long)s==m||s==0u)return s;
+ unsigned long long r=1ull,base=a;
+ while(n){if(n&1u)r=r*base%m;base=base*base%m;n>>=1;}
+ return (unsigned int)((unsigned long long)s*r%m);
+}
+// MPAS module_ra_rrtmg_sw.F:1745-1748,1403-2012 (irng=0). Per wrapper column:
+// the KISS state after the permutation draws and the per-layer exponential
+// overlap weights, with mpas_sw_mcica's arithmetic (the same gfk_exp of the
+// same operands).
+extern "C" __global__ void mpas_sw_mcica_seeds(int nc,int nl,int icld,int idcor,int julday,int permuteseed,
+ const float* play,const float* hgt,const float* latitude,unsigned int* seeds,float* weights) {
+ int c=blockDim.x*blockIdx.x+threadIdx.x;if(c>=nc)return;
+ #define X(a,k) a[(long long)c*nl+(k)]
+ unsigned int sd[4];for(int j=0;j<4;j++){float pm;if(j<nl)pm=FMUL(X(play,j),100.f);sd[j]=(unsigned int)(int)FMUL(FSUB(pm,(float)(int)pm),1000000000.f);}
+ for(int i=0;i<permuteseed;i++)mpas_kiss(sd[0],sd[1],sd[2],sd[3]);
+ for(int j=0;j<4;j++)seeds[c*4+j]=sd[j];
+ if(icld==4||icld==5){
+  float zo=2500.f;
+  if(idcor==1){float am3=FMUL(julday>181?-0.07671232521533966f:0.07671232521533966f,(float)(julday-(julday>181?272:91)));
+   float d=FSUB(latitude[c],am3);zo=FMUL(FADD(1.4315f,FMUL(2.1219f,gfk_exp(FDIV(-FMUL(d,d),654.54107666015625f)))),1.e3f);}
+  float inverse=FDIV(1.f,zo);
+  for(int k=1;k<nl;k++)weights[(long long)c*nl+k]=gfk_exp(FMUL(-FSUB(X(hgt,k),X(hgt,k-1)),inverse));
+ }
+ #undef X
+}
+// MPAS module_ra_rrtmg_sw.F:1403-2012, the wrapper's subcolumns (irng=0, icld
+// 1..5), one thread per (column, g-point): the thread jumps its column's stream
+// to its g-point's first draw and runs mpas_sw_mcica's layer loop for that
+// g-point unchanged; neighbouring threads write neighbouring g-points.
+// THE BREAKAGE THIS PREVENTS: one thread per column walked 112 x nl draws in
+// sequence and wrote four slabs at a column stride (fix group G2).
+extern "C" __global__ void mpas_sw_mcica_gpoint(int nc,int nl,int icld,int draws,
+ const float* cf,const float* iw,const float* lw,const float* sw,
+ const unsigned int* seeds,const float* weights,const unsigned int* xorshift,float* out) {
+ long long t=(long long)blockDim.x*blockIdx.x+threadIdx.x;if(t>=(long long)nc*112)return;
+ const int g=(int)(t%112);const long long c=t/112;
+ #define X(a,k) a[c*nl+(k)]
+ #define O(f,k) out[(((long long)(f)*nc+c)*nl+(k))*112+g]
+ const unsigned int n=(unsigned int)g*(unsigned int)draws;
+ unsigned int s1=mpas_sw_lcg_jump(seeds[c*4],n);
+ unsigned int s2=0u;{unsigned int v=seeds[c*4+1];const unsigned int* col=xorshift+g*32;for(int i=0;i<32;i++)if((v>>i)&1u)s2^=col[i];}
+ unsigned int s3=mpas_sw_mwc_jump(seeds[c*4+2],18000u,n);
+ unsigned int s4=mpas_sw_mwc_jump(seeds[c*4+3],30903u,n);
+ float prev=0.f,prev_cf=0.f;
+ float maximum=0.f;if(icld==3)maximum=mpas_kiss(s1,s2,s3,s4);
+ for(int k=0;k<nl;k++){
+  float r=icld==3?maximum:mpas_kiss(s1,s2,s3,s4);
+  float frac=X(cf,k)<1.e-20f?0.f:X(cf,k);
+  if(icld==2&&k>0){if(prev>FSUB(1.f,prev_cf))r=prev;else r=FMUL(r,FSUB(1.f,prev_cf));}
+  if(icld==4||icld==5){float r2=mpas_kiss(s1,s2,s3,s4);
+   if(k>0){float alpha=weights[c*nl+k];if(icld==5&&frac==0.f&&prev_cf>0.f)alpha=0.f;if(r2<alpha)r=prev;}}
+  bool cloudy=r>=FSUB(1.f,frac);O(0,k)=cloudy?1.f:0.f;
+  O(1,k)=cloudy?X(iw,k):0.f;O(2,k)=cloudy?X(lw,k):0.f;O(3,k)=cloudy?X(sw,k):0.f;
+  prev=r;prev_cf=frac;
  }
  #undef X
  #undef O

@@ -391,10 +391,22 @@ class _Lane:
         self.index_cache: dict[Any, Any] = {}
 
     def i32(self, key: Any, values: np.ndarray) -> Any:
+        """A cached device index array, complete before any stream reads it.
+
+        BREAKAGE WITHOUT THE WAIT (2026-10-24, 240/60 km fixed region, 2 cards): the coordinator
+        builds these on first use, right before ``_move_many`` packs with them on this card's
+        non-blocking stream.  ``cp.asarray`` queues its host-to-device copy on the coordinator's
+        legacy default stream, which a non-blocking stream does not wait for, so the first pack
+        could read the indices before they landed: 3 of 4 two-card LTS runs stopped with an
+        illegal address in the first class steps, and 1 refused a step on the validation flag.
+        One card never builds them (no routes, no pulls), so it never crashed.
+        """
         cached = self.index_cache.get(key)
         if cached is None:
-            with self.owner.cp.cuda.Device(self.device):
-                cached = self.owner.cp.asarray(np.ascontiguousarray(values, dtype=np.int32))
+            cp = self.owner.cp
+            with cp.cuda.Device(self.device), self.stream:
+                cached = cp.asarray(np.ascontiguousarray(values, dtype=np.int32))
+                self.stream.synchronize()
             self.index_cache[key] = cached
         return cached
 
@@ -535,12 +547,24 @@ class _BlockExchanger:
         return cached
 
     # -- the native round sites ---------------------------------------------------
-    def round_step_boundary(self, state: Any, saved: Any) -> None:
+    def round_step_boundary(self, state: Any, saved: Any, dynamics_tendencies: Any = None) -> None:
+        """A: the mailbox fills, then the same-class peers' owner truth.
+
+        Physics runs on every local column of a block, so the GF/new-Tiedtke
+        advective forcing it reads (rthdynten, rqvdynten, formed from the
+        block's previous step over all its local cells) also crosses at A:
+        the outer halo rows' tendencies have incomplete stencils, and the
+        same defect in the same-host ranks moved a 2-card 30 km globe off
+        the 1-card run at step 2, at the partition seam (e03fa99a).
+        """
         owner, block = self.owner, self.block
         owner._fill_state(block, state, saved, *self._spec("A", 0), 0)
         if owner.ntr and int(state.scalars.shape[0]) > 0:
             owner._fill_scalars(block, state.scalars, *self._scalar_spec("A", START))
-        self.peer("A", self._state_fields(state, saved, scalars=True))
+        fields = self._state_fields(state, saved, scalars=True)
+        if dynamics_tendencies is not None:
+            fields += [(name, getattr(dynamics_tendencies, name), "cell") for name in ("rthdynten", "rqvdynten")]
+        self.peer("A", fields)
 
     def round_stage_entry(self, state: Any, saved: Any) -> None:
         stage = self._schedule.stages[self._stage]
@@ -591,7 +615,13 @@ class _BlockExchanger:
         if not self.finished():
             raise RuntimeError("the physics halo round was asked for inside the dynamics schedule; "
                                "the halo would be filled at a time no class accepted")
-        self.owner._fill_state(self.block, atmosphere.state, atmosphere.saved, *self._spec("P", 6), 0)
+        # The step end is plane 3N (planes_per_step), as in the one-device executor.  A literal 6
+        # stood here from the N = 2 clock: with MPAS-A's default N = 4 it read a finer class's
+        # mid-step state into the halo the microphysics validates, so a one-card run (one-device
+        # executor) and a multi-card run parted at the first coarse step (2026-10-24, 240/60 km
+        # fixed region: 0.78 Pa RMS surface pressure at 1 h).
+        self.owner._fill_state(self.block, atmosphere.state, atmosphere.saved,
+                               *self._spec("P", self.owner.planes_per_step), 0)
         if self.owner.ntr:
             self.owner._fill_scalars(self.block, atmosphere.state.scalars, *self._scalar_spec("D", END))
         self.peer("P", self._state_fields(atmosphere.state, atmosphere.saved, scalars=True))
@@ -835,11 +865,20 @@ class FullStepLtsMulti:
         self.pull_bytes = 0
         self.time_classes = False
         self.stepper: Callable[[_Block], None] | None = None
+        #: The block's held cumulus forcing for its next step (set with ``stepper``), carried at round A.
+        self.forcing_of: Callable[[_Block], Any] | None = None
         # a context manager factory around every class step event: (class index, seconds)
         self.around_class_step: Callable[[int, float], Any] = lambda index, seconds: nullcontext()
         self._staging: dict[tuple[int, int], dict[str, Any]] = {}
         if self.ntr:
             self._attach_scalars(clamp_audit)
+        # Everything above was built on this thread's legacy default stream (tables, mailboxes,
+        # registers, spec arrays); the rank and lane streams are non-blocking and never wait for
+        # it, so every card finishes that work before the first rank kernel reads it (the same
+        # race as _Lane.i32).
+        for device in self.cards:
+            with cp.cuda.Device(device):
+                cp.cuda.Device(device).synchronize()
         # initial publication: truth plane, sixth 0 of every level group, scalars likewise
         def publish_initial(rank: int) -> None:
             for block in self.blocks:
@@ -1232,7 +1271,7 @@ class FullStepLtsMulti:
     def _attach_matched_flux(self, block: _Block) -> None:
         """Coarse side: wrap this block driver's acoustic momentum kernel (cache-local tap)."""
 
-        from . import cuda_acoustic_v841 as acoustic_module
+        from .cuda_fullstep_lts_scalars import tap_acoustic_momentum
 
         cp = self.cp
         lane = block.lane
@@ -1272,9 +1311,9 @@ class FullStepLtsMulti:
                 lane.G_edge, block.flux_kept, arguments[-2], arguments[-1]))
             block.flux_imposed += 1
 
-        tap_kernel(acoustic_module, block.driver.cache, "acoustic_ru_v841", before=keep, after=impose,
-                   dimensions=(("nlev", self.nlev), ("nedges", block.edge_stride),
-                               ("ncells", block.cell_stride)))
+        tap_acoustic_momentum(block.driver, before=keep, after=impose,
+                              dimensions=(("nlev", self.nlev), ("nedges", block.edge_stride),
+                                          ("ncells", block.cell_stride)))
 
     # -- scalar interface hooks ----------------------------------------------------------------
     def _attach_scalars(self, audit: bool) -> None:
@@ -1431,7 +1470,8 @@ class FullStepLtsMulti:
         block.exchanger.begin(schedule, direct, reset, event)
         atmosphere = driver.atmosphere
         atmosphere.state.time_seconds = self.start_seconds + start_tick * self.base_dt / self.planes_per_step
-        block.exchanger.round_step_boundary(atmosphere.state, atmosphere.saved)
+        block.exchanger.round_step_boundary(atmosphere.state, atmosphere.saved,
+                                            None if self.forcing_of is None else self.forcing_of(block))
         if any(reset):
             # every local interface edge with the coarser class sits next to a
             # reset density: recover its velocity from the committed momentum

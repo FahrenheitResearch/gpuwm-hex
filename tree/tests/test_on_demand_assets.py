@@ -304,3 +304,23 @@ def test_pin_subcommand_is_deterministic(estate, tmp_path):
     for name, row in json.loads(first.read_text())['assets'].items():
         assert row['compiler'] == json.loads((source / name).read_text())['compiler']
         assert row['sha256'] == hashlib.sha256((source / name).read_bytes()).hexdigest()
+
+
+def test_pack_matches_the_loaded_compiler_not_pip_metadata():
+    """CuPy loaded the system CUDA 13.0 libnvrtc while pip metadata named 13.4.92."""
+    from hexcore.kernel_pack import same_compiler
+    built = {"cache_key": "k", "cupy": "14.2.0", "cupy_package": "cupy-cuda13x==14.2.0", "debug": "0",
+             "nvrtc": [13, 0], "nvrtc_library_sha256": "a" * 64, "nvrtc_package": "nvidia-cuda-nvrtc==13.0.88",
+             "use_pch": False, "use_ptx": False}
+    measured = {**built, "nvrtc_package": "nvidia-cuda-nvrtc==13.4.92"}
+    assert same_compiler(built, measured)
+    assert not same_compiler(built, {**measured, "nvrtc_library_sha256": "b" * 64})
+    assert not same_compiler(built, {**measured, "nvrtc": [13, 4]})
+
+
+def test_a_pin_row_may_name_its_own_release():
+    pins = {"release_assets": {"repository": "o/r", "tag": "kernel-packs-v0.4.2"},
+            "assets": {"kernel-pack-cuda13.0.json": {"release_tag": "kernel-packs-v0.4.5"},
+                       "kernel-pack-cuda13.json": {}}}
+    assert assets.asset_url("kernel-pack-cuda13.0.json", pins).endswith("/kernel-packs-v0.4.5/kernel-pack-cuda13.0.json")
+    assert assets.asset_url("kernel-pack-cuda13.json", pins).endswith("/kernel-packs-v0.4.2/kernel-pack-cuda13.json")

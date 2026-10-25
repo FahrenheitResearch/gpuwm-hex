@@ -234,10 +234,26 @@ extern "C" __global__ void aero_surface_emission_kernel(
 '''
 
 
-@lru_cache(maxsize=None)
 def _kernel(name: str) -> Any:
+    """The aerosol interface kernel loaded on the calling card."""
+    import cupy as cp
+    # A CUDA module belongs to the card it was loaded on. Same-host ranks drive
+    # several cards from one process, so a cache keyed without the card hands
+    # the second card the first card's handle (CUDA_ERROR_INVALID_HANDLE at step 1).
+    return _kernel_on(int(cp.cuda.Device().id), name)
+
+
+@lru_cache(maxsize=None)
+def _interface_module(device: int) -> Any:
     """Compile module_mp_thompson_aerosols.F:23-210 and its interface kernels."""
-    return _compile_module(CUDA_SOURCE,_hex_numerics.options(CUDA_OPTIONS)).get_function(name)
+    import cupy as cp
+    with cp.cuda.Device(device):
+        return _compile_module(CUDA_SOURCE,_hex_numerics.options(CUDA_OPTIONS))
+
+
+@lru_cache(maxsize=None)
+def _kernel_on(device: int, name: str) -> Any:
+    return _interface_module(device).get_function(name)
 
 
 def _compile_module(source: str, options: tuple[str, ...]) -> Any:
@@ -634,6 +650,11 @@ def _run_bound_slot(call: Any) -> None:
                       **{n:p[n] for n in ("has_reqc", "has_reqi", "has_reqs")})
     if call.flags.diagnostics:
         core.launch_radar(fields, p["diagnostics"], device_math_source=maths)
+    if p.get("nest_look") is not None:
+        # A trigger look's reflectivity (mpasphys/nest_look_v842): scratch only off a diagnostics step.
+        p["nest_look"].form(fields, p["diagnostics"], diagnostics_formed=bool(call.flags.diagnostics),
+                            launch_radar=core.launch_radar, device_math_source=maths)
+    if call.flags.diagnostics:
         nz, columns = fields["qv"].shape
         relhum = p["diagnostics"]["relhum"]
         _fields(dict(relhum=relhum), shape=(nz, columns))

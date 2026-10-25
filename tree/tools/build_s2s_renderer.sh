@@ -30,6 +30,10 @@ patch -d "$out/source" -p1 --forward < "$root/docs/s2s/engine-patches/0002-s2s-e
 if ! grep -q s2s-wind-terciles "$out/source/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs"; then
   (cd "$out/source" && patch -p1 < "$root/docs/s2s/engine-patches/0003-rw-wrfbatch-s2s-wind-terciles.patch")
 fi
+# The composite map draws the model's own REFC (an MPAS run's refl10cm_max) when a frame has no REFL_10CM volume.
+if ! grep -q "native REFC" "$out/source/tools/rustwx/crates/rw-wrfbatch/src/wrf_process.rs"; then
+  (cd "$out/source" && patch -p1 < "$root/docs/s2s/engine-patches/0004-rw-wrfbatch-native-refc-composite.patch")
+fi
 # Cargo discovers .cargo/config.toml from cwd, not --manifest-path. This
 # workspace's config points every external dependency at its vendored source.
 (cd "$out/source/tools/rustwx"

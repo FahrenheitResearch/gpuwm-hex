@@ -22,6 +22,29 @@
       },
       "sha256": "d2c04d821a397c188261e41361a6a3240f59c2725d2922d17f4588690c4a7bff"
     },
+    "kernel-pack-cuda13.0.json": {
+      "bytes": 37942672,
+      "compiler": {
+        "cache_key": "87417f5ddafec4c853dab1863f8bb308dafc152c",
+        "cupy": "14.2.0",
+        "cupy_package": "cupy-cuda13x==14.2.0",
+        "debug": "0",
+        "nvrtc": [
+          13,
+          0
+        ],
+        "nvrtc_library_sha256": "a49e67e8e74590f1e98de55c39c6287efd3f59e3c3797464d7bbe0fe01349b11",
+        "nvrtc_package": "nvidia-cuda-nvrtc==13.4.92",
+        "use_pch": false,
+        "use_ptx": false
+      },
+      "kind": "kernel-pack",
+      "release_tag": "kernel-packs-v0.4.5",
+      "select": {
+        "nvrtc_major": 13
+      },
+      "sha256": "36d5753a23376dffb633981a6538bdb922436c1a348b79b253b3e6d09920b6da"
+    },
     "kernel-pack-cuda13.json": {
       "bytes": 48381036,
       "compiler": {

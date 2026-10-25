@@ -41,19 +41,39 @@ def remap_atmosphere(payload, weights, *, source_mesh, target_prepared, config, 
     balanced, balance_reason = balance_scope(weights, old)
     balance_receipt = dict(applied=False, reason=balance_reason)
 
+    from .moving_balance import _mapped
+    from .host_parallel import run_tasks
+
     def product_map(value):
         # Products of the dry density keep the donor's lowest intensive part
         # below its ground (HeightConservativeMap.mass_intensive, density).
         if height_remap_map(weights):
             return weights.mass_intensive(value, density=old['rho'])
         return getattr(weights, 'mass_intensive', weights.intensive)(value)
+
+    def momentum_product(value):
+        # product_map without touching the map's shared last-call receipts (it may run on another thread).
+        if height_remap_map(weights):
+            return _mapped(weights, value, old['rho'])[0]
+        return getattr(weights, 'mass_intensive', weights.intensive)(value)
+
+    def momentum_branch():
+        # Momentum, divergence diagnostics and the interface w map read only the carrier and the map,
+        # never the remapped thermodynamics, so they run beside it (THE COST THIS REMOVES: ~4.5 s of
+        # one core after the 18 s thermodynamics, box-aws2x 2026-10-24).  Same calls, same order.
+        return _remap_momentum(payload, weights, source_mesh, target_prepared, momentum_product, mass_map)
     if balanced:
         from .moving_balance import remap_balanced_thermodynamics
-        rho,rho_theta,scalars,mass,heat,tracer_receipts,balance_receipt = remap_balanced_thermodynamics(
-            payload,weights,target_prepared)
+        from .moving_balance import extend_below_ground as _extend
+        # The below-ground extension is given once, before either branch reads the map.
+        _extend(weights, old, [i for i, name in enumerate(payload['scalar_names'])
+                               if name in ('qv', 'qc', 'qr', 'qi', 'qs', 'qg', 'qh')])
+        mass_map = lambda value: _mapped(weights, value, None)[0]
+        (rho,rho_theta,scalars,mass,heat,tracer_receipts,balance_receipt), momentum = run_tasks([
+            lambda: remap_balanced_thermodynamics(payload, weights, target_prepared, extended=True),
+            momentum_branch])
         balance_receipt = dict(balance_receipt, applied=True, reason=balance_reason)
         height_remap = True
-        mass_map = weights.mass_intensive
     else:
         if height_remap_map(weights):
             from .moving_balance import extend_below_ground
@@ -96,44 +116,10 @@ def remap_atmosphere(payload, weights, *, source_mesh, target_prepared, config, 
                 tracer_receipts[name]['accounting'] = mass['accounting']
                 tracer_receipts[name]['terrain_domain_reconciliation']=domain_reconciliation
                 tracer_receipts[name]['positivity_roundoff']=weights.last_positivity_roundoff
-    vector = reconstruct_cartesian(old['normal_velocity'], source_mesh.arrays)
-    vector *= old['rho'][:, :, None]
-    target_vector = np.stack([product_map(vector[:, :, axis]) for axis in range(3)], axis=-1)
-    dz=np.asarray(vertical.dzw,dtype=np.float64)
-    source_momentum=np.einsum('lcj,c,l->j',vector,weights.source_area,dz)
-    mapped_momentum=np.einsum('lcj,c,l->j',target_vector,weights.target_area,dz)
+        momentum = momentum_branch()
+    (target_vector, source_momentum, mapped_momentum, radial, cells, gather_cells, rho_u, tangent_momentum,
+     divergence, w) = momentum
     arrays = target_prepared.mesh.arrays
-    centers = np.stack([arrays[name] for name in ('xCell', 'yCell', 'zCell')], axis=-1).astype(np.float64)
-    centers /= np.linalg.norm(centers, axis=-1, keepdims=True)
-    radial = np.einsum('lcj,cj->lc', target_vector, centers)
-    target_vector -= radial[:, :, None] * centers
-    cells = np.asarray(arrays['cellsOnEdge'], dtype=np.int64)
-    normals = np.asarray(arrays['edgeNormalVectors'], dtype=np.float64)
-    if normals.shape != (len(cells), 3):
-        raise ValueError(f'edge normal shape {normals.shape} is unsupported')
-    # Native regional cold initialization gives the absent cell zero mass.
-    # Never let a -1 sentinel gather the last real atmospheric column.
-    gather_vector = np.concatenate((target_vector, np.zeros_like(target_vector[:, :1])), axis=1)
-    gather_cells = np.where(cells < 0, rho.shape[1], cells)
-    rho_u = np.einsum('lej,ej->le', (gather_vector[:, gather_cells[:, 0]] + gather_vector[:, gather_cells[:, 1]])*.5,
-                      normals).astype(np.float32)
-    tangent_momentum=np.einsum('lcj,c,l->j',target_vector,weights.target_area,dz)
-    source_divergence=mass_flux_divergence(old['rho_u'],source_mesh.arrays)
-    expected_divergence=mass_map(source_divergence)
-    target_divergence=mass_flux_divergence(rho_u,arrays)
-    def divergence_rms(value):
-        return float(np.sqrt(np.einsum('lc,c,l->',value*value,weights.target_area,dz)/
-                             (weights.target_area.sum()*dz.sum())))
-    divergence=dict(coordinate='computational mass-flux divergence',
-        units='kg m-3 s-1',expected_overlap_rms=divergence_rms(expected_divergence),
-        target_edge_rms=divergence_rms(target_divergence),
-        difference_rms=divergence_rms(target_divergence-expected_divergence),
-        difference_abs_max=float(abs(target_divergence-expected_divergence).max()),
-        target_global_integral_kg_s=np.einsum('lc,c,l->',target_divergence,weights.target_area,dz).item(),
-        balance_cleanup_added=False)
-    del source_divergence,expected_divergence,target_divergence
-    w_map = getattr(weights, 'interface_intensive', weights.intensive)
-    w = w_map(old['vertical_velocity']).astype(np.float32)
     interface_rho, interface_zz = np.zeros_like(w), np.zeros_like(w)
     for level in range(1, rho.shape[0]):
         interface_rho[level] = vertical.fzm[level]*rho[level] + vertical.fzp[level]*rho[level-1]
@@ -194,6 +180,61 @@ def remap_atmosphere(payload, weights, *, source_mesh, target_prepared, config, 
                              pressure_min_pa=float(pressure.min()), pressure_max_pa=float(pressure.max()),
                              mapped_vertical_velocity_abs_max=float(abs(w).max()),
                              vertical_velocity_abs_max=float(abs(recovered_w).max()), damping_added=False)
+
+
+def _remap_momentum(payload, weights, source_mesh, target_prepared, product_map, mass_map):
+    """The carrier's momentum on the target edges, its divergence receipt and the interface w map.
+
+    Reads only the carrier and the map (never the remapped thermodynamics), so remap_atmosphere runs
+    it beside the thermodynamic remap.  The body is the previous inline code, unchanged.
+    """
+    old = payload['state']
+    vertical = target_prepared.vertical
+    vector = reconstruct_cartesian(old['normal_velocity'], source_mesh.arrays)
+    vector *= old['rho'][:, :, None]
+    from .host_parallel import run_tasks
+    # The three component maps and the source divergence are independent calls; run them together.
+    *components, source_divergence = run_tasks(
+        [lambda axis=axis: product_map(vector[:, :, axis]) for axis in range(3)] +
+        [lambda: mass_flux_divergence(old['rho_u'], source_mesh.arrays)])
+    target_vector = np.stack(components, axis=-1)
+    del components
+    dz=np.asarray(vertical.dzw,dtype=np.float64)
+    source_momentum=np.einsum('lcj,c,l->j',vector,weights.source_area,dz)
+    mapped_momentum=np.einsum('lcj,c,l->j',target_vector,weights.target_area,dz)
+    arrays = target_prepared.mesh.arrays
+    centers = np.stack([arrays[name] for name in ('xCell', 'yCell', 'zCell')], axis=-1).astype(np.float64)
+    centers /= np.linalg.norm(centers, axis=-1, keepdims=True)
+    radial = np.einsum('lcj,cj->lc', target_vector, centers)
+    target_vector -= radial[:, :, None] * centers
+    cells = np.asarray(arrays['cellsOnEdge'], dtype=np.int64)
+    normals = np.asarray(arrays['edgeNormalVectors'], dtype=np.float64)
+    if normals.shape != (len(cells), 3):
+        raise ValueError(f'edge normal shape {normals.shape} is unsupported')
+    # Native regional cold initialization gives the absent cell zero mass.
+    # Never let a -1 sentinel gather the last real atmospheric column.
+    gather_vector = np.concatenate((target_vector, np.zeros_like(target_vector[:, :1])), axis=1)
+    gather_cells = np.where(cells < 0, target_vector.shape[1], cells)
+    rho_u = np.einsum('lej,ej->le', (gather_vector[:, gather_cells[:, 0]] + gather_vector[:, gather_cells[:, 1]])*.5,
+                      normals).astype(np.float32)
+    tangent_momentum=np.einsum('lcj,c,l->j',target_vector,weights.target_area,dz)
+    expected_divergence=mass_map(source_divergence)
+    target_divergence=mass_flux_divergence(rho_u,arrays)
+    def divergence_rms(value):
+        return float(np.sqrt(np.einsum('lc,c,l->',value*value,weights.target_area,dz)/
+                             (weights.target_area.sum()*dz.sum())))
+    divergence=dict(coordinate='computational mass-flux divergence',
+        units='kg m-3 s-1',expected_overlap_rms=divergence_rms(expected_divergence),
+        target_edge_rms=divergence_rms(target_divergence),
+        difference_rms=divergence_rms(target_divergence-expected_divergence),
+        difference_abs_max=float(abs(target_divergence-expected_divergence).max()),
+        target_global_integral_kg_s=np.einsum('lc,c,l->',target_divergence,weights.target_area,dz).item(),
+        balance_cleanup_added=False)
+    del source_divergence,expected_divergence,target_divergence
+    w_map = getattr(weights, 'interface_intensive', weights.intensive)
+    w = w_map(old['vertical_velocity']).astype(np.float32)
+    return (target_vector, source_momentum, mapped_momentum, radial, cells, gather_cells, rho_u,
+            tangent_momentum, divergence, w)
 
 
 def mass_flux_divergence(edge_flux, arrays):

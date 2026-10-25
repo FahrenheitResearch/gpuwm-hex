@@ -276,6 +276,8 @@ class CascadeConfig:
     state: Path | None = None
     metrics: Path | None = None
     policy: Path | None = None
+    #: Flags for every fine forecast, after the cascade's own (e.g. ``--physics-suite=convection_permitting``).
+    forecast_args: tuple[str, ...] = ()
 
 
 @dataclass
@@ -482,6 +484,8 @@ def run_fine_forecast(
         *(() if config.gpuwm_checkout is None
           else ("--gpuwm-checkout", config.gpuwm_checkout)),
         "--case-label", label,
+        # The caller's forecast flags come last, so a --physics-suite (or a --dt) given here wins.
+        *config.forecast_args,
     )
     started = time.perf_counter()
     code = _run(

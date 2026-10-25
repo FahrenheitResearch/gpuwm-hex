@@ -247,7 +247,7 @@ def published_native_manifest(path: Path, publication: dict[str, Any], parent: P
         matches = [(stream, pattern.fullmatch(name)) for stream, pattern in patterns if pattern.fullmatch(name)]
         if len(matches) != 1:
             raise VerificationRefusal(f"native output has ambiguous or absent stream declaration: {name}")
-        completed = subprocess.run([str(binary), "--describe", str(root / name)],
+        completed = subprocess.run([*comparator_argv(binary), "--describe", str(root / name)],
                                    capture_output=True, text=True, check=False)
         if completed.returncode:
             raise VerificationRefusal(f"Rust native stream metadata failed: {completed.stderr.strip()}")
@@ -350,7 +350,7 @@ def bind_native_field_inventory(ref: dict[str, Any], parent: Path, native_path: 
         output = outputs.get(example["file"])
         if not output or output["stream"] != stream or output["sha256"] != example["sha256"]:
             raise VerificationRefusal(f"source-field inventory example is not sealed native output: {stream}")
-        completed = subprocess.run([str(binary), "--describe",
+        completed = subprocess.run([*comparator_argv(binary), "--describe",
             str(native["resolved_output_root"] / output["path"])], capture_output=True, text=True, check=False)
         if completed.returncode:
             raise VerificationRefusal(f"Rust source-field metadata failed: {completed.stderr.strip()}")
@@ -545,13 +545,50 @@ def acceptance_tier(result: dict[str, Any], diagnostic_tier: str | None,
     return None, ["nonzero words require a pinned maths-library witness; RMS and one-step grades are diagnostics only"]
 
 
+def comparator_argv(binary: Path) -> list[str]:
+    """The comparator's argv prefix: the multi-call ``rw_mpas_static`` runs it as ``verify``."""
+    multicall = binary.stem == "rw_mpas_static" or binary.stem.startswith("rw_mpas_static-")
+    return [str(binary), "verify"] if multicall else [str(binary)]
+
+
+def installed_comparator() -> Path | None:
+    """The stored-word comparator an install already carries, or None.
+
+    THE BREAKAGE THIS PREVENTS: rw_mpas_verify ships only as the ``verify``
+    tool of the multi-call ``rw_mpas_static`` (gpuwm's bridges, and this
+    wheel's libexec once its bridge is that build), never under its own name,
+    so a PyPI install refused every deck with "rw_mpas_verify unavailable"
+    although the comparator was installed.  The first copy whose ``verify
+    --abi`` answers this contract is used; older static builders without the
+    tool are skipped.
+    """
+    from hexcore import engines
+    candidates = [Path(__file__).resolve().parent / "libexec" / engines.executable_name("rw_mpas_static")]
+    package = engines._gpuwm_package_dir()
+    if package is not None:
+        name = engines.executable_name("rw_mpas_static")
+        candidates += [package / "libexec" / "bridges" / name, package.parent / "libexec" / "bridges" / name]
+    for path in candidates:
+        if not path.is_file() or not os.access(path, os.X_OK):
+            continue
+        probe = subprocess.run([*comparator_argv(path), "--abi"], capture_output=True, text=True, check=False)
+        if probe.returncode == 0 and probe.stdout.strip() == ABI:
+            return path.resolve()
+    return None
+
+
 def comparator_path(given: Path | None) -> Path:
     name = str(given) if given else os.environ.get("GPUWM_HEX_RW_MPAS_VERIFY", "rw_mpas_verify")
     located = shutil.which(name)
+    if not located and not given and "GPUWM_HEX_RW_MPAS_VERIFY" not in os.environ:
+        found = installed_comparator()
+        located = str(found) if found else None
     if not located:
-        raise VerificationRefusal("rw_mpas_verify unavailable; build rw-mpas --bin rw_mpas_verify and set GPUWM_HEX_RW_MPAS_VERIFY")
+        raise VerificationRefusal("rw_mpas_verify unavailable: neither on PATH nor in this install's "
+                                  "rw_mpas_static (gpuwm libexec/bridges); build rw-mpas --bin rw_mpas_static "
+                                  "and pass --comparator or set GPUWM_HEX_RW_MPAS_VERIFY")
     path = Path(located).resolve()
-    probe = subprocess.run([str(path), "--abi"], capture_output=True, text=True, check=False)
+    probe = subprocess.run([*comparator_argv(path), "--abi"], capture_output=True, text=True, check=False)
     if probe.returncode:
         detail = probe.stderr.strip().splitlines()
         cause = detail[0] if detail else 'no stderr from probe'
@@ -582,7 +619,7 @@ def source_provenance() -> dict[str, Any]:
 
 
 def stream_inventory(binary: Path, root: Path) -> set[Path]:
-    completed = subprocess.run([str(binary), "--inventory-root", str(root)],
+    completed = subprocess.run([*comparator_argv(binary), "--inventory-root", str(root)],
                                capture_output=True, text=True, check=False)
     if completed.returncode:
         raise VerificationRefusal(f"Rust output inventory failed: {completed.stderr.strip()}")
@@ -880,7 +917,7 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         request["diagnostics"] = diagnostics
     write_json(work / "compare-request.json", request)
     raw = work / "compare.json"
-    completed = subprocess.run([str(binary), "--request", str(work / "compare-request.json"), "--out", str(raw)],
+    completed = subprocess.run([*comparator_argv(binary), "--request", str(work / "compare-request.json"), "--out", str(raw)],
                                capture_output=True, text=True, check=False)
     if completed.returncode:
         raise VerificationRefusal(f"Rust stream comparison failed: {completed.stderr.strip()}")
@@ -903,9 +940,12 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     baseline = read_json(args.ratchet) if args.ratchet else {"schema": "mpas-ratchet-v1", "entries": []}
     regressions = ratchet_failures(candidate, baseline)
     environment_failures = environment_check['failures']
+    # Words identical to native are the proof in any complete strict capture.
+    # When the capture differs from the deck's reference, a difference is not
+    # attributed to source: raw word counts stay, the regression list and the
+    # ratchet do not take them.
+    unattributed = environment_check['verdict'] == 'DIFFERS'
     if environment_failures:
-        # Preserve raw word counts, but do not call another environment's
-        # arithmetic a source regression or advance the ratchet with it.
         regressions = []
     residue = deck.get("declared_libm_residue", [])
     if not isinstance(residue, list) or any(not isinstance(r, str) or not r.strip() for r in residue):
@@ -921,6 +961,10 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     if model_error:
         acceptance_failures.append(model_error)
     acceptance_failures.extend(stream_header_failures(header_comparisons))
+    green = accepted is not None and not regressions and not acceptance_failures and not environment_failures
+    unattributed_regressions = []
+    if unattributed and not green:
+        unattributed_regressions, regressions = regressions, []
     receipt = {"schema": "mpas-verification-v1", **context, "tier": reached,
         "acceptance_tier": accepted, "maths_library_witness": witness,
         "all_native_fields_bitwise": reached == "BITWISE",
@@ -929,11 +973,11 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             "failures": missing_policy_failures,
             "baseline_sha256": digest(args.ratchet) if args.ratchet else None,
             "process_count": ranks},
-        "passed": accepted is not None and not regressions and not acceptance_failures and not environment_failures,
-        "verdict": ('ENVIRONMENT' if environment_failures else
-                    ('GREEN' if accepted is not None and not regressions and not acceptance_failures else 'RED')),
+        "passed": green,
+        "verdict": ('GREEN' if green else 'ENVIRONMENT' if environment_failures or unattributed else 'RED'),
         "environment": environment_check,
-        "ratchet_eligible": not environment_failures,
+        "ratchet_eligible": not environment_failures and not unattributed,
+        "unattributed_ratchet_regressions": unattributed_regressions,
         "model_execution": model_execution,
         # The physics mode the model door ran (comparison-only: the mode the deck names or the harness runs).
         "physics_mode": physics_mode,
@@ -1026,8 +1070,13 @@ def run(args: argparse.Namespace) -> int:
         if output.exists():
             shutil.rmtree(output)
     status = (receipt.get("acceptance_tier") if receipt["passed"] else
-              ('ENVIRONMENT' if receipt.get('verdict') == 'ENVIRONMENT' else 'REFUSED'))
-    print(f"verify-mpas: {status}; receipt {args.receipt}")
+              ('ENVIRONMENT' if receipt.get('verdict') == 'ENVIRONMENT' else
+               'RED' if receipt.get('verdict') == 'RED' else 'REFUSED'))
+    words = (f", {receipt['data_words_compared']:,} words compared, {receipt['data_words_differing']:,} differ"
+             if "data_words_compared" in receipt else "")
+    environment_verdict = receipt.get("environment", {}).get("verdict")
+    print(f"verify-mpas: {'GREEN ' if receipt['passed'] else ''}{status}{words}; "
+          f"environment {environment_verdict}; receipt {args.receipt}")
     return 0 if receipt["passed"] else 1
 
 
@@ -1322,6 +1371,23 @@ def build_headline(args: argparse.Namespace) -> int:
             raise VerificationRefusal(f"landed-slot line {number} has an unknown, repeated or non-CUDA slot")
         landed[name] = backend
     backends.update(landed)
+    # A slot the parent's namelist leaves inactive runs nothing (convection_permitting: config_ngw_scheme and
+    # config_oml1d are false, mpas_atmphys_control.F:310-319), so it takes the route default, not a native-cpu
+    # label.  When no active slot is left on the CPU the route is the ported framework
+    # (runtime_v842.framework_only), which loads no native library: the headline then names none.
+    from .mpasphys.driver_v842 import resolve_namelist
+    from .mpasphys.runtime_v842 import framework_only
+    namelist = file_ref(parent["inputs"]["namelist"], parent_path.parent).read_text()
+    def resolved():
+        return resolve_namelist(namelist, backends={selectors[k]: v for k, v in backends.items()})
+    config = resolved()
+    backends.update({name: "hex-cuda" for name, slot in selectors.items() if not config.active(slot)})
+    if framework_only(resolved()):
+        command = deck["hex_command"]
+        while "--native-physics-library" in command:
+            at = command.index("--native-physics-library")
+            del command[at:at + 2]
+        deck.get("hex_support_inputs", {}).pop("native-library", None)
     slots_sha = hashlib.sha256(slots_text).hexdigest()
     if digest(args.slots) != slots_sha:
         raise VerificationRefusal("landed-slot file changed during deck generation")

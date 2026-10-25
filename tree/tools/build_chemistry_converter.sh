@@ -37,6 +37,17 @@ for rs in sorted((engine / 'tools').rglob('*.rs')):
 shutil.copy2(engine / 'pyproject.toml', out / 'source/pyproject.toml')
 COPY
 (cd "$out/source" && patch --batch -p1 < "$root/engine-patches/chemistry-products.patch")
+# HGT from the run's init when a history omits `ter` (MPAS-A's own output stream, the MPAS-physics route).
+# Written against engine 2.9.7 (the 2.9.6 form stopped applying when the init merge gained its field-set filter,
+# F-MPAS-PRODUCTS); skipped once the engine carries it (gpuwm fix/mpas-hgt-from-init).
+if ! grep -q "pub const INIT_FALLBACK_FIELDS" "$out/source/tools/rustwx/crates/rw-mpas/src/history.rs"; then
+  (cd "$out/source" && patch --batch -p1 < "$root/engine-patches/history-invariants.patch")
+fi
+# Fields an own-centres history lacks come from its diag stream file (MPAS-A writes refl10cm_max -> REFC only
+# there; case study 2025-05-19 H2). Skipped once the engine carries it (gpuwm fix/mpas-diag-stream).
+if ! grep -q "pub struct DiagCompanion" "$out/source/tools/rustwx/crates/rw-mpas/src/history.rs"; then
+  (cd "$out/source" && patch --batch -p1 < "$root/engine-patches/diag-stream.patch")
+fi
 cd "$out/source/tools/rustwx"
 cargo build --release --locked -p rw-mpas --bin rw_mpas_convert
 cargo test --release --locked -p rw-mpas --lib chemistry_product_tests
@@ -50,6 +61,8 @@ record = {'schema': 'gpuwm-hex.chemistry-converter-build/v1',
           'sha256': sha(out / 'rw_mpas_convert'),
           'bytes': (out / 'rw_mpas_convert').stat().st_size,
           'patch_sha256': sha(root / 'engine-patches/chemistry-products.patch'),
+          'invariants_patch_sha256': sha(root / 'engine-patches/history-invariants.patch'),
+          'diag_stream_patch_sha256': sha(root / 'engine-patches/diag-stream.patch'),
           'recipe_sha256': sha(root / 'tools/build_chemistry_converter.sh'),
           'engine_version_declaration_sha256': sha(out / 'source/pyproject.toml')}
 (out / 'provenance.json').write_text(json.dumps(record, indent=2) + '\n')

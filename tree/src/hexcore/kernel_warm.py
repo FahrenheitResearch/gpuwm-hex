@@ -115,8 +115,14 @@ class Store:
         self.identity = identity
         self.tag = str(tag)
         self.root = Path(root)
+        # Content-addressed: an artifact's key digests its whole request (source, options, arch, filename and
+        # the bound header bytes) and get() refuses any file whose header does not name that key, so one
+        # directory per compiler identity serves every run.  THE BREAKAGE THIS PREVENTS: the directory was also
+        # keyed by the run's argv (the plan tag), so every new storm-following member (a new --mesh/--grid)
+        # missed every artifact and recompiled the MPAS suite's fast-mode kernels inline, 15 s at the start of
+        # each moving segment on an RTX 4090 host (MPAS-ROUTE-SPEED-2026-10-24).
         self.directory = (self.root / ("cuda" + str(identity["nvrtc"][0])) /
-                          _digest(identity) / _digest(self.tag))
+                          _digest(identity) / "content")
         try:
             cores = len(os.sched_getaffinity(0))
         except (AttributeError, OSError):

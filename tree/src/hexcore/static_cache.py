@@ -149,11 +149,13 @@ def geography(root, cache):
             raise ValueError(f"geography symlink cycle: {folder}")
         for child in sorted(folder.iterdir()):
             name = relative / child.name
-            # A geography directory must not contain credential/config files.
+            # A hidden entry is never geography: it is left out of the manifest, unread and unhashed, so a
+            # credential or config file in the tree can never reach a key or a receipt.  It used to be refused,
+            # and a box kit's completion marker (`.geog-all.done`, 2026-10-24) failed every
+            # hex region run on those boxes until the file was moved.  gpuwm's own `.fetch-geog` receipts and
+            # `.keep` were already skipped the same way.
             if child.name.startswith('.'):
-                if child.name == '.keep' or (child.name == '.fetch-geog' and child.is_dir()):
-                    continue
-                raise ValueError(f"unexpected hidden geography entry: {name}")
+                continue
             if child.is_dir():
                 walk(child, name, ancestors | {actual})
             elif child.is_file():

@@ -243,8 +243,17 @@ CORRECT_MODE_SOURCE = {
 }
 
 
-@lru_cache(maxsize=8)
 def _module(math_header: str, corrections=()):
+    """The Kessler module loaded on the calling card."""
+    import cupy as cp
+    # A CUDA module belongs to the card it was loaded on. Same-host ranks drive
+    # several cards from one process, so a cache keyed without the card hands
+    # the second card the first card's handle (CUDA_ERROR_INVALID_HANDLE at step 1).
+    return _module_on(int(cp.cuda.Device().id), math_header, corrections)
+
+
+@lru_cache(maxsize=16)
+def _module_on(device: int, math_header: str, corrections=()):
     """Compile using the supplied shared libm (no per-scheme elementary math)."""
     import cupy as cp
     from gpuwm.nvrtc_ptx_cache import compile_using_nvrtc
@@ -256,8 +265,9 @@ def _module(math_header: str, corrections=()):
     # RawModule appends -ftz=true after its caller options in CuPy 14.2.
     # Use the same existing direct compiler as the engine's no-FTZ kernels.
     image, _ = compile_using_nvrtc(source, _hex_numerics.options(COMPILE_OPTIONS), None, "kessler_v842.cu")
-    module = cp.cuda.function.Module()
-    module.load(image.encode() if isinstance(image, str) else image)
+    with cp.cuda.Device(device):
+        module = cp.cuda.function.Module()
+        module.load(image.encode() if isinstance(image, str) else image)
     return module
 
 

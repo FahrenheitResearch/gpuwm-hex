@@ -47,8 +47,27 @@ def evaporation(rho, heat, zz, vapor, cloud):
 
     ``rho`` and ``heat`` are dry density and theta_m mass (``rho_theta``), ``vapor``/``cloud`` mixing
     ratios.  Newton iterations on qv + x = qs(T - L x / cp), at the cell's Exner function; never more
-    than the cloud water there.  Returns (x, the cell's temperature before).
+    than the cloud water there.  Returns (x, the cell's temperature before, its Exner function).
+
+    Every operation is elementwise, so level-major fields run in blocks of whole levels on all cores
+    (host_parallel.row_map) and each word is the one the single whole-field call writes.  THE COST THIS
+    REMOVES: two evaporations per move (donor and target) were 3.5 + 3.75 s of one core in a resumed
+    storm-following segment (box-aws2x 2026-10-24, sampled), the largest single-core part of the remap.
     """
+    arrays = [np.asarray(value) for value in (rho, heat, zz, vapor, cloud)]
+    shape = arrays[0].shape
+    if len(shape) != 2 or any(value.shape != shape for value in arrays):
+        return _evaporation(*arrays)
+    from .host_parallel import row_map
+    x, temperature, exner = (np.empty(shape, dtype=np.float64) for _ in range(3))
+
+    def block(rows):
+        x[rows], temperature[rows], exner[rows] = _evaporation(*(value[rows] for value in arrays))
+    row_map(block, shape[0], elements=int(np.prod(shape)) * 8)
+    return x, temperature, exner
+
+
+def _evaporation(rho, heat, zz, vapor, cloud):
     rho = np.asarray(rho, dtype=np.float64)
     heat = np.asarray(heat, dtype=np.float64)
     vapor = np.asarray(vapor, dtype=np.float64)
@@ -405,9 +424,34 @@ def extend_below_ground(weights, old, moist):
     extend(old["rho_theta"].astype(np.float64) / rho, old["exner"], loading)
 
 
-def remap_balanced_thermodynamics(payload, weights, prepared):
-    """Map products, initialize the carried force, then round conservatively."""
+def _mapped(weights, values, density):
+    """``(product map, domain reconciliation, positivity roundoff)`` of one mass product.
+
+    A map that can (HeightConservativeMap.mass_intensive_receipted) keeps both receipts out of its
+    shared ``last_*`` attributes, so concurrent products cannot read each other's receipts.
+    """
+    receipted = getattr(weights, "mass_intensive_receipted", None)
+    # An instance that replaces its own mass_intensive is honoured (that call, then its receipts).
+    if receipted is not None and "mass_intensive" not in getattr(weights, "__dict__", {}):
+        return receipted(values, density=density)
+    result = weights.mass_intensive(values, density=density)
+    return (result, getattr(weights, "last_domain_reconciliation", None),
+            getattr(weights, "last_positivity_roundoff", None))
+
+
+def remap_balanced_thermodynamics(payload, weights, prepared, *, extended=False):
+    """Map products, initialize the carried force, then round conservatively.
+
+    ``extended``: the caller already gave the map this payload's below-ground extension.
+
+    THE COST THIS REMOVES (box-aws2x 2026-10-24, resumed storm-following segment, sampled): this
+    function ran every product map, both evaporations, the column projection and the tracer casts one
+    after another on one thread, 18 s of the remap.  The independent pieces now run concurrently
+    (host_parallel.run_tasks / row_map); each is the same call on the same inputs and every sum keeps
+    its order, so the carried words are unchanged.
+    """
     from types import SimpleNamespace
+    from .host_parallel import run_tasks
 
     old, v, ref = payload["state"], prepared.vertical, prepared.reference
     moist = [
@@ -415,45 +459,63 @@ def remap_balanced_thermodynamics(payload, weights, prepared):
         for i, name in enumerate(payload["scalar_names"])
         if name in ("qv", "qc", "qr", "qi", "qs", "qg", "qh")
     ]
-    extend_below_ground(weights, old, moist)
-    rho = weights.mass_intensive(old["rho"], density=old["rho"])
-    mass_domain = weights.last_domain_reconciliation
-    heat = weights.mass_intensive(old["rho_theta"], density=old["rho"])
-    heat_domain = weights.last_domain_reconciliation
+    if not extended:
+        extend_below_ground(weights, old, moist)
+    density = old["rho"]
+    # The first product runs alone: it builds the map's lazily cached device geometry once.
+    rho, mass_domain, positivity = _mapped(weights, old["rho"], density)
     # Vapour and cloud water are adjusted to the target's saturation before the balance (saturation_adjustment);
     # their products are kept for the tracer cast below.
     names = list(payload["scalar_names"])
     adjusted, adjusted_domains, adjustment = {}, {}, None
     declared = dict(heat=0.0)
-    if all(name in names for name in SATURATION_SPECIES):
-        iv, ic = (names.index(name) for name in SATURATION_SPECIES)
-        for i in (iv, ic):
-            adjusted[i] = weights.mass_intensive(old["rho"].astype(float) * old["scalars"][i], density=old["rho"])
-            adjusted_domains[i] = weights.last_domain_reconciliation
+    saturating = all(name in names for name in SATURATION_SPECIES)
+    iv, ic = (names.index(name) for name in SATURATION_SPECIES) if saturating else (None, None)
+
+    def product(i):
+        return lambda: _mapped(weights, old["rho"].astype(float) * old["scalars"][i], density)
+
+    def donor_evaporation():
         donor, _, _ = evaporation(old["rho"], old["rho_theta"], payload["vertical"].zz,
                                   old["scalars"][iv], old["scalars"][ic])
-        donor = weights.mass_intensive(old["rho"].astype(float) * donor, density=old["rho"])
+        return _mapped(weights, old["rho"].astype(float) * donor, density)
+
+    # Tasks listed in the sequential program order of the products (that order fixes which positivity
+    # receipt a carried tracer reports below).
+    plain = [i for i in moist if not (saturating and i in (iv, ic))]
+    tasks = [lambda: _mapped(weights, old["rho_theta"], density)]
+    if saturating:
+        tasks += [product(iv), product(ic), donor_evaporation]
+    tasks += [product(i) for i in plain]
+    tasks.append(lambda: weights.interface_intensive(source_pressure_acceleration(old, payload["vertical"], moist)))
+    results = run_tasks(tasks)
+    acceleration = results.pop()
+    (heat, heat_domain, positivity), results = results[0], results[1:]
+    if saturating:
+        adjusted[iv], adjusted_domains[iv], _ = results[0]
+        adjusted[ic], adjusted_domains[ic], _ = results[1]
+        donor, _, positivity = results[2]
+        results = results[3:]
         adjusted[iv], adjusted[ic], heat, adjustment = saturation_adjustment(
             adjusted[iv], adjusted[ic], rho, heat, v.zz, donor,
             lambda value: float(weights.totals(value, source=False)[0]))
         declared = dict(heat=adjustment["theta_mass_change_kg_kelvin"],
                         **{names[iv]: adjustment["cloud_to_vapor_kg"], names[ic]: -adjustment["cloud_to_vapor_kg"]})
-    # The total water mass alone enters the balance equations. Individual
+    plain_products = {}
+    for i, (value, _, positivity) in zip(plain, results):
+        plain_products[i] = value
+    # The total water mass alone enters the balance equations, summed in moist order. Individual
     # tracers are remapped again below to avoid retaining all FP64 products.
     water = np.zeros_like(rho)
     for i in moist:
-        water += adjusted[i] if i in adjusted else weights.mass_intensive(
-            old["rho"].astype(float) * old["scalars"][i], density=old["rho"]
-        )
-    acceleration = weights.interface_intensive(
-        source_pressure_acceleration(old, payload["vertical"], moist)
-    )
+        water += adjusted[i] if i in adjusted else plain_products.pop(i)
+    del plain_products
     acceleration[[0, -1]] = 0.0
     exact_rho, exact_heat = rho.copy(), heat.copy()
-    records = []
-    for start in range(0, rho.shape[1], 4096):
-        stop = min(start + 4096, rho.shape[1])
-        sl = slice(start, stop)
+
+    # Each 4096-column block is its own projection (its own Newton iterations), as before; the blocks
+    # run concurrently and write disjoint columns.
+    def project(sl):
         vs = SimpleNamespace(
             dzw=v.dzw, zz=v.zz[:, sl], rdzu=v.rdzu, fzm=v.fzm, fzp=v.fzp
         )
@@ -465,7 +527,9 @@ def remap_balanced_thermodynamics(payload, weights, prepared):
         exact_rho[:, sl], exact_heat[:, sl], record = project_columns(
             rho[:, sl], heat[:, sl], water[:, sl], acceleration[:, sl], vs, rs
         )
-        records.append(record)
+        return record
+    blocks = [slice(start, min(start + 4096, rho.shape[1])) for start in range(0, rho.shape[1], 4096)]
+    records = run_tasks([lambda sl=sl: project(sl) for sl in blocks])
     # Do not project an exactly unchanged donor column: its saved native
     # diagnostics, including FP32 evaluation residue, already own its force.
     counts = np.bincount(weights.rows, minlength=len(weights.target_area))
@@ -549,17 +613,20 @@ def remap_balanced_thermodynamics(payload, weights, prepared):
         )
         return actual, receipt
 
-    rho, mass = cast_product(old["rho"], exact_rho, mass_domain)
-    heat, heat_receipt = cast_product(old["rho_theta"], exact_heat, heat_domain, declared["heat"])
+    (rho, mass), (heat, heat_receipt) = run_tasks([
+        lambda: cast_product(old["rho"], exact_rho, mass_domain),
+        lambda: cast_product(old["rho_theta"], exact_heat, heat_domain, declared["heat"])])
     tracers = {}
     scalars = np.empty((len(payload["scalar_names"]), *rho.shape), dtype=np.float32)
-    for i, name in enumerate(payload["scalar_names"]):
+
+    def cast_tracer(i, name):
         source = old["rho"].astype(float) * old["scalars"][i]
         if i in adjusted:
-            exact, domain = adjusted.pop(i), adjusted_domains[i]
+            exact, domain = adjusted[i], adjusted_domains[i]
+            own_positivity, mapped = None, False
         else:
-            exact = weights.mass_intensive(source, density=old["rho"])
-            domain = weights.last_domain_reconciliation
+            exact, domain, own_positivity = _mapped(weights, source, density)
+            mapped = True
         change = declared.get(name, 0.0)
         before = float(weights.totals(source, source=True)[0])
         fp64 = float(weights.totals(exact, source=False)[0] - before - change)
@@ -584,7 +651,7 @@ def remap_balanced_thermodynamics(payload, weights, prepared):
         )
         actual = rho.astype(float) * scalars[i]
         after = float(weights.totals(actual, source=False)[0])
-        tracers[name] = dict(
+        return mapped, own_positivity, dict(
             before=[before],
             after=[after],
             absolute_error=[after - before - change],
@@ -592,9 +659,22 @@ def remap_balanced_thermodynamics(payload, weights, prepared):
             rounding_envelope=[float(np.sum(abs(actual - exact) * measure))],
             fp64_error=[fp64],
             terrain_domain_reconciliation=domain,
-            positivity_roundoff=getattr(weights, "last_positivity_roundoff", None),
+            positivity_roundoff=None,
             accounting=mass["accounting"],
         )
+
+    # About eight FP64 level-by-cell temporaries live per tracer task; bound the concurrent ones to 32 GB.
+    budget = max(1, int(32 * 2**30 // max(1, 64 * rho.size)))
+    cast = run_tasks([lambda i=i, name=name: cast_tracer(i, name)
+                      for i, name in enumerate(payload["scalar_names"])], workers=budget)
+    # A carried (saturation-adjusted) tracer maps nothing, so it reports the positivity receipt of the
+    # product mapped just before it in program order, as the sequential loop did.
+    for name, (mapped, own_positivity, receipt) in zip(payload["scalar_names"], cast):
+        if mapped:
+            positivity = own_positivity
+        receipt["positivity_roundoff"] = positivity
+        tracers[name] = receipt
+    adjusted.clear()
     record = {key: max(row[key] for row in records) for key in records[0]}
     record.update(
         method="constrained native vertical pressure acceleration; column mass, theta mass and water masses retained",

@@ -105,8 +105,8 @@ fn neutral_sondes(text:&str,valid:&str)->Result<Vec<Ob>> {
 /// One IGRA v2 station file as text: the `.txt` NCEI serves, or the `.txt.zip` it serves it in (what the engine's
 /// `rw_igra2 fetch` keeps), so a fetched archive is decoded where it landed. A zip is walked by its local headers
 /// (`PK\x03\x04`), stored (0) and deflate (8) members only, as the engine's rw_igra2 reads the same files.
-fn igra_text(path:&Path)->Result<String> {
-    let bytes=std::fs::read(path)?;let name=path.to_string_lossy();
+fn igra_text(path:&Path)->Result<String> {igra_text_bytes(std::fs::read(path)?,&path.to_string_lossy())}
+fn igra_text_bytes(bytes:Vec<u8>,name:&str)->Result<String> {
     if !bytes.starts_with(b"PK\x03\x04") {return Ok(String::from_utf8(bytes).map_err(|_|format!("{name}: IGRA text is not UTF-8"))?)}
     let (mut at,mut text)=(0usize,String::new());
     let u16le=|b:&[u8],i:usize|u16::from_le_bytes([b[i],b[i+1]]) as usize;
@@ -128,34 +128,196 @@ fn igra_text(path:&Path)->Result<String> {
 /// QC-removed (-8888) and missing (-9999) values dropped, nominal hour 99 (unknown) skipped.
 fn decode_igra(out:&Path,start:&str,end:&str,inputs:&[String])->Result<Value> {
     let (a,b)=(DateTime::parse_from_rfc3339(start)?.timestamp(),DateTime::parse_from_rfc3339(end)?.timestamp());
-    let mut text=String::from("station_id,latitude_deg,longitude_deg,elevation_m,valid_time,pressure_hpa,variable,value\n");
-    let (mut soundings,mut rows)=(0usize,0usize);let mut sources=Vec::new();
+    let mut text=String::from(IGRA_HEADER);
+    let (mut soundings,mut rows)=(0usize,0usize);let mut sources=Vec::new();let mut hours=BTreeMap::new();
     for input in inputs {
         let body=igra_text(Path::new(input))?;sources.push(source_identity(Path::new(input))?);
-        let mut current:Option<(String,f64,f64,String)>=None;
-        for line in body.lines() {
-            let f=|r:std::ops::Range<usize>|line.get(r).map(str::trim).unwrap_or("");
-            if line.starts_with('#') {
-                current=None;let hour:u32=match f(24..26).parse(){Ok(h) if h<24=>h,_=>continue};
-                let date=chrono::NaiveDate::from_ymd_opt(f(13..17).parse()?,f(18..20).parse()?,f(21..23).parse()?).ok_or("IGRA header date invalid")?;
-                let when=date.and_hms_opt(hour,0,0).ok_or("IGRA header hour invalid")?.and_utc();
-                if when.timestamp()<a || when.timestamp()>b {continue}
-                let (lat,lon)=(f(55..62).parse::<f64>()?/1e4,f(63..71).parse::<f64>()?/1e4);
-                if lat.abs()>90. || lon.abs()>180. {continue}
-                soundings+=1;current=Some((f(1..12).to_string(),lat,lon,when.format("%Y-%m-%dT%H:%M:%SZ").to_string()));continue
-            }
-            let Some((id,lat,lon,when))=&current else{continue};
-            let press:i64=match f(9..15).parse(){Ok(p)=>p,Err(_)=>continue};if press<=0 || press%100!=0 {continue}
-            let p=(press/100) as u16;if !LEVELS.contains(&p){continue}
-            let num=|r:std::ops::Range<usize>|->Option<f64>{let v:i64=f(r).parse().ok()?;(v> -8888).then_some(v as f64)};
-            let mut push=|var:&str,value:f64|{text.push_str(&format!("{id},{lat},{lon},0,{when},{p},{var},{value}\n"));rows+=1};
-            if let Some(z)=num(16..21) {push("height_m",z)}
-            if let Some(t)=num(22..27) {push("temperature_k",t/10.+273.15)}
-            if let (Some(d),Some(s))=(num(40..45),num(46..51)) {if (0.0..=360.).contains(&d){let (s,r)=(s/10.,d.to_radians());push("wind_u_m_s",-s*r.sin());push("wind_v_m_s",-s*r.cos())}}
-        }
+        let (s,r)=igra_rows(&body,a,b,&mut text,&mut hours)?;soundings+=s;rows+=r;
     }
     std::fs::write(out,&text)?;
     Ok(json!({"schema":"gpuwm-hex.decoded-igra/v1","window":[start,end],"soundings":soundings,"rows":rows,"inputs":sources,"table":source_identity(out)?,"levels":"mandatory pressure levels the scorer reports"}))
+}
+const IGRA_HEADER:&str="station_id,latitude_deg,longitude_deg,elevation_m,valid_time,pressure_hpa,variable,value\n";
+/// One station file's soundings whose nominal hour lies in [a, b] (unix seconds), appended to `text` as neutral
+/// rows; `hours` counts soundings per nominal hour. Returns (soundings, rows).
+fn igra_rows(body:&str,a:i64,b:i64,text:&mut String,hours:&mut BTreeMap<String,usize>)->Result<(usize,usize)> {
+    let (mut soundings,mut rows)=(0usize,0usize);
+    let mut current:Option<(String,f64,f64,String)>=None;
+    for line in body.lines() {
+        let f=|r:std::ops::Range<usize>|line.get(r).map(str::trim).unwrap_or("");
+        if line.starts_with('#') {
+            current=None;let hour:u32=match f(24..26).parse(){Ok(h) if h<24=>h,_=>continue};
+            let date=chrono::NaiveDate::from_ymd_opt(f(13..17).parse()?,f(18..20).parse()?,f(21..23).parse()?).ok_or("IGRA header date invalid")?;
+            let when=date.and_hms_opt(hour,0,0).ok_or("IGRA header hour invalid")?.and_utc();
+            if when.timestamp()<a || when.timestamp()>b {continue}
+            let (lat,lon)=(f(55..62).parse::<f64>()?/1e4,f(63..71).parse::<f64>()?/1e4);
+            if lat.abs()>90. || lon.abs()>180. {continue}
+            let stamp=when.format("%Y-%m-%dT%H:%M:%SZ").to_string();*hours.entry(stamp.clone()).or_default()+=1;
+            soundings+=1;current=Some((f(1..12).to_string(),lat,lon,stamp));continue
+        }
+        let Some((id,lat,lon,when))=&current else{continue};
+        let press:i64=match f(9..15).parse(){Ok(p)=>p,Err(_)=>continue};if press<=0 || press%100!=0 {continue}
+        let p=(press/100) as u16;if !LEVELS.contains(&p){continue}
+        let num=|r:std::ops::Range<usize>|->Option<f64>{let v:i64=f(r).parse().ok()?;(v> -8888).then_some(v as f64)};
+        let mut push=|var:&str,value:f64|{text.push_str(&format!("{id},{lat},{lon},0,{when},{p},{var},{value}\n"));rows+=1};
+        if let Some(z)=num(16..21) {push("height_m",z)}
+        if let Some(t)=num(22..27) {push("temperature_k",t/10.+273.15)}
+        if let (Some(d),Some(s))=(num(40..45),num(46..51)) {if (0.0..=360.).contains(&d){let (s,r)=(s/10.,d.to_radians());push("wind_u_m_s",-s*r.sin());push("wind_v_m_s",-s*r.cos())}}
+    }
+    Ok((soundings,rows))
+}
+/// One NCEI IGRA2 year-to-date snapshot (`archive/IGRA_v2.2_data-y2d_sYYYYMMDD_eYYYYMMDD_cYYYYMMDD.tar`): a tar of the
+/// per-station year-to-date zips for start..end, which NCEI keeps after the live data-y2d files roll to a new year.
+#[derive(Debug,Clone,PartialEq)] struct Snapshot {name:String,start:chrono::NaiveDate,end:chrono::NaiveDate,created:chrono::NaiveDate}
+fn igra2_snapshots(index:&str)->Vec<Snapshot> {
+    let mut out:Vec<Snapshot>=Vec::new();
+    for piece in index.split("href=\"").skip(1) {
+        let href=piece.split('"').next().unwrap_or("");let name=href.rsplit('/').next().unwrap_or(href);
+        let Some(stem)=name.strip_suffix(".tar") else{continue};let parts=stem.split('_').collect::<Vec<_>>();
+        if parts.len()!=6 || parts[0]!="IGRA" || parts[2]!="data-y2d" {continue}
+        let date=|p:&str,k:char|p.strip_prefix(k).and_then(|d|chrono::NaiveDate::parse_from_str(d,"%Y%m%d").ok());
+        let (Some(start),Some(end),Some(created))=(date(parts[3],'s'),date(parts[4],'e'),date(parts[5],'c')) else{continue};
+        if !out.iter().any(|x|x.name==name) {out.push(Snapshot{name:name.into(),start,end,created})}
+    }
+    out
+}
+/// The snapshot that covers the whole window with the fewest years in it (the latest start), the newest on a tie.
+fn choose_snapshot(list:&[Snapshot],first:chrono::NaiveDate,last:chrono::NaiveDate)->Option<&Snapshot> {
+    list.iter().filter(|s|s.start<=first && s.end>=last).max_by_key(|s|(s.start,s.created))
+}
+const RANGE_CHUNK:u64=16<<20;const RANGE_FETCHERS:usize=6;const RANGE_AHEAD:usize=12;
+#[derive(Default)] struct RangeState {ready:BTreeMap<usize,Vec<u8>>,claimed:usize,consumed:usize,error:Option<String>,bytes:u64,requests:usize,done:bool}
+type Shared=std::sync::Arc<(std::sync::Mutex<RangeState>,std::sync::Condvar)>;
+/// GET one byte range of `url`: the server must answer 206 with exactly that many bytes. Gives the body and the
+/// object's total size from Content-Range.
+macro_rules! range_get {($agent:expr,$url:expr,$lo:expr,$hi:expr)=>{(||->std::result::Result<(Vec<u8>,Option<u64>),String>{
+    let (lo,hi):(u64,u64)=($lo,$hi);
+    let mut response=$agent.get($url).header("Range",&format!("bytes={lo}-{hi}")).call().map_err(|e|format!("GET {} bytes {lo}-{hi}: {e}",$url))?;
+    let status=response.status().as_u16();if status!=206 {return Err(format!("GET {} bytes {lo}-{hi} answered HTTP {status}, not 206 Partial Content",$url))}
+    let total=response.headers().get("content-range").and_then(|v|v.to_str().ok()).and_then(|v|v.rsplit('/').next()).and_then(|v|v.trim().parse::<u64>().ok());
+    let body=response.body_mut().with_config().limit(hi-lo+2).read_to_vec().map_err(|e|format!("reading {} bytes {lo}-{hi}: {e}",$url))?;
+    if body.len() as u64!=hi-lo+1 {return Err(format!("{} bytes {lo}-{hi} arrived as {} bytes",$url,body.len()))}
+    Ok((body,total))})()}}
+/// A sequential reader over an HTTP object fetched as parallel byte ranges (RANGE_FETCHERS at once, at most RANGE_AHEAD
+/// chunks held in memory), so one slow connection or the agent's per-body timeout never bounds the whole object.
+struct Ranged {state:Shared,current:Vec<u8>,at:usize,next:usize,chunks:usize}
+impl Ranged {
+    fn open(url:&str,total:u64)->Ranged {
+        let chunks=total.div_ceil(RANGE_CHUNK) as usize;let state:Shared=Default::default();
+        for _ in 0..RANGE_FETCHERS.min(chunks.max(1)) {
+            let (state,url)=(state.clone(),url.to_string());
+            std::thread::spawn(move||{let agent=rw_obs::net::agent();loop {
+                let index={let (lock,cv)=&*state;let mut s=lock.lock().unwrap();
+                    loop {if s.error.is_some() || s.done || s.claimed>=chunks {return} if s.claimed-s.consumed<RANGE_AHEAD {break} s=cv.wait(s).unwrap();}
+                    s.claimed+=1;s.claimed-1};
+                let (lo,hi)=(index as u64*RANGE_CHUNK,((index as u64+1)*RANGE_CHUNK).min(total)-1);
+                let mut result=Err(String::new());let mut tries=0;
+                for attempt in 0..4u32 {tries+=1;result=range_get!(agent,&url,lo,hi);if result.is_ok(){break} std::thread::sleep(std::time::Duration::from_secs(1<<attempt));}
+                let (lock,cv)=&*state;let mut s=lock.lock().unwrap();s.requests+=tries;
+                match result {Ok((body,_))=>{s.bytes+=body.len() as u64;s.ready.insert(index,body);},Err(e)=>s.error=Some(e)}
+                cv.notify_all();
+            }});
+        }
+        Ranged{state,current:Vec::new(),at:0,next:0,chunks}
+    }
+    fn counts(&self)->(u64,usize) {let s=self.state.0.lock().unwrap();(s.bytes,s.requests)}
+}
+impl std::io::Read for Ranged {
+    fn read(&mut self,buf:&mut [u8])->std::io::Result<usize> {
+        if self.at>=self.current.len() {
+            if self.next>=self.chunks {return Ok(0)}
+            let (lock,cv)=&*self.state;let mut s=lock.lock().unwrap();
+            loop {
+                if let Some(body)=s.ready.remove(&self.next) {self.current=body;self.at=0;self.next+=1;s.consumed=self.next;cv.notify_all();break}
+                if let Some(e)=&s.error {return Err(std::io::Error::other(e.clone()))}
+                s=cv.wait(s).unwrap();
+            }
+        }
+        let n=buf.len().min(self.current.len()-self.at);buf[..n].copy_from_slice(&self.current[self.at..self.at+n]);self.at+=n;Ok(n)
+    }
+}
+impl Drop for Ranged {fn drop(&mut self){let (lock,cv)=&*self.state;lock.lock().unwrap().done=true;cv.notify_all();}}
+/// Radiosondes of a past window from the NCEI IGRA2 year-to-date snapshot that covers it. The snapshot tar is read
+/// once as a stream (parallel byte ranges), each station's zip is decoded in memory on every core, and only the
+/// soundings whose nominal hour lies in [start, end] reach the neutral table; nothing else touches the disk.
+/// Breakage it replaces: the period-of-record route downloaded every station's whole history (2,931 zips, 28 GB) to
+/// score one 15 h run, filled the box's disk and held the run's card lease (2026-10-24).
+fn fetch_igra2_snapshot(index_url:&str,start:&str,end:&str,out:&Path)->Result<Value> {
+    let clock=std::time::Instant::now();
+    if out.exists() {return Err("snapshot table destination exists; cannot overwrite a caller-owned observation".into())}
+    let (s,e)=(DateTime::parse_from_rfc3339(start)?,DateTime::parse_from_rfc3339(end)?);let (a,b)=(s.timestamp(),e.timestamp());
+    let agent=rw_obs::net::agent();
+    let index=rw_obs::net::get_text(&agent,index_url,"IGRA2 archive index")?;
+    let snapshots=igra2_snapshots(&index);
+    let chosen=choose_snapshot(&snapshots,s.date_naive(),e.date_naive()).cloned().ok_or_else(||format!(
+        "no IGRA2 year-to-date snapshot in {index_url} covers {start}..{end} (it lists {})",
+        snapshots.iter().map(|x|format!("{}..{}",x.start,x.end)).collect::<Vec<_>>().join(", ")))?;
+    let url=format!("{}/{}",index_url.trim_end_matches('/'),chosen.name);
+    let (_,total)=range_get!(agent,&url,0,0).map_err(|e|format!("IGRA2 snapshot {}: {e}",chosen.name))?;
+    let total=total.ok_or_else(||format!("{url} answered a range request without the object's size"))?;
+    let mut reader=Ranged::open(&url,total);
+    let workers=std::thread::available_parallelism().map(|n|n.get()).unwrap_or(2).clamp(1,16);
+    let (jobs,queue)=std::sync::mpsc::sync_channel::<(usize,String,Vec<u8>)>(workers*2);
+    let queue=std::sync::Arc::new(std::sync::Mutex::new(queue));
+    type Decoded=std::result::Result<(String,usize,usize,BTreeMap<String,usize>),String>;
+    let (done,results)=std::sync::mpsc::channel::<(usize,String,Decoded)>();
+    let pool=(0..workers).map(|_|{let (queue,done)=(queue.clone(),done.clone());std::thread::spawn(move||loop {
+        let job=queue.lock().unwrap().recv();let Ok((i,name,bytes))=job else{return};
+        let decoded=(||->Result<(String,usize,usize,BTreeMap<String,usize>)>{
+            let body=igra_text_bytes(bytes,&name)?;let (mut text,mut hours)=(String::new(),BTreeMap::new());
+            let (soundings,rows)=igra_rows(&body,a,b,&mut text,&mut hours)?;Ok((text,soundings,rows,hours))})().map_err(|e|e.to_string());
+        if done.send((i,name,decoded)).is_err() {return}
+    })}).collect::<Vec<_>>();
+    drop(done);
+    let (mut members,mut walk_error)=(0usize,None);
+    for member in rw_obs::tar::TarMembers::new(&mut reader,chosen.name.clone()) {
+        match member {
+            Ok(m) if m.name.ends_with(".txt.zip") => {if jobs.send((members,m.name,m.bytes)).is_err(){break} members+=1}
+            Ok(_) => {}
+            Err(e) => {walk_error=Some(e.to_string());break}
+        }
+    }
+    drop(jobs);for worker in pool {let _=worker.join();}
+    let (bytes,requests)=reader.counts();drop(reader);
+    if let Some(e)=walk_error {return Err(format!("IGRA2 snapshot {}: {e}",chosen.name).into())}
+    let mut decoded=results.into_iter().collect::<Vec<_>>();decoded.sort_by_key(|r|r.0);
+    if decoded.len()!=members {return Err(format!("IGRA2 snapshot {}: {} of {members} station files decoded",chosen.name,decoded.len()).into())}
+    let mut text=String::from(IGRA_HEADER);let (mut soundings,mut rows,mut stations)=(0usize,0usize,0usize);let mut hours=BTreeMap::new();
+    for (_,name,result) in decoded {
+        let (part,s,r,h)=result.map_err(|e|format!("IGRA2 snapshot {}: {name}: {e}",chosen.name))?;
+        text.push_str(&part);soundings+=s;rows+=r;if s>0 {stations+=1}
+        for (k,v) in h {*hours.entry(k).or_insert(0usize)+=v}
+    }
+    let temp=out.with_extension("part");std::fs::write(&temp,&text)?;std::fs::rename(&temp,out)?;
+    Ok(json!({"schema":"gpuwm-hex.igra2-snapshot/v1","index":index_url,
+        "snapshot":{"name":chosen.name,"url":url,"start":chosen.start.to_string(),"end":chosen.end.to_string(),"created":chosen.created.to_string(),"bytes":total},
+        "window":[start,end],"bytes_downloaded":bytes+1,"range_requests":requests+1,"station_files":members,"stations_with_soundings":stations,
+        "soundings":soundings,"soundings_by_nominal_hour":hours,"rows":rows,"table":source_identity(out)?,"seconds":clock.elapsed().as_secs_f64(),
+        "decode_threads":workers,"levels":"mandatory pressure levels the scorer reports"}))
+}
+/// The IGRA2 stations a period-of-record read needs: those the station list gives a record spanning `year`, inside
+/// the verification region when one is named (the scorer keeps only the sondes inside it), with the bytes of their
+/// period-of-record zips from the archive's own directory index.
+fn igra2_station_ids(list_url:&str,por_index:&str,year:i32,region:Option<[f64;4]>)->Result<Value> {
+    let agent=rw_obs::net::agent();
+    let list=rw_obs::net::get_text(&agent,list_url,"IGRA2 station list")?;
+    let index=rw_obs::net::get_text(&agent,por_index,"IGRA2 period-of-record index")?;
+    let mut sizes=BTreeMap::new();
+    for row in index.split("<tr").skip(1) {
+        let Some(at)=row.find("-data.txt.zip") else{continue};let id=row[..at].rsplit(['"','>','/']).next().unwrap_or("").to_string();
+        let size=row.split("<td").filter_map(|c|c.split('>').nth(1)).filter_map(|c|c.split('<').next()).filter_map(|c|c.trim().parse::<u64>().ok()).last();
+        if let Some(size)=size {sizes.insert(id,size);}
+    }
+    let (mut stations,mut bytes)=(Vec::new(),0u64);
+    for line in list.lines() {
+        let f=|r:std::ops::Range<usize>|line.get(r).map(str::trim).unwrap_or("");
+        let (Ok(lat),Ok(lon),Ok(first),Ok(last))=(f(12..20).parse::<f64>(),f(21..30).parse::<f64>(),f(72..76).parse::<i32>(),f(77..81).parse::<i32>()) else{continue};
+        if !(first<=year && year<=last) {continue}
+        if let Some([w,s,e,n])=region {if !(lat>=s && lat<=n && (lon-w).rem_euclid(360.)<=e-w) {continue}}
+        let id=f(0..11).to_string();let Some(size)=sizes.get(&id) else{continue};
+        bytes+=size;stations.push(id);
+    }
+    Ok(json!({"schema":"gpuwm-hex.igra2-stations/v1","list":list_url,"index":por_index,"year":year,"region":region,"stations":stations,"bytes":bytes}))
 }
 fn surface(path:&Path,valid:&str)->Result<Vec<Ob>> {
     let target=DateTime::parse_from_rfc3339(valid)?.timestamp();let text=std::fs::read_to_string(path)?;let mut lines=text.lines();
@@ -489,6 +651,13 @@ fn main() {let args=std::env::args().collect::<Vec<_>>();let result=(||->Result<
     if args.get(1).map(String::as_str)==Some("--decode-igra") && args.len()>=6 {
         println!("{}",decode_igra(Path::new(&args[2]),&args[3],&args[4],&args[5..])?);return Ok(())
     }
+    if args.get(1).map(String::as_str)==Some("--fetch-igra2-snapshot") && args.len()==6 {
+        println!("{}",fetch_igra2_snapshot(&args[2],&args[3],&args[4],Path::new(&args[5]))?);return Ok(())
+    }
+    if args.get(1).map(String::as_str)==Some("--igra2-station-ids") && (args.len()==5 || args.len()==9) {
+        let region=if args.len()==9 {let v=args[5..9].iter().map(|x|x.parse::<f64>()).collect::<std::result::Result<Vec<_>,_>>()?;Some([v[0],v[1],v[2],v[3]])}else{None};
+        println!("{}",igra2_station_ids(&args[2],&args[3],args[4].parse()?,region)?);return Ok(())
+    }
     if args.get(1).map(String::as_str)==Some("--fetch-input") && args.len()==4 {
         use std::io::Read;
         let output=Path::new(&args[3]);if output.exists(){return Err("fetch destination exists; cannot overwrite a caller-owned observation".into())}
@@ -504,6 +673,26 @@ fn main() {let args=std::env::args().collect::<Vec<_>>();let result=(||->Result<
 }
 #[cfg(test)] mod tests {use super::*;
     #[test] fn spherical_nearest_wraps_and_barycentric_reproduces_constant(){let la:Vec<f64>=vec![0.,0.,0.1,1.];let lo:Vec<f64>=vec![179.9,-179.9,180.,179.];let m=Mesh::new(&la.iter().map(|v|v.to_radians()).collect::<Vec<_>>(),&lo.iter().map(|v|v.to_radians()).collect::<Vec<_>>());assert_eq!(m.nearest(xyz(0.,-179.91),1)[0].1,1);assert!((m.weights(0.01,179.98).iter().map(|p|p.1).sum::<f64>()-1.).abs()<1e-12);}
+    #[test] fn igra2_snapshot_covering_the_window_with_the_latest_start_is_chosen(){
+        let index=r#"<a href="IGRA_v2.2_data-por_s19050404_e20261022_c20261022_part1of4.tar">x</a><a href="IGRA_v2.2_data-y2d_s20210101_e20250615_c20250615.tar">x</a>
+            <a href="IGRA_v2.2_data-y2d_s20250101_e20260710_c20260710.tar">x</a><a href="./IGRA_v2.2_data-y2d_s20260101_e20261022_c20261022.tar">x</a>"#;
+        let list=igra2_snapshots(index);assert_eq!(list.len(),3);
+        let d=|t:&str|chrono::NaiveDate::parse_from_str(t,"%Y-%m-%d").unwrap();
+        assert_eq!(choose_snapshot(&list,d("2025-05-19"),d("2025-05-20")).unwrap().name,"IGRA_v2.2_data-y2d_s20250101_e20260710_c20260710.tar");
+        assert_eq!(choose_snapshot(&list,d("2023-03-31"),d("2023-04-01")).unwrap().name,"IGRA_v2.2_data-y2d_s20210101_e20250615_c20250615.tar");
+        assert_eq!(choose_snapshot(&list,d("2026-10-01"),d("2026-10-01")).unwrap().name,"IGRA_v2.2_data-y2d_s20260101_e20261022_c20261022.tar");
+        assert!(choose_snapshot(&list,d("2019-06-01"),d("2019-06-02")).is_none());
+        assert!(choose_snapshot(&list,d("2026-10-23"),d("2026-10-23")).is_none());
+    }
+    #[test] fn igra_rows_count_soundings_per_nominal_hour(){
+        let row=format!("10 {:>5} {:>6}A{:>5}B{:>5}B{:>5} {:>5} {:>5} {:>5}\n",-9999,50000,5850,-105,10,80,270,150);
+        let header=|d:&str,h:&str|format!("#USM00072357 {d} {h} 2315    3 ncdc-gts ncdc-gts  352300  -974400\n");
+        let body=header("2025 05 19","12")+&row+&header("2025 05 20","00")+&row+&header("2025 05 20","12")+&row;
+        let (mut text,mut hours)=(String::new(),BTreeMap::new());
+        let a=DateTime::parse_from_rfc3339("2025-05-19T11:00:00Z").unwrap().timestamp();let b=DateTime::parse_from_rfc3339("2025-05-20T01:00:00Z").unwrap().timestamp();
+        let (s,r)=igra_rows(&body,a,b,&mut text,&mut hours).unwrap();assert_eq!((s,r),(2,8));
+        assert_eq!(hours.get("2025-05-19T12:00:00Z"),Some(&1));assert_eq!(hours.get("2025-05-20T00:00:00Z"),Some(&1));assert_eq!(hours.len(),2);
+    }
     #[test] fn default_region_reproduces_the_original_conus_lattice(){
         assert_eq!(Region::from_request(&json!({})).unwrap(),None);assert_eq!(CONUS.shape(),(473,225));
         let c=CONUS.coordinates();let old=(0..225).flat_map(|y|(0..473).map(move|x|(22.+y as f64*0.125,-125.+x as f64*0.125))).collect::<Vec<_>>();

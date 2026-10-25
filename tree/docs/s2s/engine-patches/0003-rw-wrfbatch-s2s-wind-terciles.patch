@@ -1,15 +1,15 @@
 --- a/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
 +++ b/tools/rustwx/crates/rw-wrfbatch/src/ensemble_products.rs
-@@ -10,7 +10,7 @@
+@@ -10,7 +10,7 @@ use rayon::prelude::*;
  use rustwx_render::{ContourLayer, LegendControls, LegendMode, LevelDensity, RenderDensity, advisory};
- use crate::{panel::{PanelRequest, layout_path, render_panel, safe_component}, scales};
+ use crate::{panel::{PanelRequest, layout_path, render_panel_with_rgba, safe_component}, scales};
  
 -pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\ts2s-energy-scales\tglobal-ensemble-projection\tRENDERED\tFAILED";
 +pub const ABI: &str = "gpuwm-rw-wrfbatch-resident-ensemble-v2\tCDF5\tmean\tspread\tmin\tmax\tprobability\tpaintball\tpostage\tfraction\ttyped-diagnostic\ts2s-window\ts2s-energy-scales\tglobal-ensemble-projection\ts2s-wind-terciles\tRENDERED\tFAILED";
  const CONTRACT: &str = "gpuwm-resident-ensemble-products.v1";
  
  fn attr(file: &File, name: &str) -> Result<String, String> {
-@@ -38,6 +38,7 @@
+@@ -38,6 +38,7 @@ fn shaped(file: &File, name: &str, expected: &[usize]) -> Result<Vec<f32>, Strin
  // S2S window means and anomalies have declared units and fixed comparison
  // scales. The generic 0..100 fallback would hide every height/MSLP mean.
  fn s2s_scale(field: &str, kind: &str) -> Option<rustwx_render::ColorScale> {
@@ -17,7 +17,7 @@
      let anomaly = field.ends_with("_anomaly");
      let base = field.strip_suffix("_anomaly").unwrap_or(field);
      let (low, high, delta, spread) = match base {
-@@ -45,12 +46,14 @@
+@@ -45,12 +46,14 @@ fn s2s_scale(field: &str, kind: &str) -> Option<rustwx_render::ColorScale> {
          "precipitation_rate" | "freezing_rain_rate" => (0.0, 10.0, 5.0, 5.0),
          "z500" => (4500.0, 6200.0, 300.0, 150.0),
          "mslp" => (960.0, 1040.0, 20.0, 15.0),
@@ -34,15 +34,20 @@
      }
      if base == "temperature2" { return None; } // canonical operational temperature palette
      let mut scale = scales::spread_scale(high - low);
-@@ -359,9 +362,10 @@
+@@ -389,6 +392,7 @@ pub fn render(path: &Path, out: &Path, fields: &[String], domain: &str,
              } else {
                  (if units == "1" { scales::probability_scale() } else { scales::spread_scale(100.0) }, units.clone())
              };
 +            let title = file.variable(&mean_name).and_then(|v| v.attribute("long_name").and_then(|a| a.as_string()).map(str::to_string)).unwrap_or_else(|| field_title(&field).to_string());
              let slug = format!("ens_{kind}_{}", safe_component(&field, "field"));
-             let target = plane(out, domain, &valid, roster_subtitles(members, &valid, source), &latitude, &longitude,
--                ny, nx, slug, format!("Ensemble {kind} {} ({display_units})", field_title(&field)),
-+                ny, nx, slug, format!("Ensemble {kind} {title} ({display_units})"),
+             let (target, geo) = plane_geo(out, domain, &valid, roster_subtitles(members, &valid, source), &latitude, &longitude,
+                 ny, nx, slug,
+@@ -396,7 +400,7 @@ pub fn render(path: &Path, out: &Path, fields: &[String], domain: &str,
+                     // The plain product title for one deterministic plane.
+                     format!("{} ({display_units})", field_title(&field))
+                 } else {
+-                    format!("Ensemble {kind} {} ({display_units})", field_title(&field))
++                    format!("Ensemble {kind} {title} ({display_units})")
+                 },
                  values, display_units, scale, vec![], true, width, height)?;
-             println!("RENDERED\t{}", target.display()); written.push(target);
-         }
+             said(&target, geo.as_ref()); written.push(target);

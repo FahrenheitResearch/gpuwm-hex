@@ -377,6 +377,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_export_parser(commands)
 
+    # Beside export: it composes export --follow with the engine's local
+    # posting, as-posted prep and sim, for a nest added while hex runs.
+    from .add_nest_door import add_add_nest_parser
+
+    add_add_nest_parser(commands)
+
     # Last, because it composes every door above from a data row: mesh,
     # static, init-source, forecast, products, export and score in one
     # command, with its plan, status.json and events.jsonl.
@@ -471,5 +477,57 @@ def run_stage(argv: Sequence[str], env: dict[str, str] | None = None) -> int:
     return int(main(argv))
 
 
+def run_exit_handlers() -> None:
+    """What the interpreter runs at a normal exit, in its order, without the module teardown after it.
+
+    threading's exit hooks first (``threading._shutdown``: concurrent.futures stops its process pools and
+    the kernel plans' compile pools drop their workers), then the ``atexit`` functions. THE BREAKAGE THIS
+    PREVENTS (the hl-3 headline run, 2026-10-24): running ``atexit`` alone skipped the threading hooks, so
+    multiprocessing's exit function joined an idle spawn compile worker that nothing had told to stop, and a
+    finished forecast (receipt and products written) never exited.
+    """
+    import atexit
+    import threading
+    try:
+        shutdown = getattr(threading, "_shutdown", None)
+        if shutdown is not None:
+            shutdown()
+    finally:
+        atexit._run_exitfuncs()
+
+
+def device_process_exit(code: int) -> None:
+    """End a device-command process without the interpreter's module teardown.
+
+    THE BREAKAGE THIS PREVENTS (HEX-PHYSICS-PARITY run group 2 #6): a moving segment on the MPAS suite route
+    finished, wrote its receipt ("completed": true) and its carrier, then died with SIGSEGV (rc -11) while the
+    interpreter tore modules down: cupy's ``Event.__del__`` ran after the CUDA context was gone
+    ("cudaErrorDeviceUninitialized: invalid device context").  The controller counted the finished segment as
+    failed and launched a recovery.  Here the exit handlers run exactly as at a normal exit (kernel-cache and
+    prewarm manifests, history writers), the streams are flushed, and the process ends with the door's code
+    before any late finalizer can touch the device (the forked member slot in hexcore.forecast_batch does the
+    same).
+    """
+    import atexit
+    import os
+    try:
+        run_exit_handlers()
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        finally:
+            os._exit(int(code))
+
+
+def entry() -> int:
+    """The console door: :func:`main`, with a device command's process ended by :func:`device_process_exit`."""
+    argv = sys.argv[1:]
+    code = main(argv)
+    if argv and argv[0] in DEVICE_COMMANDS:
+        device_process_exit(code)
+    return code
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entry())

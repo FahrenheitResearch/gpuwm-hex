@@ -220,6 +220,8 @@ def test_native_held_sources_upload_before_contiguous_and_are_cached():
     coupling.session=session
     coupling.cp=SimpleNamespace(asarray=upload,ascontiguousarray=contiguous)
     coupling.sources=None
+    coupling.widen_sources=None  # one card: no multi-card source widening
+    coupling.exchange_sources=None  # nor halo exchange of the held sources
     kwargs=dict(rk_step=1,dynamics_substep=1,state=SimpleNamespace(rho=host),
                 saved=None,diagnostics=SimpleNamespace(h_edge=host))
     result=coupling.stage(**kwargs)

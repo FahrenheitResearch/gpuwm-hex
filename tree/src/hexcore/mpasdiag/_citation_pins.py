@@ -33,7 +33,7 @@ PINS = (
     ('mpas_isobaric_diagnostics.F', 'src/core_atmosphere/diagnostics/mpas_isobaric_diagnostics.F', 1245, 1351, '52531ab23b07afd3905befae0f38d7eb00d98857e791dd3dfe7d906e611a011d', 2),
     # o3-diag-convective: pinned native routine and stream-alarm windows.
     ('mpas_convective_diagnostics.F', 'src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F', 53, 85, '952ae1f5280474b76437454b88e825dc62b7772214b2e758656bbbae38ceb50d', 3),
-    ('mpas_convective_diagnostics.F', 'src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F', 99, 198, '318c72688ebf84636fb5208d41e61620afb5f90ab9e099419e0d78857ec482f1', 4),
+    ('mpas_convective_diagnostics.F', 'src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F', 99, 198, '318c72688ebf84636fb5208d41e61620afb5f90ab9e099419e0d78857ec482f1', 5),
     ('mpas_convective_diagnostics.F', 'src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F', 227, 487, 'ad0cc6525dd5138b41b7b2160ebfc1f8cdd938d27588d3516b4e93a5037f008e', 4),
     ('mpas_convective_diagnostics.F', 'src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F', 263, 295, 'e305f35d13570801fa1fe51e90ea5793c3b6828e99171deb5db853c1b6df50d6', 1),
     ('mpas_convective_diagnostics.F', 'src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F', 501, 525, '6a56beee6bac389b0075132193dcebe3c53dede8ebc75dbe940f78e8acdf81ee', 4),

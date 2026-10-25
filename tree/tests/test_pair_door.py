@@ -505,6 +505,41 @@ def test_a_failing_leg_stops_the_pair_naming_the_leg_and_the_rc(
     assert not (request.pair_out / "summary.txt").exists()
 
 
+def test_the_mpas_suite_routes_stream_frames_are_the_legs_frames(tmp_path: Path) -> None:
+    # hex parity run group 7, #27: the MPAS suite route writes MPAS's own history.* stream files, and the
+    # pair counted "frames control 0, treatment 0" beside legs that had written theirs.
+    request = door.resolve_pair_request(_arguments(tmp_path))
+    base = _fake_runner(areas=FRAME_AREAS)
+
+    def suite_route(plan: door.LegPlan) -> int:
+        code = base(plan)
+        (plan.out / FRAME_NAME).rename(plan.out / "history.2025-05-19_13.00.00.nc")
+        (plan.out / "native-physics-request.json").write_text("{}\n", encoding="utf-8")
+        return code
+
+    manifest = door.run_pair(request, runner=suite_route)
+    for name in ("control", "treatment"):
+        assert [Path(row["path"]).name for row in manifest["legs"][name]["history"]] == [
+            "history.2025-05-19_13.00.00.nc"]
+    assert _rows((request.pair_out / "summary.txt").read_text(encoding="utf-8"))["theta"][2] == "+2.000000e+00"
+
+
+def test_a_pair_whose_legs_left_no_frames_refuses_after_its_manifest(tmp_path: Path) -> None:
+    # hex parity run group 7, #27: "NO COMPARISON" was printed and the door still exited 0.
+    request = door.resolve_pair_request(_arguments(tmp_path))
+    base = _fake_runner(areas=FRAME_AREAS)
+
+    def no_frames(plan: door.LegPlan) -> int:
+        code = base(plan)
+        (plan.out / FRAME_NAME).unlink()
+        return code
+
+    with pytest.raises(door.PairRefusal, match="NO COMPARISON: the control and treatment leg"):
+        door.run_pair(request, runner=no_frames)
+    assert (request.pair_out / "pair_manifest.json").is_file()
+    assert "NO COMPARISON" in (request.pair_out / "summary.txt").read_text(encoding="utf-8")
+
+
 def test_a_failing_control_leg_never_spends_the_treatment_leg(
     tmp_path: Path,
 ) -> None:

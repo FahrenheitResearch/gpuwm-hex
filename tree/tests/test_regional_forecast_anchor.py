@@ -94,7 +94,7 @@ def test_the_named_forecast_pair_is_masked_digest_identical(receipts):
 SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     "src/hexcore/cuda_driver.py": {
         "recorded": "cb6477ef2fd02ad551e9b6c8af0724c94fc4d90bdc712fff1378d218662f5d04",
-        "current": "433a0e51eb948d7235fbab3aa7605c4f6135056e6c717abbbbaa0e6972fc1c0c",
+        "current": "9034951ee871ace985ccc7eacfa8559d1798d653cb0a7c64a1e353dcce5b22ef",
         "why": (
             "convection ruling, 2026-08-26: _v841_physics_cadences reports "
             "convection: None when no cumulus scheme is selected instead of "
@@ -213,7 +213,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_backend/runtime.py": {
         "recorded": "4deab4b3a37467491a531750e8618705c6884c19c0395891bc426fce2ea6ba5a",
-        "current": "b8e390535f4b88ed2954989aa0004366f923c584a631a3aa6589ba92acff54bb",
+        "current": "f07d27138e7ef6565359356762c95889870e494ea6623cf1a3f21c61edd5bdf6",
         "why": (
             "2026-10-15: require_cuda's default runtime floor 13000 -> 12000 "
             "(CUDA 12 support) and one docstring paragraph; host Python "
@@ -342,7 +342,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_horizontal_v841.py": {
         "recorded": "3fc0b860ebd67dfed453617c348810964ea1110e782fe85db10283afb406e2fe",
-        "current": "0f26e1e54ab4935aa4ce9c25d189d15b76b046e84dd015e15d2326c3a6bddf7d",
+        "current": "41a07db0b5dbe343b7c1df421ebe7f83ba6ca0fac1b689b0d8b5452452b54520",
         "why": (
             "2026-10-19 current-source refresh after f65ab11c: immutable "
             "kernel dimensions are specialized and cache keys include shape. "
@@ -393,7 +393,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_transport_v841.py": {
         "recorded": "55c66759d9c81f65ed71ce77570897c102fd64661da6ad6c37b438b27771ab23",
-        "current": "32720d050fe1fa002c983f30dce85b823edf39b593c3811aa562de43e0a86255",
+        "current": "222fbfa4cb6266435070f15057607cc7b6bf4241998cfa51c02545024a9a0ef1",
         "why": (
             "2026-10-19 LTS hook repair: unspecialized lookups retain their "
             "two-part key; the acoustic tap uses the launched shape identity. "

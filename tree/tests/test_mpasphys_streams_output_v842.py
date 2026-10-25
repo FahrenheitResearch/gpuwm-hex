@@ -191,7 +191,9 @@ def test_selected_words_are_frozen_trimmed_and_appended(tmp_path, bridge, reside
         assert reads == [('state', 'Time'), ('state', 'Time')]
         assert state.device_pools.transfers['publication_download_bytes'] == before.nbytes * 2
     if pinned:
-        assert allocations == [before.nbytes]
+        # One pinned set, or two when the second write found the first frame still being encoded
+        # (PhysicsStreams.FRAMES_IN_FLIGHT); a set is never allocated twice for the same frame.
+        assert allocations in ([before.nbytes], [before.nbytes] * 2)
         assert not writer._host_storage
 
 
@@ -483,7 +485,11 @@ def test_resident_diagnostic_updates_between_outputs_and_resets_after_capture(tm
             final_time=start+timedelta(minutes=1), diagnostics=diagnostics) as writer:
         assert writer.missing == {'output': []}
         for step in range(3):
-            assert writer.required(start+timedelta(seconds=step*30))
+            # Accumulation alone no longer forces a publication: step 1 has
+            # no due stream, and the forecast defers its maxima update to the
+            # next synchronize (ResidentOutputDiagnostics.defer). write still
+            # folds them when called.
+            assert writer.required(start+timedelta(seconds=step*30)) is (step != 1)
             writer.write(step=step, dt=30, receipt=receipt)
     assert diagnostics.events == [('update', 0), ('reset', start), ('update', 1),
         ('update', 2), ('reset', start+timedelta(minutes=1))]

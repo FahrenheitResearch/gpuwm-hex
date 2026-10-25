@@ -255,7 +255,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     "src/hexcore/history_writer.py": "b0b6f8d27fce8478f0d78d3c4cc73bdc12bf5f4a625b7f45515b8f1206fd64a1",
     "src/hexcore/cuda_arwen_helper_scope_v2.py": "cf179cb9e5650d5db36ccb8d60905a88140b360da9d54c6d8f94a8e032e00e07",
     "src/hexcore/radiation_source_sets.json": "f0357c3b4613f2cd136d62f5cd2391d034d471acc59d6f956683082cc1fdc5a2",
-    "src/hexcore/data/profiles/engine-helper-sets.v1.json": "f86f96bd257ad443abede893d46d7e15fac9f6c64364e385f263201efa7f5893",
+    "src/hexcore/data/profiles/engine-helper-sets.v1.json": "d7c155621833e4950ea39237f6b6bf736534c3c437b684525d7f353c41fa82c4",
     # Native upper damping: Rust and CUDA match compiled source blocks.
     "src/hexcore/native/upper_damping.rs": "5483b2c1e7da45317ffe4213c5879b583070d9e28d591ec52a9c697a052e81f1",
     "src/hexcore/upper_damping_v841.py": "c77cb8a360cb25f6eabf1aca6b9c50abb41e9fe603511aefc9c0c6df9117f4e1",
@@ -306,7 +306,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # Re-frozen for the Morrison row: per-bucket signed-fallout validation
     # preserves native words; the default positive-sum policy is unchanged.
     "src/hexcore/cuda_physics_v841.py": (
-        "a8ca96d41d3cc79fa148caf8cbf60a020e626ee39a82fa33a4e791417ac1bd23"
+        "43aa675137139bde8e71d52d76e2acac7363623c711eda17ebfe18b449e29761"
     ),
     # Re-frozen during the 12 GiB capacity work: the dynamics subcycle stopped
     # copying a scalar block nothing writes, stopped taking a private image of
@@ -459,7 +459,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # person).  No code line differs from the copy the H1 identities above
     # ran on.  No card run for this merge.
     "src/hexcore/cuda_driver.py": (
-        "433a0e51eb948d7235fbab3aa7605c4f6135056e6c717abbbbaa0e6972fc1c0c"
+        "9034951ee871ace985ccc7eacfa8559d1798d653cb0a7c64a1e353dcce5b22ef"
     ),
     # THE BREAKAGE THIS PREVENTS: cuda_driver.py now executes host
     # preparation through hexcore.prep_cache.  Unpinned, an edit to the key
@@ -604,7 +604,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # does not pass through the changed branch; uniform meshes are decided
     # byte-identically (tests/test_convection_admission_variable_mesh.py).
     "src/hexcore/convection_admission.py": (
-        "874b0351d61f554e6bfe3d7d0dfbd8bfbe3ecea26fa06abc202f9a164137b27e"
+        "9128972130e8022538e6fea8c41ab50df70246736f58515439e7dc2adb317f5e"
     ),
     # THE BREAKAGE THIS PREVENTS: config_v841.validate() now ADMITS the
     # model timestep from this module, so the pinned config's meaning
@@ -793,7 +793,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # Re-derived 2026-10-18 (parked-merge hex-speed): that file plus the
     # parked asynchronous history-ready seam; digest of the merged file.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "49b72c512239cff9e70d71c836754c0eb57455c472cafeed804ff1cf4aead0ef"
+        "241a576d3b059d8abec0c52d2b9161225d0d008968bee01ce5f14458269ce649"
     ),
     # New pin 2026-10-05: the New Tiedtke row's seam (the frozen column-batch
     # class subclassed, driver built at cu_physics=16, raw cumulus momentum
@@ -851,7 +851,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
         "d4e4face383eab6f19f21598613b7bd58e37eb75e067b7b9e817060a2ec015cd"
     ),
     "src/hexcore/cuda_horizontal_v841.py": (
-        "0f26e1e54ab4935aa4ce9c25d189d15b76b046e84dd015e15d2326c3a6bddf7d"
+        "41a07db0b5dbe343b7c1df421ebe7f83ba6ca0fac1b689b0d8b5452452b54520"
     ),
     # The two-rank (multi-GPU) execution boundary: the scalar-transport module
     # (which gained the guarded FCT halo-exchange hook and executes in every
@@ -874,7 +874,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # This is the current execution identity, not a re-mint of archived x4
     # or regional forecast evidence. Device requalification remains pending.
     "src/hexcore/cuda_transport_v841.py": (
-        "32720d050fe1fa002c983f30dce85b823edf39b593c3811aa562de43e0a86255"
+        "222fbfa4cb6266435070f15057607cc7b6bf4241998cfa51c02545024a9a0ef1"
     ),
     # THE BREAKAGE THESE TWO PREVENT, found by the NVRTC reciprocal-rewrite
     # lane (the NVRTC reciprocal-rewrite defect): a pinned translation unit does not compile its own file.
@@ -913,10 +913,10 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
         "b544707943ab75ce27e1972a7a57dd9a3eeed7aa23b2fa332e92594983de97e4"
     ),
     "src/hexcore/partition_executor_v841.py": (
-        "09e5a13e21a22087442e5834d0af0b7f6dd4716d92af3327d0914959df1907c7"
+        "9821e7e3b7c7238d48e40edadbc2c99afbf7e157d08b078649b51cef2c445009"
     ),
     "src/hexcore/partition_net_v841.py": (
-        "30b0988b2d40bbda8d68be1ec236564ea87bb6690bfdcd08370eea12ca11753b"
+        "707a7c455641c45a7e6c42b72c40272cfb184258177feba7a6c8e70414d45134"
     ),
 }
 
@@ -956,7 +956,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "fb0aa7da49c1a5e7f5d6bacce6503214d1e550b9a60c4faaaeff237e2d719e4b"
         ),
         "adapter_contract_sha256": (
-            "b08a3d336df0c510f2224182c271d210c13655c253cb2e99f091d7fe1237ee34"
+            "1721e6fa20c401f204286b6631096f0c3c4bf1df0b42ca782e9ab42d595411ee"
         ),
         "arwen_contract_surface_sha256": ARWEN_CONTRACT_SURFACE_SHA256,
         "arwen_glacier_composed_tu_sha256": ARWEN_GLACIER_COMPOSED_TU_SHA256,
@@ -3299,6 +3299,18 @@ def require_arwen_v2_surface_execution(
                               sea_ice=used["sea_ice_columns"], glacier=used["glacier_columns"])
         if expected_census["glacier"]:
             expected_census["glacier_path"] = ARWEN_GLACIER_CUDA_PROVENANCE
+    routing = payload.get("noahmp_routing_census")
+    if routing is not None and expected_census is not None:
+        # Independent pre-LSM layout, validated by the backend against actual
+        # execution. Static initial categories need not survive ice evolution.
+        keys = ("land", "water", "sea_ice", "glacier")
+        if (not isinstance(routing, Mapping) or
+                any(type(routing.get(k)) is not int or routing[k] < 0 for k in keys) or
+                sum(routing[k] for k in keys) != sum(expected_census[k] for k in keys) or
+                set(routing) != set(keys) | ({"glacier_path"} if routing["glacier"] else set()) or
+                (routing["glacier"] and routing["glacier_path"] != ARWEN_GLACIER_CUDA_PROVENANCE)):
+            raise ValueError(f"{label} invalid NoahMP routing census/provenance")
+        expected_census = routing
     classification = payload.get("surface_classification")
     if not isinstance(classification, Mapping):
         raise ValueError(f"{label} lacks surface_classification")

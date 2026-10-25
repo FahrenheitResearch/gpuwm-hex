@@ -99,13 +99,29 @@ def test_s2s_coordinator_owns_verification_without_future_data_retention(tmp_pat
 class _ArchiveCommands:
     """Stands in for the scorer's command runner: NOMADS refuses, IGRA2 serves (no network, no binaries)."""
 
-    def __init__(self, scratch, *, prepbufr_ok=False, igra_ok=True, soundings=3):
+    def __init__(self, scratch, *, prepbufr_ok=False, igra_ok=True, soundings=3, snapshot_ok=False, por_bytes=10 << 20):
         self.scratch, self.calls = scratch, []
         self.prepbufr_ok, self.igra_ok, self.soundings = prepbufr_ok, igra_ok, soundings
+        self.snapshot_ok, self.por_bytes = snapshot_ok, por_bytes
 
     def run(self, argv, *, json_output=True, acquisition=True, timeout=None):
         self.calls.append((list(map(str, argv)), timeout))
         tool, args = Path(str(argv[0])).name, list(map(str, argv[1:]))
+        if args[0] == "--fetch-igra2-snapshot":
+            if not self.snapshot_ok:
+                raise RuntimeError("hex_obs_scorecard exited 2: no IGRA2 year-to-date snapshot covers the window")
+            start, end = scorecard.instant(args[2]), scorecard.instant(args[3])
+            Path(args[4]).write_text("station_id,latitude_deg,longitude_deg,elevation_m,valid_time,pressure_hpa,variable,value\n")
+            hours = {}
+            when = start.replace(minute=0, second=0) + scorecard.timedelta(hours=1)
+            while when <= end:
+                if when.hour in (0, 12):
+                    hours[scorecard.stamp(when)] = self.soundings
+                when += scorecard.timedelta(hours=1)
+            return {"schema": "gpuwm-hex.igra2-snapshot/v1", "snapshot": {"name": "IGRA_v2.2_data-y2d_s20250101_e20260710_c20260710.tar"},
+                    "soundings_by_nominal_hour": {k: v for k, v in hours.items() if v}, "bytes_downloaded": 1}
+        if args[0] == "--igra2-station-ids":
+            return {"stations": ["USM00072357", "USM00072451"], "bytes": self.por_bytes}
         if args[0] == "--fetch-input":
             if not self.prepbufr_ok:
                 raise RuntimeError("hex_obs_scorecard exited 1: HTTP 403")
@@ -157,6 +173,35 @@ def test_an_earlier_year_reads_the_igra2_period_of_record(tmp_path, monkeypatch)
     scorecard.acquire_sondes(valid, tmp_path / "0" / "radiosonde", commands, _sonde_config(tmp_path))
     fetch = next(argv for argv, _ in commands.calls if Path(argv[0]).name == "rw_igra2")
     assert fetch[fetch.index("--collection") + 1] == "por"
+    # Only the stations the run needs, never the whole period-of-record archive (2026-10-24).
+    assert fetch[fetch.index("--stations") + 1] == "USM00072357,USM00072451"
+
+
+def test_a_period_of_record_read_over_its_byte_budget_is_refused_by_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(scorecard, "binary", lambda name: f"/bin/{name}")
+    commands = _ArchiveCommands(tmp_path / "scratch", por_bytes=25 << 30)
+    valid = scorecard.datetime(2019, 6, 1, 0, tzinfo=scorecard.timezone.utc)
+    try:
+        scorecard.acquire_sondes(valid, tmp_path / "0" / "radiosonde", commands, _sonde_config(tmp_path))
+    except LookupError as error:
+        assert "igra2_por_max_bytes" in str(error) and "25.0 GiB" in str(error)
+    else:
+        raise AssertionError("a 25 GiB period-of-record read must not start")
+    assert not any(Path(argv[0]).name == "rw_igra2" for argv, _ in commands.calls)
+
+
+def test_a_past_case_streams_one_igra2_snapshot_for_every_sonde_frame(tmp_path, monkeypatch):
+    # The 2025-05-19 12Z 15 h case: the 12Z and 00Z frames share one snapshot stream; no per-station archive.
+    monkeypatch.setattr(scorecard, "binary", lambda name: f"/bin/{name}")
+    commands = _ArchiveCommands(tmp_path / "scratch", snapshot_ok=True)
+    first = scorecard.datetime(2025, 5, 19, 12, tzinfo=scorecard.timezone.utc)
+    commands.sonde_window = (first, first + scorecard.timedelta(hours=12))
+    tables = [scorecard.acquire_sondes(first + scorecard.timedelta(hours=h), tmp_path / str(h) / "radiosonde", commands,
+                                       _sonde_config(tmp_path)) for h in (0, 12)]
+    assert tables[0] == tables[1] and tables[0].endswith("igra2-snapshot-2025051912-2025052000.csv")
+    streams = [argv for argv, _ in commands.calls if "--fetch-igra2-snapshot" in argv]
+    assert len(streams) == 1 and streams[0][3:5] == ["2025-05-19T11:00:00Z", "2025-05-20T01:00:00Z"]
+    assert not any(Path(argv[0]).name == "rw_igra2" for argv, _ in commands.calls)
 
 
 def test_a_recent_cycle_still_scores_from_gdas_prepbufr_first(tmp_path, monkeypatch):
@@ -180,6 +225,7 @@ def test_no_archive_serving_the_hour_names_every_archive_tried(tmp_path, monkeyp
         else:
             raise AssertionError("an hour no archive serves must not score")
         assert "gdas_prepbufr: " in text and "HTTP 403" in text and "igra2: " in text and words in text
+        assert "igra2_snapshot: " in text
 
 
 def test_rw_igra2_resolves_to_the_copy_this_wheel_bundles(tmp_path, monkeypatch):

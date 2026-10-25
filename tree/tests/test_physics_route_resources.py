@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -259,7 +260,31 @@ def test_public_decks_name_route_resources_by_key():
     deck = json.loads((gates / headline[0]["path"]).read_text())
     command = deck["hex_command"]
     for option, key in checker.RESOURCE_OPTIONS.items():
-        assert command[command.index(option) + 1] == "{resource:" + key + "}"
+        if option in command:
+            assert command[command.index(option) + 1] == "{resource:" + key + "}"
+    # Every headline slot is on the GPU, so the deck runs the ported framework: no native library, no MPAS
+    # tree (the wheel's Registry), only what `physics-resources fetch` installs.
+    assert set(deck["headline_backends"].values()) == {"hex-cuda"}
+    assert "--native-physics-library" not in command and "native-library" not in deck["hex_support_inputs"]
+    assert set(re.findall(r"\{resource:([^}]*)\}", " ".join(command))) <= {
+        "physics-resources", "thompson-tables", "pool-reader"}
+    assert checker.check(gates, with_data=False) == []
+
+
+def test_the_checker_refuses_an_all_gpu_headline_naming_the_native_library(tmp_path):
+    checker = _gate_checker()
+    deck = {"schema": "mpas-verification-deck-v1", "id": "h", "process_count": 1, "role": "headline",
+            "headline_backends": {"pbl": "hex-cuda", "oml": "hex-cuda"},
+            "hex_command": ["gpuwm-hex", "forecast", "--native-physics-library", "{resource:native-library}"]}
+    (tmp_path / "decks").mkdir()
+    (tmp_path / "decks" / "h.json").write_text(json.dumps(deck))
+    (tmp_path / "index.json").write_text(json.dumps({
+        "schema": "mpas-gate-index-v1", "landed_decks": [],
+        "gates": {"G2": [{"path": "decks/h.json", "sha256": _sha(tmp_path / "decks" / "h.json")}]}}))
+    (tmp_path / "data-manifest.json").write_text(json.dumps({"files": {}}))
+    (tmp_path / "ratchet.json").write_text(json.dumps({"schema": "mpas-ratchet-v1", "entries": []}))
+    findings = "\n".join(checker.check(tmp_path, with_data=False))
+    assert "an all-GPU headline names --native-physics-library" in findings
 
 
 def test_the_checker_refuses_a_resource_named_by_path(tmp_path):

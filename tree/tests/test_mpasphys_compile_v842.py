@@ -10,6 +10,7 @@ def test_native_carrier_binding_does_not_change_other_kernel_sources(monkeypatch
         return name
     monkeypatch.setattr(KernelCache, 'raw_kernel', compile)
     cache = MpasPhysicsKernelCache.__new__(MpasPhysicsKernelCache)
+    cache._resolved = {}  # KernelCache.__init__'s resolution memo (U-MPASPHYS-1)
     source = 'float f(float x) {return sinf(x) + cosf(x) + logf(x) + expf(x);}'
     cache.raw_kernel('f', source, module_key='hexcore.cuda_physics_prep_v841')
     native = captured[-1][0]

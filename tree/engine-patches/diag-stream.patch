@@ -1,0 +1,318 @@
+diff --git a/tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_convert.rs b/tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_convert.rs
+index eefa29f90c..81c2e1f368 100644
+--- a/tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_convert.rs
++++ b/tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_convert.rs
+@@ -105,7 +105,11 @@ its cell centres from --mesh, once the cell counts and the static fields both
+ files carry (shdmin, shdmax) agree, and reads the fields it lacks from the
+ diag file of the same time beside it (history.T.nc -> diag.T.nc).  The frame
+ names both files (MPAS_CELL_CENTRES_*, MPAS_DIAG_*).  A history that carries
+-its own centres, as MPAS-A writes it, is read exactly as before.
++its own centres, as MPAS-A writes it, keeps them; a mapped field it lacks is
++read from its diag file of the same time when one is beside it (MPAS-A writes
++refl10cm_max, which becomes REFC, only to its diagnostics stream), and the
++frame names that file (MPAS_DIAG_*).  A history that carries every field
++converts exactly as before.
+ 
+ --jobs N (single-source only) converts N history frames at a time.  The
+ default converts as many at once as there are frames, cores and host memory
+@@ -900,6 +904,21 @@ fn run() -> Result<(), String> {
+                 )
+             }
+         };
++        // A history with its own centres completed from its diag stream
++        // (MPAS-A's output stream carries no refl10cm_max): named in the
++        // receipt, and only for such a frame.
++        let split_json = match &frame.companion_diag {
++            None => split_json,
++            Some(diag) => format!(
++                "{split_json}, \"diag_stream\": {{\"diag\": \"{}\", \"diag_sha256\": {}, \"diag_fields\": [{}]}}",
++                json_escape(&diag.path.display().to_string()),
++                match &diag.sha256 {
++                    Some(d) => format!("\"{d}\""),
++                    None => "null".to_string(),
++                },
++                diag.fields.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ")
++            ),
++        };
+         let stamp = frame.valid_time.label().replace(':', "_");
+         let destination = Path::new(&out_dir).join(format!("{}_{stamp}", args.prefix));
+         let options = ConvertOptions {
+diff --git a/tools/rustwx/crates/rw-mpas/src/convert.rs b/tools/rustwx/crates/rw-mpas/src/convert.rs
+index 4452d45b0d..c00b057895 100644
+--- a/tools/rustwx/crates/rw-mpas/src/convert.rs
++++ b/tools/rustwx/crates/rw-mpas/src/convert.rs
+@@ -692,6 +692,14 @@ fn convert_frame_inner(
+         ));
+         gattrs.push(NcAttr::text("MPAS_DIAG_FIELDS", split.diag_fields.join(",")));
+     }
++    // A history with its own centres that took fields from its diag stream
++    // (MPAS-A's `output` leaves refl10cm_max there) names that file the same
++    // way; written only for such a frame, so every other frame is unchanged.
++    if let Some(diag) = &frame.companion_diag {
++        gattrs.push(NcAttr::text("MPAS_DIAG_FILE", file_name(Some(&diag.path))));
++        gattrs.push(NcAttr::text("MPAS_DIAG_SHA256", diag.sha256.clone().unwrap_or_default()));
++        gattrs.push(NcAttr::text("MPAS_DIAG_FIELDS", diag.fields.join(",")));
++    }
+     if let Some(r) = remap {
+         gattrs.push(NcAttr::text("MPAS_PRODUCT_REMAP", r.identity_json()));
+         gattrs.push(NcAttr::text("MPAS_PRODUCT_REMAP_SHA256", r.sha256.clone()));
+diff --git a/tools/rustwx/crates/rw-mpas/src/fieldmap.rs b/tools/rustwx/crates/rw-mpas/src/fieldmap.rs
+index 47c3d88073..451e4a866e 100644
+--- a/tools/rustwx/crates/rw-mpas/src/fieldmap.rs
++++ b/tools/rustwx/crates/rw-mpas/src/fieldmap.rs
+@@ -121,6 +121,9 @@ pub static FIELD_MAP: &[FieldMapping] = &[
+     f("QFX", Some("qfx"), Rank::Surface, "kg m-2 s-1", "UPWARD MOISTURE FLUX AT THE SURFACE", FieldSource::History, ""),
+     f("SWDOWN", Some("swdown"), Rank::Surface, "W m-2", "DOWNWARD SHORT WAVE FLUX AT GROUND SURFACE", FieldSource::History, ""),
+     f("GLW", Some("glw"), Rank::Surface, "W m-2", "DOWNWARD LONG WAVE FLUX AT GROUND SURFACE", FieldSource::History, ""),
++    f("REFC", Some("refl10cm_max"), Rank::Surface, "dBZ", "COMPOSITE REFLECTIVITY (COLUMN MAXIMUM, LAMBDA = 10 CM)",
++      FieldSource::History,
++      "the model's own column-maximum reflectivity; MPAS-A writes it to the diagnostics stream (diag.*.nc), not to output, so a run that writes no 3-D refl10cm still delivers its radar picture"),
+     // --- precipitation accumulations ----------------------------------------
+     f("RAINC", Some("rainc"), Rank::Surface, "mm", "ACCUMULATED TOTAL CUMULUS PRECIPITATION", FieldSource::History, ""),
+     f("RAINNC", Some("rainnc"), Rank::Surface, "mm", "ACCUMULATED TOTAL GRID SCALE PRECIPITATION", FieldSource::History, ""),
+diff --git a/tools/rustwx/crates/rw-mpas/src/history.rs b/tools/rustwx/crates/rw-mpas/src/history.rs
+index fd39df5c4e..b4ede90e79 100644
+--- a/tools/rustwx/crates/rw-mpas/src/history.rs
++++ b/tools/rustwx/crates/rw-mpas/src/history.rs
+@@ -221,6 +221,31 @@ pub struct MpasFrame {
+     /// fields came from.  `None` for every history that carries its own
+     /// centres, which are read exactly as before.
+     pub split: Option<SplitSources>,
++    /// Set only for a history that carries its own centres AND lacked a
++    /// mapped field that its `diag` stream file of the same time carried:
++    /// that file and the WRF names read from it.  `None` whenever the
++    /// history alone answered every field, so such a frame converts to the
++    /// same bytes as before.
++    pub companion_diag: Option<DiagCompanion>,
++}
++
++/// The `diag` stream file a history that carries its own cell centres was
++/// completed from.
++///
++/// THE BREAKAGE THIS PREVENTS (case study 2025-05-19, config H2, 2026-10-24):
++/// MPAS-A's own `output` stream, which the hex MPAS-physics route writes as
++/// `history.*.nc`, carries `latCell`/`lonCell` but no reflectivity; MPAS writes
++/// `refl10cm_max` (and its 2 m, 10 m and precipitation diagnostics) to the
++/// `diagnostics` stream, `diag.*.nc`.  The converter read the diag file only
++/// for a split-stream history, so every export, column store and map of that
++/// route had no model reflectivity (the case sheets' H2 radar panels were
++/// empty and its reflectivity scores read 0).
++#[derive(Debug, Clone)]
++pub struct DiagCompanion {
++    pub path: PathBuf,
++    pub sha256: Option<String>,
++    /// WRF names whose values came from the diag file.
++    pub fields: Vec<String>,
+ }
+ 
+ /// Where a split-stream frame's cell centres and diag fields were read from.
+@@ -490,29 +515,9 @@ fn open_split_sources(
+     }
+     let mut diag_path = None;
+     let mut diag_sha256 = None;
+-    match diag_companion(history_path).filter(|p| p.is_file()) {
+-        Some(path) => {
+-            let opened = netcrust::File::open(&path)?;
+-            let diag_cells = opened.dimension("nCells").map(|d| d.len());
+-            if diag_cells != Some(n_cells) {
+-                return Err(MpasError::Refusal(format!(
+-                    "diag {} has {diag_cells:?} cells and its history {n_cells}; it is \
+-                     not this run's diag stream",
+-                    path.display()
+-                )));
+-            }
+-            if let Some(levels) = opened.dimension("nVertLevels").map(|d| d.len()) {
+-                if levels != n_levels {
+-                    return Err(MpasError::Refusal(format!(
+-                        "diag {} has {levels} levels and its history {n_levels}; it is \
+-                         not this run's diag stream",
+-                        path.display()
+-                    )));
+-                }
+-            }
+-            if hash_diag {
+-                diag_sha256 = Some(crate::sha256_file(&path)?);
+-            }
++    match open_diag_companion(history_path, n_cells, n_levels, hash_diag)? {
++        Some((path, sha256, opened)) => {
++            diag_sha256 = sha256;
+             diag_path = Some(path);
+             diag = Some(opened);
+         }
+@@ -535,6 +540,48 @@ fn open_split_sources(
+     ))
+ }
+ 
++/// The `diag` stream file beside `history_path` ([`diag_companion`]), opened
++/// and checked to be this run's (same cell count, same level count when it
++/// carries levels), with its digest when `hash` is set; `None` when there is
++/// no such file.  A diag file of another mesh is refused, not skipped: its
++/// values would land on the wrong cells.
++fn open_diag_companion(
++    history_path: &Path,
++    n_cells: usize,
++    n_levels: usize,
++    hash: bool,
++) -> MpasResult<Option<(PathBuf, Option<String>, netcrust::File)>> {
++    let Some(path) = diag_companion(history_path).filter(|p| p.is_file()) else {
++        return Ok(None);
++    };
++    let opened = netcrust::File::open(&path)?;
++    let diag_cells = opened.dimension("nCells").map(|d| d.len());
++    if diag_cells != Some(n_cells) {
++        return Err(MpasError::Refusal(format!(
++            "diag {} has {diag_cells:?} cells and its history {n_cells}; it is \
++             not this run's diag stream",
++            path.display()
++        )));
++    }
++    if let Some(levels) = opened.dimension("nVertLevels").map(|d| d.len()) {
++        if levels != n_levels {
++            return Err(MpasError::Refusal(format!(
++                "diag {} has {levels} levels and its history {n_levels}; it is \
++                 not this run's diag stream",
++                path.display()
++            )));
++        }
++    }
++    let sha256 = if hash { Some(crate::sha256_file(&path)?) } else { None };
++    Ok(Some((path, sha256, opened)))
++}
++
++/// Whether a mapped field is carried by `file` under either spelling.
++fn carries_mapped(file: &netcrust::File, wrf_name: &str, mpas_name: &str) -> bool {
++    file.variable(mpas_name).is_some()
++        || native_history_name(wrf_name).is_some_and(|name| file.variable(name).is_some())
++}
++
+ /// [`read_history_with_init`] that also reads a split-stream history: one
+ /// that carries no `latCell`/`lonCell`, as RRFS-MPAS writes it.
+ ///
+@@ -661,6 +708,28 @@ fn read_history_body(
+             diag = opened;
+         }
+     }
++    // A history with its own centres that lacks a requested mapped field is
++    // completed from its diag stream file of the same time (MPAS-A writes
++    // refl10cm_max there, not in `output`); see [`DiagCompanion`].  Opened only
++    // when a field is missing, so a complete history reads exactly as before.
++    let mut companion: Option<DiagCompanion> = None;
++    if own_centres.is_some() {
++        let lacks_a_field = FIELD_MAP.iter().any(|mapping| {
++            mapping.source == FieldSource::History
++                && field_set_allows(field_set, mapping)
++                && mapping
++                    .mpas_name
++                    .is_some_and(|mpas| !carries_mapped(&file, mapping.wrf_name, mpas))
++        });
++        if lacks_a_field {
++            if let Some((path, sha256, opened)) =
++                open_diag_companion(history_path, n_cells, n_levels, true)?
++            {
++                companion = Some(DiagCompanion { path, sha256, fields: Vec::new() });
++                diag = Some(opened);
++            }
++        }
++    }
+     // Which file carries each mapped field is a header question; the reads
+     // themselves run one task per field, and their results are taken in
+     // FIELD_MAP order, so `fields`, `absent` and the split receipt are what
+@@ -688,8 +757,9 @@ fn read_history_body(
+             continue;
+         }
+         // A split-stream run writes this field to its diag stream, under the
+-        // same Registry names.
+-        if let (Some(diag), Some(_)) = (diag.as_ref(), split.as_ref()) {
++        // same Registry names; so does MPAS-A for the fields its `output`
++        // stream leaves out (the companion opened above).
++        if let Some(diag) = diag.as_ref() {
+             let name = native_history_name(mapping.wrf_name)
+                 .filter(|name| diag.variable(name).is_some())
+                 .unwrap_or(mpas_name);
+@@ -721,6 +791,8 @@ fn read_history_body(
+                 fields.insert(wrf_name.to_string(), value);
+                 if let Some(split) = split.as_mut() {
+                     split.diag_fields.push(wrf_name.to_string());
++                } else if let Some(companion) = companion.as_mut() {
++                    companion.fields.push(wrf_name.to_string());
+                 }
+             }
+             (_, Some(value)) => {
+@@ -809,6 +881,7 @@ fn read_history_body(
+         absent,
+         science_attributes,
+         split,
++        companion_diag: companion.filter(|c| !c.fields.is_empty()),
+     })
+ }
+ 
+@@ -971,6 +1044,8 @@ pub fn read_history_cells_on_mesh(
+         .find(|name| file.variable(name).is_none());
+     let deg = 180.0 / std::f64::consts::PI;
+     let mut split: Option<SplitSources> = None;
++    let mut companion: Option<Option<(PathBuf, netcrust::File)>> = None;
++    let mut companion_fields: Vec<String> = Vec::new();
+     let (latitude_degrees, longitude_degrees): (Vec<f64>, Vec<f64>) = match (missing_centre, mesh) {
+         (None, _) => {
+             let centre = |name: &str| -> MpasResult<Vec<f64>> {
+@@ -986,13 +1061,33 @@ pub fn read_history_cells_on_mesh(
+                 // Registry spelling (`uReconstructZonal`, `t2m`, as current hex
+                 // output does) used to leave the field absent, and a sounding
+                 // then refused ("carries no U").
+-                let value = match read_cell_field_at(&file, mpas_name, mesh_cells, cells)? {
++                let mut value = match read_cell_field_at(&file, mpas_name, mesh_cells, cells)? {
+                     Some(value) => Some(value),
+                     None => match native_history_name(wrf_name) {
+                         Some(native) => read_cell_field_at(&file, native, mesh_cells, cells)?,
+                         None => None,
+                     },
+                 };
++                // A field MPAS-A's `output` stream leaves out comes from its
++                // diag stream file of the same time ([`DiagCompanion`]), as the
++                // converter reads it; opened only once a wanted field is missing.
++                if value.is_none() {
++                    if companion.is_none() {
++                        companion = Some(
++                            open_diag_companion(history_path, mesh_cells, n_levels, false)?
++                                .map(|(path, _, opened)| (path, opened)),
++                        );
++                    }
++                    if let Some(Some((_, diag))) = companion.as_ref() {
++                        let name = native_history_name(wrf_name)
++                            .filter(|native| diag.variable(native).is_some())
++                            .unwrap_or(mpas_name);
++                        value = read_cell_field_at(diag, name, mesh_cells, cells)?;
++                        if value.is_some() {
++                            companion_fields.push(wrf_name.to_string());
++                        }
++                    }
++                }
+                 match value {
+                     Some(value) => {
+                         fields.insert(wrf_name.to_string(), value);
+@@ -1111,6 +1206,12 @@ pub fn read_history_cells_on_mesh(
+         absent,
+         science_attributes,
+         split,
++        companion_diag: match (companion, companion_fields.is_empty()) {
++            (Some(Some((path, _))), false) => {
++                Some(DiagCompanion { path, sha256: None, fields: companion_fields })
++            }
++            _ => None,
++        },
+     })
+ }
+ 
+diff --git a/tools/rustwx/crates/rw-mpas/src/points.rs b/tools/rustwx/crates/rw-mpas/src/points.rs
+index 7db0c4ca71..7ea6addb56 100644
+--- a/tools/rustwx/crates/rw-mpas/src/points.rs
++++ b/tools/rustwx/crates/rw-mpas/src/points.rs
+@@ -363,7 +363,7 @@ mod tests {
+             history_path: "unused".into(), history_sha256: String::new(), init_path: None, init_sha256: None,
+             valid_time: crate::history::Timestamp::parse("2024-01-01_00:00:00").unwrap(),
+             n_cells: 3, n_levels: 1, n_soil_levels: 0, fields: Default::default(),
+-            latitude_degrees: vec![], longitude_degrees: vec![], absent: vec![], science_attributes: vec![], split: None,
++            latitude_degrees: vec![], longitude_degrees: vec![], absent: vec![], science_attributes: vec![], split: None, companion_diag: None,
+         };
+         for fill in [-1e30, 9.96921e36, f32::NAN] {
+             frame.fields.insert("U10".into(), (vec![fill, 8.0, 12.0], 1));

@@ -1022,8 +1022,7 @@ class FullStepLtsActive:
     def _attach_matched_flux(self, klass: _Class) -> None:
         """Coarse side: wrap this class driver's acoustic momentum kernel (cache-local tap)."""
 
-        from . import cuda_acoustic_v841 as acoustic_module
-        from .cuda_fullstep_lts_scalars import tap_kernel
+        from .cuda_fullstep_lts_scalars import tap_acoustic_momentum
 
         cp = self.cp
         n = int(klass.coarse_edge.size)
@@ -1061,9 +1060,9 @@ class FullStepLtsActive:
                 self.G_edge, klass.flux_kept, arguments[-2], arguments[-1]))
             klass.flux_imposed += 1
 
-        tap_kernel(acoustic_module, klass.driver.cache, "acoustic_ru_v841", before=keep, after=impose,
-                   dimensions=(("nlev", self.nlev), ("nedges", klass.edge_stride),
-                               ("ncells", klass.cell_stride)))
+        tap_acoustic_momentum(klass.driver, before=keep, after=impose,
+                              dimensions=(("nlev", self.nlev), ("nedges", klass.edge_stride),
+                                          ("ncells", klass.cell_stride)))
 
     # -- one class step ------------------------------------------------------
     def _bind_dt(self, klass: _Class, seconds: float) -> Any:

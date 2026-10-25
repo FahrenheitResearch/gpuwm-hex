@@ -6,7 +6,7 @@
 
 Each endpoint uses the same conservative state transfer and mass-continuity
 projection as nest initialization (:mod:`hexcore.analysis_remap`). All six water
-species and physical w are published to the native LBC consumer with checked
+species, the region's number species (carried or diagnosed, :mod:`hexcore.handover_numbers`) and physical w are published to the native LBC consumer with checked
 atomic readiness markers.  The series' ``interval_seconds`` is the parent's
 history interval (:func:`hexcore.lbc_stream.series_document` reads it), so a
 15-minute parent history forces the nest every 15 minutes.  ``--lbc-dir DIR``
@@ -243,7 +243,31 @@ def produce(args):
     interval = (timeline[1][0] - start).total_seconds()
     if interval <= 0 or interval != int(interval) or any((b[0]-a[0]).total_seconds() != interval for a,b in zip(timeline,timeline[1:])):
         raise ValueError('parent trajectory has duplicate or missing boundary endpoints')
-    source = transfer.load(args.source_grid, args.source_static, args.analysis, transfer.SPECIES)
+    # The region's number species (hexcore.handover_numbers): carried from every frame that publishes them, else
+    # diagnosed from the frame's mass (number_scheme), so each boundary file carries lbc_ni/lbc_nr/lbc_nc with the
+    # masses instead of handing mass in with no number.  A number neither carried nor diagnosed is not published
+    # (a +0 plane would drive number 0 under the driven mass), and the published ones stay the contiguous prefix the
+    # door drives.  None given, or none carried or diagnosed: six masses.
+    from hexcore import handover_numbers
+    numbers = tuple(getattr(args, 'numbers', ()) or ())
+    number_scheme = getattr(args, 'number_scheme', None)
+    xland = handover_numbers.read_xland(args.analysis) if numbers else None
+
+    def load_numbers(path, loaded_species, loader, wanted):
+        published = handover_numbers.frame_number_species(path) if wanted else ()
+        species = loaded_species + tuple(name for name in wanted if name in published)
+        loaded = loader(species)
+        if not wanted:
+            return loaded, species, None
+        species, receipt = handover_numbers.complete_state_numbers(
+            loaded, species, wanted, scheme=number_scheme, xland=xland, prefix=True)
+        return loaded, species, receipt
+
+    source, species, source_numbers = load_numbers(
+        args.analysis, transfer.SPECIES,
+        lambda names: transfer.load(args.source_grid, args.source_static, args.analysis, names), numbers)
+    # The analysis frame fixes the series' numbers, so every boundary file has one species order.
+    numbers = tuple(source_numbers['published']) if source_numbers is not None else ()
     target = transfer.load(args.target_grid, args.target_static, args.target_init, transfer.SPECIES)
     if not target.mesh.is_regional:
         raise ValueError('nested boundary generation requires a regional target mesh')
@@ -261,15 +285,19 @@ def produce(args):
             if valid_time(path) != moment:
                 raise ValueError(f'parent clock differs from source manifest: {path}')
         if path == args.analysis:
-            parent = source
+            parent, names, number_receipt = source, species, source_numbers
         else:
             with _NETCDF:
-                parent = load_history(path, args.analysis, source, transfer.SPECIES)
-        state, saved, receipt = transfer.remap(parent, target, sg, tg, args.operator, transfer.SPECIES)
+                parent, names, number_receipt = load_numbers(
+                    path, transfer.SPECIES, lambda loaded: load_history(path, args.analysis, source, loaded),
+                    numbers)
+        state, saved, receipt = transfer.remap(parent, target, sg, tg, args.operator, names)
         provenance = dict(parent=str(path), parent_sha256=sha256(path), remap=receipt,
                           parent_representation='native analysis' if path==args.analysis else 'public history rehydrated by native cold loader')
+        if number_receipt is not None:
+            provenance['numbers'] = number_receipt
         with _NETCDF:
-            document = publish_frame(output, moment, state, saved, target.vertical, transfer.SPECIES, provenance)
+            document = publish_frame(output, moment, state, saved, target.vertical, names, provenance)
         print('READY',output/document['path'],flush=True)
         return document
 
@@ -290,7 +318,7 @@ def produce(args):
         else:
             records.extend(frame(item) for item in rest)
         atomic_json(output/'lbc-door-receipt.json', dict(schema='hex.parent-lbc.v1', files=records,
-                    interval_seconds=int(interval), species=list(transfer.SPECIES),
+                    interval_seconds=int(interval), species=list(species),
                     parent_subset=subset_receipt))
     except BaseException as error:
         atomic_json(output/'lbc-failed.json', dict(error=str(error)))

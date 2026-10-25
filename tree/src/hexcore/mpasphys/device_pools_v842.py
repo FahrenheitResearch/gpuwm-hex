@@ -126,7 +126,11 @@ class NativeDevicePoolViews(Mapping):
             if source.shape == target.shape:
                 target[...] = source
             elif (source.shape[:-1] == target.shape[:-1]
-                  and source.shape[-1] == target.shape[-1] + 1):
+                  and (source.shape[-1] == target.shape[-1] + 1
+                       or (getattr(self.session.layout, 'samehost_partition', False)
+                           and source.shape[-1] > target.shape[-1]))):
+                # The native dummy column, or on a same-host rank the halo
+                # columns: owned entities come first in a rank's local order.
                 target[...] = source[..., :target.shape[-1]]
             else:
                 raise ValueError(f'resident {pool}.{name} extent differs: {source.shape} != {target.shape}')

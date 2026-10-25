@@ -21,6 +21,46 @@ def load(path: Path):
     return json.loads(path.read_text()) if path.is_file() else None
 
 
+def ratio_verdict(rows, keys):
+    """Incomplete diagnostics cannot establish a pass or a failure."""
+    if not rows or any(row.get(key) is None or not np.isfinite(row[key])
+                       for row in rows for key in keys):
+        return None
+    return all(row[key] <= 1.5 for row in rows for key in keys)
+
+
+def matched_window(window, control):
+    """Require both diagnostics at every matching time before assigning a verdict.
+
+    Missing control samples formerly disappeared and missing ratios became zero;
+    the old pass flag also ignored the vertical-velocity ratio entirely.
+    """
+    fields = {'dp': 'surface_pressure_tendency_abs_max_pa_s', 'w': 'vertical_velocity_abs_max'}
+    result = dict(control_samples=len(window), control_complete=bool(window))
+    for label, key in fields.items():
+        measured, reference = [], []
+        for row in window:
+            match = control.get(float(row['model_seconds']), {})
+            left, right = row.get(key), match.get(key)
+            if left is None or right is None or not np.isfinite(left) or not np.isfinite(right):
+                result['control_complete'] = False
+                continue
+            measured.append(left)
+            reference.append(right)
+        ratio = None
+        if len(measured) == len(window) and window:
+            peak, baseline = max(measured), max(reference)
+            result[f'control_post_{label}_max'] = baseline
+            if baseline > 0:
+                ratio = peak / baseline
+            elif peak == 0:
+                ratio = 1.0
+            else:
+                result['control_complete'] = False  # no finite normalized metric
+        result[f'{label}_ratio_vs_control'] = ratio
+    return result
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("run", type=Path)
@@ -110,21 +150,13 @@ def main() -> None:
         row["post_zone_dp_max"] = max(zone) if zone else None
         row["post_carried_dp_max"] = max(carried) if carried else None
         row["zone_dp_ratio"] = (None if not zone or not envelope["dp"] else max(zone) / envelope["dp"])
-        matched = [control.get(float(r["model_seconds"])) for r in window]
-        matched = [c for c in matched if c and c.get("surface_pressure_tendency_abs_max_pa_s") is not None]
-        if matched and row["post_dp_max"] is not None:
-            ref_dp = max(c["surface_pressure_tendency_abs_max_pa_s"] for c in matched)
-            ref_w = max(c.get("vertical_velocity_abs_max") or 0.0 for c in matched)
-            row["control_post_dp_max"] = ref_dp
-            row["control_post_w_max"] = ref_w
-            row["dp_ratio_vs_control"] = row["post_dp_max"] / ref_dp if ref_dp else None
-            row["w_ratio_vs_control"] = (row["post_w_max"] / ref_w) if ref_w and row["post_w_max"] else None
+        row.update(matched_window(window, control))
+        if {float(r['model_seconds']) for r in window} != {t for t in control if m + 1e-6 < t <= m + post}:
+            row['control_complete'] = False
     a3_control = None
-    if control and rows:
-        a3_control = all((r.get("dp_ratio_vs_control") or 0) <= 1.5 for r in rows)
-    zone_pass = None
-    if rows and any(r.get("zone_dp_ratio") is not None for r in rows):
-        zone_pass = all((r.get("zone_dp_ratio") or 0) <= 1.5 for r in rows)
+    if control and rows and all(r['control_complete'] for r in rows):
+        a3_control = ratio_verdict(rows, ('dp_ratio_vs_control', 'w_ratio_vs_control'))
+    zone_pass = ratio_verdict(rows, ('zone_dp_ratio',))
     summary = dict(run=str(a.run), segments=segments, moves=rows, quiet_envelope_p99=envelope,
                    a3_vs_control_pass=a3_control, a3_zone_pass=zone_pass,
                    conservation_worst_relative=max((abs(v) for seg in segments if seg["conservation"]
@@ -132,8 +164,8 @@ def main() -> None:
                                                     if k not in ("carried_cells", "zone_cells") and
                                                     not k.endswith("over_expected_rms") and v is not None),
                                                    default=None),
-                   post_window_seconds=post, a3_pass=all((r["dp_ratio"] or 0) <= 1.5 and (r["w_ratio"] or 0) <= 1.5
-                                                         for r in rows) if rows and envelope["samples"] else None)
+                   post_window_seconds=post, a3_pass=ratio_verdict(rows, ('dp_ratio', 'w_ratio'))
+                   if envelope["samples"] else None)
     text = json.dumps(summary, indent=2)
     if a.out:
         a.out.write_text(text + "\n")

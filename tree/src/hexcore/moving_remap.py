@@ -118,14 +118,30 @@ class SphericalCells:
     def validate(self):
         if self.centers.shape != (len(self.area), 3) or self.vertices.shape[0] != len(self.area):
             raise ValueError('cell geometry shapes differ')
-        if not np.all(np.isfinite(self.area)) or np.any(self.area <= 0) or np.any(self.counts < 3):
+        if (not np.all(np.isfinite(self.area)) or np.any(self.area <= 0) or
+                np.any(self.counts < 3) or np.any(self.counts > self.vertices.shape[1])):
             raise ValueError('invalid cell area or vertex count')
-        for i, n in enumerate(self.counts):
-            p = self.vertices[i, :n]
-            normals = np.cross(p, np.roll(p, -1, axis=0))
-            sign = np.sign(normals @ self.centers[i])
-            if np.any(sign == 0) or np.any(sign != sign[0]):
-                raise ValueError(f'cell {i} is not consistently ordered and convex')
+        # Validate independent polygons in bounded native-array batches. The
+        # former Python loop was ~11 s per 470k-cell mesh on the real case;
+        # both meshes must pass before parallel overlap workers can start.
+        from concurrent.futures import ThreadPoolExecutor
+        from .host_parallel import threads
+        edges = np.arange(self.vertices.shape[1])[None, :]
+        def validate_block(start):
+            stop = min(start + 8192, len(self.area))
+            p = self.vertices[start:stop]
+            counts = self.counts[start:stop, None]
+            following = np.take_along_axis(p, ((edges + 1) % counts)[..., None], axis=1)
+            normals = np.cross(p, following)
+            sign = np.sign(np.einsum('ijk,ik->ij', normals, self.centers[start:stop]))
+            invalid = np.any(((sign == 0) | (sign != sign[:, :1])) & (edges < counts), axis=1)
+            bad = np.flatnonzero(invalid)
+            return None if not len(bad) else start + int(bad[0])
+        starts = range(0, len(self.area), 8192)
+        with ThreadPoolExecutor(max_workers=min(threads(), max(1, len(starts)))) as pool:
+            for bad in pool.map(validate_block, starts):
+                if bad is not None:
+                    raise ValueError(f'cell {bad} is not consistently ordered and convex')
         return self
 
     def angular_radius(self):
@@ -223,7 +239,13 @@ def _overlap_executor(source, target, sr, tr, workers, backend):
                     mp_context=multiprocessing.get_context('spawn'),
                     initializer=_init_overlap_worker,
                     initargs=(directory, source.radius_m)) as pool:
-                yield lambda bounds: pool.map(_overlap_worker, bounds)
+                try:
+                    yield lambda bounds: pool.map(_overlap_worker, bounds)
+                except BaseException:
+                    # On cooperative cancellation, finish only work already
+                    # running. Queued tiles must not delay scratch retirement.
+                    pool.shutdown(wait=True, cancel_futures=True)
+                    raise
         return
     state = source, target, sr, tr, _overlap_groups(source, sr), _accelerator()
     def run(bounds):
@@ -236,7 +258,7 @@ def _overlap_executor(source, target, sr, tr, workers, backend):
             yield lambda bounds: pool.map(run, bounds)
 
 
-def component_area_diagnostics(matrix, source_area, target_area):
+def _component_area_data(matrix, source_area, target_area):
     """Measure incompatible declared marginal totals in disconnected overlaps."""
     count, labels = connected_components(bmat([[None, matrix], [matrix.T, None]], format='csr'),
                                          directed=False)
@@ -256,7 +278,105 @@ def component_area_diagnostics(matrix, source_area, target_area):
                        worst_component_source_declared_area=float(source_total[worst]),
                        worst_component_target_declared_area=float(target_total[worst]),
                        worst_component_declared_area_difference=float(source_total[worst]-target_total[worst]))
-    return diagnostics
+    return diagnostics, target_area * factor[rows], rows
+
+
+def component_area_diagnostics(matrix, source_area, target_area):
+    return _component_area_data(matrix, source_area, target_area)[0]
+
+
+def reconcile_area_marginals(matrix, source_area, target_area, *, limit=16384):
+    """Close positive overlap marginals without changing support or tolerances.
+
+    Alternating scaling handles easy maps. Weak overlaps can make it stall;
+    after eight passes use a diagonally preconditioned Newton/CG correction of
+    the row log multipliers, eliminating column multipliers analytically.
+    This is a separately derived rectangular Schur-complement form of the
+    matrix-balancing Newton idea: Knight and Ruiz (2013),
+    DOI 10.1093/imanum/drs019. No paper implementation is copied.
+    """
+    from scipy.sparse.linalg import LinearOperator, cg
+
+    began = time.perf_counter()
+    balanced = matrix.copy()
+    def errors(value):
+        row = float(np.max(abs(np.asarray(value.sum(axis=1)).ravel()/target_area-1)))
+        col = float(np.max(abs(np.asarray(value.sum(axis=0)).ravel()/source_area-1)))
+        return row, col
+    row_error, column_error = errors(balanced)
+    iterations = 0
+    newton = []
+    for _ in range(min(int(limit), 8)):
+        if row_error <= RECIPIENT_AREA_RTOL and column_error <= DONOR_AREA_RTOL:
+            break
+        balanced.data *= np.repeat(target_area/np.asarray(balanced.sum(axis=1)).ravel(),
+                                   np.diff(balanced.indptr))
+        balanced.data *= (source_area/np.asarray(balanced.sum(axis=0)).ravel())[balanced.indices]
+        iterations += 1
+        row_error, column_error = errors(balanced)
+    diagnostics = {}
+    if row_error > RECIPIENT_AREA_RTOL and iterations < limit:
+        diagnostics, attainable, components = _component_area_data(balanced, source_area, target_area)
+        if diagnostics['declared_component_area_relative_floor'] <= RECIPIENT_AREA_RTOL:
+            import inspect
+            # SciPy 1.11 (the supported floor) called this parameter tol.
+            relative_tolerance = {'rtol' if 'rtol' in inspect.signature(cg).parameters else 'tol': 1e-3}
+            # Compatible Newton targets remove component-rounding null modes;
+            # acceptance below always checks the original declared areas.
+            scale = np.sqrt(attainable)
+            component_total = np.bincount(components, weights=attainable)
+            def project(value):
+                # The column-normalized Jacobian has one constant-potential
+                # null mode per connected component. Remove its roundoff
+                # before CG and in its preconditioner, keeping finite gauges.
+                mean = np.bincount(components, weights=value*scale)/component_total
+                return value-scale*mean[components]
+            for _ in range(min(8, int(limit)-iterations)):
+                rows = np.asarray(balanced.sum(axis=1)).ravel()
+                transpose = balanced.T.tocsr()
+                diagonal = (rows-np.add.reduceat(
+                    balanced.data**2/source_area[balanced.indices], balanced.indptr[:-1]))/attainable
+                def multiply(x):
+                    y = project(x)/scale
+                    return project((rows*y-balanced@(transpose@y/source_area))/scale)
+                operator = LinearOperator((len(rows), len(rows)), matvec=multiply, dtype=np.float64)
+                preconditioner = LinearOperator(operator.shape,
+                    matvec=lambda x: project(project(x)/np.maximum(diagonal, 1e-15)), dtype=np.float64)
+                count = [0]
+                def counted(_):
+                    count[0] += 1
+                delta, info = cg(operator, project((attainable-rows)/scale), M=preconditioner,
+                                 atol=0., maxiter=512, callback=counted, **relative_tolerance)
+                if info < 0 or not np.all(np.isfinite(delta)):
+                    break
+                # Positive bounded updates and measured descent keep an
+                # inexact CG solve from damaging an admissible overlap.
+                direction = np.clip(delta/scale, -.25, .25)
+                accepted = False
+                for backtrack in range(8):
+                    candidate = balanced.copy()
+                    candidate.data *= np.repeat(np.exp(direction*2.**(-backtrack)),
+                                                np.diff(candidate.indptr))
+                    candidate.data *= (source_area/np.asarray(candidate.sum(axis=0)).ravel())[candidate.indices]
+                    next_row, next_column = errors(candidate)
+                    if (np.all(np.isfinite(candidate.data)) and np.all(candidate.data > 0)
+                            and next_row < row_error and next_column <= DONOR_AREA_RTOL):
+                        balanced = candidate
+                        row_error, column_error = next_row, next_column
+                        accepted = True
+                        break
+                iterations += 1
+                newton.append(dict(cg_iterations=count[0], cg_info=int(info), accepted=accepted,
+                                   recipient_relative_error=row_error, donor_relative_error=column_error))
+                if not accepted or (row_error <= RECIPIENT_AREA_RTOL and column_error <= DONOR_AREA_RTOL):
+                    break
+    if row_error > RECIPIENT_AREA_RTOL or column_error > DONOR_AREA_RTOL:
+        raise ValueError(f'overlap area marginals failed to converge: {max(row_error, column_error)}; '
+                         f'component floor={diagnostics.get("declared_component_area_relative_floor")}')
+    return balanced, dict(reconciled_relative_max=max(row_error, column_error),
+        donor_area_relative_max=column_error, reconciliation_iterations=iterations,
+        reconciliation_iteration_limit=int(limit), reconciliation_newton=newton,
+        reconciliation_seconds=time.perf_counter()-began, **diagnostics)
 
 
 @dataclass
@@ -380,40 +500,16 @@ class ConservativeMap:
             progress(dict(phase='overlap-area-components', **diagnostics))
         # Geometry/declared metric differences must first pass the independent
         # coverage gate. Sparse marginal reconciliation corrects rounding only.
-        balanced = matrix.copy()
-        residual = raw_error
-        column_error = float(np.max(abs(raw_cols / source.area - 1)))
-        iterations = 0
-        for iteration in range(int(reconciliation_limit)):
-            if residual <= RECIPIENT_AREA_RTOL and column_error <= DONOR_AREA_RTOL:
-                break
-            # Scale existing CSR entries directly, retaining the exact overlap
-            # support. Each entry has one row factor and one donor factor;
-            # sparse matrix products with diagonal matrices are unnecessary.
-            row_factor = target.area / np.asarray(balanced.sum(axis=1)).ravel()
-            balanced.data *= np.repeat(row_factor, np.diff(balanced.indptr))
-            column_factor = source.area / np.asarray(balanced.sum(axis=0)).ravel()
-            balanced.data *= column_factor[balanced.indices]
-            column_error = float(np.max(abs(np.asarray(balanced.sum(axis=0)).ravel()/source.area-1)))
-            residual = max(float(np.max(abs(np.asarray(balanced.sum(axis=1)).ravel()/target.area-1))), column_error)
-            iterations = iteration + 1
-        # Column sums govern conservation. Row sums govern constant-field
-        # reproduction. Ill-conditioned tiny overlaps can converge slowly;
-        # accept only a measured row error far below FP32 state rounding,
-        # while retaining FP64 conservation of each donor's entire area.
-        column_error = float(np.max(abs(np.asarray(balanced.sum(axis=0)).ravel()/source.area-1)))
-        if residual > RECIPIENT_AREA_RTOL or column_error > DONOR_AREA_RTOL:
-            raise ValueError(f'overlap area marginals failed to converge: {residual}')
+        balanced, reconciliation = reconcile_area_marginals(
+            matrix, source.area, target.area, limit=reconciliation_limit)
         return cls(balanced.tocsr(), source.area.copy(), target.area.copy(),
                    dict(method='convex great-circle spherical cell overlap', order=1,
-                        raw_coverage_relative_max=raw_error, reconciled_relative_max=residual,
-                        donor_area_relative_max=column_error,
+                        raw_coverage_relative_max=raw_error, **reconciliation,
                         donor_area_relative_tolerance=DONOR_AREA_RTOL,
                         recipient_area_relative_tolerance=RECIPIENT_AREA_RTOL,
                         fp32_constant_reproduction_abs_max=float(abs(
                             (np.asarray(balanced.sum(axis=1)).ravel()/target.area).astype(np.float32)-np.float32(1)).max()),
                         source_sha256=source.fingerprint(), target_sha256=target.fingerprint(),
-                        reconciliation_iterations=iterations,reconciliation_iteration_limit=int(reconciliation_limit),
                         source_cells=len(source.area), target_cells=len(target.area),
                         candidate_pairs=tested, overlaps=matrix.nnz, overlap_execution=overlap_execution, seconds=time.perf_counter()-began,
                         **geometry_receipt))

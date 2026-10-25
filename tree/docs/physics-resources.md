@@ -48,14 +48,16 @@ MPICH and PnetCDF dependencies. These libraries stay in the site's cache.
 
 ```sh
 gpuwm-hex physics-resources build --pin-set rrfs
-gpuwm-hex physics-resources build --pin-set v8.4.2
+gpuwm-hex physics-resources build --pin-set v8.4.2 --build-native-library
 ```
 
 The first command supplies a local RRFS framework for a later run with that
 cache, or with explicit `--native-physics-library` and `--mpas-source` paths.
 The second supplies native MPAS-A referee resources. Neither command is part
-of the default MPAS-A framework route. `--no-native-library` skips native
-library construction. `--native-library PATH` adopts an existing MPAS-A
+of the default MPAS-A framework route. Without `--build-native-library`,
+`build --pin-set v8.4.2` compiles no native library (the GPU route and the
+headline proof deck load none); RRFS's library builds by default and
+`--no-native-library` skips it too. `--native-library PATH` adopts an existing MPAS-A
 build with its ABI and build receipts. `--mpich PREFIX` selects a local MPI
 installation, and `--jobs N` controls the source build workers.
 
@@ -64,7 +66,13 @@ Native source builds stub Noah-MP v5.0 by default. The explicit
 terms. The public distribution carries no Noah-MP v5.0 implementation.
 
 Verification decks may name explicitly built referee resources by portable
-keys such as `{resource:native-library}` and `{resource:mpas-source}`.
+keys such as `{resource:native-library}` and `{resource:mpas-source}`; the
+native-referee decks do. The headline deck
+(`mpas-headline-convection-permitting`) names none: it runs on
+`physics-resources fetch` alone.
+On a pip install, run `gpuwm-hex physics-resources fetch` first: `build` then
+takes the fetched strict Thompson tables (checked by SHA-256) instead of
+regenerating them, which needs a source checkout.
 The default framework route binds only `{resource:pool-reader}` and
 `{resource:physics-resources}`.
 

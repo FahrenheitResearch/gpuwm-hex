@@ -19,8 +19,10 @@ def test_existing_country_source_override_binds_both_initialization_and_provenan
     assert 'era5 2023-03-31T12' in result['commands']['forecast'][result['commands']['forecast'].index('--init-source')+1]
 
 
-@pytest.mark.parametrize('source,nlevels,humidity,endpoints', [('gfs',34,'no',2),('era5',38,'yes',7),('era5-cds',38,'no',7),('aifs',15,'yes',7)])
+@pytest.mark.parametrize('source,nlevels,humidity,endpoints', [('gfs',34,'no',2),('era5',38,'yes',7),('era5-cds',38,'no',7),('aifs',15,'yes',2)])
 def test_named_region_connects_cull_init_source_boundary_and_products(tmp_path, source, nlevels, humidity, endpoints):
+    # AIFS boundaries come from its own 6-hourly forecast leads since region-any-init
+    # (3dc8b074): two endpoints over the 6 h window, as GFS.
     result = plan(args(tmp_path, '--region','east-africa','--source',source))
     commands = result['commands']
     assert commands['init'][2] == source

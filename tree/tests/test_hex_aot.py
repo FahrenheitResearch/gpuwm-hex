@@ -434,6 +434,22 @@ def test_inventory_keeps_compiler_family_options_exact(tmp_path):
         inventory(tmp_path, compiler_family=14)
 
 
+def test_catalog_recipe_binds_a_system_toolkit_include(monkeypatch):
+    """A CUDA 13.0 system toolkit shadowing the pip NVRTC: CuPy compiles with
+    -I/usr/local/cuda/include, so rows formed for this compiler must carry it."""
+    from hexcore.cuda_backend import aot_build
+    entry = dict(source='extern "C" __global__ void toolkit_probe(){}',
+                 options=["-I@SITE@/cupy/_core/include", "-I@SITE@/nvidia/cu13/include"])
+    compiler = {"nvrtc": [13, 0]}
+    monkeypatch.setattr(aot_build, "toolkit_includes", lambda: ["-I/usr/local/cuda/include"])
+    assert aot_build.catalog_recipe(entry, compiler)["options"] == [
+        "-I@SITE@/cupy/_core/include", "-I/usr/local/cuda/include"]
+    # Without a compiler (inspection, the pack staleness check) the recorded layout stands.
+    assert aot_build.catalog_recipe(entry)["options"] == entry["options"]
+    monkeypatch.setattr(aot_build, "toolkit_includes", lambda: None)
+    assert aot_build.catalog_recipe(entry, compiler)["options"] == entry["options"]
+
+
 def test_cached_program_filename_binds_installed_headers(monkeypatch):
     from hexcore import kernel_plan
     from hexcore.cuda_backend.aot import recipe
@@ -632,3 +648,53 @@ def test_direct_memory_image_requires_exact_program_name_mode(tmp_path, monkeypa
     assert len(calls) == 1 and {p.name for p in tmp_path.iterdir()} == before
     built = aot.recipe(dict(source='source', options=options, **aot.direct_metadata('named.cu', True)))
     assert built['compile_request'] == memory['compile_request']
+
+
+def test_nvrtc_13_2_unknown_build_id_is_pinned_by_its_library():
+    """System NVRTC 13.2.86 prints 'Compiler Build ID: UNKNOWN'; the library digest pins it."""
+    from hexcore.cuda_backend.compile_contract import build_id_accepted
+    assert build_id_accepted("CL-36424714") and build_id_accepted("UNKNOWN")
+    assert not build_id_accepted("") and not build_id_accepted("unavailable") and not build_id_accepted(None)
+
+
+def test_unrequested_pool_compiles_do_not_hold_the_exit():
+    """A finished forecast waited 70-90 s for one worker compiling a module nobody asked for."""
+    import concurrent.futures
+    import multiprocessing
+    import time
+    from hexcore import kernel_plan
+    pool = concurrent.futures.ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"))
+    processes = pool._processes
+    pool.submit(time.sleep, 120)
+    deadline = time.monotonic() + 60
+    while not processes and time.monotonic() < deadline:
+        time.sleep(0.05)
+    pool.shutdown(wait=False)  # what kernel_plan.close() does; it drops the attribute
+    started = time.monotonic()
+    kernel_plan._drop_at_exit(pool, processes)
+    for process in list(processes.values()):
+        process.join(10)
+        assert not process.is_alive()
+    assert time.monotonic() - started < 10
+
+
+def test_a_failing_shutdown_still_terminates_an_idle_worker():
+    """The hl-3 headline run (2026-10-24): the forecast wrote its receipt, then waited 16 min joining one
+    idle spawn compile worker. The exit drop terminates the workers even when shutdown raises."""
+    import concurrent.futures
+    import multiprocessing
+    import time
+    from hexcore import kernel_plan
+    pool = concurrent.futures.ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"))
+    processes = pool._processes
+    pool.submit(time.sleep, 0).result(60)   # the worker is up and idle
+
+    class Raising:
+        def shutdown(self, **_kwargs):
+            raise OSError("wakeup pipe closed")
+
+    kernel_plan._drop_at_exit(Raising(), processes)
+    for process in list(processes.values()):
+        process.join(10)
+        assert not process.is_alive()
+    pool.shutdown(wait=True, cancel_futures=True)

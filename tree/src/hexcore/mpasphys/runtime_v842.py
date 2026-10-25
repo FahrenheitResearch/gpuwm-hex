@@ -44,13 +44,28 @@ class ResidentNativeCoupling:
             cache_dir=Path(dycore.cache.cache_directory)/'mpasphys')
         self.sources = None
         self.transport = None
+        # A limited-area run's dycore carries native's garbage column (nCells+1, nEdges+1); the physics pools hold the
+        # entity extent.  None on a closed mesh, where every array below keeps its global path.
+        self.regional = getattr(dycore, 'regional_v841', None)
         # IAU (SuiteIau): None without config_IAU_option; itimestep is the run's step (MPAS itimestep).
         self.iau = None
         self.itimestep = 0
+        # A same-host rank (samehost_v842) widens the owned-column sources to
+        # its local cells and edges before stochastic forcing and IAU (which
+        # size themselves from the local state), applies IAU to owned columns
+        # (solve_extent: nCellsSolve, nEdgesSolve) and then fills the halos
+        # from the owners, so halo words carry the owners' complete sources.
+        self.widen_sources = None
+        self.exchange_sources = None
+        self.solve_extent = None
 
-    def synchronize(self, atmosphere, *, level=1):
+    def synchronize(self, atmosphere, *, level=1, prepared_columns=False):
         """Copy native carriers/diagnostics; mpas_atmphys_interface.F:284-305."""
         from ..cuda_physics_prep_v841 import prepare_mpas_to_phys_cuda_v841
+        chemistry = getattr(self, 'chemistry', None)
+        if chemistry is not None:
+            # The MPAS physics reads the Registry's scalar rows; the appended species rows stay in the dycore.
+            atmosphere = chemistry.registry_view(atmosphere)
         s, d, native = atmosphere.state, atmosphere.saved, self.session
         for name, value in (('rho_zz',s.rho),('theta_m',d.theta_m),
                             ('u',d.normal_velocity),('w',d.vertical_velocity),
@@ -60,20 +75,109 @@ class ResidentNativeCoupling:
                             ('rtheta_p',d.rho_theta_perturbation),
                             ('pressure_p',d.pressure_perturbation),('exner',d.exner)):
             native.put('diag',name,value)
-        columns=prepare_mpas_to_phys_cuda_v841(atmosphere,scalar_names=self.names,
-                                              geometry=self.geometry,kernel_cache=self.physics_cache,
-                                              registry_scalar_names=next(row['components'] for row in native.layout.fields
-                                                if row['pool']=='state' and row['name']=='scalars'))
+        views = getattr(native, 'device_pools', None)
+        resident_winds = views is not None and views.resident and not prepared_columns
+        columns = self._resident_winds(atmosphere) if resident_winds else None
+        if columns is None:
+            resident_winds = False
+            columns=prepare_mpas_to_phys_cuda_v841(atmosphere,scalar_names=self.names,
+                                                  geometry=self.geometry,kernel_cache=self.physics_cache,
+                                                  registry_scalar_names=next(row['components'] for row in native.layout.fields
+                                                    if row['pool']=='state' and row['name']=='scalars'))
         from .diagnostics_v842 import output_diagnostics
         theta,rho,pressure=output_diagnostics(atmosphere,self.names,self.physics_cache,self.cp)
-        for name,value in (('uReconstructZonal',columns.u_p),('uReconstructMeridional',columns.v_p),
-                           ('rho',rho),('theta',theta),('pressure',pressure)):
+        if not resident_winds:
+            for name,value in (('uReconstructZonal',columns.u_p),('uReconstructMeridional',columns.v_p)):
+                native.put('diag',name,value)
+        for name,value in (('rho',rho),('theta',theta),('pressure',pressure)):
             native.put('diag',name,value)
         if getattr(self.dycore,'les_dissipation',None) is not None:
             # Native reconstructs at the outer boundary (time_integration.F:2735),
             # then holds these cell winds throughout the next dynamics splits.
             self.dycore.les_dissipation.winds=columns
         return columns
+
+    def _resident_winds(self, atmosphere):
+        """Reconstruct directly into resident pools with the shared CUDA kernel.
+
+        ResidentPhysicsGlue owns the other MPAS_to_physics carriers. Running
+        aggregate preparation here duplicated them, uploaded a species pointer
+        table and downloaded a validation flag on every synchronization. Keep
+        the flag device-side as in resident preparation, and retain scratch
+        through the forecast. The validated standalone preparation is unchanged.
+        """
+        from types import SimpleNamespace
+        import numpy as np
+        from ..cuda_physics_prep_v841 import _launch
+
+        shape = tuple(atmosphere.state.rho.shape)
+        geometry = self.geometry
+        if (shape[1] != geometry.n_cells
+                or atmosphere.saved.normal_velocity.shape != (shape[0], geometry.n_edges)):
+            raise ValueError('resident wind geometry/state extent differs')
+        if getattr(self, '_wind_fallback', False):
+            return None
+        garbage = geometry.regional_garbage_cell
+        if not hasattr(self, '_wind_storage'):
+            geometry.validate()
+            pools = SimpleNamespace(
+                u_p=self.session.field('diag', 'uReconstructZonal'),
+                v_p=self.session.field('diag', 'uReconstructMeridional'))
+            # A limited-area run's dycore carries native's garbage column as its last element (nCells+1); the pools
+            # hold the entity extent.  The kernel then writes retained dycore-extent columns and the entity columns
+            # are copied into the pools on the device, as the aggregate path's write_field did.
+            # THE BREAKAGE THIS PREVENTS: this path refused every cull ("resident wind reconstruction requires a
+            # closed global mesh", then "resident wind pool shape/dtype/layout differs") at the first output, so no
+            # MPAS-suite region ran once fix/hex-mpasphys-host met fix/hex-mpas-regional (3 km GFS 2026-10-23 18Z
+            # f348 region at 33.5N 101W, box L, 2026-10-24).
+            if garbage is not None and int(garbage) != shape[1] - 1:
+                raise ValueError(f'the regional garbage column is the last element of the padded extent; '
+                                 f'got {garbage} with {shape[1]} columns')
+            pool_shape = shape if garbage is None else (shape[0], shape[1] - 1)
+            for value in (pools.u_p, pools.v_p):
+                if value.shape != pool_shape or value.dtype != np.dtype('float32') or not value.flags.c_contiguous:
+                    # A same-host rank's pool rows are not its local state's extent: the winds take the
+                    # aggregate preparation and are put into the pool as before resident winds existed.
+                    # THE BREAKAGE THIS PREVENTS: every MPAS-suite run on 2+ cards stopped at its first
+                    # synchronization with "resident wind pool shape/dtype/layout differs".
+                    self._wind_fallback = True
+                    return None
+            if garbage is None:
+                outputs, entity_pools = pools, None
+            else:
+                outputs = SimpleNamespace(u_p=self.cp.empty(shape, dtype=self.cp.float32),
+                                          v_p=self.cp.empty(shape, dtype=self.cp.float32))
+                entity_pools = pools
+            self._wind_storage = (shape, outputs,
+                tuple(self.cp.empty(shape, dtype=self.cp.float32) for _ in range(3)),
+                self.cp.zeros(1, dtype=self.cp.int32), entity_pools)
+        held_shape, outputs, scratch, invalid, entity_pools = self._wind_storage
+        if held_shape != shape:
+            raise ValueError('resident wind extent changed during forecast')
+        _launch(self.physics_cache, 'reconstruct_winds_v841_f32', shape[1], (
+            np.int32(shape[0]), np.int32(shape[1]), np.int32(geometry.n_edges),
+            np.int32(geometry.max_edges), atmosphere.saved.normal_velocity,
+            geometry._edges_on_cell, geometry._n_edges_on_cell,
+            geometry._coeffs_reconstruct, geometry._lat_cell, geometry._lon_cell,
+            geometry._sealed_edges_on_cell, geometry._sealed_n_edges_on_cell,
+            geometry._sealed_coeffs_reconstruct, geometry._sealed_lat_cell,
+            geometry._sealed_lon_cell, *scratch, outputs.u_p, outputs.v_p, invalid))
+        if entity_pools is not None:
+            # The garbage column has nEdgesOnCell = 0, so the kernel leaves it at u = v = 0.  It is lent the donor
+            # column's wind, exactly as prepare_mpas_to_phys_cuda_v841 does (YSU refused a zero-shear sounding
+            # there, r4.75.11020), so the returned columns and the pools hold the aggregate path's words.
+            garbage = int(garbage)
+            donor = (garbage - 1 if geometry.regional_garbage_donor_cell is None
+                     else int(geometry.regional_garbage_donor_cell))
+            for value, pool in ((outputs.u_p, entity_pools.u_p), (outputs.v_p, entity_pools.v_p)):
+                value[..., garbage] = value[..., donor]
+                pool[...] = value[..., :garbage]
+        # The aggregate preparation this replaces refused a sealed-geometry change by reading this
+        # word every synchronization. The same refusal now reads it off the step path.
+        from .deferred_checks_v842 import defer
+        defer(invalid, 'MPAS_to_physics CUDA wind reconstruction failed geometry validation: '
+                       'the mesh geometry differs from its sealed copy (invalid word {value})')
+        return outputs
 
     def stage(self, *, rk_step, dynamics_substep, state, saved, diagnostics):
         """Assemble outer sources; mpas_atm_time_integration.F:2140-2176; mpas_atm_time_integration.F:3088-3185."""
@@ -95,9 +199,18 @@ class ResidentNativeCoupling:
             # physics_get_tend so density weighting/order remain unchanged.
             diabatic=self.cp.ascontiguousarray(self.cp.asarray(
                 self.session.field('tend','rt_diabatic_tend')))
+            scalar_sources=self.cp.ascontiguousarray(self.cp.asarray(sources.scalars))
+            if getattr(self, 'chemistry', None) is not None:
+                scalar_sources=self.chemistry.pad_sources(self.cp,scalar_sources)
             self.sources=CudaMpasStageSourcesV842(*(self.cp.ascontiguousarray(self.cp.asarray(value))
-                              for value in (sources.rho,sources.rho_u,sources.rho_theta,sources.scalars)),
+                              for value in (sources.rho,sources.rho_u,sources.rho_theta)),scalar_sources,
                               diabatic_theta=diabatic)
+            if self.widen_sources is not None:
+                # Same-host rank: physics_get_tend filled owned columns only;
+                # stochastic forcing and IAU read the local-extent state.
+                self.sources=self.widen_sources(self.sources,state)
+            if getattr(self, 'regional', None) is not None:
+                self.sources=self.pad_regional_sources(self.sources, state=state, saved=saved)
             if getattr(self, 'stochastic', None) is not None:
                 self.stochastic.apply(self.sources, state=state,
                     rho_edge=diagnostics.h_edge, normal_velocity=saved.normal_velocity,
@@ -107,8 +220,39 @@ class ResidentNativeCoupling:
                 # mpas_atm_time_integration.F:2220-2230: once per step, after physics_get_tend and before
                 # DYNAMICS_SUBSTEPS, onto the held physics sources.
                 self.sources=self.iau.apply(itimestep=self.itimestep,sources=self.sources,state=state,
-                                            saved=saved,diagnostics=diagnostics,cache=self.dycore.cache)
+                                            saved=saved,diagnostics=diagnostics,cache=self.dycore.cache,
+                                            solve=self.solve_extent)
+            if self.exchange_sources is not None:
+                self.sources=self.exchange_sources(self.sources)
         return self.sources
+
+    def _registry_rows(self, scalars):
+        chemistry = getattr(self, 'chemistry', None)
+        return scalars if chemistry is None else scalars[:chemistry.n_registry]
+
+    def pad_regional_sources(self, sources, *, state, saved):
+        """Entity-extent physics sources onto the regional dycore's padded stride.
+
+        Native's tendency at the garbage element is zero (mpas_atmphys_todynamics.F allocates nCells+1 and writes
+        1..nCellsSolve; cuda_physics_v841 zeroes it beside the ArWen route's projection for the same reason).  The
+        boundary zones then replace the specified-zone tendencies with the lateral-boundary ones.
+        """
+        from ..cuda_physics_v841 import CudaMpasStageSourcesV842
+        cp = self.cp
+
+        def pad(value, like):
+            if value is None or value.shape == like.shape:
+                return value
+            if value.shape[:-1] != like.shape[:-1] or value.shape[-1] + 1 != like.shape[-1]:
+                raise ValueError(f'limited-area physics source extent {value.shape} does not fit the regional '
+                                 f'dycore extent {like.shape}')
+            padded = cp.zeros(like.shape, dtype=value.dtype)
+            padded[..., :value.shape[-1]] = value
+            return padded
+
+        return CudaMpasStageSourcesV842(pad(sources.rho, state.rho), pad(sources.rho_u, saved.normal_velocity),
+                                        pad(sources.rho_theta, state.rho), pad(sources.scalars, state.scalars),
+                                        diabatic_theta=pad(sources.diabatic_theta, state.rho))
 
     def release_dynamics_sources(self):
         """Keep only the scalar source once the last RK stage has run.
@@ -140,17 +284,51 @@ class ResidentNativeCoupling:
             return
         # MPAS microphysics_to_MPAS supplies its own Exner and perturbation
         # words. Do not recompute those from the product on the host.
-        for target,pool,name in ((state.scalars,'state','scalars'),
+        registry_rows = (state.scalars if getattr(self, 'chemistry', None) is None
+                         else state.scalars[:self.chemistry.n_registry])
+        for target,pool,name in ((registry_rows,'state','scalars'),
                                  (saved.theta_m,'state','theta_m'),
                                  (saved.exner,'diag','exner'),
                                  (saved.rho_theta_perturbation,'diag','rtheta_p'),
                                  (saved.pressure_perturbation,'diag','pressure_p')):
-            target[...] = self.cp.asarray(self.session.field(pool,name,level=2 if pool=='state' else 1))
+            value = self.cp.asarray(self.session.field(pool,name,level=2 if pool=='state' else 1))
+            # Owned columns; a same-host rank's halo columns take their owners'
+            # words at the step-boundary exchange (round A).
+            target[..., :value.shape[-1]] = value
         # Native keeps rtheta_p after the rounded product/subtraction, then
         # recovers full rtheta by adding the base (mpas_atmphys_interface.F:923-926).
         state.rho_theta[...] = saved.rho_theta_perturbation
         self.dycore._add(state.rho_theta,self.dycore.atmosphere.reference.rho_theta_base)
         self.transport=None
+
+    def boundary_forcing_columns(self):
+        """Boundary-zone columns whose resolved-advection forcing GF and New Tiedtke must not read (LB1), or None.
+
+        On a limited-area run the dycore relaxes rings 1-5 toward the lateral-boundary series and resets rings 6-7
+        to it every step (atm_srk3:2688-2717, atm_bdy_set_scalars), inside the transport step that rthdynten and
+        rqvdynten difference.  The convective closure then takes the boundary's nudging, and the specified zone's
+        per-step reset to an undisturbed environment, as moisture convergence: on 2024-05-06 18Z the scale-aware
+        GF rained up to 19 mm in the outermost ring of a 937.5 m region in one hour (0.8 mm in the interior) and
+        about 5 mm a ring across a 30 km region's whole boundary zone (0.1 mm inside): a ring of rain on every
+        QPF map (fix-group-1 #3).  Correct mode (the door default) zeroes that forcing in the boundary zone;
+        exact mode keeps native MPAS-A v8.4.2's behaviour.  ``GPUWM_HEX_MPAS_LB1=0`` keeps native behaviour in
+        correct mode too.
+        """
+        regional = getattr(self, 'regional', None)
+        if regional is None or os.environ.get('GPUWM_HEX_MPAS_LB1', '1') == '0':
+            return None
+        if getattr(self.session.config, 'mode', 'exact') != 'correct':
+            return None
+        cached = getattr(self, '_boundary_columns', None)
+        if cached is None:
+            cached = self._boundary_columns = self.cp.asarray(regional.bdy_mask_cell) > 0
+        return cached
+
+    def solve_cells(self):
+        """Columns physics owns: the dycore's on a closed mesh, the entity extent (no garbage column) on a region."""
+        if getattr(self, 'regional', None) is not None:
+            return int(self.session.layout.dimensions['nCellsSolve'])
+        return self.dycore.ncells
 
     def prepare_transport(self, call):
         """Prepare GF/NTiedtke heating before microphysics; mpas_atm_time_integration.F:2770-2802."""
@@ -174,14 +352,22 @@ class ResidentNativeCoupling:
             # into the resolved-advection rate and then convection sees them twice.
             before=prepare_mpas_transport_source_baseline_v842(before=before,
                 source=self.sources.scalars,rho_old=outer.rho,
-                dt=self.dycore.config.config_dt,n_cells_solve=self.dycore.ncells,
+                dt=self.dycore.config.config_dt,n_cells_solve=self.solve_cells(),
                 kernel_cache=self.physics_cache)
-            self.session.put('state','scalars',before,level=1)
-        prepare_mpas_post_transport_v842(before=before,after=state.scalars,
+            self.session.put('state','scalars',self._registry_rows(before),level=1)
+        prepare_mpas_post_transport_v842(before=self._registry_rows(before),after=self._registry_rows(state.scalars),
             theta_m=saved.theta_m,scalar_names=self.names,rqvdynten=rqv,rthdynten=rth,
             convection_scheme=convection,monotonic=self.dycore.config.config_monotonic,
-            dt=self.dycore.config.config_dt,n_cells_solve=self.dycore.ncells,
+            dt=self.dycore.config.config_dt,n_cells_solve=self.solve_cells(),
             kernel_cache=self.physics_cache)
+        boundary = self.boundary_forcing_columns()
+        if boundary is not None:
+            # LB1 (see boundary_forcing_columns): the convective closure reads no boundary-zone relaxation as
+            # resolved advection.  ``rate`` is the dycore's own array, so the theta forcing is copied first.
+            if rate is not None:
+                rth = rth.copy()
+            rth[:, boundary] = 0
+            rqv[:, boundary] = 0
         atmosphere=self.dycore.atmosphere
         candidate=DeviceAtmosphere(atmosphere.mesh,state,atmosphere.vertical,
                     atmosphere.reference,saved,atmosphere.terrain,atmosphere.h2d)
@@ -254,7 +440,7 @@ class SuiteIau:
         self.calls = self.active_calls = 0
         self.weight_seconds = 0.0
 
-    def apply(self, *, itimestep, sources, state, saved, diagnostics, cache):
+    def apply(self, *, itimestep, sources, state, saved, diagnostics, cache, solve=None):
         import numpy as np
         from ..iau_v842 import atm_add_tend_anal_incr, atm_iau_coef, atm_iau_coef_window
 
@@ -262,8 +448,12 @@ class SuiteIau:
                   else atm_iau_coef(self.config, int(itimestep), self.dt))
         nl, nc = (int(n) for n in state.rho.shape)
         ne = int(diagnostics.h_edge.shape[1])
+        # One card: every column is solved. A same-host rank solves its owned
+        # columns (mpas_atm_iau.F loops 1..nCellsSolve/nEdgesSolve); the halo
+        # words come from their owners at the source exchange that follows.
+        ncs, nes = (nc, ne) if solve is None else (int(solve[0]), int(solve[1]))
         structs = {
-            'mesh': {'nVertLevels': nl, 'nCells': nc, 'nEdges': ne, 'nCellsSolve': nc, 'nEdgesSolve': ne,
+            'mesh': {'nVertLevels': nl, 'nCells': nc, 'nEdges': ne, 'nCellsSolve': ncs, 'nEdgesSolve': nes,
                      'zz': self.zz, 'cellsOnEdge': self.cells_on_edge},
             'state': {'rho_zz': state.rho, 'theta_m': saved.theta_m, 'scalars': state.scalars,
                       'u': saved.normal_velocity, **self.moist},
@@ -306,6 +496,18 @@ def with_stage_density(base):
         def _advance_dynamics_subcycle_v841(self, state, **kwargs):
             callback = kwargs.get('physics_stage_callback')
             if kwargs.get('physics_tendencies') is None and callback is not None:
+                if kwargs.get('initial_diagnostics') is None:
+                    # The lean diagnostics lifetime (cuda_driver._step_device_v841) hands each subcycle
+                    # initial_diagnostics=None and lets it form the substep-start solve itself.  The callback
+                    # needs that set now (rho_edge = h_edge), so form it here with the subcycle's own call
+                    # and pass it on: the subcycle then uses the same words instead of solving again.
+                    # THE BREAKAGE THIS FIXES: every IAU run on the suite route stopped in its first step
+                    # ("'NoneType' object has no attribute 'h_edge'", HEX-PHYSICS-PARITY run group 6 #23).
+                    saved = kwargs['time_level_one']
+                    kwargs['initial_diagnostics'] = self.horizontal.solve_diagnostics(
+                        state.rho, state.rho_u, dt=kwargs['outer_dt'],
+                        apvm_upwinding=self.config.config_apvm_upwinding,
+                        normal_velocity=saved.normal_velocity, rk_step=3)
                 kwargs['physics_tendencies'] = callback(
                     rk_step=kwargs['schedule'].stages[0].stage, dynamics_substep=kwargs.get('dynamics_substep', 1),
                     state=state, saved=kwargs['time_level_one'], diagnostics=kwargs['initial_diagnostics'])
@@ -416,10 +618,170 @@ def initialize_native_output(native, streams, *, restarting=False, reset_stream_
             native.reset_alarm(stream.name+':out')
 
 
+def restore_state_time(native, *, pool='state'):
+    """A restarted segment's CF ``Time`` is its valid time since ``initial_time``, as a straight run's is.
+
+    ``Time`` (seconds since ``initial_time``, the history's CF time axis) advances by dt every step from the
+    init's value (``update_state_time``).  THE BREAKAGE THIS FIXES: a restart began it again from the init's 0,
+    so every history frame after a checkpoint restart named a valid time one restart offset too early (a 13:00
+    frame of a 12:00 run restarted at 12:30 said Time = 1800 "seconds since 2023-03-31 12:00:00"; HEX-PHYSICS-
+    PARITY run group 6 #21).  The straight run's float32 sum of whole-second steps is exact, so this word is too.
+    """
+    import numpy as np
+    if getattr(native, 'clock_state', None) is None:
+        return None     # the native referee library keeps MPAS's own restart stream and clock
+    initial = datetime.strptime(str(native.get_text_field(pool, 'initial_time', level=1)).strip(),
+                                '%Y-%m-%d_%H:%M:%S')
+    start = datetime.strptime(native.clock_state.start_time.stamp(), '%Y-%m-%d_%H:%M:%S')
+    seconds = np.float32((start - initial).total_seconds())
+    for level in (1, 2):
+        native.put_field(pool, 'Time', np.array(seconds, dtype=np.float32), level=level, nlevels=2)
+    return float(seconds)
+
+
+class StepRecordWriter:
+    """Receipt rewrites and the physics call log, written off the step path (G6).
+
+    THE BREAKAGE THIS PREVENTS: the step loop serialised the whole growing
+    receipt (``json.dumps(indent=2)``, three stage rows a step, so quadratic in
+    the run) and opened and appended ``physics-calls.jsonl`` on the one host
+    thread that issues the card's work, every step.  The ArWen route hands
+    its receipts to a background writer.  Here the call log lines are
+    serialised on the step thread (the driver reuses its call list) and
+    appended in order by one writer thread; the receipt is serialised at most
+    every ``GPUWM_HEX_RECEIPT_EVERY_SECONDS`` (30 s; 0 = every step) and at
+    step 1, stops and the end, and written by the same thread with an atomic
+    rename.  The call log's bytes are unchanged; ``close`` drains both before
+    the run returns or fails, so the final files are what the old loop wrote.
+    """
+
+    def __init__(self, *, every_seconds=None, clock=None):
+        import queue
+        import threading
+        import time
+        every = os.environ.get('GPUWM_HEX_RECEIPT_EVERY_SECONDS') if every_seconds is None else every_seconds
+        self.every_seconds = 30.0 if every in (None, '') else float(every)
+        self._clock = clock or time.monotonic
+        self._last = None
+        self._queue = queue.Queue()
+        self._error = None
+        self._handles = {}
+        self.receipt_writes = 0
+        self.receipt_skips = 0
+        self.lines = 0
+        self._thread = threading.Thread(target=self._run, name='hex-step-records', daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while True:
+            item = self._queue.get()
+            try:
+                if item is None:
+                    return
+                kind, path, text = item
+                if self._error is not None:
+                    continue
+                if kind == 'append':
+                    handle = self._handles.get(path)
+                    if handle is None:
+                        handle = self._handles[path] = Path(path).open('a')
+                    handle.write(text)
+                elif kind == 'flush':
+                    for handle in self._handles.values():
+                        handle.flush()
+                else:
+                    temporary = Path(str(path) + '.partial')
+                    temporary.write_text(text)
+                    os.replace(temporary, path)
+            except BaseException as error:  # reported on the step thread at the next call
+                self._error = error
+            finally:
+                self._queue.task_done()
+
+    def _raise(self):
+        if self._error is not None:
+            error, self._error = self._error, None
+            raise RuntimeError(f'step record writer failed: {type(error).__name__}: {error}') from error
+
+    def append(self, path, line):
+        self._raise()
+        self.lines += 1
+        self._queue.put(('append', str(path), line))
+
+    def receipt(self, path, receipt, *, force=False):
+        """Serialise ``receipt`` now if forced or due; the file write happens on the writer thread."""
+        self._raise()
+        now = self._clock()
+        if not force and self._last is not None and now - self._last < self.every_seconds:
+            self.receipt_skips += 1
+            return False
+        self._last = now
+        self.receipt_writes += 1
+        self._queue.put(('receipt', str(path), json.dumps(receipt, indent=2, default=str) + '\n'))
+        return True
+
+    def drain(self):
+        self._queue.put(('flush', None, None))
+        self._queue.join()
+        self._raise()
+
+    def close(self):
+        if self._thread.is_alive():
+            self._queue.put(('flush', None, None))
+            self._queue.put(None)
+            self._thread.join()
+        for handle in self._handles.values():
+            handle.close()
+        self._handles.clear()
+        self._raise()
+
+    def summary(self):
+        return dict(writer='background thread (hex-step-records)', every_seconds=self.every_seconds,
+                    receipt_writes=self.receipt_writes, receipt_writes_skipped=self.receipt_skips,
+                    call_log_lines=self.lines)
+
+
+def moving_publication_due(moving, *, step, steps, dt):
+    """Whether a moving route consumes the host pool views after ``step``.
+
+    ``MovingRoute.after_step`` reads host pools only when it writes a tracker frame and may seal a
+    carrier (a frame step with a controller), and ``finish`` seals at the final or stopped step, which
+    is always a frame or the last step.  The shock series reads only device columns.
+    THE BREAKAGE THIS PREVENTS (G6): publishing every step downloaded every resident pool buffer
+    (3,460 MB and 307 syncs a step on the storm-following 3 km region, 2.5 s of a 4.2 s step) for a
+    controller that reads them once a frame.
+    """
+    if moving is None:
+        return False
+    if step == 0 or step >= steps:
+        return True
+    checkpoint_due = getattr(moving, 'checkpoint_due', None)
+    if checkpoint_due is not None and checkpoint_due(step, dt):
+        # A checkpoint seals the host pool views at this step ("native state already published").
+        # THE BREAKAGE THIS PREVENTS: with no download at a mid-run checkpoint step the carrier sealed stale
+        # pools, and a restart from it differed from the straight run in 35 M of 94 M history values.
+        return True
+    control = getattr(moving, 'control', None)
+    frame = float(getattr(moving, 'frame_seconds', 0.0) or 0.0)
+    if control is None or frame <= 0.0:
+        return False
+    model_seconds = float(getattr(moving, 'offset_seconds', 0.0) or 0.0) + step * dt
+    return not model_seconds % frame
+
+
+def moving_columns_due(moving, *, step, steps, dt):
+    """Whether the moving hooks read the prepared columns (psfc_p) after ``step``."""
+    if moving is None:
+        return False
+    return bool(getattr(moving, 'shock', False)) or moving_publication_due(moving, step=step, steps=steps, dt=dt)
+
+
 def native_publication_required(native, streams, *, step, steps, moving, lazy, output=None, when=None):
     """Keep state resident between writes; outer physics refreshes its own pools.
 
-    Initial/final boundaries and moving callbacks always consume current pools.
+    Initial/final boundaries always consume current pools. ``moving`` is passed
+    only at a step where the moving route consumes them (``moving_publication_due``
+    or ``moving_columns_due``); pass None otherwise.
     Alarm inspection does not reset or transfer a stream; the writer still owns
     those actions and diagnostic accumulator resets.
     """
@@ -493,6 +855,13 @@ def native_mesh_state_exclusions(layout):
 
 def load_native_dynamics_inputs(arguments, layout, payload, *, keep_initialized_deformation=False):
     """Complete input ownership before CUDA; mpas_atm_core.F:116-200,589-596."""
+    if layout.configs.get('config_apply_lbcs', False):
+        if keep_initialized_deformation:
+            # THE BREAKAGE THIS PREVENTS: the fork dycores keep the init's deformation weights on the global extent;
+            # the regional dycore pads its own, so the fork's words would land on the wrong columns.
+            raise ValueError('a limited-area run on a fork dycore suite (RRFS) runs through its own regional route, '
+                             'not the v8.4.2 suite route')
+        return load_native_regional_inputs(arguments, layout, payload)
     import numpy as np
     from ..mesh import Mesh
     from ..vector import initialize_reconstruction_coefficients
@@ -538,6 +907,46 @@ def load_native_dynamics_inputs(arguments, layout, payload, *, keep_initialized_
         else:
             mesh.arrays[name]=np.zeros((mesh.n_cells,mesh.arrays['edgesOnCell'].shape[1]),np.float32)
     return mesh,grid,profiles,state,reference,saved,names
+
+
+def load_native_regional_inputs(arguments, layout, payload):
+    """A limited-area cull's inputs, as the regional dycore takes them; mpas_atm_core.F:116-200,589-596.
+
+    The cull stores 0 (read as a negative sentinel) in one cellsOnEdge slot of every ring-7 boundary edge; native MPAS
+    maps it to the garbage cell nCells+1 at read time.  The vertical grid and the initial state are loaded with those
+    sentinels admitted, and the runtime vectors come from the Rust geometry with halos (the regional native binding's
+    own order, cuda_regional_forecast_v842.load_native_regional_inputs), because the closed-sphere reconstruction
+    reads every cellsOnEdge slot as a cell.  The regional dycore (open_regional_forecast_v841) pads every array with
+    the garbage column itself.
+    """
+    import numpy as np
+    from ..mesh import Mesh
+    from ..driver import load_mpas_vertical_grid, load_mpas_initial_state
+    from ..dynamics_v841 import load_v841_reference_wind_profiles
+    from ..rust_geometry import _run
+    init = Path(arguments.init)
+    hydration = NativePoolHydration(None, layout, payload)
+    mesh = Mesh.from_netcdf(getattr(arguments, 'grid', None) or init, init,
+                            exclude_variables=native_mesh_state_exclusions(layout))
+    for name, value in list(mesh.arrays.items()):
+        if getattr(value, 'dtype', None) is not None and value.dtype == np.float64:
+            mesh.arrays[name] = np.ascontiguousarray(value, dtype=np.float32)
+    mesh.arrays['nominalMinDc'] = hydration.horizontal_length()
+    values = _run(mesh, mode=0, dtype=np.dtype(np.float32), include_halos=True)
+    for name, value in zip(('edgeNormalVectors', 'localVerticalUnitVectors', 'cellTangentPlane',
+                            'coeffs_reconstruct'), values):
+        mesh.arrays[name] = value
+    grid = load_mpas_vertical_grid(init, mesh, config_coef_3rd_order=layout.configs['config_coef_3rd_order'],
+                                   allow_regional_sentinels=True)
+    profiles = load_v841_reference_wind_profiles(init, n_vert_levels=grid.vertical_grid.n_vert_levels)
+    names = next(r['components'] for r in layout.fields if r['pool'] == 'state' and r['name'] == 'scalars')
+    state, reference, saved = load_mpas_initial_state(init, mesh, grid.vertical_grid,
+            scalar_names=(), reference_path=init, terrain_metrics=grid.terrain_metrics,
+            return_saved_diagnostics=True, cold_start=True, allow_regional_sentinels=True)
+    state.scalars = np.ascontiguousarray(hydration.field_buffer('state', 'scalars')[..., :-1])
+    for name in ('defc_a', 'defc_b'):
+        mesh.arrays[name] = np.zeros((mesh.n_cells, mesh.arrays['edgesOnCell'].shape[1]), np.float32)
+    return mesh, grid, profiles, state, reference, saved, names
 
 
 #: The lake class of the 21-class MODIS land use (modis_landuse_20class_30s_with_lakes, WPS index islake=21),
@@ -598,6 +1007,69 @@ def native_table_roots(source,config,extra=None):
     return roots
 
 
+def balance_series_sampler(arguments, layout, names, vertical, dycore, out):
+    """``--balance-series`` on the MPAS suite route: the ArWen route's sampler on this dycore's own state.
+
+    hexcore.iau_forcing.BalanceSeries reads rho_zz and the mass species of the owned columns from
+    ``driver.atmosphere.state``, which the suite route's CUDA dycore holds exactly as the ArWen route's does.
+    THE BREAKAGE THIS RETIRES (hex parity run group 7, #25): the door refused the flag on this route because
+    no sampler was wired here. Returns None when the flag is off.
+    """
+    if not getattr(arguments, 'balance_series', False):
+        return None
+    from types import SimpleNamespace
+    import numpy as np
+    from ..iau_forcing import BalanceSeries
+    cells = int(layout.dimensions['nCells'])
+    solve = int(layout.dimensions.get('nCellsSolve', cells))
+    if solve != cells:
+        # THE BREAKAGE THIS PREVENTS: each rank would write its own partial series to one path.
+        raise ValueError('the balance series is sampled on one card; this rank owns '
+                         f'{solve} of {cells} local columns, so drop --balance-series or run on one card')
+    balance = BalanceSeries.build(Path(out) / 'balance-series.jsonl', tuple(names),
+                                  np.asarray(vertical.dzw, dtype=np.float64), dycore.cp)
+    balance.view = SimpleNamespace(classes=[SimpleNamespace(driver=dycore, n_owned_cells=solve,
+                                                            tables=SimpleNamespace(rate=1))])
+    return balance
+
+
+#: Mesh connectivity whose stored-0 "no neighbour" entries native MPAS maps to the garbage element at read time
+#: (the element count of that kind plus one), by the kind of element each array names.
+LIMITED_AREA_CONNECTIVITY = {
+    'cellsOnEdge': 'nCells', 'cellsOnCell': 'nCells', 'cellsOnVertex': 'nCells',
+    'edgesOnCell': 'nEdges', 'edgesOnEdge': 'nEdges', 'edgesOnVertex': 'nEdges',
+    'verticesOnCell': 'nVertices', 'verticesOnEdge': 'nVertices',
+}
+
+
+def remap_limited_area_sentinels(native, layout):
+    """A cull's stored-0 neighbours become the garbage element, as native MPAS's block creator does.
+
+    THE BREAKAGE THIS PREVENTS: the pinned pool reader keeps a limited-area cull's 0 ("no neighbour") in
+    cellsOnEdge, cellsOnVertex, edgesOnVertex and the rest, where native MPAS reads it as nCells+1 (nEdges+1,
+    nVertices+1).  Every one-based consumer on the suite route (the isobaric and convective output diagnostics,
+    which gather through cellsOnVertex) then indexed element -1, one word before its buffer: an illegal memory
+    access at the first output on the 937.5 m region of 2024-05-06 whenever the allocation before the buffer was
+    unmapped (4 of 6 runs; fix-group-1 #3).  Returns the count remapped per array.
+    """
+    import numpy as np
+    dimensions = layout.dimensions
+    rows = {row['name']: row for row in layout.fields if row['pool'] == 'mesh'}
+    remapped = {}
+    for name, kind in LIMITED_AREA_CONNECTIVITY.items():
+        row = rows.get(name)
+        if row is None or ('mesh', row['pool_name']) not in native._fields:
+            continue
+        values = native.get_field('mesh', row['pool_name'])
+        stored = values == 0
+        count = int(stored.sum())
+        if count:
+            values[stored] = np.int32(dimensions[kind] + 1)
+            native.put_field('mesh', row['pool_name'], values, nlevels=native._fields['mesh', row['pool_name']][2])
+        remapped[name] = count
+    return remapped
+
+
 def framework_only(config):
     """Choose the ported framework for the GPU route without an opt-in.
 
@@ -614,6 +1086,54 @@ def framework_only(config):
                 str(config.service_backends.get('surface_update', 'native-cpu')) == 'native-cpu')
 
 
+def open_limited_area_dycore(arguments, layout, mesh, grid, profiles, state, reference, saved, names, *,
+                             dt, start, config, les, kernel_cache):
+    """The regional dycore for a limited-area suite run; mpas_atm_core.F:539-596, mpas_atm_boundaries.F.
+
+    This is the ArWen route's regional assembler (cuda_regional_forecast_v841.open_regional_forecast_v841): the same
+    boundary driver, specified and relaxation zones and lateral-boundary series, so a limited-area run differs between
+    the two routes only in its physics.  The boundary drives every scalar the suite carries (lbc_<name>); a species
+    the series does not hold keeps native's recycled allocation, as on the ArWen route.
+    """
+    from ..cuda_regional_forecast_v842 import RegionalNativeDycoreConfigV842
+    from ..cuda_regional_forecast_v841 import open_regional_forecast_v841
+    from ..lbc_stream import initial_paths
+    lbc_dir = getattr(arguments, 'lbc_dir', None)
+    if lbc_dir is None:
+        raise ValueError('config_apply_lbcs is set but the run names no --lbc-dir')
+    paths = initial_paths(lbc_dir)
+    if not paths:
+        raise ValueError(f'--lbc-dir {lbc_dir} holds no lbc.*.nc: the limited-area run has no boundary series')
+    options = {f.name: layout.configs[f.name] for f in fields(RegionalNativeDycoreConfigV842)
+               if f.init and f.name in layout.configs}
+    options.update(config_dt=dt, config_moist_physics=config.moist_physics, config_apply_lbcs=True)
+    return open_regional_forecast_v841(mesh, state, grid.vertical_grid, reference, saved, grid.terrain_metrics,
+        RegionalNativeDycoreConfigV842(**options), reference_wind_profiles=profiles, lbc_paths=paths,
+        start_time=datetime.strptime(start, '%Y-%m-%d_%H:%M:%S'),
+        scalar_names=tuple('lbc_' + name for name in names), kernel_cache=kernel_cache,
+        les_dissipation=les)
+
+
+def limited_area_receipt(arguments, dycore, coupling=None):
+    """What drove the boundary, for the run's receipt."""
+    runtime = dycore.regional_v841
+    block = dict(lbc_dir=str(Path(arguments.lbc_dir).resolve()), dycore='regional (open_regional_forecast_v841)',
+                 anchor=getattr(runtime, 'anchor', None))
+    if coupling is not None:
+        applied = coupling.boundary_forcing_columns() is not None
+        block['LB1'] = dict(applied=applied,
+            what='GF / New Tiedtke resolved-advection forcing (rthdynten, rqvdynten) zeroed in boundary rings 1-7',
+            why='the boundary relaxation and the specified-zone reset are not convergence; native MPAS-A v8.4.2 '
+                'rains a ring along the boundary from them',
+            off=('exact mode' if not applied and getattr(coupling.session.config, 'mode', 'exact') != 'correct'
+                 else 'GPUWM_HEX_MPAS_LB1=0' if not applied else None))
+    try:
+        block['runtime'] = runtime.receipt()
+    except Exception as error:      # a receipt detail never fails a finished run
+        block['runtime_receipt_error'] = repr(error)
+    return block
+
+
 def run_native_dynamics(arguments, config, layout, payload, streams, library,
                         start, stop, dt, steps, out, *, moving=None, execution=None):
     """Retain startup timings on successful and failed sessions."""
@@ -622,7 +1142,9 @@ def run_native_dynamics(arguments, config, layout, payload, streams, library,
     from .. import time_ledger
     try:
         with timed_stage(runtime_rows, 'native-runtime',
-                         parallelism={'device':'GPU plus native CPU','cards':1},
+                         parallelism={'device':'GPU plus native CPU' if library is not None
+                                      else 'GPU, issued by one host thread (ported framework, no native library)',
+                                      'cards':1},
                          timeline='post.forecast_process.native.runtime'):
             return _run_native_dynamics(arguments, config, layout, payload, streams, library,
                 start, stop, dt, steps, out, moving=moving, execution=execution, timings=timings)
@@ -722,6 +1244,26 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                                                      target_grid=getattr(arguments,'grid',None) or arguments.init)
     if execution is not None:
         state,saved=execution.couple_input(state,saved,mesh,grid,reference)
+    chemistry=None
+    if getattr(arguments,'chemistry_config',None) is not None:
+        # The ArWen route's aerosol transport on this route (hexcore.mpasphys.chemistry_v842).
+        if execution is not None or physics_map is not None or (moving is not None and moving.control is not None):
+            # THE BREAKAGE THIS PREVENTS: a multi-rank or moving run would remap or partition the Registry
+            # scalars but not the appended species rows, so the plume would be cut at the first move or halo.
+            raise ValueError('chemistry on the MPAS suite route runs on one card without a moving region: the '
+                             'moving remap and the rank partition carry the Registry scalars only')
+        from .chemistry_v842 import SuiteChemistry
+        chemistry=SuiteChemistry(arguments.chemistry_config,registry_names=names,mesh=mesh,
+                                 nlev=grid.vertical_grid.n_vert_levels,
+                                 grid_path=getattr(arguments,'grid',None) or arguments.init,
+                                 start_text=layout.configs['config_start_time'])
+        if resumed:
+            chemistry.restart=moving.carrier.get('chemistry')
+            if chemistry.restart is None:
+                raise ValueError('this checkpoint carries no chemistry; a chemistry run restarts from its own checkpoint')
+        state=chemistry.extend_state(state)
+    elif resumed and moving.carrier.get('chemistry') is not None:
+        raise ValueError('this checkpoint carries chemistry: restart it with the same --chemistry-config')
     options={f.name:layout.configs[f.name] for f in fields(NativeMpasDycoreConfigV842)
              if f.init and f.name in layout.configs}
     options.update(config_dt=dt,config_moist_physics=config.moist_physics)
@@ -761,8 +1303,20 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
     if build_dycore is not None:
         from functools import partial
         factory = partial(build_dycore, factory)
+    limited_area = bool(layout.configs.get('config_apply_lbcs', False))
+    if limited_area and (execution is not None or moving is not None or driver_type is not CudaDryDycoreDriver):
+        # THE BREAKAGE THIS PREVENTS: the rank, cycling, moving and IAU wrappers build or wrap the global dycore class;
+        # applied to the regional dycore they would drop its boundary driver.  bind_limited_area refuses these
+        # options at the door; this names any other path that reaches here.
+        raise ValueError('a limited-area MPAS suite run takes the plain regional dycore: no rank, JEDI, moving, '
+                         'fork-dycore or IAU wrapper is ported onto it yet')
     with timed_stage(timings, 'dycore-build', parallelism={'device':'GPU','cards':1,'host_threads':1}, timeline='prep.native.dycore_build'):
-        dycore=factory(mesh,state,grid.vertical_grid,reference,
+        if limited_area:
+            dycore=open_limited_area_dycore(arguments, layout, mesh, grid, profiles, state, reference, saved,
+                names, dt=dt, start=start, config=config, les=les,
+                kernel_cache=cache_type(capability=require_cuda(min_compute=(7,5))))
+        else:
+            dycore=factory(mesh,state,grid.vertical_grid,reference,
                 dycore_config,saved_diagnostics=saved,
                 terrain_metrics=grid.terrain_metrics,reference_wind_profiles=profiles,
                 **({'les_dissipation':les} if les is not None else {}),
@@ -781,7 +1335,15 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
             raise RuntimeError('execution-built dycore lacks the required physics callback interface') from error
     if execution is not None:
         execution.bind_dycore(dycore)
-    geometry=CudaMpasToPhysGeometryV841.from_host(mesh)
+    # --fullstep-local-timestep in shadow mode: the ArWen route's observer on this dycore (hexcore.mpasphys.lts_v842).
+    fullstep_shadow=None
+    if execution is None and moving is None and getattr(arguments,'fullstep_local_timestep',False):
+        from .lts_v842 import attach_shadow, shadow_requested
+        if shadow_requested(arguments):
+            fullstep_shadow=attach_shadow(arguments,dycore,out)
+    # The regional dycore's arrays carry native's garbage column (nCells+1, nEdges+1); the preparation geometry must
+    # be the same padded view (cuda_regional_forecast_v842 does the same).
+    geometry=CudaMpasToPhysGeometryV841.from_host(dycore.regional_v841.padded if limited_area else mesh)
     receipt=dict(schema='mpas-native-forecast-v1',identity_checked=False,completed=False,
                  physics=config.receipt(),steps_requested=steps,steps_completed=0,
                  native_library_sha256=None if ported_framework else hashlib.sha256(library.read_bytes()).hexdigest(),
@@ -869,16 +1431,24 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                 surface_record_reader=surface_record_reader)
         session.output_config_snapshot=output_config_snapshot
         receipt['lake_cells_folded_to_water']=fold_lake_class(native,layout)
+        if limited_area:
+            receipt['limited_area_sentinels']=remap_limited_area_sentinels(native,layout)
         from .streams_output_v842 import PhysicsStreams, output_inventory
         receipt['missing_fields']=output_inventory(streams,layout)
         coupling=ResidentNativeCoupling(session,dycore,geometry,names)
+        if chemistry is not None:
+            coupling.chemistry=chemistry
+            dycore.chemistry=chemistry
         from ..stochastic import resolve_options, StochasticPhysics
         stochastic_path = getattr(arguments, 'physics_namelist', None)
         stochastic_config = resolve_options(getattr(arguments, 'stochastic', None),
             None if stochastic_path is None else Path(stochastic_path).read_text())
         stochastic_restart = None if not resumed else moving.carrier.get('stochastic')
         if stochastic_config.enabled:
-            coupling.stochastic = StochasticPhysics(mesh, grid.vertical_grid, stochastic_config)
+            partition = getattr(execution, 'stochastic_partition', None)
+            coupling.stochastic = (StochasticPhysics(mesh, grid.vertical_grid, stochastic_config)
+                if partition is None else
+                StochasticPhysics(mesh, grid.vertical_grid, stochastic_config, partition=partition()))
             dycore.stochastic = coupling.stochastic
             coupling.stochastic_dt = dt
             if stochastic_restart is not None:
@@ -893,9 +1463,11 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
             coupling.iau=SuiteIau(layout=layout,payload=payload,config=config,mesh=mesh,dycore=dycore,dt=dt)
             receipt['iau']=coupling.iau.receipt()
             print(json.dumps({'iau':receipt['iau']}),flush=True)
-        if not layout.configs['config_do_restart']:
-            from .diagnostics_v842 import initialize_thermodynamics
-            initialize_thermodynamics(dycore.atmosphere,coupling.physics_cache)
+        from .diagnostics_v842 import initialize_thermodynamics
+        # A restart forms the cold start's base state too (the restart stream's base words), never the
+        # perturbation state it carries.
+        initialize_thermodynamics(dycore.atmosphere,coupling.physics_cache,
+                                  base_only=bool(layout.configs['config_do_restart']))
         resident_reference=dycore.atmosphere.reference
         for name,value in (('rho_base',resident_reference.rho_base),('rtheta_base',resident_reference.rho_theta_base),
                            ('pressure_base',resident_reference.pressure_base),('exner_base',resident_reference.exner_base)):
@@ -910,8 +1482,13 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
             receipt['moving_physics']=moving.restore_physics(session,layout,physics_map,mesh)
         stopped_at=steps
         with native_working_directory(out):
-            with timed_stage(receipt['stage_timings'], 'physics-initialize', timeline='prep.native.physics_initialize', parallelism={'device':'GPU plus native CPU','cards':1,'host_threads':1}):
+            # The ported framework loads no native library: its stages are GPU work issued by one host thread.
+            host_label = ('GPU, issued by one host thread (ported framework, no native library)'
+                          if library is None else 'GPU plus native CPU')
+            with timed_stage(receipt['stage_timings'], 'physics-initialize', timeline='prep.native.physics_initialize', parallelism={'device':host_label,'cards':1,'host_threads':1}):
                 session.initialize()
+            if resumed:
+                receipt['physics_alarm_phase']=moving.restore_alarm_phase(session,config)
             if core_initialize is not None:
                 core_initialize(session,mesh)
                 bind_output_diagnostics=getattr(core_provider,'bind_native_output_diagnostics',None)
@@ -919,37 +1496,94 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                     bind_output_diagnostics(session,streams)
             initialize_native_output(native,streams,restarting=layout.configs['config_do_restart'],
                                      reset_stream_alarms=False)
+            if layout.configs['config_do_restart']:
+                restore_state_time(native)
             from .resident_v842 import ResidentPhysicsGlue, resident_requested
-            resident = resident_requested(config, layout.dimensions)
+            # A same-host rank (samehost_v842) owns a partition of the mesh. Its
+            # halo owner supplies the exchanges the closed single-rank mesh never
+            # needed: the PBL momentum group and the isobaric pressure halo.
+            halo = getattr(execution, 'physics_halo', None)
+            resident = (resident_requested(config, layout.dimensions) if halo is None else
+                        resident_requested(config, layout.dimensions, partitioned=True))
             diagnostics = None
             # Output diagnostics belong to the dycore, including dry runs
             # without resident physics. The provider's halo operation is a
             # no-op only on the closed single-rank meshes it supports.
             closed_mesh = all(layout.dimensions.get(name) == layout.dimensions.get(name+'Solve')
                               for name in ('nCells', 'nEdges', 'nVertices'))
-            if resident or (ported_framework and closed_mesh):
+            if resident or (ported_framework and (closed_mesh or halo is not None)):
                 from .resident_output_diagnostics_v842 import ResidentOutputDiagnostics
-                diagnostics = ResidentOutputDiagnostics(session, dycore)
-            output=output_lifetime.enter_context(PhysicsStreams(session,streams,out,final_time=stop,
-                                                                diagnostics=diagnostics))
+                diagnostics = (ResidentOutputDiagnostics(session, dycore) if halo is None else
+                               ResidentOutputDiagnostics(session, dycore, halo=halo))
+            streams_type = getattr(execution, 'streams_type', None) or PhysicsStreams
+            output=output_lifetime.enter_context(streams_type(session,streams,out,final_time=stop,
+                                                              diagnostics=diagnostics))
+            if (getattr(config,'mode',None)=='correct' and moving is None
+                    and (halo is None or getattr(output,'gathers_first_call',False))
+                    and hasattr(output,'first_frame_from_first_call')):
+                # Correct mode completes the initial frame's surface-layer diagnostics from
+                # the first physics call (hexcore.f000_first_call); exact mode is native's.
+                # Same-host ranks gather every rank's owned first-call words to rank 0's global
+                # frame (samehost_v842 GatheredPhysicsStreams._read_first_call).
+                output.first_frame_from_first_call=True
             receipt['missing_fields'] = output.missing
             session.output_streams=output
+            if chemistry is not None:
+                chemistry.bind(dycore=dycore,cache=coupling.physics_cache,coupling=coupling)
+                output.extra_history=chemistry.history_fields
+                output.extra_history_attrs={'CHEMISTRY':chemistry.history_attribute()}
             receipt['output_metadata']=getattr(output,'metadata_receipt',None)
-            dycore.atmosphere.state.scalars[...] = dycore.cp.asarray(native.get_field('state','scalars')[...,:-1])
+            initialized_scalars = dycore.cp.asarray(native.get_field('state','scalars')[...,:-1])
+            registry_scalars = coupling._registry_rows(dycore.atmosphere.state.scalars)
+            if limited_area:
+                # The garbage column (the last) keeps the regional dycore's own word.
+                registry_scalars[..., :initialized_scalars.shape[-1]] = initialized_scalars
+            else:
+                registry_scalars[...] = initialized_scalars
             if resident:
-                ResidentPhysicsGlue(session, coupling, mesh)
+                if halo is None:
+                    ResidentPhysicsGlue(session, coupling, mesh)
+                else:
+                    ResidentPhysicsGlue(session, coupling, mesh, halo=halo)
             receipt['resident_physics'] = dict(enabled=resident,
-                scope='exact global convection_permitting',
+                scope=('convection_permitting on a limited-area cull (regional dycore)' if limited_area
+                       else 'exact global convection_permitting'),
                 field_authority='GPU' if resident else 'native pools')
             lazy_publication = resident or os.environ.get('GPUWM_HEX_NATIVE_LAZY_PUBLICATION') == '1'
             publication = receipt['native_publication'] = dict(
                 lazy=lazy_publication, published=0, deferred=0)
+            # Slot refusals (GWDO, Noah, sea ice, outer winds) are read off the step path; see
+            # deferred_checks_v842 (U-MPASPHYS-1). Every check still stops the forecast.
+            from .deferred_checks_v842 import DeferredChecks, collecting
+            deferred_checks = DeferredChecks(dycore.cp)
+            output_lifetime.enter_context(collecting(deferred_checks))
             if execution is not None:
                 # Bind after initialization and optional resident glue so wrappers
                 # see the final coupling callbacks and initialized field authority.
                 execution.bind_coupling(coupling)
                 execution.initialized(dycore)
+            # [hex_nests] trigger looks (forecast --nest-triggers), armed by the same
+            # hexcore.nest_triggers.arm_loop as the ArWen route; None without a table.
+            from .nest_look_v842 import arm as arm_nest_look
+            nest_look = arm_nest_look(arguments, config, mesh=mesh,
+                                      owned_cells=(layout.dimensions['nCellsSolve'] if 'nCellsSolve' in layout.dimensions
+                                                   else mesh.n_cells),
+                                      start=start, steps=steps, dt=dt, out=out, cp=dycore.cp,
+                                      ported_framework=ported_framework, multi_rank=execution is not None)
+            session.nest_look = nest_look
+            balance=balance_series_sampler(arguments,layout,names,grid.vertical_grid,dycore,out)
+            records = StepRecordWriter()
+            output_lifetime.callback(records.close)
+            receipt['step_records'] = records.summary()
+            calls_path = (out/'physics-calls.jsonl' if execution is None
+                          else execution.calls_path(out))
+            # The step whose end-of-step publication synchronised the coupling pools from the
+            # same atmosphere the next outer-physics stage would synchronise again (G6).
+            synchronized_after = None
+            columns = None
             for step in range(steps+1):
+                if step and nest_look is not None:
+                    nest_look.begin(step)
                 if step:
                     if step == 1:
                         time_ledger.end_if_open("forecast.construct")
@@ -959,8 +1593,23 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                         if execution is not None:
                             execution.before_step(step)
                         coupling.sources=None
-                        with timed_stage(receipt['stage_timings'], 'outer-physics', timeline='post.forecast_process.native.outer_physics', parallelism={'device':'GPU plus native CPU','cards':1,'host_threads':1}):
-                            coupling.synchronize(dycore.atmosphere)
+                        with timed_stage(receipt['stage_timings'], 'outer-physics', timeline='post.forecast_process.native.outer_physics', parallelism={'device':host_label,'cards':1,'host_threads':1}) as outer_row:
+                            # THE BREAKAGE THIS PREVENTS (G6): synchronize ran three times a step; the end-of-step
+                            # publication already copied this exact atmosphere into the pools on one card, and
+                            # nothing between the two touches it, so the copy and its kernels ran twice.
+                            if execution is None and synchronized_after == step-1:
+                                outer_row['synchronize'] = 'reused end-of-step publication'
+                            else:
+                                coupling.synchronize(dycore.atmosphere)
+                            synchronized_after = None
+                            if diagnostics is not None:
+                                # The previous step's running maxima (G1), on the state the pools
+                                # now hold: this synchronize's, or the reused publication's.
+                                diagnostics.flush()
+                            # Device memory stays with the per-slot brackets (U-MPASPHYS-1's keep rule).
+                            # A bracket per physics half was measured slower on a 24 GB card (G6, an
+                            # RTX 4090, zoom: outer physics 0.82 -> 1.91 s/step): with no slot boundary
+                            # inside the half, the pool grew to the half's peak and CuPy freed and retried.
                             session.begin_step(step,(step-1)*dt)
                         coupling.itimestep=step
                         acoustic_output = {}
@@ -977,12 +1626,16 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                         # Registry's qv group exists in the dry suite too. Native
                         # always computes the moist coefficients from that active
                         # group (mpas_atm_time_integration.F:2125-2152).
-                        with timed_stage(receipt['stage_timings'], 'dycore-and-post-transport', timeline='post.forecast_process.native.dycore', parallelism={'device':'GPU plus native CPU callbacks','cards':1,'host_threads':1}):
+                        with timed_stage(receipt['stage_timings'], 'dycore-and-post-transport', timeline='post.forecast_process.native.dycore', parallelism={'device':host_label if library is None else 'GPU plus native CPU callbacks','cards':1,'host_threads':1}):
                             result=dycore._step_device_v841(physics_stage_callback=coupling.stage,
                                 physics_post_transport_callback=coupling.post_transport,
                                 physics_mass_loading_count=layout.indices['state','moist_end'],
                                 **acoustic_output)
                         dycore.atmosphere=result.atmosphere
+                        if chemistry is not None:
+                            with timed_stage(receipt['stage_timings'], 'chemistry', timeline='post.forecast_process.native.chemistry',
+                                             parallelism={'device':'GPU','cards':1,'host_threads':1}):
+                                chemistry.step(session=session,dt=dt)
                         if execution is not None:
                             # Complete boundary exchange before committing the native clock.
                             execution.after_step(dycore)
@@ -990,8 +1643,16 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                         # clock word using the same native RKIND operation on that level.
                         native.update_state_time(dt,source_level=1,target_level=1)
                         native.advance_clock()
+                        if nest_look is not None:
+                            nest_look.after_step(step)
+                        deferred_checks.flush(step)
                     if step == 1:
                         time_ledger.emit("forecast.first_step", "end", attrs=card_attrs)
+                        with timed_stage(receipt['stage_timings'], 'f000-first-call', timeline='forecast.output.f000_first_call',
+                                parallelism={'device':'GPU copy','cards':1,'host_threads':1}):
+                            complete_first_frame=getattr(output,'complete_first_frame',None)
+                            if complete_first_frame is not None:
+                                complete_first_frame()
                     receipt['steps_completed']=step
                     if getattr(coupling, 'stochastic', None) is not None:
                         receipt['stochastic'] = coupling.stochastic.receipt()
@@ -999,12 +1660,15 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                         receipt['iau']=coupling.iau.receipt()
                     if les is not None:
                         receipt['les_execution']=les.receipt(step)
-                    calls_path = (out/'physics-calls.jsonl' if execution is None
-                                  else execution.calls_path(out))
-                    with calls_path.open('a') as log:
-                        log.write(json.dumps(dict(step=step,calls=session.driver.calls))+'\n')
+                    records.append(calls_path, json.dumps(dict(step=step,calls=session.driver.calls))+'\n')
+                if balance is not None:
+                    # Step 0 is the initial state; then every step, as the ArWen route samples its macro steps.
+                    balance.sample(balance.view, float(step)*float(dt), dycore.cp)
+                    receipt['balance_series']=dict(path=str(balance.path),rows=len(balance.rows))
+                moving_pools = moving_publication_due(moving, step=step, steps=steps, dt=dt)
+                moving_columns = moving_pools or moving_columns_due(moving, step=step, steps=steps, dt=dt)
                 publish = native_publication_required(native, streams, step=step, steps=steps,
-                    moving=moving, lazy=lazy_publication,output=output,
+                    moving=moving if moving_columns else None, lazy=lazy_publication,output=output,
                     when=output.current_time(step=step,dt=dt))
                 # Always evaluate this hook: it may contain a rank collective,
                 # including when the native stream schedule already needs output.
@@ -1013,18 +1677,30 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                 if consumer_publication:
                     publish = True
                 with timed_stage(receipt['stage_timings'], 'publish-and-streams', timeline='forecast.output.history.capture',
-                        parallelism={'device':'GPU capture plus background Rust I/O' if publish else 'CPU',
+                        parallelism={'device':'GPU capture plus background Rust I/O' if publish
+                                     else 'none (no capture due; maxima deferred to the next synchronize)',
                                      'cards':int(publish),'host_threads':1}) as timing:
                     timing['state_published'] = publish
+                    columns = None
                     if publish:
-                        columns=coupling.synchronize(dycore.atmosphere)
+                        # Moving diagnostics explicitly consume psfc_p from a
+                        # complete preparation at this publication boundary.
+                        if moving_columns:
+                            columns=coupling.synchronize(dycore.atmosphere, prepared_columns=True)
+                        else:
+                            columns=coupling.synchronize(dycore.atmosphere)
+                            synchronized_after = step
                         # JEDI and moving carriers still consume host pool
-                        # views. Ordinary stream capture reads device buffers
-                        # directly and never needs this compatibility copy.
-                        if consumer_publication or moving is not None:
+                        # views, a moving carrier only at a frame or its last
+                        # step (moving_publication_due). Ordinary stream capture
+                        # reads device buffers directly and never needs this copy.
+                        if consumer_publication or moving_pools:
                             session.publish()
+                            timing['pools_downloaded'] = True
                         write_native_output(native,streams,step=step,receipt=receipt,session=session,
                                             time_seconds=step*dt,output=output,dt=dt)
+                    elif diagnostics is not None:
+                        diagnostics.defer(step=step, when=output.current_time(step=step,dt=dt))
                     publication['published' if publish else 'deferred'] += 1
                 if execution is not None:
                     execution.output(step=step,steps=steps,dt=dt,session=session,layout=layout,names=names,out=out)
@@ -1044,18 +1720,27 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                     stop=moving.after_step(step,steps=steps,dt=dt,columns=columns,session=session,dycore=dycore,
                                            mesh=mesh,vertical=grid.vertical_grid,names=names,layout=layout,out=out)
                     receipt.update(moving.receipt())
-                receipt_path.write_text(json.dumps(receipt,indent=2,default=str)+'\n')
+                receipt['step_records'] = records.summary()
+                records.receipt(receipt_path, receipt, force=stop or step <= 1)
                 if stop:
                     # The controller asked to stop at this frame: the carrier below seals this instant.
                     stopped_at=step
                     break
+            deferred_checks.finish()
+            receipt['deferred_checks'] = deferred_checks.receipt()
             time_ledger.end_if_open("forecast.integrate")
             time_ledger.emit("post.forecast", "begin", attrs=card_attrs)
+            if nest_look is not None:
+                receipt['nest_triggers']=nest_look.finish(out)
             if moving is not None:
                 moving.finish(step=stopped_at,session=session,dycore=dycore,mesh=mesh,vertical=grid.vertical_grid,
                               names=names,layout=layout,dt=dt)
                 receipt.update(moving.receipt())
             output.close()
+            if chemistry is not None:
+                ledger=chemistry.write_ledger(out)
+                receipt['chemistry']={k:ledger[k] for k in ('schema','config_sha256','committed_steps',
+                                      'mass_closure_kg','final_mass_kg','emitted_kg','route')}
             session.driver.finalize(session)
     if coupling.iau is not None:
         receipt['iau']=coupling.iau.receipt()
@@ -1067,6 +1752,10 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
             raise RuntimeError(f"IAU window not fully applied: {receipt['iau']}")
     if execution is not None:
         receipt['rank_execution']=execution.receipt()
+    if limited_area:
+        receipt['limited_area']=limited_area_receipt(arguments, dycore, coupling)
+    if fullstep_shadow is not None:
+        receipt['fullstep_lts_treatment']=fullstep_shadow.receipt()
     receipt['completed']=True
     receipt['physics_compile_manifest']=coupling.physics_cache.compile_manifest()
     from ..device_memory_release import process_release

@@ -68,6 +68,7 @@ import atexit
 import concurrent.futures
 import contextlib
 import copy
+import functools
 import hashlib
 import importlib
 import json
@@ -84,6 +85,8 @@ SCHEMA = "gpuwm.kernel-plan/v1"
 ENVIRONMENT = "GPUWM_KERNEL_PLAN"
 WORKERS_ENVIRONMENT = "GPUWM_KERNEL_PLAN_WORKERS"
 DIRECTORY_ENVIRONMENT = "GPUWM_KERNEL_PLAN_DIR"
+#: ``off`` keeps a first run with no usable pack from compiling the shipped inventory ahead.
+CATALOG_ENVIRONMENT = "GPUWM_KERNEL_PLAN_CATALOG"
 MAX_ENTRIES = 4000
 #: Entries not requested in this many runs of their tag leave the plan.
 KEEP_RUNS = 4
@@ -636,6 +639,73 @@ def _aot_cached(arguments, arch, held):
             or arguments["filename"] in held[signature])
 
 
+def _pack_serves(pack, arch: str) -> bool:
+    """Whether the verified prebuilt pack holds images for this compiler and card."""
+    return not pack.reason and ("sm_" + str(arch).removeprefix("sm_")) in pack._architectures
+
+
+def _catalog_rows(arch: str) -> list[dict[str, Any]]:
+    """The shipped kernel inventory as plan rows, for a run with no plan and no usable pack.
+
+    THE BREAKAGE THIS ENDS (2026-10-24): a first run on
+    a new box whose loaded NVRTC matched no prebuilt pack had no plan either,
+    so every module compiled in the foreground on one core (about 4 min before
+    step 1 on a global run).  The inventory is the exact request set the
+    shipped packs are built from (:func:`hexcore.cuda_backend.aot_build.inventory`,
+    this process's numerics mode), formed into the funnel's own arguments the
+    way the pack builder calls the compiler, so the foreground finds each one in
+    the single-flight table.  Raw NVRTC units bypass the funnel and are left to
+    their own route.  A row the foreground never requests costs pool time only.
+    """
+    from .cuda_backend.aot import compiler_identity, local_options
+    from .cuda_backend.aot_build import cached_program_filename, inventory
+    compiler = _compiler()
+    identity = compiler_identity()
+    debug = compiler._get_bool_env_variable("CUPY_CUDA_COMPILE_WITH_DEBUG", False)
+    target = str(arch).removeprefix("sm_")
+    rows = []
+    for row in inventory(compiler_family=identity["nvrtc"][0], compiler=identity):
+        route = row.get("compiler_route")
+        if route == "raw-nvrtc":
+            continue
+        request = row.get("compile_request") or {}
+        options = tuple(local_options(row["options"]))
+        cupy_route = route != "direct-nvrtc"
+        if cupy_route and not str(row.get("module_key", "")).startswith("cupy.cache."):
+            # A KernelCache declaration reaches NVRTC through CuPy's RawModule,
+            # which wraps its options in CuPy's own include directories (a
+            # recorded cupy.cache recipe already carries them). On
+            # 2026-10-24, without them the 14 dycore and physics modules never
+            # matched and compiled in the foreground.
+            from cupy._core import core as cupy_core
+            options = tuple(cupy_core.assemble_cupy_compiler_options(options))
+        if cupy_route:
+            options += ("-ftz=true",)
+            if debug:
+                options += ("--device-debug", "--generate-line-info")
+            try:
+                filename = cached_program_filename(row, options, target)
+            except Exception:
+                continue  # headers differ from this CuPy: the route compiles it itself
+        else:
+            filename = request.get("filename") or "kern.cu"
+        arguments = {"source": row["source"], "options": list(options), "arch": "device",
+                     "filename": str(filename), "cache_in_memory": bool(request.get("cache_in_memory", False)),
+                     "name_expressions": (None if request.get("name_expressions") is None
+                                          else [str(n) for n in request["name_expressions"]]),
+                     "method": None}
+        plan_row = {"sha256": _key(arguments), "arguments": arguments, "seconds": None}
+        if cupy_route and not arguments["cache_in_memory"]:
+            match = _CUPY_PROGRAM.match(os.path.basename(str(filename)))
+            if match is not None:
+                plan_row.update(route=CUPY_ROUTE, cache_entries={target: match.group(1)})
+        rows.append(plan_row)
+    unique = {}
+    for row in rows:
+        unique.setdefault(row["sha256"], row)
+    return list(unique.values())
+
+
 def start(device_id: int | None = None) -> dict[str, Any] | None:
     """Open a pool as wide as the usable cores and submit the plan; returns at once.
 
@@ -656,6 +726,21 @@ def start(device_id: int | None = None) -> dict[str, Any] | None:
     rows, source = load_plan()
     workers = _workers()
     root = _cache_root()
+    pack = None
+    catalog_error = None
+    is_cupy = getattr(_compiler(), "__name__", None) == "cupy.cuda.compiler"
+    if (not rows and is_cupy and os.environ.get(CATALOG_ENVIRONMENT, "").strip().lower()
+            not in ("off", "0", "no", "false")):
+        # No plan for this configuration yet (a first run). When the prebuilt
+        # pack cannot serve this compiler or card either, compile the shipped
+        # inventory ahead on every core instead of one module at a time.
+        from .cuda_backend.aot import Pack
+        pack = Pack()
+        if pack.reason != "aot_disabled" and not _pack_serves(pack, arch):
+            try:
+                rows, source = _catalog_rows(arch), "catalog"
+            except Exception as error:
+                catalog_error = f"{type(error).__name__}: {error}"
     pending = [row for row in rows if not _cached(row, arch, root)]
     disk_cached = len(rows) - len(pending)
     # A covered request will be served by the upstream AOT loader. Check its
@@ -663,9 +748,9 @@ def start(device_id: int | None = None) -> dict[str, Any] | None:
     # cannot be used. An invalid/missing pack leaves every request on the
     # ordinary warm-artifact or compiler path; the AOT hint serves no image.
     held = set()
-    if pending and getattr(_compiler(), "__name__", None) == "cupy.cuda.compiler":
+    if pending and is_cupy:
         from .cuda_backend.aot import Pack
-        held = _aot_coverage(Pack())
+        held = _aot_coverage(pack if pack is not None else Pack())
     aot_cached = [row for row in pending if held and _aot_cached(row["arguments"], arch, held)]
     covered = {row["sha256"] for row in aot_cached}
     pending = [row for row in pending if row["sha256"] not in covered]
@@ -692,6 +777,10 @@ def start(device_id: int | None = None) -> dict[str, Any] | None:
                               "pool_restored_warm": restored,
                               "pool_compiled": 0, "pool_failed": 0, "pool_seconds": 0.0,
                               "started": time.monotonic(), "last_done": None}
+    if pack is not None:
+        record["pack_reason"] = pack.reason
+    if catalog_error is not None:
+        record["catalog_error"] = catalog_error
     rows = pending
     _state["replay"] = record
     _state["device"] = device
@@ -756,6 +845,12 @@ def start(device_id: int | None = None) -> dict[str, Any] | None:
         cpu_pool = concurrent.futures.ProcessPoolExecutor(
             workers, mp_context=multiprocessing.get_context("spawn"))
         _state["compiler_pool"] = cpu_pool
+        register = getattr(threading, "_register_atexit", None)
+        if register is not None:
+            # Registered after concurrent.futures' own exit hook, so it runs first.
+            # The dict, not the attribute: shutdown() (close() below) sets
+            # the attribute to None while the manager thread keeps the dict.
+            register(functools.partial(_drop_at_exit, cpu_pool, getattr(cpu_pool, "_processes", None)))
         record.update(compiler_executor="process", pool_processes=[])
         record.pop("pool_peak_active", None)
         for row in rows:
@@ -781,6 +876,31 @@ def start(device_id: int | None = None) -> dict[str, Any] | None:
     finally:
         ready.set()
     return record
+
+
+def _drop_at_exit(cpu_pool, processes=None) -> None:
+    """At interpreter exit, drop the pool compiles nobody is waiting for.
+
+    A worker returns its image to this process and writes nothing itself, so
+    an unrequested compile still running when the run ends is pure waste.
+    THE BREAKAGE THIS ENDS (2026-10-24): a finished cold forecast held
+    its exit for 70-90 s while one worker compiled, on one core, a catalog
+    module the forecast never asked for.
+    """
+    # Each step on its own: a shutdown that raises (its wakeup pipe already closed) must not
+    # skip the terminate, or an idle worker that never got its sentinel holds the exit in
+    # multiprocessing's join (the hl-3 headline run, 2026-10-24: the forecast had written its receipt
+    # and waited 16 min on one idle spawn worker).
+    try:
+        cpu_pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+    try:
+        for process in list((processes or {}).values()):
+            if process.is_alive():
+                process.terminate()
+    except Exception:
+        pass
 
 
 def submit(job, *args: Any) -> concurrent.futures.Future | None:

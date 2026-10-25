@@ -32,6 +32,8 @@ PHYSICS_TABLES = ({"win32": "lookup_decode.dll", "darwin": "liblookup_decode.dyl
 POOL_READER = "rw_mpas_physics_pool" + _EXE
 OBS_SCORER = "hex_obs_scorecard" + (".exe" if sys.platform == "win32" else "")
 CHEM_SOURCES = "rw_hex_chem_sources" + (".exe" if sys.platform == "win32" else "")
+# The GSL drag's orographic statistics for any mesh (hexcore.ugwp_oro binds this name).
+UGWP_ORO = "rw_hex_ugwp_oro" + (".exe" if sys.platform == "win32" else "")
 S2S_ENERGY = "rw_s2s_energy" + (".exe" if sys.platform == "win32" else "")
 NETCDF_COPY = "gpuwm-hex-netcdf-copy" + (".exe" if sys.platform == "win32" else "")
 # The history writer's parallel deflate (hexcore.history_deflate binds this name).
@@ -211,6 +213,13 @@ class BuildPy(build_py):
                         str(root / "rust/chem-sources/target")], check=True)
         shutil.copy2(root / "rust/chem-sources/target/release" / ("rw_hex_chem_sources" + _EXE),
                      destination.parent / ("rw_hex_chem_sources" + _EXE))
+        # THE BREAKAGE THIS PREVENTS (2026-10-24): the RRFS-shape suite's GSL drag reads
+        # <mesh>.ugwp_oro_data.nc, which RRFS publishes for its own meshes only; without
+        # this generator every other mesh refused the suite before its first step.
+        subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
+                        str(root / "rust/ugwp-oro/Cargo.toml"), "--target-dir",
+                        str(root / "rust/ugwp-oro/target")], check=True)
+        shutil.copy2(root / "rust/ugwp-oro/target/release" / UGWP_ORO, destination.parent / UGWP_ORO)
         copier = self.build_netcdf_copy(root)
         if copier is not None:
             shutil.copy2(copier, destination.parent / NETCDF_COPY)
@@ -689,6 +698,7 @@ def bundled_helpers(root: Path) -> tuple[Path, ...]:
     return (root / "src/hexcore/libexec" / OBS_SCORER,
             root / "rust/chemistry-converter-build" / ("rw_mpas_convert" + _EXE),
             root / "rust/chem-sources/target/release" / CHEM_SOURCES,
+            root / "rust/ugwp-oro/target/release" / UGWP_ORO,
             root / "rust/s2s-energy-build" / S2S_ENERGY,
             root / "rust/netcdf-copy/target/release" / NETCDF_COPY,
             (Path(os.environ["GPUWM_HEX_ENGINE_BRIDGES"]) / ("rw_wrfbatch" + _EXE)

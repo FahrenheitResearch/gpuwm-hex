@@ -12,31 +12,95 @@ resolution door's: 2026-10-23 its first look waited for a list that never came).
 a CPU-only process of its own, into the same tree and case the full products stage writes (same file names, so the
 full pass replaces them with identical pictures). The cards are never touched; a forecast that ends without a frame
 ends the wait. Nothing here can fail the run: a failed first look is reported, and the full pass draws every frame.
+
+Then every later hour, the same way. THE BREAKAGE THIS PREVENTS (a hex global 60 km 24 h
+run on gpuwm-hex 0.4.4, 2026-10-24): the first look rendered f000 only, so f000 reached the site 62.5 s into the
+forecast, then nothing for 3 min, then f001-f024 together after the forecast and the full pass; a 10-day run would hold
+every hour after f000 for the whole forecast. After f000 the thread follows the same list and draws each frame the
+forecast closes; the frames waiting when a draw ends go together in the next draw (one import, frames side by side),
+so the drawing keeps up. These draws run at low CPU priority, carry no point soundings, and draw no windowed map (those
+need the whole series): the full pass draws those. Each draw has its own scratch, so draws never share one. The thread
+records what it drew in ``live-frames.json`` beside the forecast folder, which also tells a host (the WOOF worker)
+that the door draws every hour itself.
+
+The receipt also lets the full pass skip what is already drawn (``products --live-frames``). THE BREAKAGE THIS
+PREVENTS (hex global 60 km 24 h, 2026-10-24): with every hour drawn live, the full pass still redrew all 25
+frames' maps after the forecast (81 s), so the run's "done" came no sooner. The receipt names each frame drawn with
+exit 0 (its size and mtime, so a frame the forecast rewrote is drawn again), the tree and case it went into, and the
+products the draws made; the full pass then draws only the whole-run maps (windowed products), the frames no live
+draw took, and the point soundings.
+
+An ensemble runs one first look per member (``global_ensemble``). THE BREAKAGE THIS PREVENTS (a hex
+global-120km ensemble, 2 members, GFS 2026-10-24 00Z, 6 h): the ensemble door ran no first look, so
+no member's map existed until the forecast and every member's full products pass had ended, and all 610 maps reached
+the site at the end. Members of one resident group share a forecast parent folder, so each member's look names its own
+``receipt`` and ``log``; a ``gate`` shared by the members' looks bounds how many live draws run at once on the host.
 """
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Sequence
 
 READY = "history-ready.jsonl"
 DURABLE = "*history.*.nc.durable.json"
+LIVE_RECEIPT = "live-frames.json"
+#: Frames one live draw takes at most, and the CPU priority (nice) the live draws run at: the forecast is on the card.
+LIVE_BATCH = int(os.environ.get("GPUWM_HEX_LIVE_FRAMES_BATCH", "8"))
+LIVE_NICE = int(os.environ.get("GPUWM_HEX_LIVE_FRAMES_NICE", "10"))
+#: GPUWM_HEX_LIVE_FRAMES=0 draws f000 only, as 0.4.4 did.
+LIVE_ON = os.environ.get("GPUWM_HEX_LIVE_FRAMES", "1") != "0"
+
+
+def closed_frames(forecast: Path) -> list[Path]:
+    """Every frame the forecast has closed, in the order it closed them: its history-ready list, else the frames whose
+    durable sidecar names their full size."""
+    out: list[Path] = []
+    try:
+        for line in (forecast / READY).read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("path") and Path(row["path"]) not in out:
+                out.append(Path(row["path"]))
+    except OSError:
+        pass
+    if out:
+        return out
+    for sidecar in sorted(forecast.glob(DURABLE)):
+        frame = sidecar.with_name(sidecar.name[: -len(".durable.json")])
+        try:
+            if frame.stat().st_size == int(json.loads(sidecar.read_text(encoding="utf-8"))["bytes"]):
+                out.append(frame)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
 
 
 class FirstLook(threading.Thread):
     def __init__(self, forecast: Path, *, grid: Path | str, init: Path | str, start_time: str, out: Path | str,
-                 case: str, extra: Sequence[str] = (), poll_seconds: float = 0.5, log: Path | None = None):
+                 case: str, extra: Sequence[str] = (), poll_seconds: float = 0.5, log: Path | None = None,
+                 receipt: Path | str | None = None, gate: threading.Semaphore | None = None):
         super().__init__(name="first-look", daemon=True)
         self.forecast, self.out, self.case = Path(forecast), Path(out), case
         self.argv = ["products", "--mesh", str(grid), "--init", str(init), "--simulation-start", start_time,
                      "--out", str(out), "--case", case, *extra]
-        self.poll, self.log = poll_seconds, log or Path(forecast).parent / "first-look.log"
+        self.poll, self.log = poll_seconds, Path(log) if log else Path(forecast).parent / "first-look.log"
+        self.receipt_path = Path(receipt) if receipt else self.forecast.parent / LIVE_RECEIPT
+        self.gate = gate
         self.stopped = threading.Event()
         self.result: dict = {"status": "waiting"}
+        self.live: dict = {"out": str(self.out), "case": case, "frames": [], "drawn": [], "stat": {}, "products": [],
+                           "draws": []}
+        self.proc: subprocess.Popen | None = None
 
     def _first_frame(self) -> Path | None:
         ready = self.forecast / READY
@@ -64,6 +128,12 @@ class FirstLook(threading.Thread):
 
     def run(self) -> None:
         began = time.monotonic()
+        receipt = self.receipt_path
+        if LIVE_ON:
+            self._save(receipt)  # before the first look, so a host sees it first
+        else:
+            # A receipt left by an earlier run in this folder would let the full pass skip frames this run never rendered.
+            receipt.unlink(missing_ok=True)
         frame = self._first_frame()
         if frame is None:
             self.result = {"status": "no-frame"}
@@ -71,14 +141,86 @@ class FirstLook(threading.Thread):
         waited = time.monotonic() - began
         argv = [sys.executable, "-m", "hexcore.cli", self.argv[0], "--history", str(frame), *self.argv[1:]]
         drawn = time.monotonic()
-        with self.log.open("w", encoding="utf-8") as stream:
+        with self.gate or nullcontext(), self.log.open("w", encoding="utf-8") as stream:
             rc = subprocess.run(argv, stdout=stream, stderr=subprocess.STDOUT).returncode
         self.result = {"status": "drawn" if rc == 0 else "failed", "returncode": rc, "frame": str(frame),
                        "frame_wait_seconds": round(waited, 1), "draw_seconds": round(time.monotonic() - drawn, 1),
                        "log": str(self.log)}
+        if LIVE_ON:
+            try:
+                self._record([frame], rc, self.result["draw_seconds"], receipt)
+                self._follow({str(frame)})
+            except Exception as error:  # nothing here fails the run: the full pass draws every frame
+                self.live["stopped"] = f"{type(error).__name__}: {error}"
+
+    def _follow(self, drawn: set[str]) -> None:
+        """Draw each frame the forecast closes after the first, until finish() (the forecast has ended)."""
+        receipt = self.receipt_path
+        while not self.stopped.is_set():
+            pending = [p for p in closed_frames(self.forecast) if str(p) not in drawn][:max(1, LIVE_BATCH)]
+            if not pending:
+                self.stopped.wait(self.poll)
+                continue
+            n = len(self.live["draws"])
+            scratch = self.out.parent / f"{self.out.name}.live-scratch-{n:03d}"
+            argv = [sys.executable, "-m", "hexcore.cli", self.argv[0], *self.argv[1:], "--no-points",
+                    "--scratch", str(scratch), "--history", *map(str, pending)]
+            nice = shutil.which("nice") if LIVE_NICE > 0 else None
+            if nice:  # the nice(1) wrapper, not preexec_fn: the door process runs threads
+                argv = [nice, "-n", str(LIVE_NICE), *argv]
+            began = time.monotonic()
+            log = self.log.with_name(f"live-frames-{n:03d}.log")
+            with self.gate or nullcontext(), log.open("w", encoding="utf-8") as stream:
+                self.proc = subprocess.Popen(argv, stdout=stream, stderr=subprocess.STDOUT)
+                rc = self.proc.wait()
+            shutil.rmtree(scratch, ignore_errors=True)
+            drawn.update(map(str, pending))  # drawn or not: the full pass is the fallback, never retried here
+            self._record(pending, rc, round(time.monotonic() - began, 1), receipt)
+
+    def _record(self, frames: list[Path], rc: int, seconds: float, receipt: Path) -> None:
+        """One draw in the receipt: the frames it took, and on exit 0 each frame's identity and the products drawn."""
+        self.live["frames"] += [p.name for p in frames]
+        self.live["draws"].append({"frames": len(frames), "first": frames[0].name, "returncode": rc,
+                                   "seconds": seconds})
+        if rc == 0:
+            for path in frames:
+                try:
+                    st = path.stat()
+                except OSError:
+                    continue
+                self.live["drawn"].append(path.name)
+                self.live["stat"][path.name] = [st.st_size, st.st_mtime_ns]
+            try:
+                manifest = json.loads((self.out / self.case / "products-manifest.json").read_text(encoding="utf-8"))
+                products = set(self.live["products"])
+                for view in manifest.get("views") or ():
+                    listed = view.get("products_drawn") or ()
+                    products.update(p.strip() for p in (listed.split(",") if isinstance(listed, str) else listed)
+                                    if p and p.strip())
+                self.live["products"] = sorted(products)
+            except (OSError, ValueError, AttributeError):
+                pass
+        self._save(receipt)
+
+    def receipt(self) -> Path | None:
+        """``live-frames.json`` when a live draw (f000 included) rendered a frame with exit 0, else None: what the
+        full pass takes as ``products --live-frames``."""
+        return self.receipt_path if self.live["drawn"] else None
+
+    def _save(self, receipt: Path) -> None:
+        try:
+            receipt.write_text(json.dumps({"schema": "gpuwm-hex.live-frames/v1", **self.live}, indent=1) + "\n",
+                               encoding="utf-8")
+        except OSError:
+            pass
 
     def finish(self, timeout: float | None = None) -> dict:
-        """Stop waiting for a frame (the forecast has ended) and wait for a draw in progress."""
+        """Stop waiting for frames (the forecast has ended) and let a draw in progress land (up to ``timeout``)."""
         self.stopped.set()
         self.join(timeout)
-        return dict(self.result)
+        if self.is_alive() and self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            self.join(30)
+        receipt = self.receipt()
+        return {**self.result, "live": {"frames": len(self.live["frames"]), "draws": len(self.live["draws"]),
+                                        "drawn": len(self.live["drawn"]), "receipt": str(receipt) if receipt else None}}

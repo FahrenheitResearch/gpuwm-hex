@@ -41,6 +41,24 @@ def _print(text: str) -> None:
     print(text, flush=True)
 
 
+def _numbers(text: str, count: int, label: str) -> list[float]:
+    try:
+        values = [float(part) for part in str(text).split(',')]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'{label} must be {count} comma-separated numbers') from None
+    if len(values) != count:
+        raise argparse.ArgumentTypeError(f'{label} must be {count} comma-separated numbers')
+    return values
+
+
+def _latlon(text: str) -> list[float]:
+    return _numbers(text, 2, 'LAT,LON')
+
+
+def _latlon4(text: str) -> list[float]:
+    return _numbers(text, 4, 'LAT,LON,LAT,LON')
+
+
 def _check(arguments: argparse.Namespace) -> int:
     from .moving_jolt_check import run_check, table
 
@@ -64,8 +82,15 @@ def _author(arguments: argparse.Namespace) -> int:
         cycle=arguments.cycle, storm=arguments.storm, best_track=arguments.best_track is not None,
         template=arguments.template, fine_km=arguments.fine_km, background_km=arguments.background_km,
         fine_radius_km=arguments.fine_radius_km, hours=arguments.hours, source=arguments.source,
-        dt_seconds=arguments.dt_seconds, physics_args=arguments.physics_arg)
-    _print(json.dumps(dict(case=str(arguments.out), storm=case['storm'], authoring=case['authoring']), indent=2))
+        dt_seconds=arguments.dt_seconds, physics_args=arguments.physics_arg,
+        target=arguments.target, point=arguments.point, user_path=arguments.path, segment=arguments.segment,
+        boundary_field=arguments.boundary_field, object_field=arguments.object_field,
+        object_threshold=arguments.object_threshold, check_minutes=arguments.check_minutes,
+        lead_hours=arguments.lead_hours, from_last_hour=arguments.from_last_hour,
+        target_config=arguments.target_config)
+    _print(json.dumps(dict(case=str(arguments.out), storm=case['storm'], authoring=case['authoring'],
+                           **({'beyond_source': case['beyond_source']} if 'beyond_source' in case else {})),
+                      indent=2))
     return 0
 
 
@@ -224,6 +249,9 @@ def _run_arguments(r: argparse.ArgumentParser) -> None:
     r.add_argument('--seal-every-hours', type=float, default=12.0)
     r.add_argument('--max-preparing', type=int, choices=(1, 2), default=2,
                    help='concurrent member preparations (default 2; at most 2)')
+    r.add_argument('--member-retirement-evidence', metavar='DIR',
+                   help='opt-in: retire inactive owned grids/init after completed collector receipts in DIR; '
+                        'retain statics for later surface rendering')
     r.add_argument('--chain-min-fit', type=float, default=0.5,
                    help='deprecated compatibility option; anticipation uses the last two model fixes')
     r.add_argument('--anticipate-moves', type=int, default=3,
@@ -247,6 +275,9 @@ def _run_arguments(r: argparse.ArgumentParser) -> None:
     r.add_argument('--zone-carry', action='store_true',
                    help='frozen-far-field members: built from the current member, moved with an exact '
                         'carry outside the changed zone (hexcore.moving_zone)')
+    r.add_argument('--whole-domain-remap', action='store_true',
+                   help='use the physical-height all-domain remap even for corridor or frozen-far-field '
+                        'members; retains their geometry but disables exact far-field carry')
     r.add_argument('--prelaunch', action=argparse.BooleanOptionalAction, default=True,
                    help="start the next member's forecast process while the current one runs")
     r.add_argument('--rotate-template', action='store_true',
@@ -284,8 +315,30 @@ def add_moving_parser(commands) -> None:
     tracks = author.add_mutually_exclusive_group(required=True)
     tracks.add_argument('--tracks', type=Path, help='tc-tracks tracks.json (select --storm TRACK_ID)')
     tracks.add_argument('--best-track', type=Path, help='best-track JSON rows/row, or IBTrACS CSV with --storm SID')
+    tracks.add_argument('--point', type=_latlon, help='LAT,LON: where a setup target starts (any --target)')
+    tracks.add_argument('--segment', type=_latlon4,
+                        help='LAT,LON,LAT,LON: a dryline or front as drawn (--target boundary)')
+    tracks.add_argument('--path', type=Path,
+                        help='timed points {"rows":[{"time","lat","lon"}...]} the region follows (--target path)')
+    author.add_argument('--target', default='tc', choices=('tc', 'low', 'cape-shear', 'boundary', 'path', 'object'),
+                        help='what the fine region follows: a tropical cyclone (tc), a surface low, the dominant '
+                             'CAPE x 0-6 km shear area, a dryline/front (boundary), the user\'s path, or a '
+                             'thresholded feature (object, e.g. reflectivity)')
+    author.add_argument('--boundary-field', default='dewpoint', choices=('dewpoint', 'theta_e', 'temperature'),
+                        help='the boundary target\'s surface field: dewpoint (dryline), theta_e or temperature (front)')
+    author.add_argument('--object-field', default=None, help='the object target\'s history field (default refl10cm)')
+    author.add_argument('--object-threshold', type=float, default=None, help='the object target\'s threshold')
+    author.add_argument('--check-minutes', type=float, default=None,
+                        help='how often the target is fixed and the region may move (default 30; 15 also works)')
+    author.add_argument('--target-config', type=Path, default=None,
+                        help='JSON merged into the case tracker block (per-target tuning)')
     author.add_argument('--storm', help='track identifier or IBTrACS SID; required for multiple tracks')
-    author.add_argument('--cycle', required=True, help='UTC analysis time with an exact valid track position')
+    author.add_argument('--cycle', required=True, help='UTC source cycle (with a track: an exact valid position)')
+    lead = author.add_mutually_exclusive_group()
+    lead.add_argument('--lead-hours', type=int, default=0,
+                      help="start from the source's forecast at this lead: the run begins at cycle + lead")
+    lead.add_argument('--from-last-hour', action='store_true',
+                      help="start from the source's last forecast hour for this cycle (extend a run past its horizon)")
     author.add_argument('--out', required=True, type=Path, help='new case JSON; never overwrites a case')
     author.add_argument('--template', type=Path, help='existing case geometry/physics; event metadata is replaced')
     author.add_argument('--source', default='gfs', help='init-source row for staging')

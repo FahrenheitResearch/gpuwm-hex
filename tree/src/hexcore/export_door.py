@@ -56,10 +56,235 @@ def _valid_day(frame: Path) -> str:
     return "undated"
 
 
+READY_NAME = "export-ready.jsonl"
+HISTORY_READY_NAME = "history-ready.jsonl"
+
+
+def _history_ready_paths(forecast_dir: Path) -> list[Path]:
+    """Frames the running forecast has closed, in the order it listed them.
+
+    ``history-ready.jsonl`` is appended by every forecast driver after a frame
+    is durable (``{"step", "path"}``, or the products worker's longer row);
+    a line still being written is skipped until it is whole.  An executor that
+    keeps no such list (the variable-resolution door's) is followed by its
+    durable sidecars instead (``_durable_frames``)."""
+
+    try:
+        text = (forecast_dir / HISTORY_READY_NAME).read_text(encoding="utf-8")
+    except OSError:
+        return _durable_frames(forecast_dir)
+    seen: list[Path] = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        path = row.get("path") if isinstance(row, dict) else None
+        if path and Path(path) not in seen:
+            seen.append(Path(path))
+    return seen
+
+
+HISTORY_DURABLE_GLOB = "*history.*.nc.durable.json"
+
+
+def _durable_frames(forecast_dir: Path) -> list[Path]:
+    """Closed frames by their durable sidecars, in valid-time (name) order.
+
+    THE BREAKAGE THIS PREVENTS: the variable-resolution door's executor writes
+    each frame and then its ``<frame>.durable.json`` sidecar, but no
+    ``history-ready.jsonl``, so ``--follow`` beside it waited for a list that
+    never came and exported nothing (2026-10-23).  The sidecar is written
+    after the frame, so a frame whose sidecar names its full size is done (the
+    same rule as hex-fast-start c21eeba2's first look).  Frames are taken in
+    order and the scan stops at the first one not yet whole, so a later frame
+    is never exported ahead of an earlier one."""
+
+    frames: list[Path] = []
+    for sidecar in sorted(forecast_dir.glob(HISTORY_DURABLE_GLOB)):
+        frame = sidecar.with_name(sidecar.name[: -len(".durable.json")])
+        try:
+            whole = frame.stat().st_size == int(json.loads(sidecar.read_text(encoding="utf-8"))["bytes"])
+        except (OSError, ValueError, KeyError, TypeError):
+            whole = False
+        if not whole:
+            break
+        frames.append(frame)
+    return frames
+
+
+def _history_folder(forecast_dir: Path) -> Path:
+    """The folder holding ``history-ready.jsonl``: the run folder or a door's ``forecast/``."""
+
+    for candidate in (forecast_dir, forecast_dir / "forecast"):
+        if (candidate / HISTORY_READY_NAME).is_file():
+            return candidate
+    for depth in ("*", "*/*"):
+        found = sorted(forecast_dir.glob(f"{depth}/{HISTORY_READY_NAME}"))
+        if found:
+            return found[0].parent
+    for candidate in (forecast_dir, forecast_dir / "forecast"):
+        if next(candidate.glob(HISTORY_DURABLE_GLOB), None) is not None:
+            return candidate
+    return forecast_dir
+
+
+_STAMP = __import__("re").compile(r"(\d{4}-\d{2}-\d{2})[_T](\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})")
+
+
+def history_valid_time(path: Path) -> _dt.datetime | None:
+    """The valid time a history file's name carries (``...YYYY-MM-DD_HH.MM.SS.nc``), or None."""
+
+    match = None
+    for match in _STAMP.finditer(Path(path).name):
+        pass
+    if match is None:
+        return None
+    day, hh, mm, ss = match.groups()
+    return _dt.datetime.strptime(f"{day} {hh}:{mm}:{ss}", "%Y-%m-%d %H:%M:%S")
+
+
+def _follow_from(text: str | None) -> _dt.datetime | None:
+    if not text:
+        return None
+    return _dt.datetime.strptime(text.replace("T", "_").rstrip("Z"), "%Y-%m-%d_%H:%M:%S")
+
+
+def run_follow(args: argparse.Namespace) -> int:
+    """``export --follow``: export each frame the moment the forecast closes it.
+
+    THE BREAKAGE THIS PREVENTS: an ArWen domain driven by a hex parent could only
+    start after the whole hex forecast had run, because the export read a finished
+    run.  A nest fed this way waits hours for boundaries it needs one at a time.
+    Followed, each closed frame is converted onto the window at once and filed by an
+    atomic rename, then listed in ``<out>/export-ready.jsonl`` (frame path, valid time,
+    bytes, sha256), which a consumer (``python -m gpuwm.local_posting``) reads as the
+    frame's ready signal.  Same converter, window and files as the one-shot export;
+    only the timing differs.
+    """
+
+    started = time.monotonic()
+    if args.forecast_dir is None:
+        raise ExportDoorError("--follow watches a forecast folder; give RUN_DIR (the forecast's --out)")
+    if not args.mesh or not args.init:
+        raise ExportDoorError("--follow runs beside a forecast whose receipt is not written yet; "
+                              "give --mesh GRID.nc and --init INIT.nc")
+    if not args.simulation_start:
+        raise ExportDoorError("--follow needs --simulation-start YYYY-MM-DD_HH:MM:SS (the forecast's start), "
+                              "because lead hours are numbered from it before any receipt exists")
+    if not args.follow_frames or args.follow_frames < 1:
+        raise ExportDoorError("--follow needs --follow-frames N, the number of history frames the forecast writes")
+    forecast_dir = Path(args.forecast_dir)
+    mesh, init = Path(args.mesh), Path(args.init)
+    out = Path(args.out) if args.out else forecast_dir / "export"
+    scratch_root = Path(args.scratch) if args.scratch else out.parent / (out.name + ".export-scratch")
+    render_door.refuse_scratch_inside_out(scratch_root, out)
+    window = render_door.converter_window(args.window)
+    remap = render_door.resolve_remap(args.remap, composite=False)
+    convert_exe = render_door.resolve_convert_exe(args.convert_exe)
+    view = args.view or render_door.default_view(args.window)
+    out.mkdir(parents=True, exist_ok=True)
+    ready_path = out / READY_NAME
+    quiet_limit = float(args.follow_timeout_minutes) * 60.0
+    # A nest added while the parent runs (gpuwm-hex add-nest) starts at a frame
+    # the parent closed earlier: frames before it are not the nest's.
+    follow_from = _follow_from(getattr(args, "follow_from", None))
+    # --follow-every-minutes: only frames on the consumer's lead grid
+    # (follow_from, or the simulation start, plus k * M).  Taking every frame
+    # of a parent that writes more often than the nest's boundary interval
+    # stopped --follow-frames short of the nest's end (release review 30,
+    # finding 2).
+    every = getattr(args, "follow_every_minutes", None)
+    every_s = None if not every else float(every) * 60.0
+    anchor = follow_from or _follow_from(args.simulation_start)
+    last_progress = time.monotonic()
+    print(f"EXPORT follow frames={args.follow_frames} window={window} out={out}", flush=True)
+    done: list[dict[str, Any]] = []
+    converted: set[Path] = set()
+    while len(done) < args.follow_frames:
+        pending = [p for p in _history_ready_paths(_history_folder(forecast_dir))
+                   if p not in converted and not _before(p, follow_from)]
+        if not pending:
+            if time.monotonic() - last_progress > quiet_limit:
+                raise ExportDoorError(
+                    f"--follow: {len(done)} of {args.follow_frames} frames, and the forecast listed no new "
+                    f"frame for {args.follow_timeout_minutes:g} min")
+            time.sleep(float(args.follow_poll_seconds))
+            continue
+        history = pending[0]
+        if every_s is not None and not _on_grid(history, anchor, every_s):
+            converted.add(history)  # between two of the consumer's leads: never its frame
+            continue
+        began = time.monotonic()
+        scratch = scratch_root / f"frame-{len(done):04d}"
+        shutil.rmtree(scratch, ignore_errors=True)
+        report, _command = render_door.convert_frames(
+            convert_exe, histories=[history], mesh=mesh, scratch=scratch, window=window,
+            field_set=args.field_set, simulation_start=args.simulation_start, nc_format=args.nc_format,
+            init=init, model_label=args.model_label, remap=remap, jobs=1)
+        produced = sorted((scratch / "frames").glob("wrfout_*"))
+        if len(produced) != 1:
+            raise ExportDoorError(f"rw_mpas_convert wrote {len(produced)} frames for {history}; expected one")
+        frame = produced[0]
+        target = out / view / _valid_day(frame) / frame.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if not args.overwrite:
+                raise ExportDoorError(f"{target} exists; pass --overwrite to replace it")
+            target.unlink()
+        # Scratch sits beside --out on the same filesystem, so this is a rename:
+        # a reader of the folder never sees half a frame.
+        shutil.move(str(frame), str(target))
+        row_report = (report.get("frames") or [{}])[0]
+        row = {"frame": str(target), "history": str(history), "bytes": target.stat().st_size,
+               "sha256": row_report.get("output_sha256"), "valid_time": row_report.get("valid_time"),
+               "seconds": round(time.monotonic() - began, 3), "ready_unix": round(time.time(), 3)}
+        with ready_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(row, sort_keys=True) + "\n")
+        converted.add(history)
+        done.append(row)
+        last_progress = time.monotonic()
+        if not args.keep_scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
+        print(f"EXPORT frame {len(done)}/{args.follow_frames} {target.name} {row['seconds']} s", flush=True)
+    value = {
+        "schema": RECEIPT_SCHEMA, "mode": "follow",
+        "created_utc": _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat(),
+        "forecast": str(forecast_dir), "mesh": str(mesh), "init": str(init),
+        "simulation_start": args.simulation_start, "window": window, "view": view,
+        "field_set": args.field_set, "remap": remap, "nc_format": args.nc_format,
+        "frames": done, "seconds": round(time.monotonic() - started, 3),
+    }
+    (out / RECEIPT_NAME).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if not args.keep_scratch:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+    print(f"EXPORT follow done frames={len(done)} seconds={value['seconds']}", flush=True)
+    return 0
+
+
+def _on_grid(path: Path, anchor: _dt.datetime, every_s: float) -> bool:
+    valid = history_valid_time(path)
+    if valid is None:
+        raise ExportDoorError(f"--follow-every-minutes needs the valid time in the history name; {path.name} has none")
+    offset = (valid - anchor).total_seconds()
+    return offset >= 0 and abs(offset / every_s - round(offset / every_s)) < 1e-9
+
+
+def _before(path: Path, start: _dt.datetime | None) -> bool:
+    if start is None:
+        return False
+    valid = history_valid_time(path)
+    if valid is None:
+        raise ExportDoorError(f"--follow-from needs the valid time in the history name; {path.name} has none")
+    return valid < start
+
+
 def run_export(args: argparse.Namespace) -> int:
     from .products_door import (FORECAST_RECEIPT, discover_histories, forecast_receipt,
                                 receipt_text, simulation_start)
 
+    if getattr(args, "follow", False):
+        return run_follow(args)
     started = time.monotonic()
     forecast_dir = Path(args.forecast_dir) if args.forecast_dir else None
     receipt = forecast_receipt(forecast_dir)
@@ -141,6 +366,10 @@ def run_export(args: argparse.Namespace) -> int:
         "converter": {"command": command, "report": report},
         "seconds": round(time.monotonic() - started, 3),
     }
+    # The any-point column store, every output hour (column_store.py): from the frames just delivered.
+    from .column_store import write as write_columns
+    value["columns"] = write_columns([Path(row["frame"]) for row in delivered], out / "columns",
+                                     field_set=args.field_set)
     out.mkdir(parents=True, exist_ok=True)
     (out / RECEIPT_NAME).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if not args.keep_scratch:
@@ -178,6 +407,22 @@ def add_export_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--keep-scratch", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--convert-exe", default=None, metavar="FILE")
+    parser.add_argument("--follow", action="store_true",
+                        help="export each frame as the running forecast closes it (history-ready.jsonl), "
+                             "listing it in <out>/export-ready.jsonl; needs --mesh, --init, "
+                             "--simulation-start and --follow-frames")
+    parser.add_argument("--follow-frames", type=int, default=None, metavar="N",
+                        help="with --follow: the number of history frames the forecast writes")
+    parser.add_argument("--follow-timeout-minutes", type=float, default=240.0, metavar="MIN",
+                        help="with --follow: stop when the forecast lists no new frame for this long (default 240)")
+    parser.add_argument("--follow-poll-seconds", type=float, default=1.0, metavar="S")
+    parser.add_argument("--follow-from", default=None, metavar="YYYY-MM-DD_HH:MM:SS",
+                        help="with --follow: skip the forecast's frames valid before this time "
+                             "(a nest added while the parent runs starts here)")
+    parser.add_argument("--follow-every-minutes", type=float, default=None, metavar="M",
+                        help="with --follow: export only frames valid at --follow-from (or the simulation "
+                             "start) plus a whole multiple of M minutes, the consumer's boundary interval "
+                             "(default: every frame)")
 
 
 def add_export_parser(commands: Any) -> None:

@@ -147,3 +147,58 @@ def test_repeated_observation_counts_and_kernel_order_do_not_change_identity():
 def test_missing_manifests_or_invalid_rank_keys_refuse(manifests):
     with pytest.raises(SameHostCompileMismatch):
         compare_samehost_compile_manifests(manifests)
+
+
+_GENERIC = 'extern "C" __global__ void scale(float* x, const int ncells, const int nlev) { x[0] = ncells + nlev; }'
+
+
+def _shape_manifest(ncells, *, generic=_GENERIC, record_origin=True):
+    from hexcore.cuda_shape import specialize
+    fingerprint = {
+        "nvrtc_build": "13.0.48", "nvrtc_build_id": "CL-test",
+        "nvrtc_library_sha256": "a" * 64, "cuda_driver_version": "13000",
+        "device_compute_capability": "12.0", "cupy_version": "14.1.0",
+        "numpy_version": "2.0.0",
+    }
+    manifest = CompileManifest({"fingerprint": fingerprint, "sha256": canonical_sha256(fingerprint)})
+    options = ("--std=c++17", "--fmad=false")
+    manifest.declare_module("hexcore.k", source=generic, requested_options=options, module_cache_key="b" * 64)
+    manifest.record_kernel("hexcore.k", "scale")
+    dimensions = (("ncells", ncells), ("nlev", 55))
+    specialized, suffix = specialize(generic, "scale", dimensions)
+    manifest.declare_module("hexcore.k" + suffix, source=specialized, requested_options=options,
+                            module_cache_key=hashlib.sha256(specialized.encode()).hexdigest())
+    manifest.record_kernel("hexcore.k" + suffix, "scale")
+    if record_origin:
+        manifest.record_shape_origin("hexcore.k" + suffix,
+            generic_source_sha256=hashlib.sha256(generic.encode()).hexdigest(), dimensions=dimensions)
+    manifest.record_effective_compile("hexcore.k", {"status": "unavailable", "reason": "disk-cache hit"})
+    manifest.record_effective_compile("hexcore.k" + suffix, {"status": "unavailable", "reason": "disk-cache hit"})
+    return manifest.snapshot()
+
+
+def test_ranks_with_their_own_shape_dimensions_are_compatible():
+    # The 2-card 30 km globe: ranks own 331,934 and 331,942 cells.
+    receipt = compare_samehost_compile_manifests({0: _shape_manifest(331934), 1: _shape_manifest(331942)})
+    assert receipt["inputs_compatible"]
+    ranks = receipt["shape_modules"]["hexcore.k"]["rank_modules"]
+    assert ranks["0"][0]["dimensions"]["ncells"] == 331934 and ranks["1"][0]["dimensions"]["ncells"] == 331942
+
+
+def test_shape_module_from_a_different_generic_source_refuses():
+    other = _GENERIC.replace("ncells + nlev", "ncells - nlev")
+    with pytest.raises(SameHostCompileMismatch):
+        compare_samehost_compile_manifests({0: _shape_manifest(331934), 1: _shape_manifest(331942, generic=other)})
+
+
+def test_shape_module_without_its_generic_origin_refuses():
+    with pytest.raises(SameHostCompileMismatch, match="no recorded generic source"):
+        compare_samehost_compile_manifests({0: _shape_manifest(331934), 1: _shape_manifest(331942, record_origin=False)})
+
+
+def test_shape_module_with_different_options_refuses():
+    left, right = _shape_manifest(331934), _shape_manifest(331942)
+    for key in right["modules"]:
+        right["modules"][key]["requested_options"] = ["--std=c++17", "--fmad=true"]
+    with pytest.raises(SameHostCompileMismatch):
+        compare_samehost_compile_manifests({0: left, 1: right})

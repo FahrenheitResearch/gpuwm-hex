@@ -29,6 +29,7 @@ backends resume from the checkpoint -- the native DA restart's semantics.
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -293,8 +294,30 @@ def assemble_seam_leaves(stacks: Sequence[Mapping[str, Any]], layouts: Sequence[
 
 def write_class_background(forecast: Any, *, active: Any, stacks: Sequence[Mapping[str, Any]], host: Mapping[str, Any],
                            snapshot: Mapping[str, Any], label: str, valid_time: str, soil_levels: int,
-                           init_fallback: Mapping[str, np.ndarray], output_root: Any) -> dict[str, Any]:
+                           init_fallback: Mapping[str, np.ndarray], output_root: Any,
+                           init_path: Any) -> dict[str, Any]:
     """The JEDI background file of a full-step LTS frame: the native writer on assembled global views."""
+
+    return class_background_writer(forecast, active=active, stacks=stacks, host=host, snapshot=snapshot,
+                                   label=label, valid_time=valid_time, soil_levels=soil_levels,
+                                   init_fallback=init_fallback, output_root=output_root,
+                                   init_path=init_path)()
+
+
+def class_background_writer(forecast: Any, *, active: Any, stacks: Sequence[Mapping[str, Any]],
+                            host: Mapping[str, Any], snapshot: Mapping[str, Any], label: str, valid_time: str,
+                            soil_levels: int, init_fallback: Mapping[str, np.ndarray], output_root: Any,
+                            init_path: Any):
+    """Read the classes' live inputs NOW (host copies) and return the writer to call later.
+
+    The f000 background is written after the first macro, from the completed
+    frame (hexcore.f000_first_call); its live inputs belong to the boundary.
+
+    ``init_path``: the start file whose element identity the background carries
+    (OU1).  THE BREAKAGE: without it the writer refused every full-step LTS
+    --jedi-background run at its first frame (TypeError, missing init_path,
+    stock 0.4.4).
+    """
 
     from types import SimpleNamespace
 
@@ -304,8 +327,13 @@ def write_class_background(forecast: Any, *, active: Any, stacks: Sequence[Mappi
     pressure = active.gather(("pressure_perturbation",))["pressure_perturbation"]
     view = {"driver": SimpleNamespace(cp=active.cp, atmosphere=SimpleNamespace(
         saved=SimpleNamespace(pressure_perturbation=pressure)))}
-    return forecast.write_jedi_background(
-        output_root=output_root, stack=view, host=host, snapshot=snapshot, label=label, valid_time=valid_time,
-        soil_levels=int(soil_levels), init_fallback=init_fallback,
-        backend_state={"seam": {"arrays": {f"fields/{name}": value for name, value in leaves.items()}}},
-        effective_radii=None)
+
+    def write() -> dict[str, Any]:
+        return forecast.write_jedi_background(
+            output_root=output_root, stack=view, host=host, snapshot=snapshot, label=label,
+            valid_time=valid_time, soil_levels=int(soil_levels), init_fallback=init_fallback,
+            init_path=Path(init_path),
+            backend_state={"seam": {"arrays": {f"fields/{name}": value for name, value in leaves.items()}}},
+            effective_radii=None)
+
+    return write

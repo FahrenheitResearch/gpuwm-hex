@@ -301,6 +301,24 @@ extern "C" __global__ void vertex_helicity(int nc,int nl,int nv,int degree,
         uh[c*nl+k]=(R(uh[c*nl+k])+R(kite[ix])*R(vort[i*nl+k])).v;
     }
 }
+// mpas_convective_diagnostics.F:99-198, as a gather. One thread per
+// (cell,level) adds that cell's kite*vorticity terms in the order native's
+// ordered scatter adds them (offsets/entries list each cell's (vertex,i)
+// slots in ascending scatter order, built once per mesh), starting from the
+// same zero word: the same additions in the same order, so the same words,
+// without the serial 55-thread walk over every vertex.
+extern "C" __global__ void vertex_helicity_gather(int nc,int nl,int degree,
+    const int* offsets,const int* entries,const float* kite,const float* vort,float* uh) {
+    long long t=(long long)blockDim.x*blockIdx.x+threadIdx.x;
+    if(t>=(long long)(nc+1)*nl) return;
+    int c=(int)(t/nl),k=(int)(t%nl);
+    R s=0.0f;
+    for(int e=offsets[c];e<offsets[c+1];e++) {
+        int ix=entries[e];
+        s=s+R(kite[ix])*R(vort[(long long)(ix/degree)*nl+k]);
+    }
+    uh[(long long)c*nl+k]=s.v;
+}
 extern "C" __global__ void update_diag(int nc,int ns,int nl,unsigned mask,
     const float* z,const float* w,const float* u,const float* v,const float* area,float* uh,float* out) {
     int c=blockDim.x*blockIdx.x+threadIdx.x;
@@ -393,6 +411,33 @@ def _module(device_id, artifact=None):
         return module
 
 
+def helicity_plan(cov, n_cells, vertex_order=None):
+    """CSR of each cell's cellsOnVertex slots, in native scatter order.
+
+    ``cov`` is resident int32 (nVertices, vertexDegree), one-based with the
+    nCells+1 sentinel. Native adds slot ix = iVertex*degree+i in ascending
+    ix (or in ``vertex_order``'s vertex order for a same-host rank). Returns
+    (offsets[n_cells+2], entries[nnz]) int32 device arrays.
+    """
+    import cupy as cp
+    nv, degree = cov.shape
+    if vertex_order is None:
+        sequence = cp.arange(nv*degree, dtype=cp.int64)
+    else:
+        sequence = (cp.asarray(vertex_order, dtype=cp.int64)[:, None]*degree
+                    + cp.arange(degree, dtype=cp.int64)[None, :]).ravel()
+    cells = cov.ravel()[sequence].astype(cp.int64) - 1
+    if cells.size and (int(cells.min()) < 0 or int(cells.max()) > n_cells):
+        raise ValueError('cellsOnVertex must hold one-based indices 1..nCells+1')
+    # Unique composite keys: cell first, then position in scatter order.
+    order = cp.argsort(cells*cells.size + cp.arange(cells.size, dtype=cp.int64))
+    entries = cp.ascontiguousarray(sequence[order].astype(cp.int32))
+    counts = cp.bincount(cells, minlength=n_cells+1)
+    offsets = cp.zeros(n_cells+2, dtype=cp.int32)
+    offsets[1:] = cp.cumsum(counts).astype(cp.int32)
+    return offsets, entries
+
+
 class ConvectiveDiagnostics:
     """Stream-driven driver, preserving the MPAS output/update/reset boundary."""
 
@@ -418,6 +463,10 @@ class ConvectiveDiagnostics:
         # compute uses 17 nl-sized arrays and two extra interface entries.
         self._work = cp.empty((self.n_solve, 17*self.n_levels+3), dtype=cp.float32)
         self._uh = None
+        # A same-host rank's local vertices in global-id order (None: local
+        # order). The helicity gather adds each cell's terms in this order.
+        self.vertex_order = None
+        self._helicity_plan = None
 
     @staticmethod
     def _array(array, shape, name, dtype=np.float32):
@@ -441,6 +490,17 @@ class ConvectiveDiagnostics:
             _module(cp.cuda.Device().id, os.environ.get('MPAS_CONVECTIVE_IMAGE') or
                     os.environ.get('MPAS_CONVECTIVE_PTX')).get_function(name)(
                 ((count+127)//128,), (128,), args)
+
+    def _helicity_plan_for(self, cov, n_cells):
+        """Per-cell (vertex,i) slots in native scatter order; built once per mesh.
+
+        MPAS's mesh pool connectivity is fixed for a run, so the plan is kept
+        for the driver's lifetime (keyed on its shape and vertex order).
+        """
+        key = (cov.shape, int(n_cells), id(self.vertex_order))
+        if self._helicity_plan is None or self._helicity_plan[0] != key:
+            self._helicity_plan = (key, helicity_plan(cov, n_cells, self.vertex_order))
+        return self._helicity_plan[1]
 
     def compute(self, arrays: Mapping[str, object], fields_will_be_written: Iterable[str],
                 *, rvord: float = float(np.float32(461.6)/np.float32(287.0))):
@@ -484,9 +544,10 @@ class ConvectiveDiagnostics:
             vort = self._array(arrays['vorticity'], (nv, self.n_levels), 'vorticity')
             if self._uh is None:
                 self._uh = cp.empty((self.n_cells+1, self.n_levels), dtype=cp.float32)
-            self._launch('vertex_helicity', self.n_levels,
-                         (np.int32(self.n_cells), np.int32(self.n_levels), np.int32(nv),
-                          np.int32(degree), cov, kite, vort, self._uh))
+            offsets, entries = self._helicity_plan_for(cov, self.n_cells)
+            self._launch('vertex_helicity_gather', (self.n_cells+1)*self.n_levels,
+                         (np.int32(self.n_cells), np.int32(self.n_levels), np.int32(degree),
+                          offsets, entries, kite, vort, self._uh))
         if self.update_mask & (1 << 15):
             w, = self._inputs(arrays, ('w',))
         if self.update_mask & (1 << 16):

@@ -600,7 +600,10 @@ def _member_in_child(job, cli):
                 stream.write(json.dumps(row))
         finally:
             try:
-                atexit._run_exitfuncs()   # what a separate process runs at exit (kernel prewarm manifest)
+                # What a separate process runs at exit (kernel prewarm manifest), threading's hooks
+                # included, so an idle compile worker is stopped rather than joined forever.
+                from .cli import run_exit_handlers
+                run_exit_handlers()
             finally:
                 os._exit(code)
     os.close(write_end)

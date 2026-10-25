@@ -829,8 +829,17 @@ extern "C" __global__ void seaice_to_MPAS(float** a,int n,float threshold) {
 """
 
 
-@lru_cache(maxsize=None)
 def _module(nsoil: int):
+    """The sea-ice module loaded on the calling card."""
+    import cupy as cp
+    # A CUDA module belongs to the card it was loaded on. Same-host ranks drive
+    # several cards from one process, so a cache keyed without the card hands
+    # the second card the first card's handle (CUDA_ERROR_INVALID_HANDLE at step 1).
+    return _module_on(int(cp.cuda.Device().id), nsoil)
+
+
+@lru_cache(maxsize=None)
+def _module_on(device: int, nsoil: int):
     """Compile MPAS physics_wrf/module_sf_noah_seaice.F:36-1292 on the device."""
     # Shared pinned engine glibc float routines; no private exp/pow implementation.
     import cupy as cp
@@ -843,9 +852,10 @@ def _module(nsoil: int):
     binary, _ = compiler.compile_using_nvrtc(source,
         options=_hex_numerics.options(("--std=c++11", "--fmad=false", "--ftz=false",
                  "--prec-div=true", "--prec-sqrt=true"), keep_ftz=True),
-        arch=cp.cuda.Device().compute_capability)
-    module = cp.cuda.function.Module()
-    module.load(binary)
+        arch=cp.cuda.Device(device).compute_capability)
+    with cp.cuda.Device(device):
+        module = cp.cuda.function.Module()
+        module.load(binary)
     return module
 
 
@@ -917,17 +927,17 @@ def launch_seaice_noah(arrays: Mapping, options: SeaiceOptions, *,
         _module(nsoil).get_function("seaice_noah")(((n+127)//128,), (128,), args)
         _module(nsoil).get_function("seaice_module_state")((1,), (1,),
             (last_sflx_column, module_state, np.int32(i_start), np.int32(j_index)))
-    # Only an error flag crosses the bus on successful calls. Preserve the
-    # first-column fatal message on the exceptional path.
-    if n and bool(cp.any(errors).item()):
-        first = int(cp.argmax(errors != 0).item())
-        code = int(errors[first].item())
+    # Preserve the first-column fatal message. Inside a forecast the first nonzero word is read
+    # off the step path (deferred_checks_v842, U-MPASPHYS-1); elsewhere it is read at once.
+    if n:
+        from .deferred_checks_v842 import defer
         messages = {1: "Physical snow depth is less than snow water equiv.",
                     2: "SEAICE_THICKNESS_OPT=1 requires ICEDEPTH field",
                     3: "SEAICE_THICKNESS_OPT not recognized",
                     4: "SEAICE_ALBEDO_OPT=2 requires ALBSI field",
                     5: "SEAICE_SNOWDEPTH_OPT not recognized"}
-        raise ValueError("MPAS seaice fatal: " + messages[code])
+        defer(errors, lambda code: "MPAS seaice fatal: " + messages.get(code, f"error code {code}"),
+              reduce="first", error=ValueError)
     return arrays
 
 
@@ -984,22 +994,26 @@ def seaice_to_MPAS(work, diag_physics, sfc_input, options: SeaiceOptions, *, lsm
     n = work["xice"].size
     nsoil = work["tslb"].shape[0]
     missing = [name for name in _SEA_FLUX_FIELDS if name not in work]
+    # Bind the shared ocean flux storage first: a name lookup, no device read. The kernel reads it
+    # only in iced cells, so binding it on an ice-free call changes no word. Only when storage is
+    # truly absent does the any-ice test (a device sync) decide whether to refuse. Breakage it
+    # prevents: U-MPASPHYS-1, that test synchronized the step on every call.
+    if missing and shared is not None:
+        for name in missing:
+            try:
+                work[name] = shared[name]
+            except KeyError:
+                break
+        if all(name in work for name in _SEA_FLUX_FIELDS):
+            _validate(work, _SEA_FLUX_FIELDS, n, nsoil)
+        missing = [name for name in _SEA_FLUX_FIELDS if name not in work]
     if missing and bool(cp.any((work["xice"] >= options.xice_threshold) &
                               (work["xice"] <= 1.0)).item()):
-        if shared is not None:
-            for name in missing:
-                try:
-                    work[name] = shared[name]
-                except KeyError:
-                    break
-            missing = [name for name in _SEA_FLUX_FIELDS if name not in work]
         # Pinned native crashes at driver_seaice.F:390 on the first cpm_sea
         # read when frac=false. Prevent that same unallocated device read,
         # without refusing no-ice calls or supplying invented ocean values.
-        if missing:
-            raise RuntimeError("MPAS seaice_to_MPAS reads unallocated native ocean flux storage "
-                               "at mpas_atmphys_driver_seaice.F:390-398: " + ", ".join(missing))
-        _validate(work, _SEA_FLUX_FIELDS, n, nsoil)
+        raise RuntimeError("MPAS seaice_to_MPAS reads unallocated native ocean flux storage "
+                           "at mpas_atmphys_driver_seaice.F:390-398: " + ", ".join(missing))
     pointers, dummy = _pointers(work, n)
     if n:
         _module(nsoil).get_function("seaice_to_MPAS")(((n+127)//128,), (128,),

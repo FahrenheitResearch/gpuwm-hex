@@ -1,0 +1,64 @@
+diff --git a/tools/rustwx/crates/rw-wrfbatch/src/wrf_process.rs b/tools/rustwx/crates/rw-wrfbatch/src/wrf_process.rs
+index 8bbc5a67a0..ccaac05abe 100644
+--- a/tools/rustwx/crates/rw-wrfbatch/src/wrf_process.rs
++++ b/tools/rustwx/crates/rw-wrfbatch/src/wrf_process.rs
+@@ -3232,7 +3232,7 @@ fn push_reflectivity_products(
+     options: &WrfProcessOptions,
+     progress: &mut impl FnMut(String),
+ ) {
+-    let want_composite = options.should_process(
++    let mut want_composite = options.should_process(
+         COMPOSITE_REFLECTIVITY_FILTER,
+         Some(COMPOSITE_REFLECTIVITY_STORE),
+         WrfProductGroup::Core,
+@@ -3247,6 +3247,50 @@ fn push_reflectivity_products(
+     }
+ 
+     let native_present = file.has_var("REFL_10CM");
++    // The model's own column maximum (REFC: an MPAS run's refl10cm_max from
++    // its diagnostics stream, carried by rw_mpas_convert) draws the composite
++    // when there is no REFL_10CM volume, instead of the hydrometeor fallback.
++    // THE BREAKAGE THIS PREVENTS (case study 2025-05-19, H2, 2026-10-24): the
++    // hex MPAS-physics route writes no 3-D refl10cm, so its composite maps
++    // were the renderer's estimate, not the model's diagnostic.
++    if want_composite && !native_present && file.has_var("REFC") {
++        let read = isolate_panics("native REFC", || {
++            let values = file.read_var("REFC", timeidx).map_err(|err| err.to_string())?;
++            if values.len() != grid.shape.len() {
++                return Err(format!(
++                    "native REFC has {} values, the grid {}",
++                    values.len(),
++                    grid.shape.len()
++                ));
++            }
++            Ok(values
++                .into_iter()
++                .map(|v| if valid_reflectivity_dbz(v) { v } else { f64::NAN })
++                .collect::<Vec<f64>>())
++        });
++        match read {
++            Ok(values) => {
++                progress("Reading native column-maximum reflectivity REFC".to_string());
++                push_canonical_values(
++                    fields,
++                    grid,
++                    projection.clone(),
++                    COMPOSITE_REFLECTIVITY_STORE,
++                    composite_reflectivity_selector(),
++                    "dBZ",
++                    clean_values(&values),
++                );
++                if !want_1km {
++                    return;
++                }
++                // The 1 km product still needs a volume: read it below.
++                want_composite = false;
++            }
++            Err(err) => fields.notes.push(format!(
++                "native REFC unreadable ({err}); composite falls back to the hydrometeor dbz"
++            )),
++        }
++    }
+     progress(if native_present {
+         "Reading native WRF REFL_10CM reflectivity volume".to_string()
+     } else {

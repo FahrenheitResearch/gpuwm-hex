@@ -128,12 +128,38 @@ def inventory(package_root=None, numerics=None, compiler_family=None, *, compile
     return list(result.values())
 
 
+_PIP_CUDA_INCLUDE = "-I@SITE@/nvidia/"
+
+
+def toolkit_includes():
+    """The CUDA header ``-I`` options this CuPy appends, when they name a toolkit outside site-packages.
+
+    CuPy adds its CUDA include directory from the NVRTC it loaded: the pip
+    headers (``<site-packages>/nvidia/cu13/include``) or, when a system toolkit
+    shadows the pip wheel, ``/usr/local/cuda/include``.  ``None`` for the pip
+    layout or without CuPy, so the recorded layout stands.
+    """
+    try:
+        from cupy._core import core
+        assembled = core.assemble_cupy_compiler_options(())
+    except Exception:
+        return None
+    portable = portable_options([option for option in assembled if str(option).startswith("-I")])
+    toolkit = [option for option in portable if not option.startswith("-I@SITE@/")]
+    return toolkit or None
+
+
 def catalog_recipe(entry, compiler=None):
-    """Bind recorded CuPy include roots to the target wheel's CUDA family.
+    """Bind recorded CuPy include roots to the compiler the rows are formed for.
 
     CUDA 12 and 13 pip runtimes put headers in different directories. Keep
     those paths exact in the pack so production selection needs no aliases.
-    System-toolkit layouts still miss and take the ordinary compiler route.
+    With ``compiler`` (this process's compiler) and a system toolkit's headers
+    in CuPy's own options, the recorded pip include becomes that toolkit's.
+    THE BREAKAGE THIS ENDS (CUDA 13.0 driver 580, 2026-10-24): CuPy
+    loaded the system libnvrtc and compiled with ``-I/usr/local/cuda/include``,
+    so 150 of 217 first-run requests matched neither the pack nor the
+    ahead-of-time pool and compiled in the foreground on one core.
     """
     options = portable_options(entry.get("options", ()))
     version = (compiler or {}).get("nvrtc") or ()
@@ -141,6 +167,16 @@ def catalog_recipe(entry, compiler=None):
         options = ["-I@SITE@/nvidia/cuda_runtime/include"
                    if option == "-I@SITE@/nvidia/cu13/include" else option
                    for option in options]
+    toolkit = toolkit_includes() if compiler is not None else None
+    if toolkit and any(option.startswith(_PIP_CUDA_INCLUDE) for option in options):
+        bound = []
+        for option in options:
+            if option.startswith(_PIP_CUDA_INCLUDE):
+                bound.extend(toolkit)
+                toolkit = []
+            else:
+                bound.append(option)
+        options = bound
     return recipe({**entry, "options": options})
 
 
@@ -198,7 +234,7 @@ def physics_inventory(numerics=None):
     # MPAS's standard 55-level atmosphere, with the production workspace storage.
     for corrections in ((), ("WB3",)):
         source = thompson.cuda_source(device_math_source=resources.thompson_maths(resources._vendored_maths()),
-                                      max_levels=55, corrections=corrections, workspace=True)
+                                      max_levels=55, corrections=corrections, workspace=True, numerics=numerics)
         rows.append({**recipe({"source": source,
                                "options": list(_hex_numerics.options(thompson.COMPILE_OPTIONS, numerics=numerics)),
                                "route": "direct-nvrtc", "filename": "kern.cu"}),
@@ -368,8 +404,9 @@ def build(output, *, entries=None, architectures=ARCHITECTURES, base_pack=None, 
         with concurrent.futures.ProcessPoolExecutor(count, mp_context=context) as pool:
             compiled = list(pool.map(_compile_job, jobs, chunksize=1))
     from gpuwm.certify.compile_platform import nvrtc_banner, nvrtc_build, nvrtc_build_id
+    from .compile_contract import build_id_accepted
     banner = nvrtc_banner()
-    if nvrtc_build(banner) == "unavailable" or not nvrtc_build_id(banner).startswith("CL-"):
+    if nvrtc_build(banner) == "unavailable" or not build_id_accepted(nvrtc_build_id(banner)):
         raise ValueError("NVRTC build banner could not be measured for the wheel")
     compiled = [{**row, "nvrtc_banner": banner} for row in compiled]
     write(output, identity, [*retained, *compiled])

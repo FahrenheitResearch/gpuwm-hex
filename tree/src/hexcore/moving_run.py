@@ -180,6 +180,33 @@ def route_refusal(seg) -> str | None:
     return None
 
 
+def door_refusal(seg, rc) -> str | None:
+    """The forecast door's refusal of a segment before its first step, or None.
+
+    The door exits 2 with one ``gpuwm-hex: ...`` line when it refuses a command
+    (hexcore.cli.main).  Refused before the first step (the timeline has no
+    ``forecast.first_step`` and no recovery seal exists), the same command is
+    refused the same way every time.  THE BREAKAGE THIS PREVENTS (HEX-PHYSICS-PARITY
+    run group 2 #6): every member retried a namelist refusal three times and the
+    ensemble then reported a track-plume failure instead of the refusal.
+    """
+    if rc != 2:
+        return None
+    seg = Path(seg)
+    if any((seg / 'control').glob('seal-*.pkl')):
+        return None
+    timeline = seg / 'fc' / 'timeline.jsonl'
+    if timeline.is_file() and '"forecast.first_step"' in timeline.read_text(errors='replace'):
+        return None
+    log = seg / 'forecast.log'
+    if not log.is_file():
+        return None
+    for line in reversed(log.read_text(errors='replace').splitlines()[-50:]):
+        if line.startswith('gpuwm-hex: '):
+            return line.strip().removeprefix('gpuwm-hex: ')
+    return None
+
+
 def now_utc():
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
@@ -207,12 +234,22 @@ def stop_process_tree(proc, grace_seconds: float = 60.0):
                 proc.send_signal(sig)
         except ProcessLookupError:
             pass
-    signal_group(signal.SIGTERM)
+    # Give the coordinator a chance to close its pool and retire scratch.
+    # Killing workers while they write a multiprocessing result pipe can
+    # strand its reader thread and prevent the coordinator's finally blocks.
+    try:
+        proc.send_signal(signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     try:
         proc.wait(timeout=grace_seconds)
     except subprocess.TimeoutExpired:
         signal_group(signal.SIGKILL if os.name == 'posix' else signal.SIGTERM)
         proc.wait()
+    else:
+        # A coordinator without a handler exits immediately. Its detached
+        # descendants still belong to this owned group and must not survive.
+        signal_group(signal.SIGTERM)
 
 
 def load_tracker_module(path: str | None):
@@ -228,8 +265,12 @@ def load_tracker_module(path: str | None):
 
 # --------------------------------------------------------------------------- model state
 
-def history_fields(st, path: Path, guess, radius_km: float, object_field: str | None = None):
+def history_fields(st, path: Path, guess, radius_km: float, object_field: str | None = None, *,
+                   columns: bool = False, surface: bool = False, storm_field: str | None = None):
     """Tracker fields from one closed history frame (MPAS cell arrays).
+
+    ``columns`` (setup target cape_shear) also reads the model columns (pressure, theta, qv, u, v) and ``surface``
+    (setup target boundary) the 2 m fields (t2, q2) with the surface pressure, for the cells near the guess.
 
     ``object_field`` (object mode: the tracker's object.field_name) is read too, the column maximum of a 3-D
     field. Breakage it prevents: the object field was never read, so an object-mode tracker answered 'no object
@@ -264,11 +305,28 @@ def history_fields(st, path: Path, guess, radius_km: float, object_field: str | 
             objective = np.asarray(d[object_field][0], np.float64)
             if objective.ndim > 1:
                 objective = objective.max(axis=tuple(range(1, objective.ndim)))
+        elif storm_field and storm_field in d.variables:
+            # cape_shear's storms (EnvConfig.storm_field): optional, a frame without the field fixes on the index
+            objective = np.asarray(d[storm_field][0], np.float64)
+            if objective.ndim > 1:
+                objective = objective.max(axis=tuple(range(1, objective.ndim)))
+        column_block = surface_block = None
+        if columns:
+            column_block = dict(pressure=pressure[subset], theta=np.asarray(d['theta'][0], np.float64)[subset],
+                                qv=np.asarray(d['qv'][0], np.float64)[subset], u=u[subset], v=v[subset],
+                                terrain=terrain[subset], psfc=psfc[subset])
+        if surface:
+            # 2 m fields under either route's history name (hex history t2; the MPAS stream names it t2m).
+            t2_name = 't2' if 't2' in d.variables else 't2m'
+            surface_block = dict(t2=np.asarray(d[t2_name][0], np.float64)[subset],
+                                 q2=np.asarray(d['q2'][0], np.float64)[subset], psfc=psfc[subset])
     keep = subset
     fields = st.fields_from_columns(lat[keep], lon[keep], psfc=psfc[keep], terrain=terrain[keep],
                                     t_low=t_low[keep], pressure=pressure[keep], u=u[keep], v=v[keep],
                                     u10=u10[keep], v10=v10[keep],
-                                    object_field=None if objective is None else objective[keep])
+                                    object_field=None if objective is None else objective[keep],
+                                    **({} if column_block is None else dict(columns=column_block)),
+                                    **({} if surface_block is None else dict(surface=surface_block)))
     return fields
 
 
@@ -331,9 +389,18 @@ class Controller:
         self.stitch = bool(mesh.get('corridor'))
         if self.stitch:
             a.zone_carry = True
+        self.zone_transfer = a.zone_carry and not getattr(a, 'whole_domain_remap', False)
+        transfer = 'zone' if self.zone_transfer else 'whole-domain'
         if a.resume:
             self.state = json.loads(self.state_path.read_text())
+            previous_transfer = self.state.get('transfer', 'zone' if a.zone_carry else 'whole-domain')
+            if previous_transfer != transfer:
+                raise SystemExit('resume must retain the original transfer route: ' + previous_transfer)
             self.session = self.st.TrackSession.restore(json.loads(self.session_path.read_text()))
+            from .moving_retention import retire_finished_preparations
+            retire_finished_preparations(self, getattr(a, 'member_retirement_evidence', None))
+            self.state['hours'] = float(a.hours)
+            self.state.pop('finished_utc', None)
             # Preparations of the dead controller have no process any more: a finished one is
             # prepared, an unfinished one is cancelled (its closed stages are kept and skipped).
             for name, member in self.state['members'].items():
@@ -363,9 +430,11 @@ class Controller:
             start = self.adopt_start_member()
             self.state = dict(schema=SCHEMA, started_utc=now_utc(),
                               wall_started=time.time(), case=str(Path(a.case).resolve()),
-                              hours=float(a.hours), check_minutes=float(a.check_minutes),
+                              hours=float(a.hours), check_minutes=float(a.check_minutes), transfer=transfer,
                               fixes_source=('scripted track (machinery test; not a tracker)'
-                                            if a.scripted_track else 'run-time tracker on model state'),
+                                            if a.scripted_track else
+                                            "the user's path (not a tracker)" if config.get('mode') == 'path'
+                                            else f"run-time tracker on model state ({config.get('mode')} target)"),
                               tracker_module=self.st.__file__, t=0.0, current=start,
                               boundary=None, operator=None, source_grid=None,
                               members={start: self.read_member(start, 'ready')},
@@ -432,6 +501,8 @@ class Controller:
         lat, lon = self.st.snap(centre[0], centre[1], step)
         name = self.member_key(lat, lon)
         members = self.state['members']
+        from .moving_retention import rebuild_name
+        name = rebuild_name(name, members)
         if name in members and members[name]['status'] in ('failed', 'unstable') and step > 0:
             # The generator cannot settle every centre (measured 2026-10-12: "relaxation is in
             # a limit cycle" for one 0.25 deg lattice point); the nearest lattice neighbour
@@ -439,7 +510,7 @@ class Controller:
             around = sorted(((great_circle_km((lat + i * step, lon + j * step), centre), lat + i * step, lon + j * step)
                              for i in (-1, 0, 1) for j in (-1, 0, 1) if i or j))
             for _, la, lo in around:
-                alternative = self.member_key(la, lo)
+                alternative = rebuild_name(self.member_key(la, lo), members)
                 if alternative not in members or members[alternative]['status'] not in ('failed', 'unstable'):
                     self.event('member-neighbour', failed=name, instead=alternative, why=why)
                     lat, lon, name = la, lo, alternative
@@ -450,6 +521,9 @@ class Controller:
             if members[name]['status'] == 'preparing':
                 members[name]['order'] = min(members[name].get('order', order), order)
             if members[name]['status'] == 'stale':
+                from .moving_retention import artifacts_present
+                if not artifacts_present(members[name]):
+                    raise RuntimeError(f'stale member {name} lost an artifact outside managed retirement')
                 members[name]['status'] = 'prepared'
                 self.event('member-revived', name=name, why=why)
             # a failed preparation is not retried: it would fail the same way every check
@@ -459,7 +533,7 @@ class Controller:
         on_disk = []
         for path in self.members_dir.glob('*-case.json'):
             key = path.name[:-len('-case.json')]
-            if key == self.state['current'] or (key in members and members[key]['status'] in ('failed', 'unstable')):
+            if key == self.state['current'] or (key in members and members[key]['status'] in ('failed', 'unstable', 'retired')):
                 continue
             if key in ('frame', 'template'):
                 continue
@@ -470,7 +544,8 @@ class Controller:
             except ValueError:
                 continue
             distance = great_circle_km(row['center_deg'], (lat, lon))
-            if distance <= min(self.a.reuse_km, self.session.policy.c.min_move_km) and Path(row['init']).is_file():
+            from .moving_retention import artifacts_present
+            if distance <= min(self.a.reuse_km, self.session.policy.c.min_move_km) and artifacts_present(row):
                 on_disk.append((distance, key))
         if on_disk:
             key = min(on_disk)[1]
@@ -524,8 +599,7 @@ class Controller:
         return name
 
     def operator_path(self, source, target):
-        kind = 'zone' if self.a.zone_carry else 'overlap'
-        return self.members_dir / 'operators' / f'{source}--{target}.{kind}.npz' if self.a.zone_carry \
+        return self.members_dir / 'operators' / f'{source}--{target}.zone.npz' if self.zone_transfer \
             else self.members_dir / 'operators' / f'{source}--{target}.npz'
 
     def ensure_operator(self, target):
@@ -540,7 +614,7 @@ class Controller:
         src = self.state['members'][source]
         tgt = self.state['members'][target]
         log = self.members_dir / 'logs' / f'{source}--{target}-operator.log'
-        if self.a.zone_carry:
+        if self.zone_transfer:
             command = hexcore_command('moving', 'zone', src['grid'], tgt['grid'], src['static'], tgt['static'],
                                       src['init'], tgt['init'], path)
         else:
@@ -603,8 +677,15 @@ class Controller:
         else:
             guess, since = self.session.predicted(seconds)
             config = self.session.config
-            fields = history_fields(self.st, Path(history), guess, self.session.search_radius(since),
-                                    object_field=config.object.field_name if config.mode == 'object' else None)
+            needs = (self.st.history_needs(config) if hasattr(self.st, 'history_needs')
+                     else dict(object_field=config.object.field_name if config.mode == 'object' else None,
+                               columns=False, surface=False, state=True))
+            # A user's path reads nothing from the state; every other target reads the frame.
+            fields = (None if not needs['state'] else
+                      history_fields(self.st, Path(history), guess, self.session.search_radius(since),
+                                     object_field=needs['object_field'],
+                                     columns=needs['columns'], surface=needs['surface'],
+                                     storm_field=needs.get('storm_field')))
             fix = self.session.observe(seconds, fields)
         return fix, time.monotonic() - began
 
@@ -662,19 +743,54 @@ class Controller:
                               order=len(chain) + 1))
         return chain
 
+    def storm_room(self, current, fix):
+        """(minutes, km): how long the predicted storm core stays safe in the current region, and
+        how far the fix is from that region's safe edge (interior radius minus core margin).
+
+        The minutes are the placement policy's own dwell (fix and motion uncertainty included),
+        -1 when the core is already unsafe."""
+        policy = self.session.policy
+        if not fix.ok:
+            return -1.0, 0.0
+        velocity, _ = policy.motion.velocity(self.session.fixes)
+        stay = policy.dwell(current['center_deg'], (fix.lat, fix.lon), velocity, 0.0)
+        edge = policy.c.safe_km() - great_circle_km((fix.lat, fix.lon), current['center_deg'])
+        return float(stay), float(edge)
+
     def pick_target(self, decision, current, seconds, ready, fix):
-        """Nearest ready member containing the current fix plus its core margin."""
+        """Nearest ready member whose predicted core remains safe for a check.
+
+        Admission uses the placement policy's fix and motion uncertainty too;
+        mere current-position containment can immediately force a return move.
+        """
         if not fix.ok:
             return None
-        safe = self.session.policy.c.safe_km()
+        policy = self.session.policy
+        fixes = [f for f in self.session.fixes if f.seconds < fix.seconds] + [fix]
+        velocity, _ = self.session.motion.velocity(fixes)
         candidates = [(great_circle_km(centre, (fix.lat, fix.lon)), name)
-                      for name, centre in ready.items() if name != self.state['current']]
-        candidates = [(distance, name) for distance, name in candidates if distance <= safe]
+                      for name, centre in ready.items() if name != self.state['current']
+                      and policy.dwell(centre, (fix.lat, fix.lon), velocity,
+                                       max(0.0, (seconds - fix.seconds) / 60.0),
+                                       max(policy.c.check_minutes, policy.SUBSTEP_MIN))
+                          >= policy.c.check_minutes]
         return min(candidates)[1] if candidates else None
 
     def on_frame(self, seconds, history, control: Path):
         if seconds in {f['model_seconds'] for f in self.state['frames']}:
+            # A frame this controller already decided.  A segment that is holding at it still
+            # gets an answer: THE BREAKAGE THIS PREVENTS (HEX-PHYSICS-PARITY run group 2 #6) is a
+            # recover segment waiting forever for verdict-00005400.json, a frame answered for the
+            # failed segment only, holding its card at 0 % until killed.
+            answer = control / f'verdict-{int(seconds):08d}.json'
+            if (control / 'await-verdict.json').is_file() and not answer.exists():
+                tmp = answer.with_suffix('.partial')
+                tmp.write_text(json.dumps({'stop': False}) + '\n')
+                tmp.replace(answer)
             return None
+        # At most once per tracking frame, never on every step/background poll.
+        from .moving_retention import retire_members
+        retire_members(self, getattr(self.a, 'member_retirement_evidence', None))
         current = self.state['members'][self.state['current']]
         from .stage_timing import stage
         timings = []
@@ -703,27 +819,58 @@ class Controller:
                           else None)
                 # a member reused from disk with a cached operator is ready at once
                 self.poll_background()
+                ready = self.ready_members()
+                target = self.pick_target(decision, current, seconds, ready, fix)
+                # The honest bound is the storm's own room: how long the predicted core (with its
+                # fix and motion uncertainty) stays inside the current region's safe radius.  A
+                # continuous-follow re-centre while the storm still has a check of room is not
+                # due yet, so the forecast keeps integrating on the current member and the move
+                # lands at a later check once the member is ready (a Champi storm-following run:
+                # the first re-centre came 19 s after its member started preparing, with the
+                # storm 13 km off centre and ~140 km of room; hex 0.4.4 refused it after 0 s).
+                stay, edge_km = self.storm_room(current, fix) if target is None else (0.0, 0.0)
+                check = self.session.policy.c.check_minutes if target is None else 0.0
+                if wanted and target is None and stay >= check:
+                    self.event('move-deferred', name=wanted, at_seconds=seconds,
+                               status=self.state['members'].get(wanted, {}).get('status'),
+                               storm_room_minutes=stay, storm_to_edge_km=edge_km)
+                    # retried at the next check, where the policy sees the member once it is ready
+                    decision = replace(decision, move=False, dwell_minutes=check,
+                                       next_check_seconds=seconds + check * 60.0,
+                                       reason=decision.reason + f'; deferred: member {wanted} not ready, '
+                                       f'storm safe for {stay:.0f} min ({edge_km:.0f} km to the safe edge)')
+                    self.session.decisions[-1] = decision
+                    frame['decision'] = decision.as_dict()
+                    wanted = None
                 held = time.monotonic()
-                # --hold-for-member-seconds: the forecast is waiting at this frame for a verdict, so
-                # waiting here for the decided member lands the move on the frame the policy chose
-                # instead of hours of forecast later (a member takes ~10 min of CPU to prepare).
-                while (wanted and self.a.hold_for_member_seconds > 0 and (control / 'await-verdict.json').is_file()
+                # The move is due now: the storm would leave the safe radius before the next check.
+                # The forecast is held at this frame (it rendezvous at every check, see monitor), so
+                # the storm does not move while we wait for the member to finish preparing.
+                while (target is None and wanted and self.a.hold_for_member_seconds > 0
+                       and (control / 'await-verdict.json').is_file()
                        and self.state['members'].get(wanted, {}).get('status') in ('preparing', 'prepared')
+                       and f'op:{self.state["current"]}--{wanted}' not in self.state.get('operator_failures', [])
                        and time.monotonic() - held < self.a.hold_for_member_seconds):
                     time.sleep(2.0)
                     self.poll_background()
+                    target = self.pick_target(decision, current, seconds, self.ready_members(), fix)
                 if time.monotonic() - held > 5.0:
                     self.event('held-for-member', name=wanted, seconds=time.monotonic() - held,
-                               status=self.state['members'].get(wanted, {}).get('status'))
-                ready = self.ready_members()
-                target = self.pick_target(decision, current, seconds, ready, fix)
+                               status=self.state['members'].get(wanted, {}).get('status'),
+                               storm_room_minutes=stay, storm_to_edge_km=edge_km)
                 if wanted and self.a.hold_for_member_seconds > 0 and target is None:
                     status = self.state['members'].get(wanted, {}).get('status', 'missing')
-                    self.event('move-member-unavailable', name=wanted, status=status, at_seconds=seconds)
+                    if f'op:{self.state["current"]}--{wanted}' in self.state.get('operator_failures', []):
+                        status += ' (its overlap operator failed)'
+                    waited = time.monotonic() - held
+                    self.event('move-member-unavailable', name=wanted, status=status, at_seconds=seconds,
+                               waited_seconds=waited, storm_room_minutes=stay, storm_to_edge_km=edge_km)
                     self.save()
-                    raise RuntimeError(f'moving member {wanted} is {status} after waiting '
-                                       f'{time.monotonic() - held:.0f} s; continuing would let the '
-                                       'storm leave the fine-region interior before its decided move')
+                    raise RuntimeError(f'moving member {wanted} is {status} after holding the forecast '
+                                       f'{waited:.0f} s (--hold-for-member-seconds '
+                                       f'{self.a.hold_for_member_seconds:.0f}); the storm is {edge_km:.0f} km from '
+                                       f'the safe edge of the current region and its predicted core is safe there '
+                                       f'for {max(stay, 0.0):.0f} min, less than one {check:.0f}-min check')
             if target is not None:
                 verdict = {'stop': True, 'target': target, 'reason': decision.reason}
                 self.state['pending_move'] = dict(target=target, decided_at_seconds=seconds,
@@ -881,18 +1028,23 @@ class Controller:
             self.poll_background()
             ready = self.ready_members()
             awaiting = control / 'await-verdict.json'
-            # Holding a frame for a verdict costs its NetCDF write plus the fix (~30 s at
-            # 354k cells), so frames are held only while the tracker expects a move within
-            # --await-within-minutes; further out, a move can at most land one check late.
+            # With member waiting enabled, every check must rendezvous with the
+            # controller. A new fix can demand a move even when the PREVIOUS fix
+            # predicted a long dwell (observed in the full global run at +6 h).
+            # Removing this request between checks races the new decision: the
+            # forecast advances and on_frame cannot safely wait for preparation.
+            # The asynchronous opt-out retains its imminent-ready optimization.
             last = self.state['frames'][-1]['decision'] if self.state['frames'] else None
             imminent = last is None or last['move'] or last['dwell_minutes'] <= self.a.await_within_minutes
             ready = ready if imminent else {}
             # A model-state fix can request the very first new member. Hold
             # before observing that frame, even when no preparation exists yet.
-            coming = imminent and self.a.hold_for_member_seconds > 0
+            coming = self.a.hold_for_member_seconds > 0
             timeout = self.a.verdict_timeout + self.a.hold_for_member_seconds
             if (ready or coming) and not awaiting.exists():
-                awaiting.write_text(json.dumps({'from_seconds': 0, 'timeout_seconds': timeout}) + '\n')
+                temporary = awaiting.with_suffix('.partial')
+                temporary.write_text(json.dumps({'from_seconds': 0, 'timeout_seconds': timeout}) + '\n')
+                temporary.replace(awaiting)
             elif not (ready or coming) and awaiting.exists():
                 awaiting.unlink()
             if ready and proc.poll() is None:
@@ -1093,6 +1245,8 @@ class Controller:
             if seal is not None:
                 self.state.update(boundary=str(seal), operator=None, source_grid=None,
                                   t=float(json.loads(seal.with_suffix('.pkl.json').read_text())['time_seconds']))
+            # The recovered segment re-reaches the frames after its carrier: they are decided again.
+            self.forget_after(float(self.state['t']))
             kind = 'recover'
         adopted = None
         while self.state['t'] < self.duration:
@@ -1176,7 +1330,7 @@ class Controller:
                                      f'moving carrier {boundary}; inspect {seg / "forecast.log"}. '
                                      'The selected executor must publish moving progress and a carrier; '
                                      'retrying the same interval cannot repair missing hooks.')
-                refusal = route_refusal(seg)
+                refusal = route_refusal(seg) or door_refusal(seg, rc)
                 if refusal is not None:
                     # The route refuses this command the same way every time: retrying spends nothing useful.
                     self.event('segment-refused', index=record['index'], rc=rc)
@@ -1192,9 +1346,11 @@ class Controller:
                 if seal is not None:
                     t = float(json.loads(seal.with_suffix('.pkl.json').read_text())['time_seconds'])
                     self.state.update(boundary=str(seal), operator=None, source_grid=None, t=t)
-                    self.event('recover-from-seal', seal=str(seal), t=t)
+                    self.event('recover-from-seal', seal=str(seal), t=t,
+                               frames_discarded=self.forget_after(t))
                 else:
-                    self.event('recover-from-segment-start', t=self.state['t'])
+                    self.event('recover-from-segment-start', t=self.state['t'],
+                               frames_discarded=self.forget_after(float(self.state['t'])))
                 kind = 'recover'
                 self.state['pending_move'] = None
                 if failure == 'numerical' and self.a.member_fallback:
@@ -1206,9 +1362,13 @@ class Controller:
             self.save()
         for key, proc in self.procs.items():
             stop_process_tree(proc)
+        self.procs.clear()
         self.state['wall_seconds'] = time.time() - self.state['wall_started']
         self.state['finished_utc'] = now_utc()
-        self.state['summary'] = summarize(self.state, self.interior_km)
+        from .moving_retention import retire_finished_preparations
+        retire_finished_preparations(self, getattr(self.a, 'member_retirement_evidence', None))
+        self.state['summary'] = summarize(self.state, self.interior_km,
+                                          mode=getattr(self.session.config, 'mode', None) or 'tc')
         self.save()
         print(json.dumps(self.state['summary'], indent=1, default=float))
 
@@ -1274,16 +1434,33 @@ def move_costs(state):
     return out
 
 
-def summarize(state, interior_km):
+def summarize(state, interior_km, mode=None):
+    """A cyclone run passes only with the storm fixed inside the fine interior on every frame.
+
+    A setup target (cape_shear, low, boundary, object, path) holds its region on a frame with
+    no fix: the weather there may simply have no such area (owner canary run_6fe920b4414c6b7c,
+    GFS 2026-10-23 18Z f354, no CAPE x shear area all 24 h). It passes when the forecast ran
+    to its end and every frame that DID fix stayed inside the interior; the held frames are
+    counted and named in the note."""
     segments = state['segments']
     integration = sum(s.get('integration_seconds') or 0 for s in segments)
     walls = sum(s.get('wall_seconds') or 0 for s in segments)
     frames = state['frames']
     offsets = [f['offset_km'] for f in frames if f['offset_km'] is not None]
-    inside = bool(offsets) and len(offsets) == len(frames) and max(offsets) <= interior_km
+    mode = mode or state.get('tracker_mode') or 'tc'
+    held = len(frames) - len(offsets)
+    if mode == 'tc':
+        inside = bool(offsets) and len(offsets) == len(frames) and max(offsets) <= interior_km
+    else:
+        inside = bool(frames) and (not offsets or max(offsets) <= interior_km)
+    ran = state['t'] >= state['hours'] * 3600 and all(s.get('rc') == 0 for s in segments[-1:])
+    note = None
+    if mode != 'tc' and held:
+        note = (f'no {mode} area found on {held} of {len(frames)} frames; the region held where it was'
+                if offsets else f'no {mode} area found on any frame; held at the start point')
     return dict(
-        status='passed' if inside and state['t'] >= state['hours'] * 3600 and all(s.get('rc') == 0 for s in segments[-1:])
-        else 'incomplete',
+        status='passed' if inside and ran else 'incomplete',
+        tracker_mode=mode, held_frames=held, note=note,
         forecast_hours=state['t'] / 3600, wall_seconds=state.get('wall_seconds'),
         segment_wall_seconds=walls, integration_seconds=integration,
         overhead_seconds=(state.get('wall_seconds') or walls) - integration,
@@ -1307,7 +1484,7 @@ def summarize_folder(run) -> dict:
     for record in state['segments']:
         if 'rc' in record:
             write_result(record['path'], record)
-    summary = summarize(state, interior_km(case))
+    summary = summarize(state, interior_km(case), mode=(case.get('tracker') or {}).get('mode') or 'tc')
     (run / 'summary.json').write_text(json.dumps(summary, indent=1, default=float) + '\n')
     return summary
 

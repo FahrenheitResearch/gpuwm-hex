@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from threading import Event
 
@@ -196,6 +197,8 @@ def _points_stand_in(monkeypatch, seen: list):
 
     monkeypatch.setattr(products_door.subprocess, "run", fake_subprocess_run)
     monkeypatch.setattr(products_door, "resolve_points_exe", lambda explicit, convert: Path("rw_hex_points"))
+    # the stand-in rw_hex_points is a current build: it draws --brand
+    monkeypatch.setattr(products_door, "points_take_brand", lambda exe: True)
 
 
 def _arguments(tmp_path, histories, **over):
@@ -672,3 +675,243 @@ def test_window_products_follow_the_stored_frames(tmp_path):
     short, withheld = products_door.windowed_for_history(frames(6, 1), start)
     assert short == ("qpf_1h", "qpf_6h", "10m_wind_run_max")
     assert "needs 24 h" in withheld["qpf_24h"]
+
+
+# -- the sounding brand from the run's own records ----------------------------------------------
+
+@pytest.mark.parametrize("shape, km, expect", [
+    ("global", 120.0, "WOOF Hex · Global 120 km · Init GFS 23 Oct 2026 18Z"),
+    ("variable-resolution", 3.0, "WOOF Hex · Variable-resolution globe to 3 km · Init GFS 23 Oct 2026 18Z"),
+    ("region", 3.75, "WOOF Hex · Region 3.75 km · Init GFS 23 Oct 2026 18Z"),
+    ("storm-following", 3.0, "WOOF Hex · Storm-following 3 km · Init GFS 23 Oct 2026 18Z"),
+])
+def test_the_default_brand_names_each_shape(shape, km, expect):
+    assert products_door.default_brand(shape=shape, spacing_km=km, source="GFS",
+                                       start="2026-10-23_18:00:00") == expect
+
+
+def test_the_default_brand_drops_what_the_run_does_not_record():
+    assert products_door.default_brand(shape="global", spacing_km=120.0,
+                                       start="2026-10-23_18:00:00") == "WOOF Hex · Global 120 km · Init 23 Oct 2026 18Z"
+    assert products_door.default_brand(shape="region", spacing_km=3.0, source="HRRR") == "WOOF Hex · Region 3 km · Init HRRR"
+    assert products_door.default_brand(shape="variable-resolution") == "WOOF Hex · Variable-resolution globe"
+    assert products_door.default_brand() == "WOOF Hex"
+    assert products_door.default_brand(model=None) == "WOOF"
+    # a spacing measured from the grid's edges is written to the kilometre, or the quarter below 10 km
+    assert products_door.default_brand(shape="global", spacing_km=120.4, spacing_measured=True) == "WOOF Hex · Global 120 km"
+    assert products_door.default_brand(shape="variable-resolution", spacing_km=2.93,
+                                       spacing_measured=True) == "WOOF Hex · Variable-resolution globe to 3 km"
+
+
+def test_the_init_source_is_read_through_the_source_table():
+    # what each door writes as --init-source: a row id or alias first, or the row's display name
+    assert products_door.brand_source("gfs 2026-10-23T18; global row global-120km") == "GFS"
+    assert products_door.brand_source("gfs analysis; moving run member m0") == "GFS"
+    assert products_door.brand_source("era5 2024-07-14T15; spec abc") == "ERA5"
+    assert products_door.brand_source("NCEP HRRR 3 km CONUS (native hybrid wrfnat + soil) 2024-07-14T15; cull") == "HRRR"
+    assert products_door.brand_source("ifs-ens 2026-10-23T00") == "IFS ENS"
+    # text that names no row gives no source, never a guess
+    assert products_door.brand_source("staged analysis; moving run member m0") is None
+    assert products_door.brand_source(None) is None
+
+
+def test_a_storm_following_run_brands_its_soundings_from_its_own_records(monkeypatch, tmp_path):
+    # A storm-following run (2026-10-23): `moving products` and the segment product stage
+    # passed no --brand, and the soundings had nothing top right.
+    seen: list = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=False, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    run = tmp_path / "run"
+    fc = run / "segment-000" / "fc"
+    fc.mkdir(parents=True)
+    grid = tmp_path / "m0.grid.nc"
+    grid.write_bytes(b"m")
+    init = tmp_path / "m0.init.nc"
+    init.write_bytes(b"i")
+    for stamp in ("2026-10-23_18.00.00", "2026-10-24_00.00.00"):
+        (fc / f"cuda-history.{stamp}.nc").write_bytes(b"h")
+    (fc / "forecast-receipt.json").write_text(json.dumps({
+        "mesh": {"name": "m0", "grid": str(grid)}, "init": {"path": str(init),
+                 "source": "gfs analysis; moving run member m0"},
+        "schedule": {"start_time": "2026-10-23_18:00:00"}}), encoding="utf-8")
+    rows = tmp_path / "m0-rows.json"
+    (run / "controller.json").write_text(json.dumps({
+        "segments": [{"index": 0, "path": str(fc.parent)}],
+        "members": {"m0": {"name": "m0", "mesh_rows": str(rows)}}}), encoding="utf-8")
+    asked = []
+
+    def member_row(name, mesh, extra_rows=()):
+        asked.append((name, [str(p) for p in extra_rows]))
+        return (3.0, 100.0) if str(rows) in [str(p) for p in extra_rows] and name == "m0" else (None, None)
+
+    monkeypatch.setattr(products_door, "_mesh_row_spacing", member_row)
+    parser = argparse.ArgumentParser()
+    products_door.add_products_arguments(parser)
+    assert products_door.run_products(parser.parse_args([str(fc)])) == 0
+    points = [c for stage, c in seen if stage == "POINTS" and Path(str(c[0])).name == "rw_hex_points"][0]
+    assert points[points.index("--brand") + 1] == "WOOF Hex · Storm-following 3 km · Init GFS 23 Oct 2026 18Z"
+    manifest = json.loads(next((fc / "products").rglob("products-manifest.json")).read_text(encoding="utf-8"))
+    assert manifest["points"]["brand_from"] == "run metadata"
+
+
+def test_a_global_row_without_brand_gets_one(monkeypatch, tmp_path):
+    seen: list = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=True, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    monkeypatch.setattr(products_door, "_mesh_row_spacing", lambda name, mesh, extra_rows=(): (120.0, 120.0))
+    monkeypatch.setattr(products_door, "forecast_receipt", lambda path: {
+        "init": {"source": "gfs 2026-10-22T00; global row global-120km"},
+        "schedule": {"start_time": "2026-10-22_00:00:00"}})
+    args = _arguments(tmp_path, _histories(tmp_path))
+    assert products_door.run_products(args) == 0
+    points = [c for stage, c in seen if stage == "POINTS" and Path(str(c[0])).name == "rw_hex_points"][0]
+    assert points[points.index("--brand") + 1] == "WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z"
+
+
+def test_a_first_look_without_a_forecast_receipt_reads_the_init_source_receipt(monkeypatch, tmp_path):
+    # the first look draws f000 with --history while the forecast runs, before its receipt exists
+    seen: list = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=False, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    monkeypatch.setattr(products_door, "_mesh_row_spacing", lambda name, mesh, extra_rows=(): (3.0, 60.0))
+    (tmp_path / "init-source-receipt.json").write_text(json.dumps({
+        "source": "era5", "cycle": "2024-07-14_15:00:00"}), encoding="utf-8")
+    args = _arguments(tmp_path, _histories(tmp_path), simulation_start="2024-07-14_15:00:00")
+    assert products_door.run_products(args) == 0
+    points = [c for stage, c in seen if stage == "POINTS" and Path(str(c[0])).name == "rw_hex_points"][0]
+    assert points[points.index("--brand") + 1] == "WOOF Hex · Variable-resolution globe to 3 km · Init ERA5 14 Jul 2024 15Z"
+
+
+def test_frames_drawn_live_keep_their_maps_and_the_full_pass_draws_the_rest(monkeypatch, tmp_path):
+    """2026-10-24 (hex global 60 km 24 h): every hour was drawn while the forecast ran, then the full pass rendered
+    all 25 frames again (81 s). With the first look's receipt the pass draws the windowed maps over every frame, every
+    map of the frames no live draw took, and the points; a frame rewritten after its draw is drawn again."""
+    seen: list = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=False, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    histories = _histories(tmp_path)
+    assert products_door.run_products(_arguments(tmp_path, histories, case="patch-case")) == 0   # f000 and f006 on disk
+    case = tmp_path / "out" / "patch-case"
+    f000 = histories[0]
+    receipt = tmp_path / "live-frames.json"
+
+    def write_receipt():
+        receipt.write_text(json.dumps({
+            "schema": "gpuwm-hex.live-frames/v1", "out": str(tmp_path / "out"), "case": "patch-case",
+            "drawn": [f000.name], "stat": {f000.name: [f000.stat().st_size, f000.stat().st_mtime_ns]},
+            "products": ["2m_temperature_10m_winds", "total_qpf"]}), encoding="utf-8")
+
+    write_receipt()
+    seen.clear()
+    assert products_door.run_products(_arguments(tmp_path, histories, case="patch-case", live_frames=str(receipt))) == 0
+    renders = [c for stage, c in seen if stage == "RENDER"]
+    frames_of = lambda c: sorted(Path(x).name for x in c if Path(x).name.startswith("wrfout_d01_"))
+    series = [c for c in renders if c[c.index("--products") + 1] == "qpf_6h"]
+    rest = [c for c in renders if "qpf_6h" not in c[c.index("--products") + 1]]
+    assert len(series) == len(rest) == 3                           # each view: the windowed maps, and the rest
+    assert all(len(frames_of(c)) == 2 for c in series)             # the windowed maps over the whole series
+    assert all(len(frames_of(c)) == 1 for c in rest)               # every map of the frame not drawn live (f006)
+    manifest = json.loads((case / "products-manifest.json").read_text())
+    assert manifest["live_frames"]["drawn_live"] == [f000.name]
+    assert manifest["live_frames"]["drawn_here"] == [histories[1].name]
+    assert manifest["first_maps"]["maps"][0] == "2m_temperature_10m_winds"
+    assert (case / "global" / "2m_temperature_10m_winds" / "2026-10-03"
+            / "hex48-3km_global_2m_temperature_10m_winds_f000.png").is_file()
+    assert any(stage == "POINTS" for stage, _ in seen)
+
+    # The forecast rewrote f000 after its draw: the receipt no longer names that frame, so every frame is drawn.
+    os.utime(f000, ns=(f000.stat().st_atime_ns, f000.stat().st_mtime_ns + 10**9))
+    seen.clear()
+    assert products_door.run_products(_arguments(tmp_path, histories, case="patch-case", live_frames=str(receipt))) == 0
+    renders = [c for stage, c in seen if stage == "RENDER"]
+    assert len(renders) == 3 and all(len(frames_of(c)) == 2 for c in renders)
+    assert json.loads((case / "products-manifest.json").read_text())["live_frames"] is None
+
+
+def _write_patch_mesh(path: Path, *, lat0=35.0, lon0=-97.0, half_deg=3.0, step_deg=0.25, limited=True):
+    """A tiny MPAS-shaped grid file: a lat-lon patch of cell centres (radians),
+    unit-sphere areas, and a boundary ring when ``limited``."""
+    np = pytest.importorskip("numpy")
+    netcdf = pytest.importorskip("netCDF4")
+    lats = np.arange(lat0 - half_deg, lat0 + half_deg + 1e-9, step_deg)
+    lons = np.arange(lon0 - half_deg, lon0 + half_deg + 1e-9, step_deg)
+    glat, glon = np.meshgrid(lats, lons, indexing="ij")
+    n = glat.size
+    side = np.radians(step_deg)
+    with netcdf.Dataset(path, "w") as grid:
+        grid.setncattr("sphere_radius", 1.0)
+        grid.createDimension("nCells", n)
+        grid.createVariable("latCell", "f8", ("nCells",))[:] = np.radians(glat.ravel())
+        grid.createVariable("lonCell", "f8", ("nCells",))[:] = np.radians(glon.ravel())
+        grid.createVariable("areaCell", "f8", ("nCells",))[:] = (
+            side * side * np.cos(np.radians(glat.ravel())))
+        ring = np.zeros(glat.shape, dtype="i4")
+        if limited:
+            ring[0, :] = ring[-1, :] = ring[:, 0] = ring[:, -1] = 1
+        grid.createVariable("bdyMaskCell", "i4", ("nCells",))[:] = ring.ravel()
+
+
+def test_mesh_point_check_splits_on_and_off_mesh_points(tmp_path):
+    # graded-plateau 1 km region, box J, 2026-10-24: London was 7,025 km off a
+    # 300 km Oklahoma region and its refusal took every sounding with it.
+    mesh = tmp_path / "patch.grid.nc"
+    _write_patch_mesh(mesh)
+    check = products_door.mesh_point_check(mesh, [
+        ("Oklahoma City", 35.47, -97.52), ("London", 51.51, -0.13), ("Wichita", 37.69, -97.34)])
+    on_mesh, off_mesh, (clat, clon) = check
+    assert [p[0] for p in on_mesh] == ["Oklahoma City", "Wichita"]
+    assert [p[0] for p in off_mesh] == ["London"]
+    assert abs(clat - 35.0) < 0.1 and abs(clon + 97.0) < 0.1
+    # a point just outside the patch is off by the cell-spacing rule, with its distance
+    near = products_door.mesh_point_check(mesh, [("Edge", 38.6, -97.0)])[1][0]
+    assert near[3] is not None and near[3] > near[4]
+
+
+def test_a_limited_area_run_drops_off_mesh_points_and_draws_the_rest(monkeypatch, tmp_path, capsys):
+    seen: list = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=False, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    monkeypatch.setattr(products_door, "forecast_receipt", lambda path: {
+        "admission": {"configuration": "limited-area"}})
+    histories = _histories(tmp_path)
+    _write_patch_mesh(tmp_path / "patch.grid.nc")
+    args = _arguments(tmp_path, histories,
+                      points="Oklahoma City@35.47,-97.52;London@51.51,-0.13;Wichita@37.69,-97.34")
+    assert products_door.run_products(args) == 0
+    points = [c for stage, c in seen if stage == "POINTS" and Path(str(c[0])).name == "rw_hex_points"][0]
+    named = points[points.index("--points") + 1]
+    assert named == "Oklahoma City@35.47,-97.52;Wichita@37.69,-97.34"
+    assert "POINTS dropped: London (51.51, -0.13) is off this limited-area mesh" in capsys.readouterr().out
+    manifest = json.loads(next((tmp_path / "out").rglob("products-manifest.json")).read_text())
+    assert [d["name"] for d in manifest["points"]["dropped"]] == ["London"]
+    assert manifest["points"]["rc"] == 0
+
+
+def test_a_limited_area_run_defaults_to_the_cities_on_its_mesh(monkeypatch, tmp_path):
+    seen: list = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=False, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    monkeypatch.setattr(products_door, "forecast_receipt", lambda path: {
+        "admission": {"configuration": "limited-area"}})
+    histories = _histories(tmp_path)
+    _write_patch_mesh(tmp_path / "patch.grid.nc")
+    assert products_door.run_products(_arguments(tmp_path, histories)) == 0
+    points = [c for stage, c in seen if stage == "POINTS" and Path(str(c[0])).name == "rw_hex_points"][0]
+    names = [item.split("@")[0] for item in points[points.index("--points") + 1].split(";")]
+    assert names[0] == "Oklahoma City"  # nearest the domain centre first
+    assert {"Wichita", "Tulsa"} <= set(names)
+    assert not {"London", "Tokyo", "Sydney", "Denver", "Chicago"} & set(names)
+    assert len(names) <= products_door.DEFAULT_REGION_POINT_COUNT
+
+
+def test_a_limited_area_run_with_no_city_takes_its_centre(monkeypatch, tmp_path):
+    seen: list = []
+    _stand_in_engines(monkeypatch, tmp_path, uniform=False, seen=seen)
+    _points_stand_in(monkeypatch, seen)
+    monkeypatch.setattr(products_door, "forecast_receipt", lambda path: {
+        "admission": {"configuration": "limited-area"}})
+    histories = _histories(tmp_path)
+    _write_patch_mesh(tmp_path / "patch.grid.nc", lat0=-60.0, lon0=-140.0, half_deg=1.0)
+    assert products_door.run_products(_arguments(tmp_path, histories)) == 0
+    points = [c for stage, c in seen if stage == "POINTS" and Path(str(c[0])).name == "rw_hex_points"][0]
+    assert points[points.index("--points") + 1].startswith("Domain centre@-60.0")

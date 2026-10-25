@@ -235,6 +235,23 @@ def test_global_fine_metric_rounding_checks_actual_polygon_coverage():
         ConservativeMap.build(source, target)
 
 
+def test_geometry_validation_batches_keep_padding_and_first_bad_cell():
+    from dataclasses import replace
+    cells = octants()
+    count = 8200  # crosses the native validation block boundary
+    ids = np.arange(count) % len(cells.area)
+    vertices = np.pad(cells.vertices[ids], ((0, 0), (0, 1), (0, 0)))
+    many = replace(cells, centers=cells.centers[ids], vertices=vertices,
+                   counts=cells.counts[ids], area=cells.area[ids])
+    assert many.validate() is many
+    many.vertices[8193, 1] = many.vertices[8193, 0]
+    with pytest.raises(ValueError, match='cell 8193 is not consistently'):
+        many.validate()
+    many.counts[0] = many.vertices.shape[1] + 1
+    with pytest.raises(ValueError, match='invalid cell area or vertex count'):
+        many.validate()
+
+
 def test_refuse_incomplete_mesh_and_wrong_metrics():
     a,b=octants(),octants(.3)
     b.area[0]*=2
@@ -622,7 +639,15 @@ sys.exit(main(sys.argv[1:]))
                       stdout=subprocess.PIPE, env=env)
     try:
         assert select.select([proc.stdout], [], [], 15)[0], 'operator did not start'
-        assert proc.stdout.readline().strip() == b'OVERLAP_READY'
+        # start_child merges progress stderr into this lifecycle log.
+        # The public CLI stdout remains one JSON document (checked above).
+        for _ in range(32):
+            line = proc.stdout.readline().strip()
+            if line == b'OVERLAP_READY':
+                break
+            assert line.startswith(b'{'), line
+        else:
+            pytest.fail('operator did not reach the cancellation point')
         scratch_pattern = 'hex-overlap-*' if cancel_stage == 'overlap' else '*.partial.npz'
         assert list(tmp_path.glob(scratch_pattern))
         stop_process_tree(proc, grace_seconds=5)
@@ -634,3 +659,63 @@ sys.exit(main(sys.argv[1:]))
         if proc.poll() is None:
             stop_process_tree(proc, grace_seconds=1)
         proc.stdout.close()
+
+
+def test_a_class_without_ocean_columns_carries_no_sea_ice_and_still_moves():
+    """Owner run run_1227117932ed36db: 4 LTS classes, fields/ice_* only in the 2 with water cells; the move stopped."""
+    from copy import deepcopy
+    from hexcore.moving_physics import restore_remapped_backend
+    from hexcore.moving_seaice import SEAICE_FIELDS
+    one=lambda v: np.full((1,8),v,np.float32)
+    base={'fields/xland':one(1),'fields/xice':one(0),'fields/lakemask':one(0),'fields/tsk':one(280)}
+    wet=dict(identity={},seam=dict(identity={'n_columns':8},arrays=dict(base,**{k:one(1) for k in SEAICE_FIELDS}),
+             scalars={}),adapter={})
+    dry=deepcopy(wet)
+    for key in SEAICE_FIELDS:
+        del dry['seam']['arrays'][key]
+    backend=SimpleNamespace(restart_state=lambda:deepcopy(wet),restore_restart_state=lambda s:None)
+    payload=dict(backends=[wet,dry],layouts=[None,None],mesh=None,time_seconds=1800.)
+    cache={}
+    try:
+        restore_remapped_backend(backend,payload,None,SimpleNamespace(cell_l2g=np.arange(8)),base_dt=18.75,rate=1,
+                                 mapped_cache=cache)
+    except ValueError as error:
+        assert 'different persistent fields' not in str(error) and 'sea-ice' not in str(error)
+    except Exception:
+        pass   # the stand-in payload stops later; the persistent-field check is what this test holds
+    completed=cache['ice_complete_payload']['backends'][1]['seam']['arrays']
+    np.testing.assert_array_equal(completed['fields/ice_thickness'],np.zeros((1,8),np.float32))
+    other=deepcopy(wet);del other['seam']['arrays']['fields/xland']
+    with pytest.raises(ValueError,match='different persistent fields: fields/xland'):
+        restore_remapped_backend(backend,dict(payload,backends=[wet,other]),None,SimpleNamespace(cell_l2g=np.arange(8)),
+                                 base_dt=18.75,rate=1)
+
+
+def test_a_column_seam_with_an_empty_threshold_takes_the_fractional_rule():
+    """run_f3e336fa8500473d: the RUC column seam seals xice_threshold=None; the first move died in float(None)."""
+    from hexcore.moving_physics import sea_ice_threshold
+    assert sea_ice_threshold({'xice_threshold': None}) == pytest.approx(0.02)
+    assert sea_ice_threshold({'xice_threshold': None, 'fractional_seaice': 0}) == 0.5
+    assert sea_ice_threshold({'xice_threshold': 0.3}) == pytest.approx(0.3)
+
+
+def test_a_column_seam_surface_or_soil_field_maps_across_cells_only():
+    """run_2bfb0e1e82195f53: a seam/ field with 9 (soil) or 1 (surface) leading levels hit the height map and stopped."""
+    from hexcore.moving_physics import field_intensive
+    class Weights:
+        source_dzw = np.ones(55)
+        source_area = np.ones(4)
+        def intensive(self, values):
+            return np.asarray(values, dtype=np.float64) * 2
+        def layer_intensive(self, values):
+            raise ValueError('height map layer field has invalid source dimensions')
+    soil = np.ones((9, 4))
+    np.testing.assert_array_equal(field_intensive(soil, Weights(), 'seam/smois'), soil * 2)
+    with pytest.raises(ValueError, match='invalid source dimensions'):
+        field_intensive(np.ones((55, 4)), Weights(), 'seam/qke')
+
+
+def test_blended_surface_optics_come_with_the_new_members_ice():
+    """A check of run_2bfb0e1e82195f53: carried albedo against the new member's xice gave RUC an ice albedo above 1."""
+    from hexcore.moving_physics import STATIC
+    assert {'fields/xice', 'fields/albedo', 'fields/emiss', 'fields/xicem'} <= STATIC

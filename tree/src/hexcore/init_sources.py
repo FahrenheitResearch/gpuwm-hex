@@ -259,13 +259,15 @@ def validate_row(row: dict[str, Any]) -> None:
         if block is None:
             continue
         is_forecast = block_name.endswith("forecast")
-        allowed = {"interval_hours", "products", "decode"} | ({"max_hours"} if is_forecast else {"forecast"})
+        allowed = {"interval_hours", "products", "decode"} | ({"max_hours", "ladders"} if is_forecast else {"forecast"})
         if set(block) - allowed:
             _refuse(f"{row['id']}: unknown {block_name} keys {sorted(set(block) - allowed)}")
         if type(block.get("interval_hours")) is not int or block["interval_hours"] < 1:
             _refuse(f"{row['id']}: {block_name}.interval_hours must be a positive integer")
         if is_forecast and (type(block.get("max_hours")) is not int or block["max_hours"] < 1):
             _refuse(f"{row['id']}: {block_name}.max_hours must be a positive integer")
+        if is_forecast and "ladders" in block:
+            _validate_ladders(row["id"], block)
         if "products" in block:
             nested = {key: value for key, value in row.items() if key not in ("forecast", "surface_series")}
             nested["products"] = block["products"]
@@ -370,13 +372,65 @@ class Cycle:
         return self.when.strftime("%Y-%m-%d_%H:%M:%S")
 
 
+def _validate_ladders(row_id: str, forecast: dict[str, Any]) -> None:
+    """``forecast.ladders``: the leads a publisher posts, per cycle hour, as [until, every] steps.
+
+    The breakage it prevents: one interval for the whole range either refused real leads (IFS posts 3-hourly
+    to 144 h, then 6-hourly to 360 h, and its 06/18 UTC runs stop at 144 h) or admitted leads that are never
+    posted and failed later as a missing object. The first entry whose ``cycle_hours`` holds the cycle's
+    hour (or is null) decides; ``interval_hours`` stays the boundary cadence, a spacing every ladder posts.
+    """
+    ladders = forecast["ladders"]
+    if not isinstance(ladders, list) or not ladders:
+        _refuse(f"{row_id}: forecast.ladders must be a non-empty list")
+    top = 0
+    for ladder in ladders:
+        if not isinstance(ladder, dict) or set(ladder) - {"cycle_hours", "steps"}:
+            _refuse(f"{row_id}: a forecast ladder declares only cycle_hours and steps")
+        hours = ladder.get("cycle_hours")
+        if hours is not None and (not isinstance(hours, list) or not hours
+                                  or any(type(h) is not int or not 0 <= h <= 23 for h in hours)):
+            _refuse(f"{row_id}: ladder cycle_hours must list UTC hours 0-23, or be null for every other cycle")
+        steps = ladder.get("steps")
+        previous = 0
+        if not isinstance(steps, list) or not steps:
+            _refuse(f"{row_id}: a forecast ladder needs [until, every] steps")
+        for step in steps:
+            if (not isinstance(step, list) or len(step) != 2 or any(type(v) is not int or v < 1 for v in step)
+                    or step[0] <= previous or (step[0] - previous) % step[1]):
+                _refuse(f"{row_id}: ladder step {step} must be [until, every] with until rising and reached "
+                        "in whole steps")
+            previous = step[0]
+        top = max(top, previous)
+    if top != forecast["max_hours"]:
+        _refuse(f"{row_id}: forecast.max_hours {forecast['max_hours']} differs from the ladders' last lead {top}")
+
+
+def _lead_posted(forecast: dict[str, Any], cycle_hour: int, lead_hours: int) -> bool:
+    ladders = forecast.get("ladders")
+    if not ladders:
+        return lead_hours <= forecast["max_hours"] and lead_hours % forecast["interval_hours"] == 0
+    for ladder in ladders:
+        if ladder.get("cycle_hours") is None or cycle_hour in ladder["cycle_hours"]:
+            start = 0
+            for until, every in ladder["steps"]:
+                if lead_hours <= until:
+                    return (lead_hours - start) % every == 0
+                start = until
+            return False
+    return False
+
+
 def template_context(cycle: Cycle, row: dict[str, Any], member: int | None, lead_hours: int = 0) -> dict[str, Any]:
     if lead_hours < 0:
         _refuse("forecast lead must be nonnegative")
     forecast = row.get("forecast", {})
-    if lead_hours and (not forecast or lead_hours > forecast["max_hours"]
-                       or lead_hours % forecast["interval_hours"]):
-        _refuse(f"{row['id']}: lead {lead_hours} is outside the row's forecast cadence/range")
+    if lead_hours and (not forecast or not _lead_posted(forecast, cycle.when.hour, lead_hours)):
+        ladder = (f"ladders {forecast['ladders']}" if forecast.get("ladders") else
+                  f"every {forecast['interval_hours']} h to {forecast['max_hours']} h" if forecast else
+                  "no forecast hours (an analysis source)")
+        _refuse(f"{row['id']}: lead {lead_hours} is outside the row's forecast cadence/range: a "
+                f"{cycle.when.hour:02d} UTC cycle posts {ladder}")
     valid = cycle.when + timedelta(hours=lead_hours)
     context: dict[str, Any] = {
         "lead": lead_hours, "valid_yyyymmddhh": valid.strftime("%Y%m%d%H"),
@@ -589,9 +643,20 @@ def coalesce_spans(spans: list[tuple[int, int | None]],
 
 
 def _fetch_selected(plan: ProductPlan, target: Path, jobs: int) -> dict[str, Any]:
-    pairs = list(zip([plan.url, *plan.url_mirrors], [plan.index_url, *plan.index_mirrors]))
+    # A mirror past the last index template is an archive that publishes the object with no index (GDEX's GFS
+    # holdings): that address is read whole.  Breakage it prevents: a 2015-2020 GFS cycle is on GDEX only, and
+    # zip() dropped every mirror without an index, so the row refused cycles the engine's own archive table serves.
+    urls = [plan.url, *plan.url_mirrors]
+    indexes = [plan.index_url, *plan.index_mirrors]
+    pairs = [(url, indexes[k] if k < len(indexes) else None) for k, url in enumerate(urls)]
     for position, (data_url, index_url) in enumerate(pairs):
         try:
+            if index_url is None:
+                if jobs > 1 and plan.codec is None:
+                    parallel = _fetch_whole_parallel(target, data_url, jobs)
+                    if parallel is not None:
+                        return {"url": data_url, "index_url": None, **parallel}
+                return {"url": data_url, "index_url": None, **_fetch_whole_from(plan, target, data_url)}
             return _fetch_selected_from(plan, target, jobs, data_url, index_url)
         except InitSourceRefusal:
             if position == len(pairs) - 1:
@@ -791,7 +856,7 @@ def acquire(plans: list[ProductPlan], dest: Path, cycle: Cycle, *, staged: list[
         if target.stat().st_size == 0:
             _refuse(f"{target} is empty; an empty product decodes to missing fields")
         out.append({"role": plan.role, "file": str(target), "bytes": target.stat().st_size,
-                    "sha256": _sha256_file(target), "url": plan.url, "transport": plan.transport,
+                    "sha256": _sha256_file(target), "url": how.get("url", plan.url), "transport": plan.transport,
                     "fields": plan.fields, "reason": plan.reason, "id": plan.product_id,
                     "remap": plan.remap, **how})
     return out

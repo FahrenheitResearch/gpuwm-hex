@@ -77,7 +77,7 @@ def attach_subcycle_graphs(driver: Any) -> "SubcycleGraphs":
 
 
 #: Meshes of this many cells and more run the dynamics subcycle eager by
-#: default (census items 5 and 11, HEX-MEMORY-2026-10-14 CENSUS.md).  A replay
+#: default (the 2026-10-14 memory census, items 5 and 11).  A replay
 #: reads and writes fixed addresses, so the graph holds a staged copy of every
 #: subcycle input (12.0 KB per column at x1.40962) and keeps its private
 #: scratch pool for the life of the run (19.4 KB per column), memory the

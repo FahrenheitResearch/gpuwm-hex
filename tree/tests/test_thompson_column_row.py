@@ -26,14 +26,16 @@ def test_model_order_is_the_engine_species_row():
         species_row_for_scheme("mp_thompson_aerosols").names())
 
 
-def test_the_boundary_drives_only_the_six_masses():
+def test_the_boundary_drives_the_masses_and_the_numbers_a_stream_carries():
     # An MPAS LBC stream carries lbc_qv..lbc_qg and the two aerosols but no
-    # ni/nr/nc; driving all eleven refuses at the door ("noncontiguous model
-    # species"), measured on conus12km 2026-10-03.
+    # ni/nr/nc; driving all eleven refused at the door ("noncontiguous model
+    # species", conus12km 2026-10-03), so the aerosols stay appended.  The
+    # three hydrometeor numbers are driven where the stream carries them (a
+    # region cut from a kept hex parent), and the door drives the prefix a
+    # stream supplies, so an MPAS stream still drives exactly the six masses.
     assert THOMPSON_AERO_COLUMN_ROW.driven_scalar_names == (
-        "qv", "qc", "qr", "qi", "qs", "qg")
-    assert THOMPSON_AERO_COLUMN_ROW.appended_scalar_names == (
-        "ni", "nr", "nc", "nwfa", "nifa")
+        "qv", "qc", "qr", "qi", "qs", "qg", "ni", "nr", "nc")
+    assert THOMPSON_AERO_COLUMN_ROW.appended_scalar_names == ("nwfa", "nifa")
 
 
 def test_same_frozen_batch_and_scheme_alias():

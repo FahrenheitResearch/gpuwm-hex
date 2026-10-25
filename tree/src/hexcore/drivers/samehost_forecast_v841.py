@@ -187,6 +187,50 @@ def built_layout_arguments(arguments, request, count):
     return selected
 
 
+def lease_vram_mib(grid, count, *, cells, levels=55):
+    """The per-card VRAM a box lease should declare for this mesh on ``count`` cards of this host.
+
+    THE BREAKAGE IT PREVENTS: box leases were declared by hand from an old
+    receipt (the 30 km 2-card run declared 26,000 MiB and each card peaked at
+    29,538 MiB), so the pool admitted other jobs against memory the run was
+    already using.  This prices exactly what the forecast door's admission
+    prices -- the same footprint row, through the measured same-host rank
+    peaks, on this host's card, at the real local column count of the
+    partition the door will build (the verified, cached layout builder) --
+    and returns its required bytes (predicted peak plus the card margin).
+    Reads the card's shape from the driver, so it needs a visible card.
+    """
+    import math
+    from types import SimpleNamespace
+    from hexcore.device_admission import MIB, _through_measured_rank_peaks, model_for_card, samehost_rank_model
+    from hexcore.forecast_door import read_card_profile
+    from hexcore.file_digest import sha256_file
+    from hexcore.partition_assets_v841 import load_layouts_npz
+
+    count = int(count)
+    card = read_card_profile()
+    if count > 1:
+        selected = built_layout_arguments(SimpleNamespace(), SimpleNamespace(grid=Path(grid)), count)
+        layouts = load_layouts_npz(selected.samehost_layouts, expect_mesh_sha256=sha256_file(grid),
+                                   expect_part_sha256=sha256_file(selected.samehost_part), expect_halo_rings=3)
+        local = [int(layout.n_local_cells) for layout in layouts]
+        model = samehost_rank_model(model_for_card(card, "global"))
+        basis = "same-host rank admission row at the largest rank's local columns"
+    else:
+        local = [int(cells)]
+        model = _through_measured_rank_peaks(model_for_card(card, "global"), single_card=True)
+        if int(levels) != model.levels:
+            from dataclasses import replace
+            scale = max(1.0, int(levels) / model.levels)
+            model = replace(model, levels=int(levels), bytes_per_cell=model.bytes_per_cell * scale,
+                            restated_bytes_per_cell=model.restated_bytes_per_cell * scale, stage_peak_fits=())
+        basis = "single-card admission row, through the measured single-card peak where one exists"
+    required = max(model.required_bytes(n) for n in local)
+    return {"vram_mib_per_card": int(math.ceil(required / MIB)), "cards": count,
+            "local_columns": local, "predicted_peak_mib": round(max(model.predict_bytes(n) for n in local) / MIB),
+            "card": card.as_dict(), "basis": basis, "model": model.provenance}
+
+
 def visible_card_memory():
     """Read only CUDA-visible cards, after the rental queue masks its grant."""
     for name in ("GPUWM_HEX_NO_LOCAL_GPU", "GPUWM_NO_LOCAL_GPU"):
@@ -687,7 +731,7 @@ def admit_request(request, registry, options, door):
         configuration = door.request_configuration(request)
         model = request.model.with_card(card, configuration) if isinstance(request.model, door._SuppliedRow) else model_for_card(card, configuration)
         if request.model is None:
-            model = samehost_rank_model(model)
+            model = samehost_rank_model(model, ranks=len(options["devices"]))
         owned_ranks = [rank for rank, target in enumerate(options["devices"]) if target == device]
         predicted = sum(int(round(model.predict_bytes(options["layouts"][rank].n_local_cells))) for rank in owned_ranks)
         stochastic_arrays = {}
@@ -838,7 +882,7 @@ def _capture_rank_arrays(proof, host, stack, step, label, download, *, resident)
     for payload in (backend.step_receipt(), diagnostic["metadata"], diagnostic["receipt"]):
         if dict(payload["surface_classification"]) != classification:
             raise RuntimeError("history backend census differs from its local constructor")
-        expected_census = census if step else None
+        expected_census = payload.get("noahmp_routing_census", census) if step else None
         executed = payload.get("last_noahmp_census")
         if executed is None:
             executed = payload.get("last_land_surface_census")
@@ -1244,6 +1288,15 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
         product_ready = HistoryReady(on_history_ready, session_factory=history_product_session,
                                      max_pending=history_product_max_pending,
                                      required_product_ids=required_product_ids)
+    # F000's surface-layer diagnostics come from the first physics call
+    # (hexcore.f000_first_call).  A run resumed mid-forecast (start_step > 0)
+    # captures no f000; its checkpoints are taken in the step loop, at their
+    # own boundaries, never from the held frame.
+    from hexcore import f000_first_call
+    first_call = (f000_first_call.FirstCallHandoff()
+                  if (0 in captures and start_step == 0 and int(schedule["steps"]) > 0)
+                  else None)
+    held_f000 = []
     try:
         with SameHostRanks(devices, transport, cp=cp, physics_scope=physics_scope, streams=rank_streams) as ranks:
             def boundary(step):
@@ -1266,7 +1319,11 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                             "receipt": {"step": step, "arwen_v2_surface_execution": {"last_noahmp_census": None}}}
                 if step == 0:
                     proof.overlay_f000_initialized_surface_diagnostics(snapshot["arrays"], host["f000_surface_diagnostics"]["arrays"])
-                    forecast.complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"])
+                    snapshot["receipt"]["f000_completed_surface_diagnostics"] = (
+                        forecast.complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"]))
+                    if first_call is not None:
+                        snapshot["receipt"]["f000_first_call_diagnostics"] = (
+                            forecast.complete_f000_from_first_call(snapshot, first_call.take()))
                 physical_gates[str(step)] = proof.physical_snapshot_gate(snapshot, allow_initial_negative_qv=(step == 0),
                     scalar_names=host["scalar_names"], surface_accumulators=host["surface_accumulators"],
                     surface_accumulator_declarations=host.get("surface_accumulator_declarations"))
@@ -1287,6 +1344,12 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                                             valid_time=schedule["valid_times"][step])
                     return
                 arrays = ranks.call(gather)
+                if step == 0 and first_call is not None and not first_call.done:
+                    held_f000.append(arrays)  # host copies; written once the first call has run
+                    return
+                write_sync(step, arrays)
+            def write_sync(step, arrays):
+                history_path = Path(output_root) / f"cuda-history.{schedule['labels'][step]}.nc"
                 snapshot = assemble_snapshot(step, arrays)
                 frame_hashes[str(step)] = {name: proof.array_sha256(array) for name, array in snapshot["arrays"].items()}
                 with measure_wall("history_nested_in_capture"), output_span("forecast.output.history", step):
@@ -1294,6 +1357,17 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                 if product_ready is not None:
                     product_ready.submit(frame_records[str(step)], step=step, label=schedule["labels"][step],
                                          valid_time=schedule["valid_times"][step])
+            def hand_f000_first_call():
+                def read(rank):
+                    return f000_first_call.read_arwen_first_call(stacks[rank]["backend"], cp)
+                with measure_wall("f000_first_call"):
+                    per_rank = ranks.call(read)
+                    names = sorted(set.intersection(*(set(m) for m in per_rank))) if per_rank else []
+                    first_call.put(assemble_owned_arrays(
+                        layouts, [{n: m[n] for n in names} for m in per_rank],
+                        kinds={n: "cell" for n in names}, native_pads=()) if names else {})
+                if held_f000:
+                    write_sync(0, held_f000.pop())
             if 0 in captures:
                 capture(0)
             boundary(start_step)
@@ -1320,7 +1394,8 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                             lambda held, start, length, **context:
                             iau_forcing.add(rank, held, start, length, **context))}))
                     atmosphere = stack["driver"].atmosphere
-                    exchanger.round_step_boundary(atmosphere.state, atmosphere.saved)
+                    exchanger.round_step_boundary(atmosphere.state, atmosphere.saved,
+                                                  result.dynamics_tendencies)
                     exchanger.end_step()
                     previous[rank] = result.committed.surface_updates
                     forcing[rank] = result.dynamics_tendencies
@@ -1375,6 +1450,8 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                         time_ledger.end_if_open("forecast.first_step")
                 elapsed = time.perf_counter() - mark
                 step_rows.append({"step": step, "seconds": elapsed, "ranks": rank_receipts})
+                if step == 1 and first_call is not None:
+                    hand_f000_first_call()
                 with measure_wall("health_with_sync"):
                     health.append(ranks.call(lambda rank: forecast.step_health_gate(stacks[rank], step, cp)))
                 if step == 1:
@@ -1395,6 +1472,10 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                 with measure_wall("step_log"):
                     print(json.dumps({"step": step, "seconds": elapsed, "samehost_ranks": len(devices)}), flush=True)
                 gc_policy.after_step(step)
+            if first_call is not None:
+                first_call.put(None)  # the loop ended before a first call (refused step 1)
+                if held_f000:
+                    write_sync(0, held_f000.pop())
             if refusal is None and all(carrier is not None for carrier in forcing):
                 def collect_forcing(rank):
                     carrier = forcing[rank]
@@ -1408,6 +1489,8 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                 final_forcing_hashes = {name: {"dtype": value.dtype.str, "shape": list(value.shape),
                                               "sha256": proof.array_sha256(value)} for name, value in arrays.items()}
     finally:
+        if first_call is not None:
+            first_call.put(None)  # no first call will come; never leave a writer waiting
         gc_policy.exit()
         if product_ready is not None and last_step_clock is not None:
             product_ready.forecast_ended(*last_step_clock)

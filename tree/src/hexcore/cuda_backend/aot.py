@@ -421,7 +421,8 @@ def cache_compiler_banner(pack):
     version = pack.compiler["nvrtc"]
     if not compile_platform.nvrtc_build(banner).startswith(f"{version[0]}.{version[1]}."):
         return
-    if not compile_platform.nvrtc_build_id(banner).startswith("CL-"):
+    from .compile_contract import build_id_accepted
+    if not build_id_accepted(compile_platform.nvrtc_build_id(banner)):
         return
     with _BRIDGE_LOCK:
         original = compile_platform.nvrtc_banner

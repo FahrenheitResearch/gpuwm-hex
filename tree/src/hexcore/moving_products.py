@@ -35,7 +35,9 @@ def track_document(run, best_track=None):
             lat=fix.get('lat'), lon=fix.get('lon'), mslp_hpa=fix.get('mslp_min_hpa'),
             instantaneous_wind10_ms=fix.get('vmax10_ms'), member=frame['member'],
             segment=frame['segment'], offset_km=frame.get('offset_km'),
-            inside_interior=frame.get('inside_interior')))
+            inside_interior=frame.get('inside_interior'),
+            # What the fixer saw (a setup target's area, peak, MLCAPE and shear; a boundary's axis), as JSON.
+            fix_reason=fix.get('reason'), fix_components=json.dumps(fix.get('components') or {}, sort_keys=True)))
     if not any(f is not None for f in fixes):
         raise MovingCaseError('moving products requires at least one accepted model-state fix')
     best = None
@@ -56,11 +58,50 @@ def track_document(run, best_track=None):
     return document, diagnostics
 
 
+def finish_segment_maps(run, *, poll_seconds=5.0, timeout_seconds=3600.0, log=print, alive=None, restart=None):
+    """Every closed segment's field maps exist before the moving run's products are called done.
+
+    THE BREAKAGE THIS PREVENTS: each segment's forecast starts its product door detached, and the last one is still
+    drawing when ``moving run`` returns. Under a card lease the wrapper then stops what is left of the process tree,
+    so the last segment's maps were never drawn: GFS 2026-10-23 18Z f354 setup-following run, box L 2026-10-24
+    ("child-barrier reaped=51 stopped=5"), segment-012 (+20 to +24 h) left with an empty products folder. A stage
+    still drawing is waited for; one that died is redrawn (moving_run.restart_dead_products) and waited for.
+    Returns {"waited": [...], "redrawn": [...], "unfinished": [...]}."""
+    from .moving_run import product_stage_alive, restart_dead_products
+    alive = alive or product_stage_alive
+    restart = restart or restart_dead_products
+    run = Path(run)
+    segments = json.loads((run/'controller.json').read_text()).get('segments', [])
+
+    def pending():
+        out = []
+        for record in segments:
+            fc = Path(record.get('path', ''))/'fc'
+            log_path = fc/'products.log'
+            if record.get('rc') != 0 or not log_path.is_file():
+                continue
+            if not any(line.startswith('PRODUCTS done ') for line in log_path.read_text(errors='replace').splitlines()):
+                out.append(fc)
+        return out
+
+    waiting = pending()
+    waited = [str(fc) for fc in waiting if alive(fc)]
+    redrawn = restart(segments, log) if len(waited) < len(waiting) else []
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        left = pending()
+        if not left or not any(alive(fc) for fc in left) or time.monotonic() > deadline:
+            break
+        time.sleep(poll_seconds)
+    return dict(waited=waited, redrawn=list(redrawn), unfinished=[str(fc) for fc in pending()])
+
+
 def products(run, out=None, best_track=None):
     from gpuwm.rustwx import find_renderer, renderer_env
     started = time.monotonic()
     run = Path(run).expanduser().resolve()
     out = Path(out).expanduser().resolve() if out else run/'moving-products'
+    segment_maps = finish_segment_maps(run)
     document, diagnostics = track_document(run,best_track)
     out.mkdir(parents=True,exist_ok=True)
     tracks = out/'tracks.json'
@@ -81,7 +122,8 @@ def products(run, out=None, best_track=None):
         model_frames=len(diagnostics),accepted_fixes=sum(row['ok'] for row in diagnostics),
         products=['track.png','tracks.json','intensity.csv'],
         field_products='each segment/fc/products: native mesh for that segment',
-        best_track_role='verification only; never passed into the controller')
+        best_track_role='verification only; never passed into the controller',
+        segment_maps=segment_maps)
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
     if result.returncode:
         raise MovingCaseError(f'rw_wrfbatch exited {result.returncode}; see {out/"renderer.log"}')

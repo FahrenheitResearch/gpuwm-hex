@@ -95,6 +95,7 @@ def _config(arguments: argparse.Namespace) -> CascadeConfig:
         state=None if arguments.state is None else Path(arguments.state),
         metrics=None if arguments.metrics is None else Path(arguments.metrics),
         policy=None if arguments.policy is None else Path(arguments.policy),
+        forecast_args=tuple(str(item) for item in getattr(arguments, "forecast_arg", None) or ()),
     )
 
 
@@ -306,6 +307,9 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
                              "is not cycle 1 of the world")
     parser.add_argument("--metrics", type=Path, default=None, metavar="FILE")
     parser.add_argument("--policy", type=Path, default=None, metavar="FILE")
+    parser.add_argument("--forecast-arg", action="append", default=[], metavar="ARG",
+                        help="a flag for every fine forecast, e.g. --forecast-arg=--physics-suite=convection_permitting "
+                             "(`gpuwm-hex physics list`); repeat for several")
     parser.add_argument("--no-render", dest="render", action="store_false", default=True,
                         help="skip the frame; the forecast still runs")
     parser.add_argument(

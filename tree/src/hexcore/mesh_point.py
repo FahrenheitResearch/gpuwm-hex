@@ -536,6 +536,10 @@ class PointRequest:
     vram_gib: float | None
     mesh_exe: Path | None
     name: str | None
+    #: A drawn region (a polygon row, :mod:`hexcore.mesh_shape`) instead of
+    #: the cap at ``point``.  ``point`` is then its centroid and
+    #: ``radius_km`` its equal-area radius, both descriptive.
+    shape: Mapping[str, Any] | None = None
 
     @property
     def fine_km(self) -> float:
@@ -546,11 +550,52 @@ class PointRequest:
         return self.transition_factor * self.fine_km
 
 
+def drawn_shape(arguments: argparse.Namespace) -> dict[str, Any] | None:
+    """The region ``--shape FILE`` or ``--ellipse ...`` draws, or None."""
+
+    from . import mesh_shape
+
+    shape_file = getattr(arguments, "shape", None)
+    ellipse = getattr(arguments, "ellipse", None)
+    if shape_file is not None and ellipse is not None:
+        raise PointPlanRefusal("--shape and --ellipse both draw the core; give one")
+    try:
+        if shape_file is not None:
+            return mesh_shape.load_shape(Path(shape_file))
+        if ellipse is not None:
+            return mesh_shape.parse_ellipse(ellipse)
+    except mesh_shape.ShapeRefusal as error:
+        raise PointPlanRefusal(str(error)) from error
+    return None
+
+
 def request_from_arguments(arguments: argparse.Namespace) -> PointRequest:
+    from . import mesh_shape
+
+    shape = drawn_shape(arguments)
+    if shape is not None and getattr(arguments, "point", None) is not None:
+        raise PointPlanRefusal(
+            "--point and a drawn core (--shape/--ellipse) were both given; the drawn "
+            "region's centre is its own, so name one")
+    if shape is not None and shape["kind"] == "cap":
+        # A drawn circle IS the circle door: same spec, same bytes.
+        point = (float(shape["center_deg"][0]), float(shape["center_deg"][1]))
+        radius = float(shape["radius_km"])
+        shape = None
+    elif shape is not None:
+        point = mesh_shape.centroid(shape)
+        radius = mesh_shape.equal_area_radius_km(shape)
+    else:
+        if getattr(arguments, "point", None) is None:
+            raise PointPlanRefusal(
+                "no fine core was named: pass --point LAT,LON (with --radius-km), "
+                "--shape FILE or --ellipse LAT,LON,SEMI_MAJOR_KM,SEMI_MINOR_KM[,AZIMUTH_DEG]")
+        point = parse_point(arguments.point)
+        radius = float(arguments.radius_km)
     return PointRequest(
-        point=parse_point(arguments.point),
+        point=point,
         fine_dx_m=float(arguments.fine_dx_m),
-        radius_km=float(arguments.radius_km),
+        radius_km=radius,
         background_km=float(arguments.background_km),
         transition_factor=float(arguments.transition_factor),
         ring_factor=float(arguments.ring_factor),
@@ -559,7 +604,63 @@ def request_from_arguments(arguments: argparse.Namespace) -> PointRequest:
         vram_gib=arguments.vram_gib,
         mesh_exe=arguments.mesh_exe,
         name=getattr(arguments, "name", None),
+        shape=shape,
     )
+
+
+def request_spec(request: PointRequest) -> dict[str, Any]:
+    """The resolution spec a request builds: the cap ladder at the point, or
+    the same ladder around a drawn region (:mod:`hexcore.mesh_shape`)."""
+
+    if request.shape is None:
+        return ladder_spec(
+            request.point,
+            fine_dx_m=request.fine_dx_m,
+            radius_km=request.radius_km,
+            background_km=request.background_km,
+            transition_factor=request.transition_factor,
+            ring_factor=request.ring_factor,
+            name=request.name,
+        )
+    from . import mesh_shape
+
+    lat, lon = request.point
+    return mesh_shape.shape_ladder_spec(
+        request.shape,
+        rungs_km=ladder_rungs(request.background_km, request.fine_dx_m),
+        background_km=request.background_km,
+        transition_factor=request.transition_factor,
+        ring_factor=request.ring_factor,
+        name=request.name or (
+            f"shape {lat:.4f}N {lon:.4f}E {request.fine_dx_m:g}m core "
+            f"{mesh_shape.area_km2(request.shape):,.0f} km2, outline grown "
+            f"{request.transition_km:g} km"),
+    )
+
+
+def request_cull_region(request: PointRequest) -> dict[str, Any]:
+    if request.shape is None:
+        return cull_region(request.point, request.radius_km, request.cull_pad_scale)
+    from . import mesh_shape
+
+    try:
+        return mesh_shape.shape_cull_region(
+            request.shape, grown_km=request.transition_km, pad_scale=request.cull_pad_scale)
+    except mesh_shape.ShapeRefusal as error:
+        raise PointPlanRefusal(str(error)) from error
+
+
+def request_halo_region(request: PointRequest, halo_km: float) -> dict[str, Any]:
+    if request.shape is None:
+        return halo_region(request.point, request.radius_km, request.cull_pad_scale, halo_km)
+    from . import mesh_shape
+
+    try:
+        return mesh_shape.shape_halo_region(
+            request.shape, grown_km=request.transition_km, pad_scale=request.cull_pad_scale,
+            halo_km=halo_km)
+    except mesh_shape.ShapeRefusal as error:
+        raise PointPlanRefusal(str(error)) from error
 
 
 def plan_point(request: PointRequest) -> dict[str, Any]:
@@ -567,16 +668,8 @@ def plan_point(request: PointRequest) -> dict[str, Any]:
 
     from .swath.sizing import dry_run
 
-    spec = ladder_spec(
-        request.point,
-        fine_dx_m=request.fine_dx_m,
-        radius_km=request.radius_km,
-        background_km=request.background_km,
-        transition_factor=request.transition_factor,
-        ring_factor=request.ring_factor,
-        name=request.name,
-    )
-    region = cull_region(request.point, request.radius_km, request.cull_pad_scale)
+    spec = request_spec(request)
+    region = request_cull_region(request)
     generator_card = request.card["generator_card"] if request.card else None
     sizing = dry_run(
         spec,
@@ -590,18 +683,28 @@ def plan_point(request: PointRequest) -> dict[str, Any]:
         if attainment and attainment[-1].get("attained_spacing_km")
         else request.fine_km
     )
-    cull = predicted_cull_cells(
-        spec=spec,
-        radius_km=request.radius_km,
-        pad_scale=request.cull_pad_scale,
-        attained_fine_km=attained_km,
-    )
+    if request.shape is None:
+        cull = predicted_cull_cells(
+            spec=spec,
+            radius_km=request.radius_km,
+            pad_scale=request.cull_pad_scale,
+            attained_fine_km=attained_km,
+        )
+        cull["attainment_basis"] = (
+            "generator region_attainment on the innermost cap (cap regions are "
+            "the shape the generator's attainment reports correctly; see "
+            "hexcore.swath.sizing)"
+        )
+    else:
+        from . import mesh_shape
+
+        cull = mesh_shape.predicted_shape_cull_cells(
+            spec=spec, drawn=request.shape, cull=region, attained_fine_km=attained_km)
+        cull["core_radius_km"] = request.radius_km
+        cull["cut_radius_km"] = None
+        cull["outline_grown_km"] = request.transition_km
+        cull["attainment_basis"] = "generator region_attainment on the innermost region"
     cull["attained_fine_spacing_km"] = attained_km
-    cull["attainment_basis"] = (
-        "generator region_attainment on the innermost cap (cap regions are "
-        "the shape the generator's attainment reports correctly; see "
-        "hexcore.swath.sizing)"
-    )
     verdict = None
     if request.card is not None:
         verdict = device_verdict(
@@ -609,9 +712,12 @@ def plan_point(request: PointRequest) -> dict[str, Any]:
                 None if request.vram_gib is None else float(request.vram_gib) * 1024.0
             ),
         )
-        verdict["max_core_radius_km_on_this_card"] = max_radius_for_cells(
-            int(verdict["cells_that_fit"]), request, attained_fine_km=attained_km,
-        )
+        # The largest CIRCLE the card holds; a drawn region has no radius to
+        # solve for, so it is priced by the cells it needs alone.
+        verdict["max_core_radius_km_on_this_card"] = (
+            max_radius_for_cells(int(verdict["cells_that_fit"]), request,
+                                 attained_fine_km=attained_km)
+            if request.shape is None else None)
     return {
         "schema": "gpuwm-hex.point-plan/v1",
         "point_deg": list(request.point),
@@ -637,6 +743,7 @@ def plan_point(request: PointRequest) -> dict[str, Any]:
         "cull": cull,
         "device": verdict,
         "card": request.card,
+        "drawn_shape": None if request.shape is None else dict(request.shape),
     }
 
 
@@ -656,13 +763,27 @@ def _report(plan: Mapping[str, Any]) -> list[str]:
         f"ring {plan['ring_factor']:g}x)",
         f"  parent (global)  {parent['predicted_cells']:,.0f} cells (the generator's "
         f"own sizing integral)",
-        f"  core             {plan['core_radius_km']:g} km at "
-        f"{cull['attained_fine_spacing_km'] * 1000.0:.1f} m attained -> "
-        f"{cull['core_cells']:,.0f} cells",
-        f"  cull             cut at {cull['cut_radius_km']:g} km (pad "
-        f"{plan['cull_pad_scale']:g}) -> {cull['predicted_cells']:,.0f} cells "
-        f"predicted, {cull['boundary_rings']} boundary rings ({cull['basis']})",
     ]
+    if plan.get("drawn_shape"):
+        lines += [
+            f"  core             drawn, {len(plan['drawn_shape']['vertices_deg'])} vertices, "
+            f"{cull['core_area_km2']:,.0f} km2 (equal-area radius {plan['core_radius_km']:.1f} km), "
+            f"outline grown {cull['outline_grown_km']:g} km so the drawn area is fine; "
+            f"{cull['attained_fine_spacing_km'] * 1000.0:.1f} m attained -> "
+            f"{cull['core_cells']:,.0f} cells",
+            f"  cull             the fine region grown by the pad ({plan['cull_pad_scale']:g}) -> "
+            f"{cull['predicted_cells']:,.0f} cells predicted, {cull['boundary_rings']} boundary "
+            f"rings ({cull['basis']})",
+        ]
+    else:
+        lines += [
+            f"  core             {plan['core_radius_km']:g} km at "
+            f"{cull['attained_fine_spacing_km'] * 1000.0:.1f} m attained -> "
+            f"{cull['core_cells']:,.0f} cells",
+            f"  cull             cut at {cull['cut_radius_km']:g} km (pad "
+            f"{plan['cull_pad_scale']:g}) -> {cull['predicted_cells']:,.0f} cells "
+            f"predicted, {cull['boundary_rings']} boundary rings ({cull['basis']})",
+        ]
     device = plan.get("device")
     if device is None:
         lines.append(
@@ -678,8 +799,10 @@ def _report(plan: Mapping[str, Any]) -> list[str]:
             f"  budget           {device['budget_mib']:,.1f} MiB ({device['budget_basis']})",
             f"  verdict          {'FITS' if device['fits'] else 'DOES NOT FIT'}"
             + ("" if device["fits"] else f", short by {device['short_by_mib']:,.1f} MiB")
-            + f"; this card holds {device['cells_that_fit']:,} cells, a core of up to "
-            f"{device['max_core_radius_km_on_this_card']:g} km at this spacing and pad",
+            + f"; this card holds {device['cells_that_fit']:,} cells"
+            + ("" if device["max_core_radius_km_on_this_card"] is None else
+               f", a core of up to {device['max_core_radius_km_on_this_card']:g} km at this "
+               f"spacing and pad"),
         ])
     lines.extend([
         "",
@@ -1277,7 +1400,7 @@ _BINARY64 = "binary64_earth_centred"
 def static_coordinate_errors(grid: Path, static: Path) -> list[str]:
     """Does a static built on ``grid`` hold the coordinates it declares?
 
-    THE BREAKAGE THIS PREVENTS (ARWEN-VS-HEX-TIMING-2026-10-15).  gpuwm
+    THE BREAKAGE THIS PREVENTS (2026-10-15).  gpuwm
     2.9.0's ``rw_mpas_static``, and every build of gpuwm integrate/hex-mpas
     before 46c8a71513e, reads every grid through binary32.  The static of a
     GENERATED grid then declares ``binary64_earth_centred`` and holds binary32
@@ -1404,6 +1527,11 @@ def generate_point(
     out_dir.mkdir(parents=True, exist_ok=True)
     logs = out_dir / "logs"
     stem = f"point-{row_token(request.point)}-{request.fine_dx_m:g}m-r{request.radius_km:g}km"
+    if request.shape is not None:
+        import hashlib
+
+        digest = hashlib.sha256(json.dumps(request.shape, sort_keys=True).encode()).hexdigest()[:8]
+        stem = f"shape-{row_token(request.point)}-{request.fine_dx_m:g}m-{digest}"
     if request.name:
         stem = request.name
     spec_path = out_dir / f"{stem}.spec.json"
@@ -1506,7 +1634,7 @@ def generate_point(
     working: list[Path] = []
 
     def build_halo(width_km: float) -> dict[str, Any]:
-        region = halo_region(request.point, request.radius_km, request.cull_pad_scale, width_km)
+        region = request_halo_region(request, width_km)
         path = _write_region(out_dir / f"{stem}.halo-region.json", region)
         started = time.perf_counter()
         for stale in (work_grid, work_static, work_static_receipt):
@@ -1794,6 +1922,17 @@ def add_point_arguments(parser: argparse.ArgumentParser) -> None:
         help="centre of the fine core; the spec is the registered 937.5 m "
              "ladder recipe moved to this point")
     group.add_argument(
+        "--shape", type=Path, default=None, metavar="FILE",
+        help="a drawn fine core instead of --point/--radius-km: a Shape row JSON "
+             "(kind polygon with vertices_deg [[lat, lon], ...], lat_lon_box or cap) or "
+             "GeoJSON (Polygon, MultiPolygon, Feature, FeatureCollection; the largest "
+             "outer ring).  The outline is grown by one ramp of the fine rung so the "
+             "whole drawn area gets the fine spacing")
+    group.add_argument(
+        "--ellipse", default=None, metavar="LAT,LON,SEMI_MAJOR_KM,SEMI_MINOR_KM[,AZIMUTH_DEG]",
+        help="a drawn elliptical fine core; the azimuth is the major axis's bearing "
+             "clockwise from north (default 0)")
+    group.add_argument(
         "--fine-dx-m", type=float, default=937.5, metavar="M",
         help="fine spacing in metres; must be a rung of the halving ladder "
              "under --background-km (default 937.5)")
@@ -1914,6 +2053,10 @@ __all__ = [
     "parent_row_name",
     "parse_point",
     "plan_point",
+    "drawn_shape",
+    "request_cull_region",
+    "request_halo_region",
+    "request_spec",
     "predicted_cull_cells",
     "prove_regional_cut",
     "spacing_at",

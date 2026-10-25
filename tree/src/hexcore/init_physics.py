@@ -77,6 +77,28 @@ def unknown_suite_refusal(suite, known):
             "needs the RRFS fork's own init_atmosphere)")
 
 
+def mpas_v842_selection(suite, land_surface):
+    """``init --physics-suite`` for an MPAS-A v8.4.2 suite: the init this door writes with no suite.
+
+    MPAS-A v8.4.2 runs its suites from init_atmosphere's case-7 fields with Noah's four soil levels, and the
+    forecast allocates every other species its suite selects with the Registry defaults
+    (mpas_atmphys_init_microphysics.F), so the suite needs nothing more from the init. The suite is still named
+    in the receipt, as it is for an ArWen-route suite.
+    THE BREAKAGE THIS RETIRES (hex parity run group 7, #28): the door refused the flag ("drop the flag"), so a
+    caller that names the suite for both the init and the forecast, as it does on the ArWen route, stopped.
+    """
+    from .errors import MpasPortError
+    if land_surface == "ruc":
+        # THE BREAKAGE THIS PREVENTS: RUC's nine soil levels in an init whose suite's land model reads four.
+        raise MpasPortError(f"--physics-suite {suite} is an MPAS-A v8.4.2 suite, whose land models (Noah, Noah-MP) "
+                            "read four soil levels, and --land-surface ruc writes nine; drop --land-surface ruc")
+    return {"land_surface": land_surface or "noah", "scalar_names": (),
+            "physics_initialization": {
+                "suite": suite, "route": "mpas-suite (MPAS-A v8.4.2)",
+                "init": "case-7 fields with the land model's four soil levels, the init written with no suite",
+                "species": "allocated by the forecast with the Registry defaults (mpas_atmphys_init_microphysics.F)"}}
+
+
 def init_selection(suite, land_surface):
     from .errors import MpasPortError
     from .physics_suites import load_table, suite_row
@@ -85,6 +107,8 @@ def init_selection(suite, land_surface):
         return {"land_surface": land_surface or "noah", "scalar_names": ()}
     table = load_table()
     known = [row["name"] for row in table["suites"]]
+    if suite not in known and suite in set(table.get("mpasphys_v842", {}).get("suite_routes", {})):
+        return mpas_v842_selection(suite, land_surface)
     if suite not in known:
         raise MpasPortError(unknown_suite_refusal(suite, known))
     selectors = suite_row(suite)["selectors"]

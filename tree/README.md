@@ -1104,7 +1104,7 @@ gpuwm-hex forecast --mesh x1.2562 --grid x1.2562.grid.nc --init x1.2562.init.nc 
 - **Native comparison backends** require an explicit site build. Per-scheme
   backend selectors and `--physics-default-backend native-cpu` select that
   site's Fortran implementations. Build them with
-  `gpuwm-hex physics-resources build --pin-set v8.4.2`, then pass
+  `gpuwm-hex physics-resources build --pin-set v8.4.2 --build-native-library`, then pass
   `--native-physics-library` or set `MPAS_NATIVE_LIBRARY`. The RRFS-MPAS
   route requires its separate site build,
   `gpuwm-hex physics-resources build --pin-set rrfs`; a public install
@@ -1114,8 +1114,34 @@ gpuwm-hex forecast --mesh x1.2562 --grid x1.2562.grid.nc --init x1.2562.init.nc 
   *Correct mode* above).
 
 `--preflight` checks routing and metadata without integrating.
-`gpuwm-hex verify-mpas --deck DECK --receipt R.json --work-root DIR` runs a
-deck and compares every stream word hex writes against native MPAS.
+`gpuwm-hex verify-mpas --deck DECK --receipt R.json --work-root DIR --ratchet RATCHET`
+runs a deck and compares every stream word hex writes against native MPAS.
+The published decks are in the sdist under `verification/gates/` (see its
+README for the data layout). The headline deck runs every active physics
+slot on the GPU, so it needs no native MPAS library, no MPAS-Model tree and no
+compiler. Running it from a pip install:
+
+```sh
+pip install "gpuwm-hex[gpu-cu13]"
+gpuwm-hex physics-resources fetch
+gpuwm-hex verify-mpas --deck verification/gates/decks/mpas-headline-convection-permitting.json \
+    --ratchet verification/gates/ratchet.json --receipt hl-3.json --work-root hl-3-work
+```
+
+The comparator is the `verify` tool of gpuwm's `rw_mpas_static` bridge,
+found in the install. It loads the system netCDF-C library at run time
+(`apt install libnetcdf-dev`, `dnf install netcdf`, or set `RW_MPAS_NETCDF_LIBRARY`). `--comparator` or
+`GPUWM_HEX_RW_MPAS_VERIFY` names another build. verify-mpas captures the run's
+environment itself, before and after the forecast, and writes both captures
+into the receipt: the engine (a git checkout's commit, or for a pip install
+its installed files checked against their RECORD hashes), CUDA runtime,
+NVRTC, CuPy, driver, card and every external math header. It refuses a run
+whose numerics are not strict, whose capture is incomplete, or whose engine
+files differ from their RECORD. A deck may pin a reference environment
+(`strict_environment`). Identical words are GREEN in any environment, and the
+receipt lists how the environment differs from the reference. Differing words
+are a source regression only in the reference environment; elsewhere the
+verdict is ENVIRONMENT, with the raw counts kept.
 
 ---
 

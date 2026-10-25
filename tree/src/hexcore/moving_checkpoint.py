@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import pickle
 import time
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
@@ -158,16 +157,24 @@ def export_boundary_blocks(path, *, active, stacks, previous, forcing, host, phy
 
 
 def _seal(path, payload, backends, state, started):
+    from . import moving_carrier_codec
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".partial")
-    with temporary.open("wb") as stream:
-        pickle.dump(payload, stream, protocol=5)
-    temporary.replace(path)
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
+
+    class HashingWriter:
+        # The file hash is taken from the bytes as they are written, in order, instead of a second
+        # full read of the multi-GB carrier on one core after it is written.
+        def __init__(self, stream):
+            self.stream = stream
+
+        def write(self, data):
+            digest.update(data)
+            return self.stream.write(data)
+    with temporary.open("wb") as stream:
+        storage = moving_carrier_codec.dump(payload, HashingWriter(stream))
+    temporary.replace(path)
     inventory = [{"identity": value["identity"],
                   "seam_identity": value["seam"]["identity"],
                   "scalars": value["seam"]["scalars"],
@@ -175,6 +182,7 @@ def _seal(path, payload, backends, state, started):
                              for key, array in value["seam"]["arrays"].items()}}
                  for value in backends]
     receipt = dict(schema=payload["schema"], path=str(path), bytes=path.stat().st_size,
+                   storage=storage,
                    sha256=digest.hexdigest(), time_seconds=payload["time_seconds"],
                    registers_empty=True, backends=inventory,
                    partition=payload.get("partition", dict(kind="classes")),
@@ -213,14 +221,26 @@ def load_boundary(path):
     """
     path = Path(path)
     receipt = json.loads(path.with_suffix(path.suffix + ".json").read_text())
-    digest = hashlib.sha256()
-    with path.open('rb') as stream:
-        for block in iter(lambda: stream.read(8 << 20), b''):
-            digest.update(block)
-    if digest.hexdigest() != receipt['sha256'] or path.stat().st_size != receipt['bytes']:
-        raise ValueError('moving carrier does not match its sealed receipt')
-    with path.open('rb') as stream:
-        payload = pickle.load(stream)
+
+    def file_digest():
+        digest = hashlib.sha256()
+        with path.open('rb') as stream:
+            for block in iter(lambda: stream.read(8 << 20), b''):
+                digest.update(block)
+        return digest.hexdigest()
+
+    def verify():
+        if digest.result() != receipt['sha256'] or path.stat().st_size != receipt['bytes']:
+            raise ValueError('moving carrier does not match its sealed receipt')
+    from concurrent.futures import ThreadPoolExecutor
+    from . import moving_carrier_codec
+    # The file hash runs beside the block inflation; nothing is unpickled until it matches the receipt.
+    # THE COST THIS REMOVES: the hash and then the decode ran one after the other (7.4 s of a resumed
+    # storm-following segment's critical path, box-aws2x 2026-10-24).
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="hex-carrier-hash") as hasher:
+        digest = hasher.submit(file_digest)
+        with path.open('rb') as stream:
+            payload = moving_carrier_codec.load(stream, before_unpickle=verify)
     if payload['schema'] != 'gpuwm-hex.moving-boundary/v1':
         raise ValueError('unknown moving carrier schema')
     return payload
@@ -327,7 +347,16 @@ def identify_source_geometry(mesh, source, target_radius):
     if radius!=float(target_radius):
         raise ValueError('moving forecast earth radii differ')
     scale=(radius/source.radius_m)**2
-    if not np.array_equal(stored['areaCell'],(source.area*scale).astype(stored['areaCell'].dtype)) or not np.allclose(coordinates,source.centers,rtol=0,atol=4e-16):
+    area=stored['areaCell']
+    same=np.equal(area,(source.area*scale).astype(area.dtype))
+    if area.dtype==np.float32:
+        # A single-precision static scales its unit-sphere areas the way MPAS init does, in RKIND arithmetic:
+        # areaCell(f32) * (sphere_radius**2)(f32). THE BREAKAGE THIS PREVENTS (parity run group 4, 2026-10-24): a
+        # region cut from a kept global-row run (x1.40962 grid on the unit sphere, its native static on the Earth
+        # radius) was refused at init because 245 of 660 cut areas differ by one f32 rounding from the binary64
+        # product. The rw_mpas_mesh cull accepts the same two roundings (cull.rs same_scaled_word).
+        same|=np.equal(area,source.area.astype(np.float32)*np.float32(scale))
+    if not same.all() or not np.allclose(coordinates,source.centers,rtol=0,atol=4e-16):
         raise ValueError('source grid does not identify the stored moving boundary')
     return radius,scale
 

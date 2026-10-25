@@ -409,8 +409,16 @@ CUDA_OPTIONS = ("--std=c++17", "--fmad=false", "--ftz=false",
                 "--prec-div=true", "--prec-sqrt=true")
 
 
-@lru_cache(maxsize=1)
 def _module():
+    """The cloudiness driver module loaded on the calling card."""
+    # A CUDA module belongs to the card it was loaded on. Same-host ranks drive
+    # several cards from one process, so a cache keyed without the card hands
+    # the second card the first card's handle (CUDA_ERROR_INVALID_HANDLE at step 1).
+    return _module_on(int(_cp().cuda.Device().id))
+
+
+@lru_cache(maxsize=None)
+def _module_on(device: int):
     """Compile the driver kernels for mpas_atmphys_driver_cloudiness.F:175-234."""
     # The base's hex libm_identity/rkind_libm modules expose CPU hooks only.
     # Reuse the pinned engine's shared device implementation until f4 supplies
@@ -422,9 +430,10 @@ def _module():
     # native RKIND subnormals in the ozone interpolation multiply/add chain.
     binary, _ = compiler.compile_using_nvrtc(
         header.read_text()+"\n"+CUDA_SOURCE, options=_hex_numerics.options(CUDA_OPTIONS),
-        arch=_cp().cuda.Device().compute_capability)
-    module = function.Module()
-    module.load(binary)
+        arch=_cp().cuda.Device(device).compute_capability)
+    with _cp().cuda.Device(device):
+        module = function.Module()
+        module.load(binary)
     return module
 
 

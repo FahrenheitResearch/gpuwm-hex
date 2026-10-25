@@ -17,6 +17,14 @@ Pieces
 * ``ObjectFixer``     severe-convection centre: the dominant thresholded object
                       of a 2-D field (updraft helicity, composite reflectivity)
                       near the predicted position.
+* setup targets       follow a severe-weather SETUP rather than a cyclone:
+                      ``low`` (a surface low: the TC consensus on synoptic
+                      scales), ``cape_shear`` (the dominant area of mixed-layer
+                      CAPE x 0-6 km bulk shear), ``boundary`` (a dryline or
+                      front: the dominant 2 m dewpoint / theta-e / temperature
+                      gradient segment, oriented like the segment the user
+                      traced) and ``path`` (a path the user traced: the region goes
+                      where the user said, by time; it is not a tracker).
 * ``MotionModel``     recency-weighted least-squares motion from the fix
                       history, blended with the deep-layer steering flow
                       diagnosed from the same state while the history is short.
@@ -220,6 +228,11 @@ class StateFields:
     wind10: np.ndarray | None = None
     object_field: np.ndarray | None = None          # e.g. updraft helicity or composite reflectivity
     land: np.ndarray | None = None
+    # Setup targets. ``columns``: per-point model columns (n, nlev), level 0 at the bottom: pressure (Pa),
+    # theta (K), qv (kg/kg), u, v (m/s), plus terrain (m) and psfc (Pa) as (n,). ``surface``: t2 (K), q2 (kg/kg),
+    # psfc (Pa), each (n,). Either may be None; the fixer that needs one says so in its miss reason.
+    columns: Mapping[str, np.ndarray] | None = None
+    surface: Mapping[str, np.ndarray] | None = None
     cloud: PointCloud | None = None
 
     def points(self) -> PointCloud:
@@ -230,7 +243,7 @@ class StateFields:
 
 def fields_from_columns(lat, lon, *, psfc, terrain, t_low, pressure=None, u=None, v=None, u10=None, v10=None,
                         levels_pa=(85000.0, 70000.0) + STEERING_LEVELS_PA[2:], object_field=None, subset=None,
-                        cloud=None):
+                        cloud=None, columns=None, surface=None):
     """Build StateFields from model columns (history file or live arrays).
 
     ``subset`` (index array) limits the expensive 3-D interpolation to cells near the storm;
@@ -253,6 +266,10 @@ def fields_from_columns(lat, lon, *, psfc, terrain, t_low, pressure=None, u=None
             out.u_p[level], out.v_p[level] = uu, vv
     if object_field is not None:
         out.object_field = np.asarray(object_field, float)
+    if columns is not None:
+        out.columns = {k: np.asarray(v, float) for k, v in columns.items()}
+    if surface is not None:
+        out.surface = {k: np.asarray(v, float) for k, v in surface.items()}
     return out
 
 
@@ -286,13 +303,19 @@ class TCConfig:
     smooth_km: float = 20.0
     centroid_km: float = 100.0
     agree_km: float = 120.0
-    min_depression_hpa: float = 1.0   # MSLP minimum below the 250-450 km ring mean
+    min_depression_hpa: float = 1.0   # MSLP minimum below the ring mean (ring_inner_km..ring_outer_km)
+    ring_inner_km: float = 250.0
+    ring_outer_km: float = 450.0
     min_vort850: float = 5.0e-5       # hemisphere-signed, s-1, on the smoothed lattice
     min_components: int = 1
     vmax_radius_km: float = 250.0
     steering_inner_km: float = 0.0
     steering_outer_km: float = 500.0
     weights: dict = field(default_factory=lambda: {'mslp': 1.0, 'vort850': 1.0, 'vort700': 0.5})
+    # fix = prediction + fix_blend * (consensus - prediction). 1.0 for a cyclone (its centre is sharp); a broad
+    # synoptic low's smoothed minimum jumps 100-200 km between half-hourly frames (IFS f360 lee low, box L
+    # 2026-10-24: fixes 44.9N -> 46.6N -> 43.4N in 1.5 h, the region thrown 264 km off), so the low target damps it.
+    fix_blend: float = 1.0
 
 
 @dataclass
@@ -377,7 +400,7 @@ class TCFixer:
         c = self.c
         cloud = fields.points()
         glat, glon = float(guess[0]), float(wrap_lon(guess[1]))
-        half = search_km + max(450.0, c.centroid_km * 2)
+        half = search_km + max(c.ring_outer_km, c.centroid_km * 2)
         lat_ = LocalLattice(cloud, glat, glon, half, c.lattice_spacing_km)
         sig = c.smooth_km / c.lattice_spacing_km
         r0 = lat_.radius_from(0.0, 0.0)
@@ -392,7 +415,7 @@ class TCFixer:
             if np.isfinite(pin).any():
                 j = np.nanargmin(pin)
                 x0, y0 = float(lat_.x.flat[j]), float(lat_.y.flat[j])
-                ring = _ring_mean(lat_, p, x0, y0, 250.0, 450.0)
+                ring = _ring_mean(lat_, p, x0, y0, c.ring_inner_km, c.ring_outer_km)
                 depression = ring - float(pin.flat[j])
                 info['mslp'] = dict(min_hpa=float(pin.flat[j]), depression_hpa=depression)
                 if depression >= c.min_depression_hpa:
@@ -431,7 +454,7 @@ class TCFixer:
         if np.hypot(*mean) > search_km:
             fx.reason = f'consensus centre {np.hypot(*mean):.0f} km from the prediction exceeds the search radius'
             return fx
-        fx.lat, fx.lon = lat_.to_latlon(*mean)
+        fx.lat, fx.lon = lat_.to_latlon(*(c.fix_blend * np.asarray(mean, float)))
         fx.ok = True
         fx.reason = 'consensus of ' + '+'.join(used)
         if fields.wind10 is not None:
@@ -488,6 +511,371 @@ class ObjectFixer:
         fx.components = dict(object=dict(area_km2=area, peak=peak, objects=int(n)))
         fx.steering_ms = steering(fields, fx.lat, fx.lon, c.steering_inner_km, c.steering_outer_km)
         return fx
+
+
+# --------------------------------------------------------------------------- setup targets
+
+def low_config(**overrides) -> 'TCConfig':
+    """A synoptic surface low: the TC consensus (smoothed MSLP minimum + 850 hPa vorticity) on synoptic scales.
+
+    Wider lattice, smoothing, centroid and depression ring than a cyclone, and a weaker vorticity floor (a
+    mid-latitude low's smoothed 850 hPa vorticity is a few 1e-5 s-1, not a cyclone's 1e-4)."""
+    base = dict(lattice_spacing_km=15.0, search_km=200.0, search_growth_kmh=30.0, smooth_km=100.0,
+                centroid_km=200.0, agree_km=250.0, min_depression_hpa=1.0, ring_inner_km=500.0,
+                ring_outer_km=900.0, min_vort850=2.0e-5, min_components=1, vmax_radius_km=500.0,
+                steering_inner_km=0.0, steering_outer_km=800.0,
+                weights={'mslp': 1.0, 'vort850': 0.5, 'vort700': 0.0}, fix_blend=0.5)
+    base.update(overrides)
+    return TCConfig(**base)
+
+
+@dataclass
+class EnvConfig:
+    """The dominant area of a severe-weather ingredient product: mixed-layer CAPE x 0-6 km bulk shear.
+
+    index = (MLCAPE / 1000 J kg-1) * (S06 / 20 m s-1); 1 means 1000 J/kg with 20 m/s of deep-layer shear."""
+    lattice_spacing_km: float = 15.0
+    search_km: float = 300.0
+    search_growth_kmh: float = 50.0
+    smooth_km: float = 40.0
+    threshold: float = 0.25           # index units: e.g. 500 J/kg with 10 m/s, or 250 J/kg with 20 m/s
+    min_area_km2: float = 5000.0
+    distance_scale_km: float = 250.0
+    size_power: float = 0.5
+    mixed_layer_pa: float = 10000.0   # the lowest 100 hPa
+    shear_depth_m: float = 6000.0
+    fix_blend: float = 0.6            # fix = prediction + blend * (area centre - prediction): an area's centroid
+                                      # wanders with the diurnal cycle; the blend keeps the region's moves clean
+    core_fraction: float = 0.6        # the target is the area's core: the part at or above core_fraction x its peak.
+                                      # Breakage it prevents: GFS 2026-10-23 18Z f354 (box K, 2026-10-24) grew one
+                                      # connected 0.25 area to 570,000 km2 over Texas and Mexico, its centroid
+                                      # drifted 700 km to Sinaloa and the region left the storms on the Rio Grande.
+    # Storms are part of the setup: deep convection uses up the CAPE it grows from, so the index is lowest
+    # exactly where the setup is producing storms, and an index-only target walks away from them. Breakage it
+    # prevents: GFS 2026-10-23 18Z f354 cape_shear (box L, 2026-10-24) left the storm complex on the Rio Grande
+    # and Edwards Plateau after 4 h and slid 800 km WSW, ending on a storm-free Pacific CAPE plume off Sinaloa.
+    # Column-maximum reflectivity at or above storm_dbz near the area pulls the centre with weight
+    # storm_weight x the area's peak index per fully covered cell; with no storms the target is the index core.
+    storm_field: str = 'refl10cm'
+    storm_dbz: float = 35.0
+    storm_weight: float = 1.0
+    storm_reach_km: float = 150.0     # storms within this distance of the CAPE x shear area belong to it
+    # A setup moves with the weather, not across a country in an hour. When the storms died after dark on the same
+    # run (+16 h), the one connected 0.25 area stretched from Coahuila to the Pacific, its peak was a storm-free
+    # ocean plume off Sinaloa, and the fixes ran 100-150 km per 30 min check (900 km in 3.5 h). So the core is taken
+    # from the area's part within core_reach_km of the prediction, and one fix moves at most max_step_km from it.
+    core_reach_km: float | None = 200.0
+    max_step_km: float | None = 45.0
+    steering_inner_km: float = 0.0
+    steering_outer_km: float = 500.0
+
+
+@dataclass
+class BoundaryConfig:
+    """A dryline or front: the dominant gradient segment of a surface scalar near the prediction."""
+    field: str = 'dewpoint'           # 'dewpoint' (dryline), 'theta_e' or 'temperature' (fronts), from t2/q2/psfc
+    lattice_spacing_km: float = 6.0
+    search_km: float = 200.0
+    search_growth_kmh: float = 40.0
+    smooth_km: float = 18.0
+    threshold: float = 4.0            # K per 100 km
+    min_area_km2: float = 2000.0
+    distance_scale_km: float = 150.0
+    size_power: float = 0.5
+    segment: list | None = None       # [[lat, lon], [lat, lon]]: the segment the user traced at the start
+    orientation_weight: float = 1.0   # score *= |cos(angle to the segment's orientation)| ** weight
+    fix_blend: float = 0.7
+    steering_inner_km: float = 0.0
+    steering_outer_km: float = 400.0
+
+
+@dataclass
+class PathConfig:
+    """A path the user traced: rows of [seconds since the run's start, lat, lon]. Not a tracker."""
+    rows: list = field(default_factory=list)
+    search_km: float = 0.0
+    search_growth_kmh: float = 0.0
+
+
+def _virtual(t, q):
+    return t * (1.0 + 0.608 * q)
+
+
+def _saturation_mixing_ratio(t, p):
+    es = 611.2 * np.exp(17.67 * (t - 273.15) / np.maximum(t - 29.65, 1.0))
+    return 0.622 * es / np.maximum(p - es, 1.0)
+
+
+def _theta_e(t, p, r, t_lcl):
+    """Bolton (1980) eq. 43; r in kg/kg."""
+    rg = r * 1000.0
+    return (t * (100000.0 / p) ** (0.2854 * (1.0 - 0.00028 * rg))
+            * np.exp((3.376 / t_lcl - 0.00254) * rg * (1.0 + 0.00081 * rg)))
+
+
+def _lcl_temperature(t, r, p):
+    """Bolton (1980) eq. 21 from the vapour pressure (hPa)."""
+    e = np.maximum(r * p / (0.622 + r), 1.0) / 100.0
+    return 2840.0 / (3.5 * np.log(t) - np.log(e) - 4.805) + 55.0
+
+
+def mlcape_and_shear(columns: Mapping[str, np.ndarray], mixed_layer_pa=10000.0, shear_depth_m=6000.0):
+    """Mixed-layer CAPE (J/kg: positive buoyancy area of a pseudo-adiabatic parcel, Bolton theta-e, virtual
+    temperature) and the 0-shear_depth_m bulk shear (m/s) of model columns, vectorised over columns.
+
+    columns: pressure, theta, qv, u, v as (n, nlev) with level 0 at the bottom, and terrain, psfc as (n,)."""
+    p = np.asarray(columns['pressure'], float)
+    th = np.asarray(columns['theta'], float)
+    qv = np.maximum(np.asarray(columns['qv'], float), 1e-8)
+    u, v = np.asarray(columns['u'], float), np.asarray(columns['v'], float)
+    psfc = np.asarray(columns['psfc'], float)
+    kappa = RD / CP
+    t = th * (p / 1.0e5) ** kappa
+    tv = _virtual(t, qv)
+    # heights above the ground (hypsometric, from the surface pressure)
+    z = np.empty_like(p)
+    z[:, 0] = RD * tv[:, 0] / G * np.log(np.maximum(psfc, p[:, 0] + 1.0) / p[:, 0])
+    z[:, 1:] = z[:, :1] + np.cumsum(RD * 0.5 * (tv[:, 1:] + tv[:, :-1]) / G * np.log(p[:, :-1] / p[:, 1:]), axis=1)
+    # the mixed layer: mean theta and mixing ratio of the levels within mixed_layer_pa of the surface
+    ml = p >= (psfc[:, None] - mixed_layer_pa)
+    ml[:, 0] = True
+    count = ml.sum(axis=1)
+    th_ml = (th * ml).sum(axis=1) / count
+    r_ml = ((qv / (1.0 - qv)) * ml).sum(axis=1) / count
+    t_start = th_ml * (psfc / 1.0e5) ** kappa
+    t_lcl = _lcl_temperature(t_start, r_ml, psfc)
+    p_lcl = psfc * (t_lcl / t_start) ** (1.0 / kappa)
+    thetae = _theta_e(t_start, psfc, r_ml, t_lcl)
+    # parcel temperature on every level: dry below the LCL, pseudo-adiabatic (theta-e conserved) above
+    dry = th_ml[:, None] * (p / 1.0e5) ** kappa
+    lo, hi = np.full_like(p, 150.0), np.full_like(p, 350.0)
+    for _ in range(30):
+        mid = 0.5 * (lo + hi)
+        warm = _theta_e(mid, p, _saturation_mixing_ratio(mid, p), mid) > thetae[:, None]
+        hi = np.where(warm, mid, hi)
+        lo = np.where(warm, lo, mid)
+    moist_t = 0.5 * (lo + hi)
+    above = p < p_lcl[:, None]
+    tp = np.where(above, moist_t, dry)
+    rp = np.where(above, _saturation_mixing_ratio(moist_t, p), r_ml[:, None])
+    tvp = tp * (1.0 + 0.608 * rp / (1.0 + rp))
+    buoyancy = G * (tvp - tv) / tv
+    dz = np.diff(z, axis=1, prepend=0.0)
+    useful = (p >= 10000.0) & (z > 0)
+    cape = np.where(useful, np.maximum(buoyancy, 0.0) * dz, 0.0).sum(axis=1)
+    # 0-depth bulk shear: the lowest model level to depth above the ground
+    reach = z >= shear_depth_m
+    k1 = np.argmax(reach, axis=1)
+    ok = reach.any(axis=1) & (k1 > 0)
+    k1 = np.where(ok, k1, 1)
+    k0 = k1 - 1
+    rows = np.arange(p.shape[0])
+    w = (shear_depth_m - z[rows, k0]) / np.maximum(z[rows, k1] - z[rows, k0], 1e-3)
+    ut = u[rows, k0] + w * (u[rows, k1] - u[rows, k0])
+    vt = v[rows, k0] + w * (v[rows, k1] - v[rows, k0])
+    shear = np.where(ok, np.hypot(ut - u[:, 0], vt - v[:, 0]), np.nan)
+    return np.where(np.isfinite(cape), cape, np.nan), shear
+
+
+def surface_scalar(surface: Mapping[str, np.ndarray], name: str):
+    """2 m dewpoint, theta-e or temperature (K) from t2 (K), q2 (kg/kg) and psfc (Pa)."""
+    t2 = np.asarray(surface['t2'], float)
+    if name == 'temperature':
+        return t2
+    q = np.maximum(np.asarray(surface['q2'], float), 1e-8)
+    p = np.asarray(surface['psfc'], float)
+    r = q / (1.0 - q)
+    e = np.maximum(r * p / (0.622 + r), 1.0)
+    if name == 'dewpoint':
+        ln = np.log(e / 611.2)
+        return 273.15 + 243.5 * ln / (17.67 - ln)
+    if name == 'theta_e':
+        return _theta_e(t2, p, r, _lcl_temperature(t2, r, p))
+    raise ValueError(f'unknown boundary field {name!r} (dewpoint, theta_e, temperature)')
+
+
+def _dominant_object(lattice, f, threshold, min_area_km2, search_km, distance_scale_km, size_power,
+                     extra_score=None):
+    """The thresholded object of ``f`` with the best size x nearness score: ((score, x, y, area, peak, mask), n)."""
+    from scipy.ndimage import label
+    mask = np.isfinite(f) & (f >= threshold)
+    labels, n = label(mask)
+    if n == 0:
+        return None, 0
+    cell = lattice.spacing ** 2
+    excess = np.where(mask, f - threshold + 1e-6, 0.0)
+    best = None
+    for k in range(1, n + 1):
+        m = labels == k
+        area = m.sum() * cell
+        if area < min_area_km2:
+            continue
+        w = excess * m
+        xc, yc = float((w * lattice.x).sum() / w.sum()), float((w * lattice.y).sum() / w.sum())
+        d = math.hypot(xc, yc)
+        if d > search_km:
+            continue
+        score = float(w.sum() * cell) ** size_power * math.exp(-(d / distance_scale_km) ** 2)
+        if extra_score is not None:
+            score *= extra_score(m, w, xc, yc)
+        if best is None or score > best[0]:
+            best = (score, xc, yc, area, float(f[m].max()), m)
+    return best, n
+
+
+def _axis_deg(lattice, w):
+    """Principal axis of a weighted object, degrees clockwise from north in [0, 180)."""
+    s = w.sum()
+    x0, y0 = (w * lattice.x).sum() / s, (w * lattice.y).sum() / s
+    dx, dy = lattice.x - x0, lattice.y - y0
+    cxx, cyy, cxy = (w * dx * dx).sum() / s, (w * dy * dy).sum() / s, (w * dx * dy).sum() / s
+    angle = 0.5 * math.atan2(2 * cxy, cxx - cyy)        # from +x (east), counter-clockwise
+    return (90.0 - math.degrees(angle)) % 180.0
+
+
+class EnvFixer:
+    """``cape_shear``: the dominant area of MLCAPE x 0-6 km bulk shear near the prediction."""
+
+    def __init__(self, config: EnvConfig | None = None):
+        self.c = config or EnvConfig()
+
+    def fix(self, seconds, fields: StateFields, guess, search_km) -> Fix:
+        c = self.c
+        fx = Fix(seconds=float(seconds), ok=False, guess=[float(guess[0]), float(wrap_lon(guess[1]))],
+                 search_km=float(search_km))
+        if fields.columns is None:
+            fx.reason = 'no model columns in the state (cape_shear needs pressure, theta, qv, u, v)'
+            return fx
+        cloud = fields.points()
+        lattice = LocalLattice(cloud, guess[0], guess[1], search_km + 2 * c.smooth_km, c.lattice_spacing_km, k=1)
+        idx = lattice.index[:, 0]
+        cols = {k: np.asarray(v)[idx] for k, v in fields.columns.items()}
+        cape, shear = mlcape_and_shear(cols, c.mixed_layer_pa, c.shear_depth_m)
+        index = (cape / 1000.0) * (shear / 20.0)
+        f = smooth(index.reshape(lattice.shape), c.smooth_km / c.lattice_spacing_km)
+        best, n = _dominant_object(lattice, f, c.threshold, c.min_area_km2, search_km, c.distance_scale_km,
+                                   c.size_power)
+        if best is None:
+            fx.reason = ('no CAPE x shear area above threshold' if n == 0
+                         else 'no CAPE x shear area of sufficient size within the search radius')
+            fx.components = dict(cape_shear=dict(
+                max_index=float(np.nanmax(f)) if np.isfinite(f).any() else None, rejected=True))
+            return fx
+        _, xc, yc, area, peak, m = best
+        local = m if c.core_reach_km is None else m & (np.hypot(lattice.x, lattice.y) <= c.core_reach_km)
+        if local.any():
+            peak = float(f[local].max())
+        else:
+            local = m
+        core_level = max(c.threshold, c.core_fraction * peak)
+        core = local & (f >= core_level)
+        w = np.where(core, f - core_level + 1e-6, 0.0) if core.any() else np.where(local, f - c.threshold + 1e-6, 0.0)
+        storm_km2, storm_share = 0.0, 0.0
+        if fields.object_field is not None and c.storm_weight > 0:
+            from scipy.ndimage import distance_transform_edt
+            hot = (np.asarray(fields.object_field, float)[idx] >= c.storm_dbz).reshape(lattice.shape)
+            near = (distance_transform_edt(~m) * c.lattice_spacing_km <= c.storm_reach_km) & (
+                np.hypot(lattice.x, lattice.y) <= search_km)
+            cover = smooth(hot.astype(float), c.smooth_km / c.lattice_spacing_km)
+            ws = np.where(near, c.storm_weight * peak * cover, 0.0)
+            storm_km2 = float((hot & near).sum() * c.lattice_spacing_km ** 2)
+            if ws.sum() > 0:
+                storm_share = float(ws.sum() / (ws.sum() + w.sum()))
+                w = w + ws
+        xc, yc = float((w * lattice.x).sum() / w.sum()), float((w * lattice.y).sum() / w.sum())
+        dx, dy = c.fix_blend * xc, c.fix_blend * yc
+        step = math.hypot(dx, dy)
+        capped = c.max_step_km is not None and step > c.max_step_km
+        if capped:
+            dx, dy = dx * c.max_step_km / step, dy * c.max_step_km / step
+        fx.lat, fx.lon = lattice.to_latlon(dx, dy)
+        fx.ok = True
+        fx.reason = ('core of the dominant CAPE x shear area with its storms' if storm_share > 0
+                     else 'core of the dominant CAPE x shear area')
+        cape2, shear2 = cape.reshape(lattice.shape), shear.reshape(lattice.shape)
+        fx.components = dict(cape_shear=dict(
+            area_km2=area, core_km2=float(core.sum() * c.lattice_spacing_km ** 2), peak_index=peak, objects=int(n),
+            storm_km2=storm_km2, storm_share=storm_share, step_km=step, step_capped=bool(capped),
+            raw_centre=list(lattice.to_latlon(xc, yc)),
+            max_mlcape=float(np.nanmax(np.where(m, cape2, np.nan))),
+            median_shear06=float(np.nanmedian(np.where(m, shear2, np.nan)))))
+        fx.steering_ms = steering(fields, fx.lat, fx.lon, c.steering_inner_km, c.steering_outer_km)
+        return fx
+
+
+class BoundaryFixer:
+    """``boundary``: the dominant dryline / front segment (surface-scalar gradient) near the prediction."""
+
+    def __init__(self, config: BoundaryConfig | None = None):
+        self.c = config or BoundaryConfig()
+        self.orientation = None
+        if self.c.segment:
+            (a_lat, a_lon), (b_lat, b_lon) = self.c.segment
+            x, y = project(a_lat, a_lon, b_lat, b_lon)
+            self.orientation = math.degrees(math.atan2(float(x), float(y))) % 180.0
+
+    def fix(self, seconds, fields: StateFields, guess, search_km) -> Fix:
+        c = self.c
+        fx = Fix(seconds=float(seconds), ok=False, guess=[float(guess[0]), float(wrap_lon(guess[1]))],
+                 search_km=float(search_km))
+        if fields.surface is None:
+            fx.reason = 'no surface fields in the state (boundary needs t2, q2, psfc)'
+            return fx
+        cloud = fields.points()
+        lattice = LocalLattice(cloud, guess[0], guess[1], search_km + 3 * c.smooth_km, c.lattice_spacing_km)
+        scalar = smooth(lattice.sample(surface_scalar(fields.surface, c.field)), c.smooth_km / c.lattice_spacing_km)
+        gy, gx = np.gradient(scalar, lattice.spacing / 100.0)     # K per 100 km
+        grad = np.hypot(gx, gy)
+        orientation = self.orientation
+
+        def aligned(m, w, xc, yc):
+            if orientation is None or c.orientation_weight <= 0:
+                return 1.0
+            return abs(math.cos(math.radians(_axis_deg(lattice, w) - orientation))) ** c.orientation_weight + 1e-3
+
+        best, n = _dominant_object(lattice, grad, c.threshold, c.min_area_km2, search_km, c.distance_scale_km,
+                                   c.size_power, extra_score=aligned)
+        if best is None:
+            fx.reason = (f'no {c.field} gradient above {c.threshold:g} K/100 km' if n == 0
+                         else f'no {c.field} gradient segment of sufficient size within the search radius')
+            return fx
+        _, xc, yc, area, peak, m = best
+        axis = _axis_deg(lattice, np.where(m, grad - c.threshold, 0.0))
+        self.orientation = axis          # a boundary turns slowly: follow its own orientation from here on
+        fx.lat, fx.lon = lattice.to_latlon(c.fix_blend * xc, c.fix_blend * yc)
+        fx.ok = True
+        fx.reason = f'dominant {c.field} gradient segment'
+        fx.components = dict(boundary=dict(field=c.field, area_km2=area, peak_k_per_100km=peak, objects=int(n),
+                                           axis_deg=axis, raw_centre=list(lattice.to_latlon(xc, yc))))
+        fx.steering_ms = steering(fields, fx.lat, fx.lon, c.steering_inner_km, c.steering_outer_km)
+        return fx
+
+
+def path_position(rows, seconds):
+    t = np.array([float(r[0]) for r in rows])
+    lat = np.array([float(r[1]) for r in rows])
+    lon = np.degrees(np.unwrap(np.radians([float(r[2]) for r in rows])))   # the short way across 180
+    return float(np.interp(seconds, t, lat)), float(wrap_lon(np.interp(seconds, t, lon)))
+
+
+class PathFixer:
+    """``path``: the user's own path, by time. The region goes where the user said; nothing is diagnosed."""
+
+    def __init__(self, config: PathConfig):
+        if len(config.rows) < 1:
+            raise ValueError('a path target needs at least one [seconds, lat, lon] row')
+        self.c = config
+
+    def fix(self, seconds, fields, guess, search_km) -> Fix:
+        lat, lon = path_position(self.c.rows, seconds)
+        ahead = path_position(self.c.rows, seconds + 1800.0)
+        x, y = project(lat, lon, ahead[0], ahead[1])
+        return Fix(seconds=float(seconds), ok=True, lat=lat, lon=lon, guess=[float(guess[0]), float(guess[1])],
+                   reason="the user's path (not a tracker)",
+                   steering_ms=[float(x) * 1000.0 / 1800.0, float(y) * 1000.0 / 1800.0])
+
+
+TRACKER_MODES = ('tc', 'object', 'low', 'cape_shear', 'boundary', 'path')
 
 
 # --------------------------------------------------------------------------- motion
@@ -801,10 +1189,14 @@ class PlacementPolicy:
 
 @dataclass
 class TrackerConfig:
-    mode: str = 'tc'                  # 'tc' or 'object'
+    mode: str = 'tc'                  # one of TRACKER_MODES
     initial_center_deg: list | None = None
     tc: TCConfig = field(default_factory=TCConfig)
     object: ObjectConfig = field(default_factory=ObjectConfig)
+    low: TCConfig = field(default_factory=low_config)
+    cape_shear: EnvConfig = field(default_factory=EnvConfig)
+    boundary: BoundaryConfig = field(default_factory=BoundaryConfig)
+    path: PathConfig = field(default_factory=PathConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
     placement: PlacementConfig | None = None
 
@@ -814,10 +1206,18 @@ class TrackerConfig:
         out = cls(mode=d.get('mode', 'tc'), initial_center_deg=d.get('initial_center_deg'))
         out.tc = TCConfig(**d.get('tc', {}))
         out.object = ObjectConfig(**d.get('object', {}))
+        out.low = low_config(**d.get('low', {}))
+        out.cape_shear = EnvConfig(**d.get('cape_shear', {}))
+        out.boundary = BoundaryConfig(**d.get('boundary', {}))
+        out.path = PathConfig(**d.get('path', {}))
         out.motion = MotionConfig(**d.get('motion', {}))
         if d.get('placement'):
             out.placement = PlacementConfig(**d['placement'])
         return out
+
+    def target(self):
+        """The active mode's own config block."""
+        return getattr(self, self.mode)
 
     def as_dict(self):
         return asdict(self)
@@ -829,10 +1229,11 @@ class TrackSession:
     def __init__(self, config: TrackerConfig):
         if config.initial_center_deg is None:
             raise ValueError('the analysis-time storm position is required')
-        if config.mode not in ('tc', 'object'):
-            raise ValueError(f'unknown tracker mode {config.mode}')
+        if config.mode not in TRACKER_MODES:
+            raise ValueError(f'unknown tracker mode {config.mode} (one of {", ".join(TRACKER_MODES)})')
         self.config = config
-        self.fixer = TCFixer(config.tc) if config.mode == 'tc' else ObjectFixer(config.object)
+        self.fixer = {'tc': TCFixer, 'low': TCFixer, 'object': ObjectFixer, 'cape_shear': EnvFixer,
+                      'boundary': BoundaryFixer, 'path': PathFixer}[config.mode](config.target())
         self.motion = MotionModel(config.motion)
         self.policy = PlacementPolicy(config.placement, self.motion) if config.placement else None
         self.fixes: list[Fix] = []
@@ -847,7 +1248,7 @@ class TrackSession:
         return self.motion.predict(self.fixes, seconds - good[-1].seconds), (seconds - good[-1].seconds) / 3600.0
 
     def search_radius(self, hours_since_fix):
-        c = self.config.tc if self.config.mode == 'tc' else self.config.object
+        c = self.config.target()
         return c.search_km + c.search_growth_kmh * max(hours_since_fix, 0.0)
 
     def observe(self, seconds, fields: StateFields) -> Fix:
@@ -900,6 +1301,18 @@ class TrackSession:
                 break
             s.misses += 1
         return s
+
+
+def history_needs(config: TrackerConfig) -> dict:
+    """What a mode reads from a history frame beyond the cyclone fields: its object field, model columns, 2 m fields.
+
+    Breakage it prevents: a setup target whose fields the controller never read answers 'no model columns in the
+    state' at every frame and the region never moves (the object-mode lesson, derecho 1 km run, 2026-10-17)."""
+    return dict(object_field=config.object.field_name if config.mode == 'object' else None,
+                columns=config.mode == 'cape_shear', surface=config.mode == 'boundary',
+                state=config.mode != 'path',
+                # cape_shear reads its storms too, when the frame has the field (EnvConfig.storm_field)
+                storm_field=config.cape_shear.storm_field if config.mode == 'cape_shear' else None)
 
 
 def interior_radius_from_mesh(mesh: Mapping) -> float:

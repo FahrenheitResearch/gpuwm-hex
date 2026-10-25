@@ -24,7 +24,9 @@ in its receipt:
 ``q2`` is excluded from the verdict and reported informationally, following the
 restart-proof precedent in ``_snapshot_hash_projection``.  So is ``psfc`` in
 the step-0 frame only: the driver completes its start frame from the model's
-own surface pressure where the proof publishes the seam's placeholder.
+own surface pressure where the proof publishes the seam's placeholder, and its
+surface-layer fields (10 m wind and 2 m temperature where the start file has
+none, fluxes and PBL depth) from the first physics call.
 
 BITWISE-IDENTICAL is required.  Any mismatch means the fork changed the model
 and must be fixed before any showcase forecast runs.
@@ -54,8 +56,10 @@ CHECKPOINT_STEP = proof.CHECKPOINT_STEP
 FULL_STEPS = proof.FULL_STEPS
 SNAPSHOT_LABEL_BY_STEP = {0: "F000", CHECKPOINT_STEP: "F030", FULL_STEPS: "F001"}
 #: Start-frame fields the forecast driver completes
-#: (``run_cuda_v841_forecast.F000_COMPLETED_SURFACE_DIAGNOSTICS``).
-F000_COMPLETED = ("q2", "psfc")
+#: (``run_cuda_v841_forecast.F000_COMPLETED_SURFACE_DIAGNOSTICS``, and the
+#: surface-layer fields it takes from the first physics call,
+#: ``hexcore.f000_first_call.ARWEN_FIELDS``).
+F000_COMPLETED = ("q2", "psfc", "u10", "v10", "t2", "hfx", "qfx", "lh", "pblh")
 
 
 def _leaves(value):

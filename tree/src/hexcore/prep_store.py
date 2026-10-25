@@ -67,12 +67,14 @@ ENV_STORE = "GPUWM_HEX_PREP_STORE"
 ENV_OUTBOX = "GPUWM_HEX_PREP_STORE_OUTBOX"
 ENV_ENGINES = "GPUWM_HEX_PREP_STORE_ENGINES"
 ENV_STREAMS = "GPUWM_HEX_PREP_STORE_STREAMS"
-KINDS = ("mesh", "static", "order")
+KINDS = ("mesh", "static", "order", "ugwp_oro")
 _CHUNK = 64 << 20
 
 
 class PrepStoreError(RuntimeError):
-    """A store answered with bytes that are not the entry's; nothing was published."""
+    """A store answered with bytes that are not the entry's; nothing was published.
+
+    ``fetch_entry`` catches it per entry and the caller builds instead."""
 
 
 #: Digests this process already proved, by exact file version: a file this
@@ -414,17 +416,26 @@ def fetch_entry(kind: str, key: str, targets: Mapping[str, Path],
         started = time.perf_counter()
         for dest in targets.values():
             dest.parent.mkdir(parents=True, exist_ok=True)
-        moved = store.fetch(kind, key, entry, targets)
-        fetched = time.perf_counter() - started
         names = list(targets)
         partials = [_partial(targets[name]) for name in names]
-        digests = _hash_many(partials)
-        bad = [n for n, d in zip(names, digests) if d != entry["files"][n]["sha256"]]
-        if bad:
+        # A bad entry (bytes that are not the entry's, a cut transfer, a file
+        # the store no longer holds) is refused and never published, and the
+        # caller builds: on 2026-10-23 one entry whose receipt was not its
+        # entry.json's bytes stopped six region doors instead of letting them build.
+        try:
+            moved = store.fetch(kind, key, entry, targets)
+            fetched = time.perf_counter() - started
+            digests = _hash_many(partials)
+            bad = [n for n, d in zip(names, digests) if d != entry["files"][n]["sha256"]]
+            if bad:
+                raise PrepStoreError(f"{store.name} {kind}/{key[:12]}: {', '.join(bad)} differ from the "
+                                     f"entry's SHA-256; nothing published")
+        except (OSError, ValueError, KeyError, TypeError, PrepStoreError) as error:
             for partial in partials:
                 partial.unlink(missing_ok=True)
-            raise PrepStoreError(f"{store.name} {kind}/{key[:12]}: {', '.join(bad)} differ from the "
-                                 f"entry's SHA-256; nothing published")
+            _log(f"BAD STORE ENTRY REFUSED: {kind} {key[:12]} from {store.name}: {error}. "
+                 f"Nothing from it was published; trying the next store, else building.")
+            continue
         for name, partial in zip(names, partials):
             os.replace(partial, targets[name])
             _VERIFIED[_version(targets[name])] = entry["files"][name]["sha256"]
@@ -666,6 +677,50 @@ def order(grid: Path, static: Path, out_dir: Path, hex_order: Path) -> dict[str,
         stage_entry("order", key, material, targets, root=box,
                     built={"seconds": round(seconds, 2), "engine": engine_identity(hex_order, registry)})
     return {"source": "built", "kind": "order", "key": key, "seconds": round(seconds, 2)}
+
+
+# ---------------------------------------------------------------------------
+# GSL drag orographic statistics (<mesh>.ugwp_oro_data.nc)
+# ---------------------------------------------------------------------------
+def ugwp_oro_request(grid: Path, geog: Path, registry: Mapping[str, Any]):
+    """Key: the generator's identity and method, the grid's SHA-256 and the 30" terrain it reads."""
+    from . import ugwp_oro as _ugwp
+    material = {"schema": KEY_SCHEMA, "kind": "ugwp_oro", "engine": engine_identity(_ugwp.binary(), registry)["class"],
+                "method": _ugwp.METHOD, "grid_sha256": sha256_file(grid), "terrain": _ugwp.topo_fingerprint(geog)}
+    return key_of(material), material
+
+
+def ugwp_oro(grid: Path, geog: Path, out: Path, *, builder: Callable[[], Any],
+             receipt: Path | None = None) -> dict[str, Any]:
+    """The mesh's ugwp_oro_data.nc: fetched from the store when it holds this grid's, else built and staged.
+
+    The file depends on the grid and the terrain alone, never the cycle, so it
+    rides the store beside the mesh's static (THE BREAKAGE: every RRFS-shape
+    run on a library mesh would otherwise rebuild it before its card starts).
+    """
+    targets = {"ugwp_oro_data.nc": Path(out)}
+    if receipt is not None:
+        targets["receipt.json"] = Path(receipt)
+    stores = configured_stores()
+    box = outbox()
+    if not stores and box is None:
+        builder()
+        return {"source": "built"}
+    registry = engine_registry(stores)
+    key, material = ugwp_oro_request(Path(grid), Path(geog), registry)
+    if stores and not Path(out).exists():
+        hit = fetch_entry("ugwp_oro", key, {"ugwp_oro_data.nc": Path(out)}, stores)
+        if hit is not None:
+            return {"source": "store", "kind": "ugwp_oro", "key": key,
+                    **{k: v for k, v in hit.items() if k != "entry"}}
+    started = time.perf_counter()
+    builder()
+    seconds = time.perf_counter() - started
+    if box is not None:
+        from . import ugwp_oro as _ugwp
+        stage_entry("ugwp_oro", key, material, {k: v for k, v in targets.items() if v.exists()}, root=box,
+                    built={"seconds": round(seconds, 2), "engine": engine_identity(_ugwp.binary(), registry)})
+    return {"source": "built", "kind": "ugwp_oro", "key": key, "seconds": round(seconds, 2)}
 
 
 def mesh_set(*, out_dir: Path, name: str, mesh_exe: Path, static_exe: Path, geog: Path,

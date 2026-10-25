@@ -1613,8 +1613,25 @@ class PersistentSuiteCudaPhysicsBackendV841(PersistentTwoPhaseCudaPhysicsBackend
         rebuilt.validate(n_vert_levels=shape[0], n_cells=shape[1])
         return rebuilt, tuple(sorted(rates))
 
-    def diagnostic_snapshot(self) -> CudaArwenDiagnosticSnapshotV841:
-        """The frozen snapshot with the row's soil width."""
+    def history_diagnostic_snapshot(self):
+        """The history frame's snapshot on the suite seam.
+
+        THE BREAKAGE THIS PREVENTS: the parent's history path calls
+        ``diagnostic_snapshot(selective=True, resident=True)``, a keyword pair
+        this seam's export does not take, so every column-suite run (rrfs_v2_dev,
+        the HRRR-shape overrides) died with a TypeError writing its hour-0
+        frame.  The suite seam exports through the host, so the frame gets the
+        full snapshot: fresh device copies, the same fields, hashes included.
+        """
+
+        return self.diagnostic_snapshot()
+
+    def diagnostic_snapshot(self, *, selective: bool = False, resident: bool = False) -> CudaArwenDiagnosticSnapshotV841:
+        """The frozen snapshot with the row's soil width.
+
+        ``selective`` and ``resident`` are accepted for the parent's signature;
+        the suite seam's export has one host path, so both are ignored.
+        """
 
         if self._phase != "boundary":
             raise RuntimeError("diagnostic_snapshot is legal only at a committed boundary")

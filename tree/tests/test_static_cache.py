@@ -176,3 +176,11 @@ def test_a_failing_runner_publishes_nothing(case):
         sc.build_static(**case, runner=runner)
     assert not case['out'].exists()
     assert not list(case['cache'].glob('*/complete.json'))
+
+
+def test_hidden_entries_in_the_geography_are_ignored_not_refused(case):
+    """A box kit's `.geog-all.done` marker in the root refused every hex static build (2026-10-24)."""
+    clean = sc.geography(case['geog'], None)
+    (case['geog']/'.geog-all.done').write_text('2026-10-24T02:55:00Z')
+    (case['geog']/'.secrets').mkdir(); (case['geog']/'.secrets'/'token').write_text('x')
+    assert sc.geography(case['geog'], None) == clean

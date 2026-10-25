@@ -5016,8 +5016,13 @@ def _workspace_source(text: str):
 
 def workspace_bytes(layout: Mapping, kernel: str, nz: int, stride: int) -> int:
     """Bytes of one tile of the column workspace for ``kernel`` (``stride`` columns, whole warps)."""
-    lanes = -(-stride // 32) * 32
-    return (nz + 1) * lanes * sum(layout[kernel][t] * size for t, _, size in _WS_TYPES)
+    width = 128 if _hex_numerics.mode() == "fast" else 32
+    lanes = -(-stride // width) * width
+    size = (nz + 1) * lanes * sum(layout[kernel][t] * size for t, _, size in _WS_TYPES)
+    if _hex_numerics.mode() == "fast":
+        from .thompson_phases_v842 import CARRY_BYTES_PER_COLUMN
+        size += lanes * CARRY_BYTES_PER_COLUMN
+    return size
 
 
 def workspace_enabled() -> bool:
@@ -5045,25 +5050,107 @@ def workspace_tile_columns():
 _RESIDENT_COLUMNS = {}
 
 
-def resident_columns(kernel) -> int:
-    """Threads of 32-thread blocks of ``kernel`` the current card runs at once."""
+def resident_columns(kernel, block_threads: int = 32) -> int:
+    """Threads of actual-sized blocks the current card runs at once."""
     from cupy.cuda import driver, runtime
     device = runtime.getDevice()
-    key = (device, kernel.ptr)
+    key = (device, kernel.ptr, block_threads)
     if key not in _RESIDENT_COLUMNS:
         sms = runtime.deviceGetAttribute(runtime.cudaDevAttrMultiProcessorCount, device)
-        blocks = driver.occupancyMaxActiveBlocksPerMultiprocessor(kernel.ptr, 32, 0)
-        _RESIDENT_COLUMNS[key] = max(1, sms * blocks) * 32
+        blocks = driver.occupancyMaxActiveBlocksPerMultiprocessor(kernel.ptr, block_threads, 0)
+        _RESIDENT_COLUMNS[key] = max(1, sms * blocks) * block_threads
     return _RESIDENT_COLUMNS[key]
 
 
+@lru_cache(maxsize=1)
+def _fast_support() -> str:
+    """Let fast-mode arithmetic contract, without the strict payload adapters.
+
+    Keep precise division/sqrt and the shared elementary maths. The strict
+    source stays byte-for-byte unchanged, including its kernel-pack key.
+    This runs once during module construction, never in the column loop.
+    """
+    import re
+    source = _SUPPORT
+    for scalar, sqrt in (("float", "sqrtf"), ("double", "sqrt")):
+        for name, expression, arguments in (
+            ("add", "a+b", f"{scalar} a,{scalar} b"),
+            ("sub", "a-b", f"{scalar} a,{scalar} b"),
+            ("mul", "a*b", f"{scalar} a,{scalar} b"),
+            ("div", "a/b", f"{scalar} a,{scalar} b"),
+            ("sqrt", f"{sqrt}(a)", f"{scalar} a"),
+        ):
+            signature = f"__device__ {scalar} tc_{name}({arguments})"
+            source, count = re.subn(
+                re.escape(signature) + r" \{[^\n]*\}",
+                f"__device__ __forceinline__ {scalar} tc_{name}({arguments}) {{return {expression};}}",
+                source,
+            )
+            if count != 1:
+                raise ValueError(f"Thompson fast arithmetic: expected one {signature}, found {count}")
+    # Elementary functions for fast numerics (strict keeps every glibc replica).
+    # binary32 EXP/LOG/LOG10/** come from CUDA's libm: the replicas of glibc's float functions
+    # evaluate in binary64, which RTX-class cards run at 1/64 rate, and CUDA's are binary32
+    # throughout (within 2-4 ulp). binary64 EXP/LOG/** (the DOUBLE PRECISION slopes and
+    # intercepts) evaluate in binary32 when argument and result are normal binary32 numbers
+    # (their arguments mostly are binary32 values widened, so the narrowing is exact); outside
+    # that range the argument is split exactly in binary64 and the core is still binary32, so
+    # the whole binary64 range is kept; zero, negative, infinite and NaN arguments take the
+    # exact replica. About 1e-7 relative, the class of the fast arithmetic. Measured on the
+    # 60 -> 15 km zoom globe at dt 90 (216,187 columns, a 3 h state, quiet RTX PRO 6000):
+    # 85 -> 62 ms for the binary32 functions, then 68 -> 41 ms for the binary64 ones. CUDA's
+    # own binary64 pow was slower than the replica (74 ms).
+    narrow = "fabsf(r)>1.2e-38f&&fabsf(r)<3.0e38f"
+    for old, new in (
+        ("__device__ double tc_exp(double a) {return mpas_exp(a);}",
+         "__device__ __forceinline__ double tc_exp(double a) {"
+         f"const float r=expf((float)a);if({narrow})return (double)r;"
+         "return isfinite(a)?tc_fast_exp2(a*1.4426950408889634):mpas_exp(a);}"),
+        ("__device__ double tc_log(double a) {return mpas_log(a);}",
+         "__device__ __forceinline__ double tc_log(double a) {"
+         "if(a>1.2e-38&&a<3.0e38)return (double)logf((float)a);"
+         "return (a>0.0&&isfinite(a))?tc_fast_log2(a)*0.6931471805599453:mpas_log(a);}"),
+        ("__device__ double tc_pow(double a,double b) {return mpas_pow(a,b);}",
+         "__device__ __forceinline__ double tc_pow(double a,double b) {"
+         f"if(a>1.2e-38&&a<3.0e38){{const float r=powf((float)a,(float)b);if({narrow})return (double)r;}}"
+         "return (a>0.0&&isfinite(a)&&isfinite(b))?tc_fast_exp2(b*tc_fast_log2(a)):mpas_pow(a,b);}"),
+    ):
+        if source.count(old) != 1:
+            raise ValueError(f"Thompson fast maths: expected one {old}")
+        source = source.replace(old, new)
+    core = ("__device__ __forceinline__ double tc_fast_log2(double a) "
+            "{int e;const double m=frexp(a,&e);return (double)e+(double)log2f((float)m);}\n"
+            "__device__ __forceinline__ double tc_fast_exp2(double y) "
+            "{const double f=floor(fmin(fmax(y,-2000.0),2000.0));"
+            "return ldexp((double)exp2f((float)(y-f)),(int)f);}\n")
+    anchor = "__device__ __forceinline__ double tc_exp(double a) {"
+    source = source.replace(anchor, core + anchor, 1)
+    for old, new in (
+        ("__device__ float tc_exp(float a) {return mpas_expf(a);}",
+         "__device__ __forceinline__ float tc_exp(float a) {return expf(a);}"),
+        ("__device__ float tc_log(float a) {return mpas_logf(a);}",
+         "__device__ __forceinline__ float tc_log(float a) {return logf(a);}"),
+        ("__device__ float tc_log10(float a) {return mpas_log10f(a);}",
+         "__device__ __forceinline__ float tc_log10(float a) {return log10f(a);}"),
+    ):
+        if source.count(old) != 1:
+            raise ValueError(f"Thompson fast maths: expected one {old}")
+        source = source.replace(old, new)
+    source, count = re.subn(r"__device__ float tc_pow\(float a,float b\) \{[^\n]*\}",
+                            "__device__ __forceinline__ float tc_pow(float a,float b) {return powf(a,b);}", source)
+    if count != 1:
+        raise ValueError("Thompson fast maths: expected one binary32 tc_pow")
+    return source
+
+
 def cuda_source(*, device_math_source: str, max_levels: int = MAX_LEVELS, corrections=(),
-                workspace: bool = False) -> str:
+                workspace: bool = False, numerics: str | None = None) -> str:
     """Compose with the shared mathematics header; no local libm fallback.
 
     MPAS module_mp_thompson.F:1400-3642,4176-4212,4391-4466,
     4662-4803,4809-4913,4924-5235; src/core_atmosphere/physics/mpas_atmphys_functions.F:156-217.
     ``workspace`` selects the column-workspace storage (see WORKSPACE_FUNCTIONS).
+    ``numerics`` lets the offline pack compose both modes in one process.
     """
     if not device_math_source.strip():
         raise ValueError("shared MPAS device maths source is required to preserve the reference libm")
@@ -5072,9 +5159,14 @@ def cuda_source(*, device_math_source: str, max_levels: int = MAX_LEVELS, correc
     declarations = ",".join(f"const {'float' if n == 'tnccn_act' else 'double'}* input_{n}" for n in TABLE_ARGUMENTS)
     assignments = "\n".join(f"m.{n}=input_{n};" for n in TABLE_ARGUMENTS)
     driver = _DRIVER.replace("TABLE_DECLARATIONS", declarations).replace("TABLE_ASSIGNMENTS", assignments)
-    text = f"#define THOMPSON_COLUMN_KMAX {max_levels}\n" + device_math_source + "\n" + _SUPPORT + _COLUMN + driver + _RADAR_DRIVER + _conversion_source() + _PRECIP
+    mode = _hex_numerics.mode() if numerics is None else _hex_numerics.normalise(numerics)
+    support = _SUPPORT if mode == "strict" else _fast_support()
+    text = f"#define THOMPSON_COLUMN_KMAX {max_levels}\n" + device_math_source + "\n" + support + _COLUMN + driver + _RADAR_DRIVER + _conversion_source() + _PRECIP
     if workspace:
         text = _workspace_source(text)[0]
+        if mode == "fast":
+            from .thompson_phases_v842 import split_source
+            text = split_source(text, _body_end)
     if not corrections:
         return text
     from .driver_v842 import correct_source
@@ -5104,15 +5196,30 @@ def _launch_columns(kernel_name: str, module, args: tuple, nz: int, columns: int
     if not workspace:
         kernel(((columns+31)//32,),(32,),args)
         return
+    phases = None
+    if kernel_name == "mpas_thompson_step" and _hex_numerics.mode() == "fast":
+        from .thompson_phases_v842 import CELL_PHASES, KERNELS, WARP_GROUPS
+        phases = tuple(module.get_function(name) for name in KERNELS)
     tile = workspace_tile_columns()
-    stride = min(columns, tile if tile is not None else resident_columns(kernel))
+    # A tile is the columns the column-serial phases run at once; the warp phase launches
+    # 32 threads per column of the same tile and simply takes more waves.
+    resident = (min(resident_columns(phase, 128) for i, phase in enumerate(phases) if i not in WARP_GROUPS)
+                if phases else resident_columns(kernel))
+    stride = min(columns, tile if tile is not None else resident)
     nbytes = workspace_bytes(workspace_layout(), kernel_name, nz, stride)
     if (nz + 1) * stride >= 2**31:
         raise ValueError("Thompson workspace tile too wide for 32-bit level offsets")
     ws = cp.empty(nbytes, dtype=cp.uint8)
     for col0 in range(0, columns, stride):
         n = min(stride, columns - col0)
-        kernel(((n+31)//32,),(32,),args+(ws,np.int32(col0),np.int32(n)))
+        tile_args = args+(ws,np.int32(col0),np.int32(n))
+        if phases:
+            for phase, phase_kernel in enumerate(phases):
+                count = n * nz if phase in CELL_PHASES else n * 32 if phase in WARP_GROUPS else n
+                threads = 128
+                phase_kernel(((count + threads - 1) // threads,), (threads,), tile_args)
+        else:
+            kernel(((n+31)//32,),(32,),tile_args)
     del ws
 
 
@@ -5201,6 +5308,26 @@ def launch_radar(fields: Mapping, diagnostics: Mapping, *, device_math_source: s
     _launch_columns("mpas_thompson_radar",_module(device,device_math_source,nz,(),workspace),args,nz,columns,workspace)
 
 
+_POINTER_TABLES = {}
+
+
+def _pointer_table(arrays):
+    """Device table of the arrays' addresses, uploaded once per distinct set of views.
+
+    The pools are resident, so the same views come back every step; rebuilding the table each
+    call put a blocking host-to-device copy on the step path four times a step. The key is the
+    addresses themselves, so a cached table always holds exactly the addresses asked for.
+    """
+    import cupy as cp
+    key = (cp.cuda.runtime.getDevice(), tuple(a.data.ptr for a in arrays))
+    table = _POINTER_TABLES.get(key)
+    if table is None:
+        if len(_POINTER_TABLES) >= 64:
+            _POINTER_TABLES.clear()
+        table = _POINTER_TABLES[key] = cp.asarray(np.array(key[1], dtype=np.uint64))
+    return table
+
+
 def launch_conversion(phase: str, model: Mapping, mesh: Mapping, diagnostics: Mapping,
                       tendencies: Mapping, fields: Mapping, constants: Mapping, *,
                       device_math_source: str, mp_top_level: int | None = None,
@@ -5229,8 +5356,7 @@ def launch_conversion(phase: str, model: Mapping, mesh: Mapping, diagnostics: Ma
         if name == "m_w" and a.shape==(nz+1,columns):expected=a.shape
         if a.shape != expected or a.dtype != cp.float32 or not a.flags.c_contiguous or a.device.id != device:
             raise ValueError(f"{name}: invalid MPAS conversion tile shape, precision, ordering or device")
-    pointers=cp.asarray([a.data.ptr for a in arrays],dtype=cp.uint64)
-    args=(pointers,np.int32(nz),np.int32(columns))
+    args=(_pointer_table(arrays),np.int32(nz),np.int32(columns))
     if phase == "to":
         if mp_top_level is None or not 1 <= mp_top_level <= nz:
             raise ValueError("MPAS top level must be a 1-based inclusive level inside the tile")
@@ -5263,8 +5389,7 @@ def launch_precip(phase: str, fields: Mapping, surface: Mapping, diagnostics: Ma
     counter=diagnostics["i_rainnc"]
     if counter.shape!=(columns,) or counter.dtype!=cp.int32 or not counter.flags.c_contiguous or counter.device.id!=device:
         raise ValueError("MPAS precipitation bucket counter requires contiguous int32 per column")
-    workptr=cp.asarray([a.data.ptr for a in work],dtype=cp.uint64);diagptr=cp.asarray([a.data.ptr for a in diag],dtype=cp.uint64)
-    args=inputs+(workptr,diagptr,counter,np.int32(nz),np.int32(columns),np.int32(phase=="to"),np.int32(l_acrain),np.float32(bucket))
+    args=inputs+(_pointer_table(work),_pointer_table(diag),counter,np.int32(nz),np.int32(columns),np.int32(phase=="to"),np.int32(l_acrain),np.float32(bucket))
     # Correct mode (CORRECT_MODE_SOURCE): the precipitation kernel comes from the corrected text.
     module=_module(device,device_math_source,nz,tuple(corrections),workspace_enabled())
     module.get_function("mpas_thompson_precip")(((columns+31)//32,),(32,),args)
@@ -5399,10 +5524,28 @@ def _bind_native_views(provider, call):
              constants=constants, fields=fields, surface=surface, precip=precip,
              tables=tables, device_math_source=maths,
              dt_microp=native_scalars["dt_microp"], n_microp=int(native_scalars["n_microp"]),
-             mp_top_level=int(provider["tend_physics"]["mp_top_level"].item()),
+             mp_top_level=_mp_top_level(provider, resources),
              l_acrain=bool(native_scalars["l_acrain"]))
     p.update({name: bool(native_scalars[name]) for name in ("has_reqc", "has_reqi", "has_reqs")})
+    # A [hex_nests] trigger look armed on this run (mpasphys/nest_look_v842): None on every other run.
+    p["nest_look"] = getattr(provider.session, "nest_look", None)
     return {"thompson_v842": p}
+
+
+def _mp_top_level(provider, resources):
+    """mp_top_level, read from the device once per session (set at init, constant after).
+
+    Reading it with .item() every call was a device-to-host wait on the step path.
+    """
+    value = provider["tend_physics"]["mp_top_level"]
+    data = getattr(value, "data", None)
+    key = getattr(data, "ptr", None)
+    if key is None:
+        return int(value.item())
+    cache = resources.setdefault("_mp_top_level", {})
+    if key not in cache:
+        cache[key] = int(value.item())
+    return cache[key]
 
 
 def register(registry):
@@ -5456,6 +5599,11 @@ def _run_bound_slot(call):
                       **{n:p[n] for n in ("has_reqc","has_reqi","has_reqs")})
     if call.flags.diagnostics:
         launch_radar(fields,p["diagnostics"],device_math_source=maths)
+    if p.get("nest_look") is not None:
+        # A trigger look's reflectivity: the diagnostics' own on a diagnostics step, else into scratch only.
+        p["nest_look"].form(fields,p["diagnostics"],diagnostics_formed=bool(call.flags.diagnostics),
+                            launch_radar=launch_radar,device_math_source=maths)
+    if call.flags.diagnostics:
         nz,columns=fields["qv"].shape;a=p["diagnostics"]["relhum"]
         if a.shape!=(nz,columns) or a.dtype!=cp.float32 or not a.flags.c_contiguous or a.device.id!=fields["qv"].device.id:
             raise ValueError("MPAS relative humidity requires the float32 mass-grid diagnostic view")

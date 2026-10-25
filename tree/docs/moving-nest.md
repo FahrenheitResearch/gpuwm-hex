@@ -154,9 +154,10 @@ convection_permitting with every scheme on the GPU, 2 h, one 357 km move at 1 h)
 |---|---|---|
 | `GPUWM_HEX_MOVING_BALANCE` | `1` | `0` takes the previous thermodynamic remap path (the measured jolt) for comparison |
 | `run --zone-carry` | off | frozen-far-field members built from the current member, with an exact carry outside the changed zone |
+| `run --whole-domain-remap` | off | use the physical-height all-domain transfer on corridor or frozen-far-field geometry too; useful for qualifying its constrained balance correction on historical corridor cases. The controller records the route and refuses a resume with a different route. |
 | `run --prelaunch` | on | start the next member's forecast before the move so its host preparation is hidden |
-| `run --hold-for-member-seconds` | 0 | hold the forecast at a decided move until its member is ready |
-| `run --check-minutes` | 60 | history and tracker interval |
+| `run --hold-for-member-seconds` | 1800 | rendezvous at every tracking frame; wait up to this many seconds for a decided member. A missing controller reply stops the run. `0` selects asynchronous decisions, which can land one check late. |
+| `run --check-minutes` | case policy, else 60 | history and tracker interval in minutes |
 
 ## What is measured, and what is not
 
@@ -175,9 +176,13 @@ convection_permitting with every scheme on the GPU, 2 h, one 357 km move at 1 h)
     move, and every arm bit for bit the one-card check (all final state hashes equal).
   - The coarse smoke case (240/60 km, 12,381 cells, the 2025-11-08 12Z western Pacific storm, 3 h,
     one move at 1 h, scripted fixes): the model storm's track on two cards is the one-card track to
-    0.09 km after 3 h and its central pressure to 0.01 hPa; surface pressure differs by 2.3 Pa RMS
-    after 3 h (one-card and two-card runs of the same forecast differ as much without a move). Mass and
-    tracers held to 1.4e-10 at the move.
+    0.09 km after 3 h and its central pressure to 0.01 hPa; surface pressure differed by 2.3 Pa RMS
+    after 3 h (measured before the fix below). Mass and tracers held to 1.4e-10 at the move.
+  - That difference was the multi-card executor, not the card count: its halo round before the
+    microphysics read a finer class at mid-step instead of at the step end (fixed 2026-10-24). Now a
+    one-card run and a two-card run of the same forecast are byte-identical without a move: the same
+    storm on a 240/60 km fixed region (11,242 cells, rate classes 1/2/4, convection ntiedtke, 225 s
+    base step, two RTX PRO 6000), 3 h, every 15-minute frame, 50 fields, 167 M values, 0 different.
   - A carrier sealed on one card resumes on two and the reverse; a same-mesh resume on two cards is
     bit-identical to the uninterrupted run (14.1 M words, 0 different).
 - Moves over steep terrain on whole-mesh members. The remap no longer extrapolates a donor below its
@@ -284,3 +289,13 @@ CPUs). Marginal sums keep each column's donor order; independent stencil levels
 keep their original arithmetic. These changes preserve conservation checks and
 prepared-area rounding limits. They do not establish a whole-move speedup on
 every mesh; use the stage receipts for the actual case.
+
+The spherical-overlap builder retains its independent polygon-coverage check
+and declared-area gates (recipient relative error at most `1e-10`, donor at
+most `2e-14`). Weakly connected overlaps can make alternating area scaling
+stall. After eight ordinary passes, a positive Newton/CG correction accelerates
+the same reconciliation, with component null modes projected out. It never adds
+an overlap or relaxes either gate. Incompatible component totals still refuse.
+Operator receipts record the original floor, accepted CG updates, final errors,
+FP32 constant reproduction and reconciliation wall time. Progress goes to stderr;
+the `moving operator` command keeps one final JSON document on stdout.

@@ -92,15 +92,22 @@ MYNN_IEEE_ARITHMETIC_SUPPORT = r'''
 // device helpers. Strict primitive evidence: tests/mpas_mynn_v842/prepare_ieee_probe.py.
 #ifdef __CUDA_ARCH__
 __device__ __forceinline__ float mynn_ieee_result(float a,float b,float result) {
+#if defined(HEX_NUMERICS_FAST) && HEX_NUMERICS_FAST
+    return result;
+#else
     unsigned int r=__float_as_uint(result);
     if ((r & 0x7fffffffu)<=0x7f800000u) return result;
     unsigned int x=__float_as_uint(a),y=__float_as_uint(b);
     if ((x & 0x7fffffffu)>0x7f800000u) return __uint_as_float(x|0x00400000u);
     if ((y & 0x7fffffffu)>0x7f800000u) return __uint_as_float(y|0x00400000u);
     return __uint_as_float(0xffc00000u);
+#endif
 }
 // MPAS physics_mmm/bl_mynn_subroutines.F90:473-6560; strict primitive NaN selection.
 __device__ __forceinline__ double mynn_ieee_result(double a,double b,double result) {
+#if defined(HEX_NUMERICS_FAST) && HEX_NUMERICS_FAST
+    return result;
+#else
     unsigned long long r=(unsigned long long)__double_as_longlong(result);
     if ((r & 0x7fffffffffffffffULL)<=0x7ff0000000000000ULL) return result;
     unsigned long long x=(unsigned long long)__double_as_longlong(a);
@@ -110,6 +117,7 @@ __device__ __forceinline__ double mynn_ieee_result(double a,double b,double resu
     if ((y & 0x7fffffffffffffffULL)>0x7ff0000000000000ULL)
         return __longlong_as_double(y|0x0008000000000000ULL);
     return __longlong_as_double(0xfff8000000000000ULL);
+#endif
 }
 // MPAS physics_mmm/bl_mynn_subroutines.F90:473-6560; strict primitive NaN selection.
 __device__ __forceinline__ float mynn_ieee_add(float a,float b) {
@@ -251,6 +259,18 @@ extern "C" __global__ void mynn_radiation(
     if (n < count) result[n] = mpas_add(lw[n], sw[n]);
 }
 
+// MPAS driver_pbl.F:384-389,454-485; sum directly into MMM layout.
+// Input strides retain solve-cell slices and avoid packed temporaries.
+extern "C" __global__ void mynn_radiation_layout(
+    const int ncol, const int nlev, const float* lw, const float* sw,
+    const int lwr, const int lwc, const int swr, const int swc, float* result)
+{
+    const int n = blockIdx.x * blockDim.x + threadIdx.x;
+    if (n >= ncol*nlev) return;
+    const int c = n % ncol, k = n / ncol;
+    result[n] = mpas_add(lw[k*lwr+c*lwc], sw[k*swr+c*swc]);
+}
+
 // MPAS mpas_atmphys_driver_pbl.F:454-462; shared GNU device powf.
 extern "C" __global__ void mynn_dx(
     const int ncol, const float len_disp, const float* mesh_density, float* dx)
@@ -266,7 +286,7 @@ MYNN_CUDA_OPTIONS = ("--fmad=false", "--ftz=false", "--prec-div=true",
                      "--prec-sqrt=true", "--std=c++17")
 
 
-def _compile_device_module(source):
+def _compile_device_module(source, extra_options=()):
     """bl_mynn.F90:129-1242; preserve native subnormal arithmetic.
 
     Direct NVRTC avoids CuPy RawModule's forced flush-to-zero compiler option.
@@ -283,8 +303,9 @@ def _compile_device_module(source):
     from cupy_backends.cuda.libs import nvrtc
 
     arch = cp.cuda.Device().compute_capability
+    options = (*_hex_numerics.options(MYNN_CUDA_OPTIONS), *extra_options)
     identity = {"source_sha256": hashlib.sha256(source.encode()).hexdigest(),
-                "options": list(_hex_numerics.options(MYNN_CUDA_OPTIONS)), "arch": arch,
+                "options": list(options), "arch": arch,
                 "nvrtc": list(nvrtc.getVersion()), "cupy": cp.__version__}
     cache_root = os.environ.get("CUPY_CACHE_DIR")
     cache = Path(cache_root) / "mpas_mynn_v842" if cache_root else None
@@ -302,7 +323,7 @@ def _compile_device_module(source):
             pass
     if binary is None:
         from ..cuda_backend.aot import direct_image
-        binary = direct_image(source, _hex_numerics.options(MYNN_CUDA_OPTIONS), arch)
+        binary = direct_image(source, options, arch)
         if cache is not None:
             cache.mkdir(parents=True, exist_ok=True)
             suffix = "." + uuid.uuid4().hex
@@ -380,28 +401,65 @@ class MynnDriverAdapter:
         self._launch("mynn_layout", array.size, (ncol, nlev, to_mpas, array, output))
         return output
 
-    def from_mpas(self, diagnostics, surface, mesh_density, len_disp):
+    def radiation(self, lw, sw):
+        """driver_pbl.F:384-389,454-485; one sum/layout launch, no staging."""
+        if (not isinstance(lw, self.cp.ndarray) or not isinstance(sw, self.cp.ndarray)
+                or lw.ndim != 2 or sw.shape != lw.shape or lw.dtype != self.cp.float32
+                or sw.dtype != self.cp.float32):
+            raise ValueError("MYNN radiation requires matching float32 (level,column) arrays")
+        nlev, ncol = lw.shape
+        result = self.cp.empty((ncol, nlev), dtype=self.cp.float32, order="F")
+        if result.size:
+            self._launch("mynn_radiation_layout", result.size,
+                         (ncol, nlev, lw, sw, *(s // 4 for s in (*lw.strides, *sw.strides)), result))
+        return result
+
+    def from_mpas(self, diagnostics, surface, mesh_density, len_disp, *, extra_copies=()):
         """mpas_atmphys_driver_pbl.F:419-507, scheme-specific input slice.
 
         Shared PBL input fields are assembled by the common physics seam.
         Returned fields use the MPAS wrapper names and (column,level) Fortran layout.
+        Independent binder copies and clears share this launch via extra_copies.
         """
         import numpy as np
-        fields = {dst: self.layout(diagnostics[src]) for src, dst in _DIAGNOSTICS.items()}
+        # A column-fastest (level, column) pool array is already the MMM
+        # (column, level) Fortran array: MMM then updates the pool in place, as
+        # native's by-reference call does, and the commit has nothing to copy.
+        fields, copies = {}, list(extra_copies)
+        for src, dst in _DIAGNOSTICS.items():
+            view = diagnostics[src].T
+            if view.flags.f_contiguous and view.dtype == self.cp.float32:
+                fields[dst] = view
+            else:
+                fields[dst] = self.cp.empty(view.shape, dtype=self.cp.float32, order="F")
+                copies.append((fields[dst], view))
         shape = fields["qke"].shape
         ncol, _ = shape
         self._checked({"meshDensity": mesh_density}, (ncol,))
         for src, dst in (("ch", "ch"), ("qsfc", "qsfc"), ("rmol", "rmol"), ("skintemp", "ts")):
             self._checked({src: surface[src]}, (ncol,))
-            fields[dst] = surface[src].copy()
+            fields[dst] = self.cp.empty(ncol, dtype=self.cp.float32)
+            copies.append((fields[dst], surface[src]))
         fields["dx"] = self.cp.empty(ncol, dtype=self.cp.float32)
         self._launch("mynn_dx", ncol, (ncol, np.float32(len_disp), mesh_density, fields["dx"]))
         for name in (*_BUDGETS, *_ZERO_TENDENCIES, "pattern_spp_pbl"):
-            fields[name] = self.cp.zeros(shape, dtype=self.cp.float32, order="F")
+            fields[name] = self.cp.empty(shape, dtype=self.cp.float32, order="F")
+            copies.append((fields[name], None))
         for name in ("maxwidth", "maxmf", "ztop_plume"):
-            fields[name] = self.cp.zeros(ncol, dtype=self.cp.float32)
-        fields["ktop_plume"] = self.cp.zeros(ncol, dtype=self.cp.int32)
+            fields[name] = self.cp.empty(ncol, dtype=self.cp.float32)
+            copies.append((fields[name], None))
+        fields["ktop_plume"] = self.cp.empty(ncol, dtype=self.cp.int32)
+        copies.append((fields["ktop_plume"], None))
+        self.copy_many(copies)
         return fields
+
+    def copy_many(self, pairs):
+        """driver_pbl.F:454-507,628-725; parallel pool layout transfers."""
+        from .mynn_copies_v842 import MynnCopies
+        copies = getattr(self, '_copies', None)
+        if copies is None:
+            copies = self._copies = MynnCopies(self.cp)
+        copies.copy_many(pairs)
 
     def to_mpas(self, fields, *, f_ni, f_nc, f_nifa, f_nwfa):
         """mpas_atmphys_driver_pbl.F:628-725, scheme-specific output slice."""
@@ -424,7 +482,7 @@ MYNN_ARRAY_SUPPORT = MYNN_IEEE_ARITHMETIC_SUPPORT + r'''
 // MPAS physics_mmm/bl_mynn_subroutines.F90:473-6560; GNU CVTSS2SD preserves
 // NaN sign/payload and quiets signaling inputs. Finite conversion is unchanged.
 __device__ __forceinline__ double mynn_real64(float a) {
-#ifdef __CUDA_ARCH__
+#if defined(__CUDA_ARCH__) && !(defined(HEX_NUMERICS_FAST) && HEX_NUMERICS_FAST)
     unsigned int x=__float_as_uint(a);
     if ((x & 0x7fffffffu)>0x7f800000u) {
         unsigned long long bits=((unsigned long long)(x & 0x80000000u)<<32)
@@ -437,7 +495,7 @@ __device__ __forceinline__ double mynn_real64(float a) {
 // MPAS physics_mmm/bl_mynn_subroutines.F90:473-6560; GNU CVTSD2SS truncates
 // the NaN payload, preserves sign and sets the binary32 quiet bit.
 __device__ __forceinline__ float mynn_real32(double a) {
-#ifdef __CUDA_ARCH__
+#if defined(__CUDA_ARCH__) && !(defined(HEX_NUMERICS_FAST) && HEX_NUMERICS_FAST)
     unsigned long long x=(unsigned long long)__double_as_longlong(a);
     if ((x & 0x7fffffffffffffffULL)>0x7ff0000000000000ULL) {
         unsigned int bits=(unsigned int)((x>>32)&0x80000000ULL)|0x7fc00000u
@@ -468,6 +526,7 @@ __device__ __forceinline__ float mynn_ieee_erf(float a) { return mynn_ieee_resul
 // MPAS physics_mmm/bl_mynn_subroutines.F90:473-6560; GNU POW propagates a
 // signaling NaN even for x**0 and 1**y. The shared finite POW path is retained.
 __device__ __forceinline__ float mynn_ieee_pow(float a,float b) {
+#if !(defined(HEX_NUMERICS_FAST) && HEX_NUMERICS_FAST)
     unsigned int x=__float_as_uint(a),y=__float_as_uint(b);
     // The pinned GNU/libm primitive bank measures positive quiet NaNs for
     // NaN**(+/-1), including negative signaling inputs; finite POW is shared.
@@ -476,10 +535,12 @@ __device__ __forceinline__ float mynn_ieee_pow(float a,float b) {
     bool signaling_x=(x&0x7fc00000u)==0x7f800000u && (x&0x003fffffu)!=0;
     bool signaling_y=(y&0x7fc00000u)==0x7f800000u && (y&0x003fffffu)!=0;
     if(signaling_x || signaling_y) return mynn_ieee_result(a,b,__uint_as_float(0xffc00000u));
+#endif
     return mynn_ieee_result(a,b,mynn_pow(a,b));
 }
 // MPAS physics_mmm/bl_mynn_subroutines.F90:473-6560; GNU binary64 POW NaNs.
 __device__ __forceinline__ double mynn_ieee_pow(double a,double b) {
+#if !(defined(HEX_NUMERICS_FAST) && HEX_NUMERICS_FAST)
     unsigned long long x=(unsigned long long)__double_as_longlong(a),y=(unsigned long long)__double_as_longlong(b);
     if ((x&0x7fffffffffffffffULL)>0x7ff0000000000000ULL &&
         (y&0x7fffffffffffffffULL)==0x3ff0000000000000ULL)
@@ -487,6 +548,7 @@ __device__ __forceinline__ double mynn_ieee_pow(double a,double b) {
     bool signaling_x=(x&0x7ff8000000000000ULL)==0x7ff0000000000000ULL && (x&0x0007ffffffffffffULL)!=0;
     bool signaling_y=(y&0x7ff8000000000000ULL)==0x7ff0000000000000ULL && (y&0x0007ffffffffffffULL)!=0;
     if(signaling_x || signaling_y) return mynn_ieee_result(a,b,__longlong_as_double(0xfff8000000000000ULL));
+#endif
     return mynn_ieee_result(a,b,mynn_pow(a,b));
 }
 #define mynn_exp mynn_ieee_exp
@@ -664,7 +726,14 @@ template<class T> __device__ T mynn_max(T a,T b) { return a>b ? a:b; }
 // Keep binary32 MIN/MAX calls separate. The admitted sm_89 compiler changes
 // 52 NaN words in the inlined clamp while each isolated operation matches GNU;
 // separate calls reproduce all 7813 strict primitive words (minmax-noinline-v49).
-__device__ __noinline__ float mynn_min(float a,float b) {
+#if defined(HEX_NUMERICS_FAST) && HEX_NUMERICS_FAST
+// The isolated-call workaround protects strict NaN words. Fast numerics
+// keeps the ordered comparison but inlines the per-level clamp operations.
+#define MYNN_MINMAX_ATTR __forceinline__
+#else
+#define MYNN_MINMAX_ATTR __noinline__
+#endif
+__device__ MYNN_MINMAX_ATTR float mynn_min(float a,float b) {
 #ifdef __CUDA_ARCH__
     float result;
     // A comparison/select cannot become CUDA's different NaN MIN/MAX.
@@ -677,7 +746,7 @@ __device__ __noinline__ float mynn_min(float a,float b) {
 }
 
 // MPAS physics_mmm/bl_mynn_subroutines.F90:473-6560; strict MINSS/MAXSS selection.
-__device__ __noinline__ float mynn_max(float a,float b) {
+__device__ MYNN_MINMAX_ATTR float mynn_max(float a,float b) {
 #ifdef __CUDA_ARCH__
     float result;
     // A comparison/select cannot become CUDA's different NaN MIN/MAX.
@@ -689,6 +758,7 @@ __device__ __noinline__ float mynn_max(float a,float b) {
 #endif
 }
 
+#undef MYNN_MINMAX_ATTR
 // MPAS physics_mmm/bl_mynn_subroutines.F90:473-6560; strict MINSS/MAXSS selection.
 __device__ double mynn_min(double a,double b) {
 #ifdef __CUDA_ARCH__
@@ -854,6 +924,45 @@ def _column_batch(ncol, stride, processors, free_bytes):
     return min(((ncol + 63) // 64) * 64, max(64, 256 * processors), affordable)
 
 
+_STATIC_COLUMNS = (
+    "const int worker = blockIdx.x*blockDim.x+threadIdx.x;\n"
+    "for (int thread = worker; thread < batch_count; thread += blockDim.x*gridDim.x) {\n")
+_DYNAMIC_COLUMNS = (
+    "const int worker = blockIdx.x*blockDim.x+threadIdx.x;\n"
+    "const int mynn_lane = threadIdx.x & 31;\n"
+    "int mynn_base = worker & ~31;\n"
+    "for (;;) {\n"
+    "if (mynn_base >= batch_count) break;\n"
+    "{ const int thread = mynn_base + mynn_lane;\n"
+    "if (thread < batch_count) {\n")
+_STATIC_END = "error_flags[batch_first+thread]=errflg;\n}\n}\n"
+_DYNAMIC_END = (
+    "error_flags[batch_first+thread]=errflg;\n} }\n"
+    "int mynn_next = 0;\n"
+    "if (mynn_lane == 0) mynn_next = (int)atomicAdd(&g_mynn_next_column, 32u);\n"
+    "mynn_next = __shfl_sync(0xffffffffu, mynn_next, 0);\n"
+    "mynn_base = mynn_next + (int)(blockDim.x*gridDim.x);\n"
+    "}\n}\n")
+
+
+def _dynamic_columns(source):
+    """Fast numerics: warps take 32-column chunks from a device counter.
+
+    The static grid stride gave every worker the same column count, so the
+    few warps holding EDMF plume columns (dmp_mf plus condensation_edmf are
+    ~40% of the kernel on 5% of columns) set the kernel's end while the rest
+    of the card idled. Each warp still starts on its own first 32 columns and
+    then takes the next free chunk. Columns are independent and use only their
+    worker's private arena, so the words do not depend on which warp computes
+    a column (measured: 0 of 711,471,929 output words differ on a captured
+    216,187-column call). Every lane of a 64-thread block reaches the shuffle.
+    """
+    if source.count(_STATIC_COLUMNS) != 1 or not source.endswith(_STATIC_END):
+        raise ValueError("MYNN column loop changed; dynamic column scheduling needs review")
+    head = source[:-len(_STATIC_END)].replace(_STATIC_COLUMNS, _DYNAMIC_COLUMNS, 1)
+    return "__device__ unsigned int g_mynn_next_column;\n" + head + _DYNAMIC_END
+
+
 class MynnCudaModule:
     """Whole MMM module using MPAS's bl_mynn_run argument names.
 
@@ -867,8 +976,40 @@ class MynnCudaModule:
         """bl_mynn.F90:24-107,129-1242; whole numerical module compilation."""
         import cupy as cp
         self.cp = cp
-        self._source = CUDA_FTZ_HELPERS + shared_math_source + MYNN_ARRAY_SUPPORT + MYNN_MODULE_CUDA
+        numerical = MYNN_MODULE_CUDA
+        # Fast numerics balances columns across warps (G4, MPAS-ROUTE-SPEED-2026-10-24).
+        # Strict numerics keeps the proven image byte for byte.
+        self._dynamic = not _hex_numerics.is_strict()
+        if self._dynamic:
+            numerical = _dynamic_columns(numerical)
+        self._source = CUDA_FTZ_HELPERS + shared_math_source + MYNN_ARRAY_SUPPORT + numerical
         self._module = None
+        self._resident = None
+        self._next_column = None
+
+    def _storage(self, ncol, stride):
+        """Worker scratch allocated once per device and shape; error flags per call.
+
+        The kernel's words do not depend on the worker count (each column is
+        independent; the grid strides over columns), so the first call's
+        budget is kept. Allocating per call cost cudaMalloc/cudaFree pairs
+        (each free a device sync) on every step once the slot's pool blocks
+        were released (MPAS-ROUTE-SPEED-2026-10-24 G4: 70 mallocs + 45 frees).
+        """
+        cp = self.cp
+        device = cp.cuda.runtime.getDevice()
+        # Error flags stay per call: callers may read a step's flags later.
+        errors = cp.empty(ncol, dtype=cp.int32)
+        held = self._resident
+        if held is not None and held[0] == (device, ncol, stride):
+            return held[1], errors, held[2]
+        properties = cp.cuda.runtime.getDeviceProperties(device)
+        self._resident = None
+        free_bytes, _ = cp.cuda.runtime.memGetInfo()
+        batch = _column_batch(ncol, stride, properties['multiProcessorCount'], free_bytes)
+        workspace = cp.empty(batch*stride, dtype=cp.uint8)
+        self._resident = ((device, ncol, stride), workspace, batch)
+        return workspace, errors, batch
 
     @property
     def module(self):
@@ -913,12 +1054,13 @@ class MynnCudaModule:
         # is absent, so this bounds the active call tree including alignment.
         stride = MYNN_WORKSPACE_LEVEL_BYTES*kte + MYNN_WORKSPACE_FIXED_BYTES
         stride = (stride+7)//8*8
-        properties = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
-        free_bytes, _ = cp.cuda.runtime.memGetInfo()
-        batch = _column_batch(ncol, stride, properties['multiProcessorCount'], free_bytes)
-        workspace = cp.empty(batch*stride, dtype=cp.uint8)
-        errors = cp.empty(ncol, dtype=cp.int32)
+        workspace, errors, batch = self._storage(ncol, stride)
         kernel = self.module.get_function("mynn_mmm_run")
+        if self._dynamic:
+            # The column counter restarts on the launch stream; no host wait.
+            if self._next_column is None:
+                self._next_column = int(self.module.get_global_var("g_mynn_next_column"))
+            cp.cuda.runtime.memsetAsync(self._next_column, 0, 4, cp.cuda.get_current_stream().ptr)
         kernel((batch // 64,), (64,), (np.int32(0), np.int32(ncol), constants,
                              workspace, np.uint64(stride), errors, *values))
         return errors
@@ -985,15 +1127,20 @@ class MynnBlDriver:
                 levels = int(arguments["kme"])-int(arguments["kts"])+1 if name == "w" else shape[1]
                 if field.shape[0] != shape[0] or field.shape[1] < levels:
                     raise ValueError(f"{name} storage does not contain the original MYNN tile")
-                arguments[name] = cp.asfortranarray(field[:, :levels])
+                arguments[name] = field[:, :levels]
         values = {}
+        direct = set()
         mixing = {"qv": arguments["qv"]}
+        copies = []
+        if not mixing['qv'].flags.f_contiguous:
+            mixing['qv'] = cp.empty(shape, dtype=cp.float32, order='F')
+            copies.append((mixing['qv'], arguments['qv']))
         # module_bl_mynn.F:378-452: zero local species first, then copy only
         # those whose flag is true and whose optional argument is present.
         for destination, (source, flag) in _OPTIONAL_SPECIES.items():
             supplied = arguments.get(source)
-            field = (supplied.copy(order="F") if arguments[flag] and supplied is not None
-                     else cp.zeros(shape, dtype=cp.float32, order="F"))
+            field = cp.empty(shape, dtype=cp.float32, order="F")
+            copies.append((field, supplied if arguments[flag] and supplied is not None else None))
             if destination.startswith("sq"):
                 mixing[source] = field
             else:
@@ -1001,17 +1148,17 @@ class MynnBlDriver:
         specific = {name: cp.empty(shape, dtype=cp.float32, order="F")
                     for name in ("sqv", "sqc", "sqi", "sqs")}
         flags = tuple(bool(arguments[n]) for n in ("f_qc", "f_qi", "f_qs"))
-        self.adapter.pre(mixing, specific, flags, exact_inverse=exact_inverse)
         values.update(specific)
         # module_bl_mynn.F:462-476: stochastic input is zero unless both the
         # forcing switch and optional pattern argument are supplied.
         pattern = arguments.get("pattern_spp")
-        values["pattern_spp_pbl"] = (pattern.copy(order="F")
-            if arguments["spp_pbl"] > 0 and pattern is not None
-            else cp.zeros(shape, dtype=cp.float32, order="F"))
+        values["pattern_spp_pbl"] = cp.empty(shape, dtype=cp.float32, order="F")
+        copies.append((values["pattern_spp_pbl"], pattern
+                       if arguments["spp_pbl"] > 0 and pattern is not None else None))
         # module_bl_mynn.F:527-540: these local tendencies start at zero.
         for name in _OPTIONAL_TENDENCIES:
-            values[name] = cp.zeros(shape, dtype=cp.float32, order="F")
+            values[name] = cp.empty(shape, dtype=cp.float32, order="F")
+            copies.append((values[name], None))
         for name, spec in MYNN_ARGUMENTS.items():
             if name in values or name in ("errmsg", "errflg") or name.startswith("bl_mynn_"):
                 continue
@@ -1027,13 +1174,46 @@ class MynnBlDriver:
                 target_shape = (shape[0],) if len(spec["dimensions"]) == 1 else shape
                 # Native always supplies its five local budget arrays to MMM.
                 # MMM defines them before the wrapper's optional copy-out.
-                if spec["intent"] == "out" or name in _BUDGETS:
+                if name in _BUDGETS:
                     values[name] = cp.empty(target_shape, dtype=dtype, order="F")
+                elif (spec["intent"] in ("out", "inout") and isinstance(value, cp.ndarray)
+                      and value.shape == target_shape and value.dtype == dtype
+                      and value.flags.f_contiguous):
+                    # The wrapper's private copy and its copy-back move the same
+                    # words; MMM updates the caller's storage in place instead.
+                    values[name] = value
+                    direct.add(name)
+                elif spec["intent"] == "out":
+                    values[name] = cp.empty(target_shape, dtype=dtype, order="F")
+                elif spec["intent"] == "in":
+                    # The generated MMM descriptor reads these arrays only.
+                    # Keep the wrapper's private copies for INOUT arguments.
+                    if value is None or value.flags.f_contiguous:
+                        values[name] = value
+                    else:
+                        values[name] = cp.empty(value.shape, dtype=dtype, order='F')
+                        copies.append((values[name], value))
                 else:
-                    values[name] = value.copy(order="F")
+                    values[name] = cp.empty(target_shape, dtype=dtype, order="F")
+                    copies.append((values[name], value))
             else:
                 values[name] = value
         values.update(options.mmm_arguments())
+        # In-place storage must not alias any other argument; such a name keeps
+        # the wrapper's private copy (module_bl_mynn.F:543-598 copies locals).
+        seen = {}
+        for name, array in values.items():
+            if isinstance(array, cp.ndarray) and array.size:
+                seen.setdefault(_address(array), []).append(name)
+        for names in seen.values():
+            for name in names if len(names) > 1 else ():
+                if name in direct:
+                    direct.discard(name)
+                    private = cp.empty(values[name].shape, dtype=values[name].dtype, order="F")
+                    copies.append((private, values[name]))
+                    values[name] = private
+        self.adapter.copy_many(copies)
+        self.adapter.pre(mixing, specific, flags, exact_inverse=exact_inverse)
         errors = self.numerical.run(values, constants)
         post = {name: values[source] for name, source in
                 (("dqv", "rqvblten"), ("dqc", "rqcblten"),
@@ -1042,8 +1222,9 @@ class MynnBlDriver:
         # module_bl_mynn.F:602-741: optional species tendencies copy out only
         # with their species flag; all budgets copy out as a complete group.
         budgets_present = all(arguments.get(name) is not None for name in _BUDGETS)
+        copies = []
         for name, spec in MYNN_ARGUMENTS.items():
-            if not spec["dimensions"] or spec["intent"] not in ("out", "inout"):
+            if not spec["dimensions"] or spec["intent"] not in ("out", "inout") or name in direct:
                 continue
             source = WRAPPER_TO_MMM.get(name, name)
             target = original.get(source)
@@ -1055,7 +1236,8 @@ class MynnBlDriver:
                 continue
             if target.ndim == 2:
                 target = target[:, :shape[1]]
-            cp.copyto(target, values[name])
+            copies.append((target, values[name]))
+        self.adapter.copy_many(copies)
         return errors
 
 
@@ -1099,7 +1281,7 @@ _MYNN_PREPARED = {
 }
 # module_bl_mynn.F:114-152 declares these prepared arguments INTENT(IN).
 # The moisture pre/post kernels take const pointers; the numerical wrapper
-# copies its MMM arguments and copies back only OUT/INOUT arguments.
+# retains private MMM INOUT storage and copies back only OUT/INOUT arguments.
 _MYNN_PREPARED_INPUTS = (
     "ps", "dz", "u", "v", "w", "th", "tt", "p", "exner", "rho",
     "qv", "qc", "qi", "qs", "nc", "ni", "nifa", "nwfa",
@@ -1175,33 +1357,42 @@ def bind_native_pools(provider, call):
                   icloud_bl=0, spp_pbl=0, errflg=0)
     # mpas_atmphys_vars.F:417-418 declares these two INTEGER PARAMETERs as 0.
     # driver_pbl.F:813-816 initializes StrKIND status, not a diagnostic refusal.
-    fields["errmsg"] = cp.full(512, ord(" "), dtype=cp.uint8)
+    # MynnBlDriver.run initializes the status once before its numerical call.
+    fields["errmsg"] = cp.empty(512, dtype=cp.uint8)
     # MPAS framework/mpas_kind_types.F:32 declares StrKIND=512.
     prepared = provider["prepared"]
+    copies = []
     for name, native in _MYNN_PREPARED.items():
         value = prepared[native]
-        fields[name] = cp.asfortranarray(value.T) if value.ndim == 2 else value.copy()
+        view = value.T if value.ndim == 2 else value
+        if view.flags.f_contiguous and (value.ndim == 2 or name in _MYNN_PREPARED_INPUTS):
+            fields[name] = view
+        else:
+            fields[name] = cp.empty(view.shape, dtype=view.dtype, order='F')
+            copies.append((fields[name], view))
     diag = provider["diag_physics"]
     tendencies = provider["tend_physics"]
     surface = {name: diag[name] for name in ("ch", "qsfc", "rmol")}
     surface["skintemp"] = provider["sfc_input"]["skintemp"]
-    diagnostics = {name: cp.asfortranarray(diag[name]) for name in _DIAGNOSTICS}
-    fields.update(driver.adapter.from_mpas(diagnostics, surface,
-                  provider["mesh"]["meshDensity"], provider["configs"]["config_len_disp"]))
+    diagnostics = {name: diag[name] for name in _DIAGNOSTICS}
     for name in ("hfx", "qfx", "ust", "wspd", "znt"):
-        fields[name] = diag[name].copy()
-    fields["pblh"] = diag["hpbl"].copy()
-    fields["xland"] = provider["sfc_input"]["xland"].copy()
+        fields[name] = cp.empty_like(diag[name])
+        copies.append((fields[name], diag[name]))
+    for name, source in (("pblh", diag["hpbl"]), ("xland", provider["sfc_input"]["xland"])):
+        fields[name] = cp.empty_like(source)
+        copies.append((fields[name], source))
     count = fields["ite"] - fields["its"] + 1
-    fields["kpbl"] = cp.ones(count, dtype=cp.int32)
-    fields["uoce"] = cp.zeros(count, dtype=cp.float32)
-    fields["voce"] = cp.zeros(count, dtype=cp.float32)
+    fields["kpbl"] = cp.empty(count, dtype=cp.int32)
+    copies.append((fields["kpbl"], 1))
+    for name in ("uoce", "voce"):
+        fields[name] = cp.empty(count, dtype=cp.float32)
+        copies.append((fields[name], None))
+    fields.update(driver.adapter.from_mpas(diagnostics, surface,
+                  provider["mesh"]["meshDensity"], provider["configs"]["config_len_disp"],
+                  extra_copies=copies))
     nz = fields["kte"] - fields["kts"] + 1
-    lw = cp.asfortranarray(tendencies["rthratenlw"][:nz])
-    sw = cp.asfortranarray(tendencies["rthratensw"][:nz])
-    radiation = cp.empty_like(lw, order="F")
-    driver.adapter._launch("mynn_radiation", radiation.size, (radiation.size, lw, sw, radiation))
-    fields["rthraten"] = driver.adapter.layout(radiation)
+    fields["rthraten"] = driver.adapter.radiation(tendencies["rthratenlw"][:nz],
+                                                tendencies["rthratensw"][:nz])
     return {"mynn_v842": {"provider": provider, "driver": driver,
                          "arguments": fields, "constants": constants}}
 
@@ -1220,27 +1411,37 @@ def run_slot(call):
     return errors
 
 
+def _address(array):
+    """First-word device (or host witness) address of an array view."""
+    face = getattr(array, "__cuda_array_interface__", None) or array.__array_interface__
+    return face["data"][0]
+
+
 def commit_native_outputs(provider, driver, fields):
     """MPAS mpas_atmphys_driver_pbl.F:628-725,969-975; complete output transaction.
 
     The numerical wrapper and native-pool interface replay share this exact
     copy-out boundary. Unwritten levels and non-solve cells remain in storage.
     """
-    diagnostics, extra = driver.adapter.to_mpas(fields, **{name: fields[name]
-                                               for name in ("f_ni", "f_nc", "f_nifa", "f_nwfa")})
-    cp = provider.cp
     nz = fields["kte"] - fields["kts"] + 1
     diag, tend = provider["diag_physics"], provider["tend_physics"]
-    for name, value in diagnostics.items():
-        cp.copyto(diag[name][:nz], value[:nz])
-    for name, value in extra.items():
-        cp.copyto(tend[name][:nz], value[:nz])
+    pairs = [(diag[name][:nz], fields[source][:, :nz].T)
+             for name, source in (*_DIAGNOSTICS.items(), *((n, n) for n in _BUDGETS))]
+    extra = ["rqsblten"]
+    if fields["f_ni"]:
+        extra.append("rniblten")
+    if fields["f_nc"] and fields["f_nifa"] and fields["f_nwfa"]:
+        extra.extend(("rncblten", "rnifablten", "rnwfablten"))
+    pairs.extend((tend[name][:nz], fields[name][:, :nz].T) for name in extra)
     for name in ("rublten", "rvblten", "rthblten", "rqvblten", "rqcblten", "rqiblten"):
-        cp.copyto(tend[name][:nz], fields[name][:, :nz].T)
+        pairs.append((tend[name][:nz], fields[name][:, :nz].T))
     for name, source in (("kzh", "exch_h"), ("kzm", "exch_m"), ("kzq", "exch_h")):
-        cp.copyto(diag[name][:nz], fields[source][:, :nz].T)
-    cp.copyto(diag["hpbl"], fields["pblh"])
-    cp.copyto(diag["kpbl"], fields["kpbl"])
+        pairs.append((diag[name][:nz], fields[source][:, :nz].T))
+    pairs.extend(((diag["hpbl"], fields["pblh"]), (diag["kpbl"], fields["kpbl"])))
+    # Fields MMM updated in place in the pool need no copy (from_mpas views).
+    pairs = [(d, s) for d, s in pairs if not (_address(d) == _address(s) and d.shape == s.shape
+                                               and d.strides == s.strides)]
+    driver.adapter.copy_many(pairs)
     _discard_native_inputs(provider)
 
 

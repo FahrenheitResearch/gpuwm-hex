@@ -11,7 +11,14 @@ import numpy as np
 from .fullstep_lts import geometric_rates, buffer_rates
 from .cuda_courant_fullstep_lts import CudaColumnTransportMonitor
 
-NATIVE_DRIVER_SHA256 = '05e87df6f384b3b2ef6530a3e1ed797ac66c367259c0061480b983770a982897'
+# Re-audited 2026-10-24 (HEX-PHYSICS-PARITY fix group 2, #8): both calls of advance_scalar_transport_cuda_v841 in
+# cuda_driver.py (the global path and the regional third stage) still pass source-old rho at position 4, the split
+# fluxes at 6 and 7 and the stage duration at 8, with rdzw and rk_step as keywords.  The previous pin (05e87df6...)
+# matched no shipped driver since 0.4.1, so the shadow refused every variable-mesh run on both physics routes.
+# Re-audited again for 0.4.5: the limited-area suite change to cuda_driver.py touches the moist coefficients only;
+# both transport calls keep the same argument positions.  tests/test_fullstep_lts_shadow_pin.py now fails on any
+# driver change, so the pin is re-audited at merge time instead of refusing a user's run.
+NATIVE_DRIVER_SHA256 = '9034951ee871ace985ccc7eacfa8559d1798d653cb0a7c64a1e353dcce5b22ef'
 
 
 class FullStepShadow:

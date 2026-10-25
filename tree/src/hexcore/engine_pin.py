@@ -1,9 +1,9 @@
 """
-Current public pin: gpuwm 2.9.2 at public engine commit
-570c503fbbfab6e076572d3e6386f41fccf56049, tag v2.9.2. The measurement
-repin-292-20261020.json verifies all published platform wheels, the complete
+Current public pin: gpuwm 2.9.7 at public engine commit
+4726b689c6db142577eca3968a1f74256e3c057f, tag v2.9.7. The measurement
+repin-297-20261025.json verifies all published platform wheels, the complete
 sixteen-path seam, composed glacier digest, contract surface and helper set.
-The dependency is gpuwm>=2.9.4,<2.10 (release installation minimum). The sealed 2.9.3 public packet has
+The dependency is gpuwm>=2.9.7,<2.10 (release installation minimum). The sealed 2.9.3 public packet has
 its own complete measured PACKET_ENGINES row, recorded separately in
 verification/engine-verdicts/prepared-engines.json. Historical pin records
 below remain measurements of their original inputs.
@@ -1018,7 +1018,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         on_pypi=True,
         moved=(
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/mpas_column_batch.py",
             "gpuwm/core/noahmp_glacier.py",
             "gpuwm/core/noahmp_glacier_gpu.py",
             "gpuwm/core/noahmp_kernel_sources.py",
@@ -1034,7 +1036,9 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
         on_pypi=True,
         moved=(
             "gpuwm/config.py",
+            "gpuwm/core/gf.py",
             "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/mpas_column_batch.py",
             "gpuwm/core/noahmp_glacier.py",
             "gpuwm/core/noahmp_glacier_gpu.py",
             "gpuwm/core/noahmp_runtime.py",
@@ -1046,6 +1050,48 @@ PUBLISHED_ENGINES: tuple[PublishedEngine, ...] = (
     ),
     PublishedEngine(
         version="2.9.4",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.9.5",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.9.6",
+        on_pypi=True,
+        moved=(
+            "gpuwm/config.py",
+            "gpuwm/core/gf.py",
+            "gpuwm/core/kernels/__init__.py",
+            "gpuwm/core/mpas_column_batch.py",
+            "gpuwm/core/physics.py",
+            "gpuwm/core/rrtmg_legacy.py",
+            "gpuwm/io/restart.py",
+        ),
+        offline_build_road=True,
+    ),
+    PublishedEngine(
+        version="2.9.7",
         on_pypi=True,
         moved=(),
         offline_build_road=True,
@@ -1282,7 +1328,7 @@ def engine(version: str) -> PublishedEngine | None:
     return None
 
 
-GPUWM_INSTALL_MINIMUM = "2.9.4"
+GPUWM_INSTALL_MINIMUM = "2.9.7"
 
 
 def measured_gpuwm_floor() -> str:

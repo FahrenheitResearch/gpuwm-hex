@@ -234,7 +234,13 @@ def latest_checkpoint(member: dict, attempts: list[dict]) -> Path | None:
             try:
                 stamp = datetime.strptime(path.name, "checkpoint.%Y-%m-%d_%H.%M.%S.pkl")
             except ValueError:
-                continue
+                # The MPAS suite route names its checkpoint by lead (checkpoint.f024.pkl, or
+                # checkpoint.t00005400.pkl off the hour; mpasphys.checkpoint_v842), from the member's start.
+                lead = path.name[len("checkpoint."):-len(".pkl")]
+                if "start_time" not in member or not lead[1:].isdigit() or lead[:1] not in ("f", "t"):
+                    continue
+                seconds = int(lead[1:]) * (3600 if lead[0] == "f" else 1)
+                stamp = datetime.strptime(member["start_time"], "%Y-%m-%d_%H:%M:%S") + timedelta(seconds=seconds)
             # A killed atomic write leaves .part, never a completed checkpoint.
             # A kill after the final checkpoint but before the completion
             # receipt still needs a restartable, strictly earlier checkpoint.

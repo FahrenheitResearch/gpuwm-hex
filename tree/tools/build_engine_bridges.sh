@@ -37,7 +37,7 @@
 # by default: built against a distribution libnetcdf it needs libnetcdf.so.15,
 # which Debian 12 does not have (lane H7, measured).
 #
-# rw_mpas_static joined them (ARWEN-VS-HEX-TIMING-2026-10-15): gpuwm 2.9.0 and
+# rw_mpas_static joined them (2026-10-15): gpuwm 2.9.0 and
 # integrate/hex-mpas 24b6f08c read every grid through binary32, so a generated
 # grid's static declared binary64 coordinates it did not hold and the point door
 # could not build a 3 km regional mesh (its vertical check and rw_mpas_mesh
@@ -99,6 +99,10 @@ bash /hex/tree/tools/build_netcdf4_static.sh /opt/netcdf4-static
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "${toolchain}" >/dev/null
 export PATH="\$HOME/.cargo/bin:\$PATH"
 mkdir -p /build && cp -a /gpuwm/tools /build/tools
+# static-fields (an rw-mpas dependency) include_str!s gpuwm/authorities/*.json from the repo root; without it the
+# rw-mpas build stops "couldn't read .../gpuwm/authorities/sfire-input-fields.v1.json" (gpuwm e6dc05d0f8, 2026-10-24).
+# Data only: no bridge's bytes depend on where it sits beyond the file contents it embeds.
+if [ -d /gpuwm/gpuwm/authorities ]; then mkdir -p /build/gpuwm && cp -a /gpuwm/gpuwm/authorities /build/gpuwm/authorities; fi
 cd /build/tools/rustwx
 GPUWM_BRIDGE_SOURCE_REV=${rev} LIBRARY_PATH=/opt/netcdf4-static/lib \\
   cargo build --release --locked --offline -p rw-mpas --features system-netcdf $(printf -- "--bin %s " $BRIDGES)
@@ -133,6 +137,8 @@ out, rev, image, gpuwm = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], pa
 hex_tree = pathlib.Path(sys.argv[5])
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 bins = gpuwm / "tools/rustwx/crates/rw-mpas/src/bin"
+# gpuwm 2.9.7 builds rw_mpas_static from a bin directory (bin/rw_mpas_static/main.rs and its modules).
+bin_source = lambda name: f"{name}.rs" if (bins / f"{name}.rs").is_file() else f"{name}/main.rs"
 hex_root = pathlib.Path(sys.argv[5])
 record = {
     "schema": "gpuwm-hex.engine-bridges-build/v1",
@@ -141,8 +147,8 @@ record = {
     "rustc": (out / "rustc.txt").read_text().strip(),
     "netcdf_c": "4.9.3 static with netCDF-4: HDF5 1.14.6 and zlib 1.3.1 (tools/build_netcdf4_static.sh)",
     "bridges": {name: {"sha256": sha(out / name), "bytes": (out / name).stat().st_size,
-                       "source": f"tools/rustwx/crates/rw-mpas/src/bin/{name}.rs",
-                       "source_sha256": sha(bins / f"{name}.rs")}
+                       "source": f"tools/rustwx/crates/rw-mpas/src/bin/{bin_source(name)}",
+                       "source_sha256": sha(bins / bin_source(name))}
                 for name in ("rw_mpas_geometry", "rw_mpas_stream", "rw_mpas_static", "rw_mpas_rrfs_connectivity",
                              "rw_mpas_rrfs_damping", "rw_mpas_rrfs_deformation", "rw_mpas_lbc", "rw_mpas_mesh")},
     "cargo_lock_sha256": sha(gpuwm / "tools/rustwx/Cargo.lock"),

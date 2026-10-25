@@ -190,3 +190,66 @@ def active_indices_in_range(cells: np.ndarray, counts: np.ndarray, limit: int) -
             for _ in pool.map(check, blocks):
                 pass
     return not failures
+
+
+def _caller_device():
+    """The calling thread's current CUDA device when CuPy is already loaded, else None.
+
+    CuPy keeps the current device per host thread; a pool thread starts on device 0. A task that
+    launches a kernel (the moving height integrals) must run on the caller's card, or a multi-card
+    executor's remap would upload its geometry to card 0.
+    """
+    import sys
+    cupy = sys.modules.get("cupy")
+    if cupy is None:
+        return None
+    try:
+        return int(cupy.cuda.runtime.getDevice())
+    except Exception:  # noqa: BLE001 - no usable device: the tasks run without one
+        return None
+
+
+def run_tasks(tasks, *, workers: int | None = None) -> list:
+    """Run independent zero-argument callables concurrently; results in task order.
+
+    Exact by construction: each task is the same call it was on one thread, on its own inputs, and
+    nothing is reduced across tasks here. The first failure (in task order) is raised after every
+    task has finished, so no task is left running against state its caller is about to discard.
+    ``GPUWM_HEX_HOST_COPY_THREADS=1`` runs them in order on the caller's thread.
+    """
+    tasks = list(tasks)
+    limit = threads() if workers is None else max(1, min(threads(), int(workers)))
+    if limit <= 1 or len(tasks) <= 1:
+        return [task() for task in tasks]
+    device = _caller_device()
+
+    def call(task):
+        if device is None:
+            return task()
+        import cupy
+        with cupy.cuda.Device(device):
+            return task()
+
+    with ThreadPoolExecutor(max_workers=min(limit, len(tasks)), thread_name_prefix="hex-host-task") as pool:
+        futures = [pool.submit(call, task) for task in tasks]
+        errors = [future.exception() for future in futures]
+    for error in errors:
+        if error is not None:
+            raise error
+    return [future.result() for future in futures]
+
+
+def row_map(function: Callable[[slice], Any], rows: int, *, elements: int) -> None:
+    """Call ``function(rows_block)`` over contiguous blocks of the leading axis, on threads when it pays.
+
+    For level-major (level, cell) fields an elementwise expression on a block of whole levels reads
+    and writes C-contiguous rows, so NumPy takes the same inner loop per element that the whole-array
+    expression takes, and every output word is the one the single call writes.
+    """
+    workers = min(threads(), rows)
+    if workers <= 1 or elements < MIN_PARALLEL_ELEMENTS:
+        function(slice(0, rows))
+        return
+    bounds = np.linspace(0, rows, workers + 1, dtype=np.int64)
+    blocks = [slice(int(a), int(b)) for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
+    run_tasks([lambda block=block: function(block) for block in blocks], workers=workers)

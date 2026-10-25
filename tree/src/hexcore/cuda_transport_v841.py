@@ -1472,7 +1472,7 @@ def advance_scalars_monotonic_cuda_v841(
         invalid_flag=validation_flag, kernel_cache=kernel_cache,
     )
     width = int(coefficients.adv_coefs.shape[1])
-    # Census item 4 (HEX-MEMORY-2026-10-14 CENSUS.md, ranked opportunities):
+    # Census item 4 (the 2026-10-14 memory census, ranked opportunities):
     # the limiter runs a few species per pass.  Every FCT kernel indexes
     # tracer-major (tracer, level, entity) and never reads across tracers, so
     # a pass over the contiguous slice [first, last) launches the same body on

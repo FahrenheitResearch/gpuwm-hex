@@ -164,6 +164,127 @@ DEFAULT_POINTS = (
 DEFAULT_GLOBAL_POINT_COUNT = 6
 EARTH_RADIUS_KM = 6371.229
 
+#: Cities a LIMITED-AREA run takes its soundings at when none are named: the
+#: ones on its mesh, nearest the domain centre first, at most
+#: ``DEFAULT_REGION_POINT_COUNT``; a domain with none of them gets its centre.
+#: THE BREAKAGE THIS PREVENTS (graded-plateau 1 km region, box J,
+#: 2026-10-24): a regional run fell back to the world set (London, Tokyo,
+#: Sydney), rw_hex_points refused London as 7,025 km off the mesh, and that
+#: one refusal took every sounding with it.
+REGION_CITIES = DEFAULT_POINTS + (
+    ("Dallas", 32.78, -96.80), ("Houston", 29.76, -95.37), ("San Antonio", 29.42, -98.49),
+    ("Austin", 30.27, -97.74), ("Lubbock", 33.58, -101.85), ("Midland", 32.00, -102.08),
+    ("El Paso", 31.76, -106.49), ("Albuquerque", 35.08, -106.65), ("Phoenix", 33.45, -112.07),
+    ("Las Vegas", 36.17, -115.14), ("Salt Lake City", 40.76, -111.89), ("Omaha", 41.26, -95.93),
+    ("Lincoln", 40.81, -96.68), ("Topeka", 39.05, -95.68), ("Des Moines", 41.59, -93.62),
+    ("Sioux Falls", 43.55, -96.73), ("Rapid City", 44.08, -103.23), ("Bismarck", 46.81, -100.78),
+    ("Minneapolis", 44.98, -93.27), ("Milwaukee", 43.04, -87.91), ("St. Louis", 38.63, -90.20),
+    ("Springfield", 37.21, -93.29), ("Little Rock", 34.75, -92.29), ("Fort Smith", 35.39, -94.40),
+    ("Shreveport", 32.53, -93.75), ("Memphis", 35.15, -90.05), ("Nashville", 36.16, -86.78),
+    ("Jackson", 32.30, -90.18), ("Birmingham", 33.52, -86.80), ("Atlanta", 33.75, -84.39),
+    ("New Orleans", 29.95, -90.07), ("Tampa", 27.95, -82.46), ("Jacksonville", 30.33, -81.66),
+    ("Charlotte", 35.23, -80.84), ("Raleigh", 35.78, -78.64), ("Washington", 38.91, -77.04),
+    ("Philadelphia", 39.95, -75.17), ("New York", 40.71, -74.01), ("Boston", 42.36, -71.06),
+    ("Pittsburgh", 40.44, -79.99), ("Cleveland", 41.50, -81.69), ("Detroit", 42.33, -83.05),
+    ("Indianapolis", 39.77, -86.16), ("Columbus", 39.96, -83.00), ("Cincinnati", 39.10, -84.51),
+    ("Louisville", 38.25, -85.76), ("Seattle", 47.61, -122.33), ("Portland", 45.52, -122.68),
+    ("San Francisco", 37.77, -122.42), ("Los Angeles", 34.05, -118.24), ("San Diego", 32.72, -117.16),
+    ("Boise", 43.62, -116.20), ("Billings", 45.78, -108.50), ("Cheyenne", 41.14, -104.82),
+    ("Anchorage", 61.22, -149.90), ("Honolulu", 21.31, -157.86), ("San Juan", 18.47, -66.11),
+    ("Toronto", 43.65, -79.38), ("Montreal", 45.50, -73.57), ("Winnipeg", 49.90, -97.14),
+    ("Calgary", 51.05, -114.07), ("Vancouver", 49.28, -123.12), ("Monterrey", 25.69, -100.32),
+    ("Mexico City", 19.43, -99.13), ("Havana", 23.11, -82.37), ("Bogota", 4.71, -74.07),
+    ("Lima", -12.05, -77.04), ("Santiago", -33.45, -70.67), ("Buenos Aires", -34.60, -58.38),
+    ("Rio de Janeiro", -22.91, -43.17), ("Paris", 48.86, 2.35), ("Madrid", 40.42, -3.70),
+    ("Lisbon", 38.72, -9.14), ("Dublin", 53.35, -6.26), ("Amsterdam", 52.37, 4.90),
+    ("Brussels", 50.85, 4.35), ("Berlin", 52.52, 13.40), ("Munich", 48.14, 11.58),
+    ("Zurich", 47.38, 8.54), ("Vienna", 48.21, 16.37), ("Rome", 41.90, 12.50), ("Milan", 45.46, 9.19),
+    ("Warsaw", 52.23, 21.01), ("Prague", 50.08, 14.44), ("Budapest", 47.50, 19.04),
+    ("Copenhagen", 55.68, 12.57), ("Stockholm", 59.33, 18.07), ("Oslo", 59.91, 10.75),
+    ("Helsinki", 60.17, 24.94), ("Athens", 37.98, 23.73), ("Istanbul", 41.01, 28.98),
+    ("Kyiv", 50.45, 30.52), ("Moscow", 55.76, 37.62), ("Cairo", 30.04, 31.24),
+    ("Lagos", 6.52, 3.38), ("Johannesburg", -26.20, 28.05), ("Cape Town", -33.92, 18.42),
+    ("Riyadh", 24.71, 46.68), ("Dubai", 25.20, 55.27), ("Tehran", 35.69, 51.39),
+    ("Karachi", 24.86, 67.01), ("Mumbai", 19.08, 72.88), ("Kolkata", 22.57, 88.36),
+    ("Dhaka", 23.81, 90.41), ("Bangkok", 13.76, 100.50), ("Singapore", 1.35, 103.82),
+    ("Jakarta", -6.21, 106.85), ("Manila", 14.60, 120.98), ("Hong Kong", 22.32, 114.17),
+    ("Shanghai", 31.23, 121.47), ("Beijing", 39.90, 116.41), ("Seoul", 37.57, 126.98),
+    ("Osaka", 34.69, 135.50), ("Taipei", 25.03, 121.57), ("Perth", -31.95, 115.86),
+    ("Brisbane", -27.47, 153.03), ("Melbourne", -37.81, 144.96), ("Darwin", -12.46, 130.84),
+    ("Auckland", -36.85, 174.76),
+)
+DEFAULT_REGION_POINT_COUNT = 8
+#: The sphere rw_hex_points measures distances on (rw_mpas MPAS_EARTH_RADIUS_M).
+MPAS_EARTH_RADIUS_M = 6371229.0
+
+
+def mesh_point_check(mesh, points) -> tuple[list, list, tuple[float, float]] | None:
+    """``(on_mesh, off_mesh, (centre_lat, centre_lon))`` for ``points`` on a mesh, or ``None``.
+
+    The rule is rw_hex_points' own (rw_mpas ``PointSampler``): a point is off
+    the mesh when its nearest cell centre is further away than that cell's
+    spacing, ``sqrt(2 * areaCell / sqrt(3))`` on the unit sphere times the
+    MPAS radius.  ``off_mesh`` items are ``(name, lat, lon, nearest_km,
+    spacing_km)``.  ``None`` when the mesh cannot be read; the caller then
+    passes the points through and rw_hex_points decides.
+    """
+    if mesh is None:
+        return None
+    try:
+        import numpy as np
+        from netCDF4 import Dataset
+
+        from .netcdf_lock import NETCDF
+        with NETCDF, Dataset(mesh) as grid:
+            lat = np.asarray(grid["latCell"][:], dtype=np.float64)
+            lon = np.asarray(grid["lonCell"][:], dtype=np.float64)
+            area = np.asarray(grid["areaCell"][:], dtype=np.float64)
+            radius = float(grid.getncattr("sphere_radius"))
+    except (OSError, ValueError, KeyError, AttributeError, ImportError):
+        return None
+    if lat.size == 0 or not (math.isfinite(radius) and radius > 0.0):
+        return None
+    cells = np.stack((np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)), axis=1)
+    mean = cells.mean(axis=0)
+    norm = float(np.linalg.norm(mean))
+    if norm > 0.0:
+        centre = mean / norm
+        centre_deg = (math.degrees(math.asin(max(-1.0, min(1.0, float(centre[2]))))),
+                      math.degrees(math.atan2(float(centre[1]), float(centre[0]))))
+        reach = float(np.arccos(np.clip(cells @ centre, -1.0, 1.0)).max())
+    else:
+        centre, centre_deg, reach = None, (0.0, 0.0), math.pi
+    spacing_km = np.sqrt(2.0 * (area / (radius * radius)) / math.sqrt(3.0)) * MPAS_EARTH_RADIUS_M / 1000.0
+    reach += float(spacing_km.max()) / (MPAS_EARTH_RADIUS_M / 1000.0)
+    on_mesh, off_mesh = [], []
+    for name, plat, plon in points:
+        p, q = math.radians(plat), math.radians(plon)
+        target = np.array((math.cos(p) * math.cos(q), math.cos(p) * math.sin(q), math.sin(p)))
+        if centre is not None and math.acos(max(-1.0, min(1.0, float(centre @ target)))) > reach:
+            # Beyond every cell plus the widest spacing: off the mesh, and the
+            # distance to the domain edge is all a note needs.
+            beyond = (math.acos(max(-1.0, min(1.0, float(centre @ target)))) - reach) * MPAS_EARTH_RADIUS_M / 1000.0
+            off_mesh.append((name, plat, plon, None, beyond))
+            continue
+        dots = cells @ target
+        index = int(np.argmax(dots))
+        chord = float(np.linalg.norm(cells[index] - target))
+        km = 2.0 * math.asin(max(0.0, min(1.0, chord / 2.0))) * MPAS_EARTH_RADIUS_M / 1000.0
+        if km > float(spacing_km[index]):
+            off_mesh.append((name, plat, plon, km, float(spacing_km[index])))
+        else:
+            on_mesh.append((name, plat, plon))
+    return on_mesh, off_mesh, centre_deg
+
+
+def region_default_points(check: tuple[list, list, tuple[float, float]]) -> list:
+    """The cities of :data:`REGION_CITIES` on a limited-area mesh, nearest its
+    centre first, or the domain centre when none is on it."""
+
+    on_mesh, _off, (clat, clon) = check
+    on_mesh = sorted(on_mesh, key=lambda p: great_circle_km(clat, clon, p[1], p[2]))
+    return on_mesh[:DEFAULT_REGION_POINT_COUNT] or [("Domain centre", round(clat, 3), round(clon, 3))]
+
 POINTS_ENV = engines.POINTS.env_names[0]
 
 
@@ -187,7 +308,8 @@ def add_label_arguments(parser) -> None:
         "--brand", default=None, metavar="TEXT",
         help="bold text at the top right of every sounding and meteogram (e.g. "
              "'WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z'); forwarded "
-             "to the product stage. Default: none")
+             "to the product stage. Default: composed from the run's own records "
+             "(shape, finest spacing, init source and time)")
 
 
 def label_argv(args) -> list[str]:
@@ -215,6 +337,272 @@ def points_take_brand(points_exe: Path) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return "--brand" in (probe.stdout or "") + (probe.stderr or "")
+
+
+# ---------------------------------------------------------------------------
+# the sounding brand, from the run's own records
+# ---------------------------------------------------------------------------
+#: The model a hex sounding names top right.  A sounding never shows a default
+#: tool name or nothing there; the header comes from the run's own metadata on
+#: every path.
+BRAND_MODEL = "WOOF Hex"
+#: The brand with nothing known about the run, not even the model.
+BRAND_FALLBACK = "WOOF"
+BRAND_SHAPES = {
+    "global": "Global",
+    "variable-resolution": "Variable-resolution globe to",
+    "region": "Region",
+    "storm-following": "Storm-following",
+}
+_BRAND_SHAPES_WITHOUT_SPACING = {"variable-resolution": "Variable-resolution globe"}
+#: Words a source's display name may lead with that name its agency, not the model.
+_SOURCE_AGENCIES = {"NCEP", "ECMWF", "DWD", "NOAA"}
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def spacing_text(km, *, measured: bool = False) -> str | None:
+    """``3``, ``120``, ``3.75``: a spacing in km as the brand writes it.
+
+    A row's declared spacing is written as declared.  A spacing measured
+    from the grid's edges is not a round number (a 120 km globe's median
+    edge is 120.4 km), so it is written to the kilometre at 10 km and up,
+    and to the nearest quarter kilometre below when it is that close."""
+
+    try:
+        km = float(km)
+    except (TypeError, ValueError):
+        return None
+    if not (km > 0.0) or km != km or km == float("inf"):
+        return None
+    if measured:
+        if km >= 10.0:
+            km = float(round(km))
+        else:
+            quarter = round(km * 4.0) / 4.0
+            km = quarter if quarter > 0 and abs(km - quarter) <= 0.05 * km else round(km, 2)
+    return f"{round(km, 4):g}"
+
+
+def brand_time(start: str | None) -> str | None:
+    """``2026-10-23_18:00:00`` -> ``23 Oct 2026 18Z`` (``18:30Z`` off the hour)."""
+
+    if not start:
+        return None
+    text = str(start).strip().replace("T", "_").rstrip("Z")
+    for layout in ("%Y-%m-%d_%H:%M:%S", "%Y-%m-%d_%H:%M", "%Y-%m-%d_%H", "%Y%m%d%H"):
+        try:
+            when = _dt.datetime.strptime(text, layout)
+            break
+        except ValueError:
+            continue
+    else:
+        return None
+    hour = f"{when.hour:02d}" if when.minute == 0 else f"{when.hour:02d}:{when.minute:02d}"
+    return f"{when.day} {_MONTHS[when.month - 1]} {when.year} {hour}Z"
+
+
+def default_brand(*, shape: str | None = None, spacing_km=None, source: str | None = None,
+                  start: str | None = None, model: str | None = BRAND_MODEL,
+                  spacing_measured: bool = False) -> str:
+    """The top-right text of a sounding when no ``--brand`` is given:
+    ``WOOF Hex · Storm-following 3 km · Init GFS 23 Oct 2026 18Z``.
+
+    ``shape`` is one of :data:`BRAND_SHAPES` (global row, variable-resolution
+    globe, limited-area region, storm-following).  A part the run does not
+    record is dropped, never guessed: no source gives ``Init 23 Oct 2026
+    18Z``, nothing at all gives ``WOOF Hex``, and no model ``WOOF``.  Every
+    door that ends in the product stage gets its brand here, so none can
+    fall back to an empty top right."""
+
+    parts = [str(model).strip() if model and str(model).strip() else BRAND_FALLBACK]
+    km = spacing_text(spacing_km, measured=spacing_measured)
+    if shape in BRAND_SHAPES:
+        parts.append(f"{BRAND_SHAPES[shape]} {km} km" if km
+                     else _BRAND_SHAPES_WITHOUT_SPACING.get(shape, BRAND_SHAPES[shape]))
+    elif km:
+        parts.append(f"{km} km")
+    init = " ".join(p for p in (source, brand_time(start)) if p)
+    if init:
+        parts.append(f"Init {init}")
+    return " · ".join(parts)
+
+
+def _source_short_name(display_name: str) -> str | None:
+    """``NCEP GFS 0.25 degree, cycle step 0`` -> ``GFS``; ``ECMWF IFS ENS open
+    data ...`` -> ``IFS ENS``: the model words of a source row's display name."""
+
+    words = display_name.split()
+    while words and words[0] in _SOURCE_AGENCIES:
+        words = words[1:]
+    kept: list[str] = []
+    for word in words:
+        bare = word.rstrip(",;:")
+        if not bare or not bare[0].isupper():
+            break
+        kept.append(bare)
+        if bare != word:
+            break
+    return " ".join(kept) or None
+
+
+def brand_source(text: str | None, table: dict | None = None) -> str | None:
+    """The init source a receipt's ``init.source`` names, as the brand
+    writes it (``GFS``, ``ERA5``, ``HRRR``), or ``None``.
+
+    The doors write a source row's id or display name first (``gfs
+    2026-10-23T18; global row ...``, ``gfs analysis; moving run member
+    m0``), so the name is looked up in the init-source table; text that
+    names no row (``staged analysis``) gives no source rather than a guess."""
+
+    if not text:
+        return None
+    if table is None:
+        try:
+            from . import init_sources
+            table = init_sources.load_table()
+        except Exception:  # noqa: BLE001 - no table, no source named
+            return None
+    rows = table.get("sources") or ()
+    lowered = str(text).strip().lower()
+    by_display = [row for row in rows if row.get("display_name")
+                  and lowered.startswith(str(row["display_name"]).lower())]
+    if by_display:
+        row = max(by_display, key=lambda r: len(r["display_name"]))
+        return _source_short_name(row["display_name"])
+    token = re.split(r"[\s;,]+", lowered, maxsplit=1)[0].replace("_", "-")
+    for row in rows:
+        if token in {str(n).strip().lower().replace("_", "-")
+                     for n in (row.get("id"), *row.get("aliases", ())) if n}:
+            return _source_short_name(str(row.get("display_name") or "")) or str(row["id"]).upper()
+    return None
+
+
+def moving_controller(forecast_dir: Path | None) -> dict | None:
+    """The moving run's ``controller.json`` when ``forecast_dir`` is one of
+    its segments (``<run>/segment-NNN/fc``), else ``None``."""
+
+    if forecast_dir is None:
+        return None
+    segment = Path(forecast_dir).resolve().parent
+    if not segment.name.startswith("segment-"):
+        return None
+    try:
+        state = json.loads((segment.parent / "controller.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) and "segments" in state else None
+
+
+def _mesh_row_spacing(mesh_name: str | None, mesh: Path | None,
+                      extra_rows=()) -> tuple[float | None, float | None]:
+    """(finest, coarsest) km a registered mesh row declares for this run's mesh."""
+
+    try:
+        from . import mesh_rows
+        files = [*mesh_rows.row_files(), *[Path(p) for p in extra_rows if p]]
+        rows = [row for location in files if Path(location).is_file()
+                for row in mesh_rows.read_rows(location)]
+    except Exception:  # noqa: BLE001 - an unreadable row file names no spacing
+        rows = []
+    grid = str(mesh) if mesh is not None else None
+    for row in rows:
+        if (mesh_name and row.name == mesh_name) or (grid and row.grid == grid):
+            fine = row.fine_dx_m or row.nominal_dx_m
+            return (float(fine) / 1000.0 if fine else None,
+                    float(row.background_km) if row.background_km else None)
+    if mesh_name:
+        try:
+            from .forecast_door import load_registry
+            row = load_registry().get(mesh_name)
+        except Exception:  # noqa: BLE001
+            row = None
+        if row is not None and row.nominal_dx_m:
+            coarse = row.coarsest_dx_m or row.nominal_dx_m
+            return float(row.nominal_dx_m) / 1000.0, float(coarse) / 1000.0
+    return None, None
+
+
+def _mesh_file_spacing(mesh: Path | None) -> tuple[float | None, float | None]:
+    """(finest, coarsest) km measured from the grid's own ``dcEdge``: the
+    median edge on a uniform mesh (its nominal spacing), the shortest on a
+    variable one."""
+
+    if mesh is None:
+        return None, None
+    try:
+        import numpy as np
+        from netCDF4 import Dataset
+
+        from .netcdf_lock import NETCDF
+        with NETCDF, Dataset(mesh) as grid:
+            if "dcEdge" not in grid.variables:
+                return None, None
+            edges = np.asarray(grid["dcEdge"][:], dtype=np.float64)
+    except Exception:  # noqa: BLE001 - not a readable grid
+        return None, None
+    edges = edges[edges > 0.0]
+    if edges.size == 0:
+        return None, None
+    low, high = float(edges.min()), float(edges.max())
+    fine = float(np.median(edges)) if high < 2.0 * low else low
+    return fine / 1000.0, high / 1000.0
+
+
+def init_source_receipt(init: Path | None) -> dict:
+    """The ``init-source-receipt.json`` the init-source door wrote beside
+    the run's init (``source`` row id, ``cycle``), or ``{}``."""
+
+    if init is None:
+        return {}
+    try:
+        doc = json.loads((Path(init).parent / "init-source-receipt.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def run_brand_metadata(*, forecast_dir: Path | None, receipt: dict, mesh: Path | None,
+                       limited_area: bool, uniform: bool | None,
+                       start: str | None, init: Path | None = None) -> dict:
+    """What a run records about itself for its brand: shape, finest spacing,
+    init source and start, each ``None`` when the run does not record it.
+
+    * shape: a segment of a moving run (its ``controller.json``) is
+      storm-following; a limited-area mesh a region; else the refined-core
+      view's verdict (``uniform``), else the declared or measured spacing
+      range, decides global row against variable-resolution globe.
+    * spacing: the mesh row the run was bound to (``$GPUWM_HEX_MESH_ROWS``,
+      a moving run's member rows, the built-in registry), else the grid.
+    * source: the receipt's ``init.source``, through the init-source table,
+      else the init-source receipt beside the init (a first look draws
+      before the forecast receipt exists).
+    * start: ``--simulation-start`` or the receipt's ``schedule.start_time``,
+      else that init-source receipt's cycle."""
+
+    controller = moving_controller(forecast_dir)
+    member_rows = [m.get("mesh_rows") for m in ((controller or {}).get("members") or {}).values()
+                   if isinstance(m, dict)]
+    mesh_name = receipt_text(receipt, "mesh", "name")
+    fine, coarse = _mesh_row_spacing(mesh_name, mesh, member_rows)
+    measured = False
+    if fine is None:
+        fine, coarse = _mesh_file_spacing(mesh)
+        measured = fine is not None
+    if controller is not None:
+        shape = "storm-following"
+    elif limited_area:
+        shape = "region"
+    else:
+        if uniform is None and fine and coarse:
+            uniform = coarse < 2.0 * fine
+        shape = None if uniform is None else ("global" if uniform else "variable-resolution")
+    source = brand_source(receipt_text(receipt, "init", "source"))
+    if source is None or not start:
+        made = init_source_receipt(init)
+        source = source or brand_source(made.get("source") if isinstance(made.get("source"), str) else None)
+        start = start or (made.get("cycle") if isinstance(made.get("cycle"), str) else None)
+    return {"shape": shape, "spacing_km": fine, "spacing_measured": measured,
+            "source": source, "start": start}
 
 
 def great_circle_km(lat1, lon1, lat2, lon2) -> float:
@@ -325,9 +713,39 @@ def _parse_stamp(stamp: str) -> _dt.datetime:
     return _dt.datetime.strptime(stamp.replace("T", "_").replace(".", ":")[:19], "%Y-%m-%d_%H:%M:%S")
 
 
-def frame_echo_dbz(path: Path) -> float | None:
-    """The strongest reflectivity in one history frame (dBZ), read by the Rust reader; None when none is stored."""
+def diag_companion(path: Path) -> Path | None:
+    """The ``diag`` stream file written at the same time as a history frame, when it is on disk.
 
+    The converter's rule (rw-mpas ``diag_companion``): the last ``history`` token of the name becomes ``diag``,
+    in the same folder (``history.2025-05-19_13.00.00.nc`` -> ``diag.2025-05-19_13.00.00.nc``).
+    """
+
+    name = Path(path).name
+    at = name.rfind("history")
+    if at < 0:
+        return None
+    companion = Path(path).with_name(name[:at] + "diag" + name[at + len("history"):])
+    return companion if companion.is_file() else None
+
+
+def frame_echo_dbz(path: Path) -> float | None:
+    """The strongest reflectivity in one history frame (dBZ), read by the Rust reader; None when none is stored.
+
+    THE BREAKAGE THIS PREVENTS (case study 2025-05-19, H2, 2026-10-24): the MPAS-physics route writes MPAS-A's
+    ``output`` stream as its history, which carries no reflectivity; MPAS writes ``refl10cm_max`` to the
+    ``diag`` stream of the same time.  Reading the history alone found no echo in any frame, so the viewer never
+    offered the reflectivity map.  A field the history lacks is read from its diag companion.
+    """
+
+    peak = _echo_dbz_in(Path(path))
+    if peak is None:
+        companion = diag_companion(Path(path))
+        if companion is not None:
+            peak = _echo_dbz_in(companion)
+    return peak
+
+
+def _echo_dbz_in(path: Path) -> float | None:
     import numpy as np
     from gpuwm.netcdf_bridge import open_dataset
 
@@ -622,9 +1040,84 @@ def auto_frame_jobs(histories: list[Path], view_jobs: int, *,
     return max(1, min(by_memory, by_cores, len(histories), MAX_FRAME_JOBS))
 
 
+#: The first look's receipt (hexcore/first_look.py), read by ``--live-frames``.
+LIVE_FRAMES_SCHEMA = "gpuwm-hex.live-frames/v1"
+
+
+def live_drawn(receipt: Path | str | None, out_case: Path, histories: list[Path], start: str) -> dict | None:
+    """The frames the first look already rendered into THIS tree, or None (the full pass draws everything).
+
+    THE BREAKAGE THIS PREVENTS (hex global 60 km 24 h, 2026-10-24): every hour was drawn while the forecast
+    ran, then the full pass rendered all 25 frames again after it (81 s), so the run was done no sooner. A frame counts as
+    drawn only when the receipt names this tree and case, the frame's size and mtime still match what was drawn (a
+    forecast rerun in the same folder rewrites them), and pictures for its lead are on disk in the tree."""
+
+    if not receipt:
+        return None
+    try:
+        doc = json.loads(Path(receipt).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict) or doc.get("schema") != LIVE_FRAMES_SCHEMA or not doc.get("out") or not doc.get("case"):
+        return None
+    try:
+        if (Path(doc["out"]) / str(doc["case"])).resolve() != Path(out_case).resolve() or not Path(out_case).is_dir():
+            return None
+    except OSError:
+        return None
+    stat = doc.get("stat") or {}
+    named = set(doc.get("drawn") or ())
+    leads = {png.stem.rsplit("_", 1)[-1] for png in Path(out_case).rglob("*.png")
+             if png.relative_to(out_case).parts[0] != "points"}
+    origin = _parse_stamp(start)
+    frames = []
+    for path in histories:
+        if path.name not in named:
+            continue
+        stamp = frame_stamp(path)
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if stamp is None or list(stat.get(path.name) or ()) != [st.st_size, st.st_mtime_ns]:
+            continue
+        seconds = int(round((_parse_stamp(stamp) - origin).total_seconds()))
+        if render_door.lead_token(seconds, path.name) in leads:
+            frames.append(path)
+    if not frames:
+        return None
+    return {"receipt": str(receipt), "frames": frames, "products": {str(p) for p in doc.get("products") or ()}}
+
+
+def _merge_views(parts: list[tuple[int, dict | None, str | None]]) -> tuple[int, dict | None, str | None]:
+    """One view drawn in parts (the whole-run maps over every frame, the rest over the frames not drawn live), told
+    as one: the first non-zero exit and refusal, the first manifest with the parts' counts summed and their drawn and
+    unavailable products joined."""
+
+    rc = next((r for r, _, _ in parts if r), 0)
+    refusal = next((x for _, _, x in parts if x is not None), None)
+    manifests = [m for _, m, _ in parts if m is not None]
+    if not manifests:
+        return rc, None, refusal
+    merged = dict(manifests[0])
+    counts: dict = {}
+    drawn: list[str] = []
+    unavailable: dict = {}
+    for m in manifests:
+        for key, value in (m.get("counts") or {}).items():
+            counts[key] = counts.get(key, 0) + value if isinstance(value, (int, float)) else value
+        listed = m.get("products_drawn") or ()
+        for slug in (listed.split(",") if isinstance(listed, str) else listed):
+            if slug and slug.strip() and slug.strip() not in drawn:
+                drawn.append(slug.strip())
+        unavailable.update(m.get("products_unavailable") or {})
+    merged.update(counts=counts, products_drawn=",".join(drawn), products_unavailable=unavailable)
+    return rc, merged, refusal
+
+
 def _render_view(*, histories, mesh, init, start, out_case, scratch_root, view,
                  window, products, size, model_label, remap, exes, basemap_dir,
-                 keep_scratch, frame_jobs=1, source_label=None) -> tuple[int, dict | None, str | None]:
+                 keep_scratch, frame_jobs=1, source_label=None, part="") -> tuple[int, dict | None, str | None]:
     """One view through the render door in standard-set mode."""
 
     args = argparse.Namespace(
@@ -634,7 +1127,7 @@ def _render_view(*, histories, mesh, init, start, out_case, scratch_root, view,
         window=window, view=view, model_label=model_label, source_label=source_label,
         field_set="full",
         label=None, simulation_start=start, size=size, heavy=False,
-        nc_format="cdf5", scratch=str(Path(scratch_root) / f"render-{view}"),
+        nc_format="cdf5", scratch=str(Path(scratch_root) / f"render-{view}{part}"),
         keep_scratch=keep_scratch, basemap_dir=basemap_dir,
         convert_exe=exes[0], renderer_exe=exes[1], remap=remap,
         standard_set=True, series=True, frame_jobs=frame_jobs)
@@ -834,6 +1327,7 @@ def run_products(args) -> int:
             f"{named}); the door draws one run")
     forecast_dir = Path(named or positional) if (named or positional) else None
     receipt = forecast_receipt(forecast_dir)
+    run_receipt = receipt
     from .chem_transport import product_slugs
     chemistry_products = product_slugs(forecast_dir)
     if args.history:
@@ -896,6 +1390,12 @@ def run_products(args) -> int:
     renderer_exe = render_door.resolve_renderer_exe(args.renderer_exe)
     exes = (str(convert_exe), str(renderer_exe))
     print(f"PRODUCTS case={case} frames={len(histories)} start={start} out={out_case}", flush=True)
+    live = live_drawn(getattr(args, "live_frames", None), out_case, histories, start)
+    live_names = {p.name for p in (live or {}).get("frames", ())}
+    redraw = [p for p in histories if p.name not in live_names]
+    if live is not None:
+        print(f"PRODUCTS live: {len(live_names)} of {len(histories)} frames already drawn while the forecast ran; "
+              f"this pass draws the whole-run maps over every frame and the maps of {len(redraw)} frame(s)", flush=True)
     # The opening maps (first_maps): the reflectivity scan reads frames beside the views, off their path.
     opening: dict = {}
     opening_scan = threading.Thread(
@@ -907,13 +1407,44 @@ def run_products(args) -> int:
 
     def view(name, window, products, size):
         view_started = time.monotonic()
-        rc, manifest, refusal = _render_view(
-            histories=histories, mesh=mesh, init=init, start=start,
-            out_case=out_case, scratch_root=scratch_root, view=name,
-            window=window, products=tuple(products) + chemistry_products, size=size,
-            model_label=args.model_label, remap=args.remap, exes=exes,
-            basemap_dir=args.basemap_dir, keep_scratch=args.keep_scratch,
-            frame_jobs=frame_jobs, source_label=getattr(args, "source_label", None))
+        common = dict(mesh=mesh, init=init, start=start, out_case=out_case, scratch_root=scratch_root, view=name,
+                      window=window, size=size, model_label=args.model_label, remap=args.remap, exes=exes,
+                      basemap_dir=args.basemap_dir, keep_scratch=args.keep_scratch, frame_jobs=frame_jobs,
+                      source_label=getattr(args, "source_label", None))
+        if live is None:
+            rc, manifest, refusal = _render_view(
+                histories=histories, products=tuple(products) + chemistry_products, **common)
+        else:
+            # The frames drawn live keep their pictures (the same door rendered them, byte for byte); this pass draws
+            # the windowed maps, which need the whole series, and every map of the frames no live draw took, side
+            # by side. A view with nothing else to draw redraws the last frame, so it still names its window.
+            whole_run = tuple(p for p in products if p in WINDOWED_PRODUCTS)
+            per_frame = tuple(p for p in products if p not in WINDOWED_PRODUCTS) + chemistry_products
+            rest = redraw or ([] if whole_run else histories[-1:])
+            jobs_here = []
+            if whole_run:
+                jobs_here.append(dict(histories=histories, products=whole_run, part="-series"))
+            if rest:
+                jobs_here.append(dict(histories=rest, products=per_frame, part="-rest"))
+            results: list = [None] * len(jobs_here)
+
+            def part(index):
+                result = _render_view(**jobs_here[index], **common)
+                if (jobs_here[index]["part"] == "-series" and result[0] and result[2]
+                        and result[2].startswith("none of the standard products")):
+                    result = (0, None, None)  # no whole-run map this history can draw: not a failed view
+                results[index] = result
+
+            helpers = [threading.Thread(target=part, args=(i,), name=f"view-{name}-part{i}")
+                       for i in range(1, len(jobs_here))]
+            for helper in helpers:
+                helper.start()
+            part(0)
+            for helper in helpers:
+                helper.join()
+            if not any(r for r, _, _ in results) and all(m is None for _, m, _ in results):
+                results.append(_render_view(histories=histories[-1:], products=per_frame, part="-rest", **common))
+            rc, manifest, refusal = _merge_views(results)
         record = {"view": name, "window": window, "rc": rc, "refusal": refusal,
                   "elapsed_seconds": round(time.monotonic() - view_started, 3)}
         if refusal is not None and "no refined region" not in refusal:
@@ -978,10 +1509,12 @@ def run_products(args) -> int:
     if not args.no_global and not limited_area:
         pending.append(pool.submit(view, "global", "global", global_products, args.global_size))
     refined_centre = None
+    mesh_uniform = None
     if not args.no_mesh_view:
         rc, manifest, refusal = pool.submit(
             view, "refined-core", "mesh", regional_products, args.regional_size).result()
         if refusal is not None and "no refined region" in refusal:
+            mesh_uniform = True
             # A uniform mesh has no refined region: the converter refuses
             # --window mesh by that name.  Not a failure of this run.
             core = next(v for v in views if v["view"] == "refined-core")
@@ -993,6 +1526,7 @@ def run_products(args) -> int:
             regions = {}
             if manifest is not None:
                 refined_centre = window_centre(manifest)
+                mesh_uniform = False
             if refined_centre is not None and not limited_area:
                 lat, lon, half = refined_centre
                 extent = max(1500.0, 8.0 * half)
@@ -1017,8 +1551,15 @@ def run_products(args) -> int:
             print(f"POINTS skipped: {reason}", flush=True)
             return {"rc": 0, "skipped": reason, "points": [],
                     "elapsed_seconds": round(time.monotonic() - points_started, 3)}
+        dropped: list[dict] = []
+        on_mesh_already = False
         if args.points:
             points = parse_point_text(args.points)
+        elif limited_area and (check := mesh_point_check(mesh, REGION_CITIES)) is not None:
+            points = region_default_points(check)
+            on_mesh_already = True
+            print(f"POINTS default: {len(points)} on this limited-area mesh: "
+                  + ", ".join(name for name, _, _ in points), flush=True)
         elif refined_centre is not None:
             lat, lon, half = refined_centre
             radius = max(150.0, 0.9 * half)
@@ -1028,6 +1569,22 @@ def run_products(args) -> int:
         else:
             points = list(DEFAULT_POINTS[:3]) + [p for p in DEFAULT_POINTS if p[0] in ("London", "Tokyo", "Sydney")]
             points = points[:DEFAULT_GLOBAL_POINT_COUNT]
+        if limited_area and not on_mesh_already and (check := mesh_point_check(mesh, points)) is not None:
+            # A point off a limited-area mesh is dropped with a note and the
+            # rest are drawn: rw_hex_points refuses the whole list over one
+            # off-mesh point (graded-plateau 1 km region, 2026-10-24).
+            points = check[0]
+            for name, plat, plon, km, spacing in check[1]:
+                where = (f"{km:.1f} km from the nearest cell centre, beyond that cell's {spacing:.1f} km spacing"
+                         if km is not None else f"{spacing:.0f} km beyond the domain edge")
+                note = f"{name} ({plat:.2f}, {plon:.2f}) is off this limited-area mesh: {where}"
+                dropped.append({"name": name, "lat": plat, "lon": plon, "note": note})
+                print(f"POINTS dropped: {note}", flush=True)
+            if not points:
+                reason = "every point is off this limited-area mesh; no sounding or meteogram drawn"
+                print(f"POINTS skipped: {reason}", flush=True)
+                return {"rc": 0, "skipped": reason, "points": [], "dropped": dropped,
+                        "elapsed_seconds": round(time.monotonic() - points_started, 3)}
         raw = scratch_root / "points"
         raw.mkdir(parents=True, exist_ok=True)
         receipt = raw / "points.json"
@@ -1037,10 +1594,23 @@ def run_products(args) -> int:
                    "--sounding-every-hours", str(args.sounding_every_hours),
                    "--points", ";".join(f"{n}@{la},{lo}" for n, la, lo in points),
                    "--json", str(receipt)]
+        # The top right is never a default tool name or nothing.  THE BREAKAGE
+        # THIS PREVENTS: a storm-following run (GFS 2026-10-23 18Z) rendered its
+        # soundings with an empty top right because no door step passed
+        # --brand.  An explicit --brand still wins; else the run's own records.
         brand = getattr(args, "brand", None)
-        if brand and points_take_brand(points_exe):
+        brand_from = "--brand"
+        if not brand:
+            metadata = run_brand_metadata(
+                forecast_dir=forecast_dir, receipt=run_receipt, mesh=mesh,
+                limited_area=limited_area, uniform=mesh_uniform, init=init,
+                start=args.simulation_start or receipt_text(run_receipt, "schedule", "start_time"))
+            brand = default_brand(**metadata)
+            brand_from = "run metadata"
+        if points_take_brand(points_exe):
             command += ["--brand", brand]
-        elif brand:
+            print(f"POINTS brand ({brand_from}): {brand}", flush=True)
+        else:
             print(f"POINTS brand not drawn: {points_exe} predates --brand; "
                   "install the gpuwm release that carries it", flush=True)
         command += ["--history", *[str(p) for p in histories]]
@@ -1049,7 +1619,8 @@ def run_products(args) -> int:
         for line in (result.stdout or "").splitlines():
             if line.startswith(("POINT\t", "METEOGRAM\t", "FINISHED\t", "POINTS MISSING\t")):
                 print(f"POINTS {line}", flush=True)
-        points_record = {"rc": result.returncode, "points": points, "invocation": command,
+        points_record = {"rc": result.returncode, "points": points, "dropped": dropped, "invocation": command,
+                         "brand": brand, "brand_from": brand_from,
                          "elapsed_seconds": round(time.monotonic() - points_started, 3)}
         if result.returncode != 0:
             tail = [l for l in (result.stderr or "").splitlines() if l.strip()]
@@ -1080,7 +1651,7 @@ def run_products(args) -> int:
 
     rendered = sum((v.get("counts") or {}).get("rendered", 0) for v in views)
     opening_scan.join()
-    drawn = set()
+    drawn = set((live or {}).get("products", ()))
     for v in views:
         listed = v.get("products_drawn") or ()
         drawn.update(p.strip() for p in (listed.split(",") if isinstance(listed, str) else listed) if p)
@@ -1109,6 +1680,8 @@ def run_products(args) -> int:
         "windows_not_requested": windows_not_requested,
         "maps_rendered": rendered,
         "first_maps": opening or None,
+        "live_frames": ({"receipt": live["receipt"], "drawn_live": sorted(live_names),
+                         "drawn_here": [p.name for p in redraw]} if live is not None else None),
         "failed_views": failed_views,
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }
@@ -1150,8 +1723,9 @@ def add_products_arguments(parser) -> None:
     parser.add_argument("--region", action="append", metavar="NAME=region:CLAT,CLON,W_KM,H_KM",
                         help="an extra regional view (repeatable); dx from the mesh cells inside it")
     parser.add_argument("--points", default=None, metavar="'Name@LAT,LON;...'",
-                        help="sounding/meteogram points (default: cities inside a refined core, "
-                             "else a world set)")
+                        help="sounding/meteogram points (default: on a limited-area mesh the cities "
+                             "on it, else cities inside a refined core, else a world set). On a "
+                             "limited-area mesh a point off the mesh is dropped with a note")
     parser.add_argument("--sounding-every-hours", type=float, default=6.0)
     parser.add_argument("--remap", default=render_door.REMAP_AUTO, choices=render_door.REMAP_CHOICES,
                         help="see `gpuwm-hex render --help`; default: product (linear state, "
@@ -1162,7 +1736,8 @@ def add_products_arguments(parser) -> None:
     parser.add_argument("--brand", default=None, metavar="TEXT",
                         help="bold text at the top right of every sounding and meteogram, "
                              "e.g. 'WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z' "
-                             "(at most 120 characters); default: none")
+                             "(at most 120 characters); default: composed from the run's own "
+                             "records (products_door.default_brand)")
     parser.add_argument("--source-label", default=None, metavar="TEXT",
                         help="source credit printed on each map (1-160 printable ASCII "
                              "characters), e.g. which ensemble member it came from; default: "
@@ -1180,6 +1755,9 @@ def add_products_arguments(parser) -> None:
     parser.add_argument("--no-global", action="store_true")
     parser.add_argument("--no-mesh-view", action="store_true")
     parser.add_argument("--no-points", action="store_true")
+    parser.add_argument("--live-frames", default=None, metavar="FILE",
+                        help="the first look's live-frames.json: frames it rendered into this tree keep their maps; "
+                             "this pass draws the whole-run maps, the other frames and the points (the doors pass it)")
     parser.add_argument("--scratch", default=None, metavar="DIR")
     parser.add_argument("--keep-scratch", action="store_true")
     parser.add_argument("--basemap-dir", default=None, metavar="DIR")

@@ -19,6 +19,68 @@ from typing import Any, Mapping, Sequence
 from .errors import MpasPortError
 
 
+#: Headroom over the measured whole-run curve. The curve passes through each
+#: run's sampled peak, which a 1 s sampler can miss by a subsecond spike, and
+#: runs between two measured sizes are interpolated. 10 % puts every measured
+#: run of today's build 10-12 % under its prediction (tests/test_global_vr_mesh_plan.py
+#: test_shipped_curve_lands_10_to_15_percent_over_every_measured_run).
+WHOLE_RUN_MARGIN = 0.10
+
+
+def whole_run_curve(rows: Sequence[Mapping[str, Any]], count: int, *,
+                    base_mib: Any) -> dict[str, Any] | None:
+    """Peak MiB from this card's measured whole runs, plus WHOLE_RUN_MARGIN.
+
+    THE BREAKAGE IT PREVENTS (WOOF run-controls, 2026-10-24): the nearest run
+    at or below a size was held CONSTANT below the smallest run, so an
+    80 -> 5 km zoom globe of 128,942 cells was priced at 25,272 MiB (the
+    216,189-cell run) and peaked at 13,036 MiB; a 52,618-cell globe was priced
+    the same and peaked at 7,472 MiB. Quotes, refusals and card leases were
+    sized 2-3.4x too big. Before that, the largest floor over every run priced
+    the 581,895-cell globe at 68.0 GB against 44,450 MiB (feasibility defect 3).
+
+    Two or more runs: straight between neighbouring measured runs (peaks made
+    non-decreasing in cells), the first segment's slope below the smallest and
+    the last segment's slope past the largest. One run: device_admission's own
+    slope through it below, cell-linear above (the old anchor's conservative
+    side). Derived between and past the measured sizes, not measured there.
+    """
+    if not rows:
+        return None
+    by_cells: dict[int, Mapping[str, Any]] = {}
+    for row in rows:
+        cells = int(row["cells"])
+        if cells not in by_cells or row["peak_process_vram_mib"] > by_cells[cells]["peak_process_vram_mib"]:
+            by_cells[cells] = row
+    points = sorted(by_cells.values(), key=lambda row: row["cells"])
+    xs = [float(row["cells"]) for row in points]
+    ys: list[float] = []
+    for row in points:
+        ys.append(max([float(row["peak_process_vram_mib"]), *ys[-1:]]))
+    x = float(count)
+    if len(points) == 1:
+        if x <= xs[0]:
+            curve = ys[0] + float(base_mib(count)) - float(base_mib(int(xs[0])))
+            basis = "one measured whole run: device_admission's slope through it below its size"
+        else:
+            curve = ys[0] * x / xs[0]
+            basis = "one measured whole run: cell-linear past its size"
+    else:
+        segment = next((i for i in range(1, len(xs)) if x <= xs[i]), len(xs) - 1)
+        x0, x1, y0, y1 = xs[segment - 1], xs[segment], ys[segment - 1], ys[segment]
+        curve = y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+        basis = ("straight between the measured whole runs" if xs[0] <= x <= xs[-1] else
+                 "the first measured segment's slope below the smallest run" if x < xs[0] else
+                 "the last measured segment's slope past the largest run")
+    nearest = min(points, key=lambda row: abs(math.log(x / float(row["cells"]))))
+    floor = max(0.0, curve) * (1.0 + WHOLE_RUN_MARGIN)
+    return {"observation": dict(nearest), "observations": [row["id"] if "id" in row else row.get("receipt_sha256")
+                                                           for row in points],
+            "curve_mib": round(curve, 3), "margin_fraction": WHOLE_RUN_MARGIN,
+            "floor_mib": round(floor, 3),
+            "basis": f"{basis}, plus {WHOLE_RUN_MARGIN:.0%}; derived at other sizes, not measured there"}
+
+
 def predict(cells: float, *, card: Mapping[str, Any], levels: int,
             dt_seconds: float, hours: float, budget_mib: float | None = None,
             table: Mapping[str, Any] | None = None,
@@ -46,15 +108,12 @@ def predict(cells: float, *, card: Mapping[str, Any], levels: int,
                   and row["status"] == "complete"]
     calibration = None
     predicted_peak = base_peak
-    for row in applicable:
-        # One whole forecast is an anchor, not a two-size allocation fit.
-        # Keep its observed fixed floor below the anchor and price all of
-        # its footprint per cell above it. Never lower device_admission.
-        floor = row["peak_process_vram_mib"] * max(1., count / row["cells"])
-        if floor > predicted_peak:
-            predicted_peak = floor
-            calibration = {"observation": dict(row), "floor_mib": round(floor, 3),
-                "basis": "single whole-run observed floor; constant below anchor cells, cell-linear above; derived at other shapes, not a measured multi-size fit"}
+    curve = whole_run_curve(applicable, count,
+                            base_mib=lambda cells: model.predict_bytes(cells) / admission.MIB)
+    # Never lower device_admission: the curve is a floor on its peak.
+    if curve is not None and curve["floor_mib"] > predicted_peak:
+        predicted_peak = curve["floor_mib"]
+        calibration = curve
     required = predicted_peak + margin
     table = load_table() if table is None else table
     references = [row for row in table.get("measured_seconds_per_forecast_hour", [])

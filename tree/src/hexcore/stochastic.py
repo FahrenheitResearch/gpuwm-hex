@@ -389,11 +389,27 @@ class StochasticPhysics:
     momentum tendency. Its globally normalized dual-edge curl is rotational.
     This is a mesh adaptation, not WRF's prescribed constant-dissipation mode.
     """
-    def __init__(self, mesh, vertical, config):
+    def __init__(self, mesh, vertical, config, *, partition=None):
         import cupy as cp
         self.config = StochasticConfig.parse(config)
         self.resource = MeshHarmonics.cached(mesh, self.config.degree)
         self.process = ForcingPatterns(self.resource, self.config)
+        # ``partition`` (a same-host MPAS-physics rank): ``mesh`` is the rank's
+        # local mesh, owned cells and edges first; ``allreduce`` sums a float64
+        # vector over the ranks. The spectral process is the same on every rank
+        # (same member seed and draws), so the pattern is one global pattern;
+        # the normalisations below are global owned-entity sums. Halo words of
+        # the forced sources are replaced by their owners' after forcing.
+        self.partition = partition
+        if partition is not None:
+            r, a = self.resource, mesh.arrays
+            oc, oe = int(partition.owned_cells), int(partition.owned_edges)
+            area = cp.asarray(a['areaCell'], dtype=cp.float32)[:oc]
+            weight = (cp.asarray(a['dcEdge'], dtype=cp.float32) * cp.asarray(a['dvEdge'], dtype=cp.float32))[:oe]
+            totals = partition.allreduce(np.array([float(cp.sum(area, dtype=cp.float64)),
+                                                   float(cp.sum(weight, dtype=cp.float64))]))
+            self.owned_area = cp.ascontiguousarray(area / cp.float32(totals[0]))
+            self.owned_edge_weight = cp.ascontiguousarray(weight / cp.float32(totals[1]))
         z = cp.asarray(vertical.zgrid, dtype=cp.float32)
         n = mesh.n_cells
         if z.shape != (vertical.n_vert_levels+1, n):
@@ -446,7 +462,10 @@ class StochasticPhysics:
         es = _field_strides(edge_density, levels, ne, 'edge density')
         # Unused pointers keep one kernel ABI for SPPT-only and SKEB-only calls.
         psi = thermal = dissipation = norm = sppt
-        if c.skeb:
+        if c.skeb and getattr(self, 'partition', None) is not None:
+            dissipation, psi, norm, thermal = self._partition_budget(
+                streamfunction, temperature, momentum, edge_density, wind, nc, levels)
+        elif c.skeb:
             sink = cp.maximum(-wind*momentum/edge_density, 0)
             dissipation = cp.sum(sink*r.edge_weight[None,:], axis=1, keepdims=True)
             psi = cp.clip(streamfunction[nc:], -c.clip, c.clip)
@@ -477,6 +496,35 @@ class StochasticPhysics:
         self.calls += 1
         return held
 
+    def _partition_budget(self, streamfunction, temperature, momentum, edge_density, wind, nc, levels):
+        """SKEB's global sums on a rank: owned-entity partials, one reduction per step.
+
+        The one-card sums over every cell and edge of the closed mesh; a rank
+        holds halo copies, so only owned cells and edges (first in local order)
+        contribute. Thermal spread is E[t^2] - E[t]^2 over the unit total area.
+        """
+        import cupy as cp
+        r, c, part = self.resource, self.config, self.partition
+        oc, oe = int(part.owned_cells), int(part.owned_edges)
+        w, area = self.owned_edge_weight, self.owned_area
+        sink = cp.maximum(-wind[:, :oe]*momentum[:, :oe]/edge_density[:, :oe], 0)
+        psi = cp.clip(streamfunction[nc:], -c.clip, c.clip)
+        curl = r.orientation[:oe]*(psi[r.voe[:oe, 1]]-psi[r.voe[:oe, 0]])/r.dv[:oe]
+        thermal = temperature[:nc].copy()
+        owned_t = thermal[:oc].astype(cp.float64)
+        partial = cp.concatenate((
+            cp.sum(sink.astype(cp.float64)*w[None, :], axis=1),
+            cp.sum((curl*curl).astype(cp.float64)*w)[None],
+            cp.sum(owned_t*area)[None], cp.sum(owned_t*owned_t*area)[None]))
+        total = part.allreduce(cp.asnumpy(partial))
+        dissipation = cp.asarray(total[:levels].astype(np.float32).reshape(levels, 1))
+        norm = cp.asarray(np.float32(math.sqrt(max(total[levels], 0.0))))
+        mean = total[levels+1]
+        spread = math.sqrt(max(total[levels+2] - mean*mean, 0.0))
+        thermal -= cp.float32(mean)
+        thermal /= cp.float32(max(spread, 1e-30))
+        return dissipation, psi, norm, thermal
+
     def receipt(self):
         import cupy as cp
         from .device_admission import stochastic_array_ledger
@@ -506,7 +554,14 @@ class StochasticPhysics:
                     evaluation='GPU cuBLAS matrix product into reused output; GPU Philox and fused cell/edge forcing (128 threads per block)',
                     dissipation='positive kinetic-energy sink of unperturbed physics momentum sources',
                     backscatter_normalization='integrated AR(1) covariance: 2/h*tanh(h/(2*time_s)), h=max(dt,interval_s)',
-                    scientific_status='spread-skill qualification required')
+                    scientific_status='spread-skill qualification required',
+                    **({} if getattr(self, 'partition', None) is None else dict(partition=dict(
+                        ranks=int(self.partition.ranks), owned_cells=int(self.partition.owned_cells),
+                        owned_edges=int(self.partition.owned_edges),
+                        pattern='one spectral process on every rank (same member seed and draws), '
+                                'evaluated at local cells and vertices',
+                        budget='owned-entity float64 partial sums reduced across ranks once per step',
+                        halos='forced halo words replaced by their owners at the source exchange'))))
 
 
 class LtsStochasticPhysics:

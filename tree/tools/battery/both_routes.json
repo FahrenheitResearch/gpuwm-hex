@@ -1,0 +1,223 @@
+{
+  "schema": "gpuwm-hex.both-routes-gate/v1",
+  "about": "One short real run per capability family on each physics route (ArWen and MPAS). Breakage it prevents: a capability that works on one route and is refused, silently dropped or broken on the other (every hex capability works on every physics route). Read by tools/both_routes_gate.py; tests/test_both_routes_gate.py parses every argv below with the real gpuwm-hex parser on the CPU tier.",
+  "routes": {
+    "arwen": {"door": [], "forecast": [], "moving": []},
+    "mpas": {
+      "door": ["--forecast-arg=--physics-suite=convection_permitting"],
+      "forecast": ["--physics-suite=convection_permitting"],
+      "moving": ["--physics-arg=--physics-suite=convection_permitting"]
+    }
+  },
+  "cases": {
+    "cycle": "2023-03-31T12",
+    "storm_best_track_sid": "2022266N12294",
+    "storm_cycle": "2022-09-26T00"
+  },
+  "legs": [
+    {
+      "id": "global",
+      "family": "global forecast, live frames, maps, export, column store",
+      "cards": 1, "vram_mib": 14000, "minutes": 20,
+      "steps": [
+        {"name": "door", "gpu": true, "argv": ["global", "--row", "global-120km", "--cycle", "{cycle}", "--hours", "2",
+          "--history-every-minutes", "60", "{staged_args}", "--work-dir", "{work}", "--skip", "score", "{route_door}"],
+         "watch": ["forecast/history-ready.jsonl", "forecast/*.durable.json"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["forecast/history.*.nc", "forecast/cuda-history.*.nc"], "min": 3},
+        {"kind": "live_rows", "min": 2,
+         "why": "frames are published while the forecast runs (live maps, export --follow, concurrent nests)"},
+        {"kind": "glob", "patterns": ["products/**/*.png"], "min": 1},
+        {"kind": "glob", "patterns": ["export/**/wrfout*"], "min": 3}
+      ]
+    },
+    {
+      "id": "keep-as-init",
+      "family": "export to ArWen / keep-as-init / Hex with Regional parent frames",
+      "after": "global", "cards": 0, "vram_mib": 0, "minutes": 10,
+      "steps": [
+        {"name": "export", "gpu": false, "argv": ["export", "{leg:global}/forecast", "--out", "{work}/export",
+          "--window", "region-latlon:36,-97,900,900", "--field-set", "full", "--overwrite"]}
+      ],
+      "checks": [
+        {"kind": "nc_vars", "patterns": ["export/**/wrfout*"], "min": 3, "all_of": ["HGT", "T2", "PSFC"],
+         "any_of": ["REFC", "REFL_10CM"],
+         "why": "gpuwm prep --source hex-global needs terrain_height; the case sheets need a radar field"},
+        {"kind": "text", "file": "export.log", "pattern": "COLUMNS files=[1-9]",
+         "why": "the any-point column store is written for every exported hour"}
+      ]
+    },
+    {
+      "id": "zoom-globe",
+      "family": "variable-resolution globe (mesh-plan --run)",
+      "cards": 1, "vram_mib": 10000, "minutes": 20,
+      "steps": [
+        {"name": "door", "gpu": true, "argv": ["mesh-plan", "--global-mesh", "--card", "rtx-pro-6000", "--point", "41.5,-93.0", "--background-km", "240",
+          "--fine-dx-m", "60000", "--radius-km", "800", "--generate", "--out-dir", "{work}", "{geog_args}", "--run",
+          "--source", "gfs", "--cycle", "{cycle}", "--hours", "1", "--history-every-minutes", "60", "{staged_args}",
+          "{route_door}"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["**/history.*.nc", "**/cuda-history.*.nc"], "min": 2}
+      ]
+    },
+    {
+      "id": "lts",
+      "family": "local time stepping on a variable-resolution globe",
+      "cards": 1, "vram_mib": 10000, "minutes": 20,
+      "steps": [
+        {"name": "door", "gpu": true, "argv": ["mesh-plan", "--global-mesh", "--card", "rtx-pro-6000", "--point", "41.5,-93.0", "--background-km", "240",
+          "--fine-dx-m", "60000", "--radius-km", "800", "--generate", "--out-dir", "{work}", "{geog_args}", "--run",
+          "--source", "gfs", "--cycle", "{cycle}", "--hours", "1", "--history-every-minutes", "60", "{staged_args}",
+          "{route_door}", "--forecast-arg=--fullstep-local-timestep"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["**/history.*.nc", "**/cuda-history.*.nc"], "min": 2},
+        {"kind": "text", "file": "door.log", "pattern": "(?i)local.time.step|lts",
+         "why": "the run took the LTS executor, not the fixed step"}
+      ]
+    },
+    {
+      "id": "region",
+      "family": "limited-area region (country/point door, boundary driver)",
+      "cards": 1, "vram_mib": 8000, "minutes": 25,
+      "steps": [
+        {"name": "door", "gpu": true, "argv": ["country", "--point", "36.5,-97.5", "--radius-km", "100", "--cycle", "{cycle}",
+          "--hours", "1", "--work-dir", "{work}", "{geog_args}", "{route_door}"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["**/history.*.nc", "**/cuda-history.*.nc"], "min": 2}
+      ]
+    },
+    {
+      "id": "multicard",
+      "family": "two cards on one host (2 cards = 1 card)",
+      "after": "global", "cards": 2, "vram_mib": 8000, "minutes": 10,
+      "steps": [
+        {"name": "forecast", "gpu": true, "argv": ["{base_forecast}", "--hours", "2", "--samehost-devices", "0,1",
+          "--out", "{work}/forecast", "--scratch", "{work}/scratch"]}
+      ],
+      "checks": [
+        {"kind": "same_words", "a": "{leg:global}/forecast", "b": "{work}/forecast",
+         "why": "the two-card run is the one-card run, word for word"}
+      ]
+    },
+    {
+      "id": "restart-stochastic",
+      "family": "checkpoint/restart with SPPT+SKEB (restart = straight)",
+      "after": "global", "cards": 1, "vram_mib": 14000, "minutes": 15,
+      "steps": [
+        {"name": "straight", "gpu": true, "argv": ["{base_forecast}", "--hours", "2", "--checkpoint-hours", "1",
+          "--stochastic", "{\"sppt\": true, \"skeb\": true}", "--out", "{work}/straight", "--scratch", "{work}/scratch-a"]},
+        {"name": "restart", "gpu": true, "argv": ["{base_forecast}", "--hours", "2",
+          "--stochastic", "{\"sppt\": true, \"skeb\": true}", "--restart-from", "{checkpoint:straight}",
+          "--out", "{work}/restart", "--scratch", "{work}/scratch-b"]}
+      ],
+      "checks": [
+        {"kind": "same_words", "a": "{work}/straight", "b": "{work}/restart",
+         "why": "a restart from the 1 h checkpoint ends on the straight run's words"}
+      ]
+    },
+    {
+      "id": "iau",
+      "family": "incremental analysis update (zero increment over 1 h)",
+      "after": "global", "cards": 1, "vram_mib": 10000, "minutes": 10,
+      "steps": [
+        {"name": "forecast", "gpu": true, "argv": ["{base_forecast}", "--hours", "1", "--iau-analysis", "{init}",
+          "--iau-window-seconds", "3600", "--out", "{work}/forecast", "--scratch", "{work}/scratch"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["forecast/history.*.nc", "forecast/cuda-history.*.nc"], "min": 2}
+      ]
+    },
+    {
+      "id": "jedi-background",
+      "family": "CUDA JEDI background files",
+      "after": "global", "cards": 1, "vram_mib": 10000, "minutes": 10,
+      "steps": [
+        {"name": "forecast", "gpu": true, "argv": ["{base_forecast}", "--hours", "1", "--jedi-background",
+          "--out", "{work}/forecast", "--scratch", "{work}/scratch"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["forecast/**/mpasout.*.nc"], "min": 2,
+         "why": "a JEDI background (MPAS mpasout) at every history frame"}
+      ]
+    },
+    {
+      "id": "chemistry",
+      "family": "aerosol transport (--chemistry-config)",
+      "after": "global", "cards": 1, "vram_mib": 10000, "minutes": 10,
+      "steps": [
+        {"name": "inputs", "gpu": false, "builtin": "chemistry_inputs"},
+        {"name": "forecast", "gpu": true, "argv": ["{base_forecast}", "--hours", "1",
+          "--chemistry-config", "{work}/chem/chemistry.json", "--out", "{work}/forecast", "--scratch", "{work}/scratch"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["forecast/**/chemistry-receipt.json"], "min": 1,
+         "why": "the flag reaches the transport instead of being dropped"}
+      ]
+    },
+    {
+      "id": "balance-series",
+      "family": "balance series sampler",
+      "after": "global", "cards": 1, "vram_mib": 10000, "minutes": 10,
+      "steps": [
+        {"name": "forecast", "gpu": true, "argv": ["{base_forecast}", "--hours", "1", "--balance-series",
+          "--out", "{work}/forecast", "--scratch", "{work}/scratch"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["forecast/**/*balance*"], "min": 1}
+      ]
+    },
+    {
+      "id": "nest-triggers",
+      "family": "Hex with Regional trigger nests (the look arms)",
+      "after": "global", "cards": 1, "vram_mib": 10000, "minutes": 10,
+      "steps": [
+        {"name": "table", "gpu": false, "builtin": "trigger_table"},
+        {"name": "forecast", "gpu": true, "argv": ["{base_forecast}", "--hours", "1", "--nest-triggers", "{work}/triggers.json",
+          "--out", "{work}/forecast", "--scratch", "{work}/scratch"]}
+      ],
+      "checks": [
+        {"kind": "jsonl_key", "file": "forecast/nest-trigger-looks.jsonl", "key": "armed",
+         "why": "the trigger loop arms on this route instead of being ignored"}
+      ]
+    },
+    {
+      "id": "members",
+      "family": "co-resident member roster (global --members, s2s)",
+      "after": "global", "cards": 1, "vram_mib": 16000, "minutes": 10,
+      "steps": [
+        {"name": "roster", "gpu": false, "builtin": "member_roster"},
+        {"name": "forecast", "gpu": true, "argv": ["{base_forecast}", "--hours", "1", "--members", "{work}/roster.json",
+          "--stochastic", "{\"sppt\": true}", "--out", "{work}/forecast", "--scratch", "{work}/scratch"]}
+      ],
+      "checks": [
+        {"kind": "glob", "patterns": ["forecast/m1/**/history.*.nc", "forecast/m1/**/cuda-history.*.nc"], "min": 2},
+        {"kind": "glob", "patterns": ["forecast/m2/**/history.*.nc", "forecast/m2/**/cuda-history.*.nc"], "min": 2}
+      ]
+    },
+    {
+      "id": "moving",
+      "family": "storm-following moving region",
+      "cards": 1, "vram_mib": 20000, "minutes": 40,
+      "about": "6 h so the member the controller prepares after its first move decision is ready before the forecast ends",
+      "steps": [
+        {"name": "case", "gpu": false, "argv": ["moving", "case", "--best-track", "{best_track}", "--storm", "{storm_sid}",
+          "--cycle", "{storm_cycle}", "--out", "{work}/case.json", "--hours", "6", "--fine-km", "15",
+          "--fine-radius-km", "600", "--background-km", "120", "--dt-seconds", "75", "{route_moving}"]},
+        {"name": "stage", "gpu": false, "argv": ["moving", "stage", "--case", "{work}/case.json", "--casedir", "{work}/casedir",
+          "{storm_staged_args}"]},
+        {"name": "prepare", "gpu": false, "argv": ["moving", "prepare", "--case", "{work}/case.json", "--casedir",
+          "{work}/casedir", "{geog_args}"]},
+        {"name": "run", "gpu": true, "argv": ["moving", "run", "--case", "{work}/case.json", "--casedir", "{work}/casedir",
+          "--out", "{work}/run", "--hours", "6", "{geog_args}"]}
+      ],
+      "checks": [
+        {"kind": "json_len", "file": "run/controller.json", "key": "moves", "min": 1,
+         "why": "the region moved with the storm at least once"}
+      ]
+    }
+  ]
+}

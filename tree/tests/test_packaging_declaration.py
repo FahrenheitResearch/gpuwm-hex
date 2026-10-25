@@ -37,9 +37,9 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.4.4", (
-        "0.4.4 is the fix cut beside gpuwm 2.9.6 (2026-10-23): 0.4.3 plus every point-sounding door "
-        "forwarding --model-label and --brand; moving it is a release decision, not an edit"
+    assert declared == "0.4.5", (
+        "0.4.5 is the release beside gpuwm 2.9.7 (2026-10-24, pre-approved with it): every fix and the "
+        "MPAS-physics route at parity; moving it is a release decision, not an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")
@@ -141,7 +141,7 @@ def test_the_runtime_version_agrees_with_the_declaration(declaration: dict) -> N
 # ---------------------------------------------------------------------------
 def test_the_console_script_reaches_a_real_entry_point(declaration: dict) -> None:
     scripts = declaration["project"]["scripts"]
-    assert scripts == {"gpuwm-hex": "hexcore.cli:main"}, (
+    assert scripts == {"gpuwm-hex": "hexcore.cli:entry"}, (
         "one console script with subcommands, mirroring gpuwm's shape; a "
         f"script per door was not the decision.  Found: {scripts}"
     )

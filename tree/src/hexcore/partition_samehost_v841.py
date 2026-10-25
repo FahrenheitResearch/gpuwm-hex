@@ -54,9 +54,21 @@ class SameHostHaloExchanger(HaloExchanger):
         """P: owner truth for the unpublished post-RK physics input."""
         self._round("P", self._physics_fields(atmosphere.state, atmosphere.saved))
 
-    def round_step_boundary(self, state, saved):
-        """A: owner truth before the next phase-one physics preparation."""
-        self._round("A", self._physics_fields(state, saved))
+    def round_step_boundary(self, state, saved, dynamics_tendencies=None):
+        """A: owner truth before the next phase-one physics preparation.
+
+        Physics runs on every local column, so every input it reads must be
+        owner truth there. The GF advective forcing (rthdynten, rqvdynten) is
+        formed from the step's dynamics tendencies over all local cells, and
+        the outer halo rows' tendencies have incomplete stencils: unexchanged,
+        the next step's GF on seam columns read them and a 2-card run left the
+        1-card run at step 2, at the partition seam.
+        """
+        fields = self._physics_fields(state, saved)
+        if dynamics_tendencies is not None:
+            fields += [("physics/" + name, getattr(dynamics_tendencies, name), "cell")
+                       for name in ("rthdynten", "rqvdynten")]
+        self._round("A", fields)
 
     def _round(self, letter, fields, *, interior_work=None):
         if self._step is None:

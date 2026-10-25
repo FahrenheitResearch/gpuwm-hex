@@ -556,8 +556,9 @@ def run_bl_ysu_gwdo_cuda_v842(*, dt_seconds: float, config_len_disp: float | Non
                                   tuple(kernel_artifact["options"]), kernel_artifact["binary"])
     kernel = module.get_function("bl_ysu_gwdo_v842_f32")
     kernel(((ncells+63)//64,), (64,), args)
-    if int(invalid.get()[0]):
-        raise RuntimeError("YSU GWDO compiled level count differs from its launch")
+    # Read off the step path inside a forecast (deferred_checks_v842, U-MPASPHYS-1).
+    from .deferred_checks_v842 import defer
+    defer(invalid, "YSU GWDO compiled level count differs from its launch", error=RuntimeError)
     return output
 
 

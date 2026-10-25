@@ -88,22 +88,93 @@ def read_track(path, *, storm=None, best_track=False):
     return document, identifier, sorted(fixes.items()), path
 
 
-def author_case(path, *, track, cycle, storm=None, best_track=False, template=None,
+SETUP_TARGETS = ('low', 'cape_shear', 'boundary', 'path', 'object')
+TARGETS = ('tc',) + SETUP_TARGETS
+
+
+def last_lead_hours(row, cycle) -> int:
+    """The source's last posted forecast hour for this cycle (its table row's ladders or max_hours)."""
+    from .source_horizon import SourceHorizonError, last_posted_lead
+    try:
+        return last_posted_lead(row, cycle.hour)
+    except SourceHorizonError as error:
+        raise MovingCaseError(str(error)) from None
+
+
+def resolve_lead(row, cycle, lead_hours=0, from_last_hour=False) -> int:
+    from .source_horizon import SourceHorizonError, resolve_lead as resolve
+    try:
+        return resolve(row, cycle, lead_hours, from_last_hour)
+    except SourceHorizonError as error:
+        raise MovingCaseError(str(error)) from None
+
+
+def _path_rows(path, start):
+    """A user's path file -> [[seconds since start, lat, lon], ...] (times UTC, ascending)."""
+    _, _, fixes, path_file = read_track(path)
+    rows = [[(time - start).total_seconds(), p[0], p[1]] for time, p in fixes]
+    if len(rows) < 2:
+        raise MovingCaseError('a path needs at least two timed points')
+    return rows, path_file
+
+
+def _interp_path(rows, seconds):
+    from .storm_tracker import path_position
+    return path_position(rows, seconds)
+
+
+def author_case(path, *, track=None, cycle, storm=None, best_track=False, template=None,
                 fine_km=3.0, background_km=None, fine_radius_km=200.0,
-                hours=12.0, source='gfs', dt_seconds=None, physics_args=None):
-    """Seed from an exact analysis position and earlier fixes, never future observations."""
+                hours=12.0, source='gfs', dt_seconds=None, physics_args=None,
+                target='tc', point=None, user_path=None, segment=None, boundary_field='dewpoint',
+                object_field=None, object_threshold=None, check_minutes=None, lead_hours=0,
+                from_last_hour=False, target_config=None):
+    """Seed from an exact analysis position and earlier fixes, never future observations.
+
+    ``target`` picks what the fine region follows: ``tc`` (a tropical cyclone from a track position), or a
+    severe-weather setup started at ``point`` (or the midpoint of ``segment``, or the start of ``user_path``):
+    ``low``, ``cape_shear``, ``boundary`` (with ``segment``), ``path`` (``user_path``: not a tracker) or
+    ``object`` (a thresholded field such as reflectivity). ``lead_hours`` / ``from_last_hour`` start from the
+    source's forecast at that lead (the run begins at cycle + lead); beyond the source's last hour the run is a
+    free run, and the case says so."""
     from .init_sources import load_table, resolve_source
+    target = str(target).replace('-', '_')
+    if target not in TARGETS:
+        raise MovingCaseError(f'--target {target!r} is not one of {", ".join(TARGETS)}')
     source_row = resolve_source(load_table(), source)
     source = source_row['id']
-    _, identifier, fixes, track_path = read_track(track, storm=storm, best_track=best_track)
-    analysis = timestamp(cycle)
-    if analysis.minute or analysis.second or analysis.microsecond:
+    source_cycle = timestamp(cycle)
+    if source_cycle.minute or source_cycle.second or source_cycle.microsecond:
         raise MovingCaseError('--cycle must be a whole UTC analysis hour')
-    at_analysis = [p for time, p in fixes if time == analysis]
-    if not at_analysis:
-        raise MovingCaseError('track has no valid position exactly at --cycle; '
-                              'an interpolated future best-track position cannot seed an analysis')
-    center = at_analysis[0]
+    lead = resolve_lead(source_row, source_cycle, lead_hours, from_last_hour)
+    analysis = source_cycle + dt.timedelta(hours=lead)
+    identifier, fixes, track_path, path_rows = None, [], None, None
+    if target == 'path':
+        if user_path is None:
+            raise MovingCaseError('--target path needs --path (the timed points the region follows)')
+        path_rows, track_path = _path_rows(user_path, analysis)
+        center = list(_interp_path(path_rows, 0.0))
+    elif track is not None:
+        _, identifier, fixes, track_path = read_track(track, storm=storm, best_track=best_track)
+        at_analysis = [p for time, p in fixes if time == analysis]
+        if not at_analysis:
+            raise MovingCaseError('track has no valid position exactly at the start time; '
+                                  'an interpolated future best-track position cannot seed an analysis')
+        center = at_analysis[0]
+    elif point is not None:
+        center = [_number(point[0], '--point latitude'), (_number(point[1], '--point longitude') + 180) % 360 - 180]
+    elif segment is not None:
+        a, b = (segment[0], segment[1]), (segment[2], segment[3])
+        from .storm_tracker import project, unproject
+        x, y = project(a[0], a[1], b[0], b[1])
+        mid = unproject(a[0], a[1], float(x) / 2, float(y) / 2)
+        center = [float(mid[0]), float(mid[1])]
+    else:
+        raise MovingCaseError('give a track (--tracks/--best-track), a --point, a --segment or a --path')
+    if target == 'tc' and track is None and point is None:
+        raise MovingCaseError('--target tc needs a track position or a --point')
+    if target == 'boundary' and segment is None and point is None:
+        raise MovingCaseError('--target boundary needs --segment (the dryline or front as drawn) or a --point')
     past = [(time, p) for time, p in fixes if dt.timedelta(0) < analysis-time <= dt.timedelta(hours=6)]
     heading, speed = 0.0, 0.0
     motion_times = []
@@ -144,6 +215,28 @@ def author_case(path, *, track, cycle, storm=None, best_track=False, template=No
                         core_margin_km=min(50.0, (radius-18*fine)/3), check_minutes=30.0,
                         min_move_km=min(60.0, (radius-18*fine)/2), max_move_km=2*(radius-18*fine),
                         max_dwell_minutes=180.0, follow='continuous')), physics_args=[])
+    tracker = case.setdefault('tracker', {})
+    tracker['mode'] = target
+    if check_minutes is not None:
+        tracker.setdefault('placement', {})['check_minutes'] = _number(check_minutes, '--check-minutes')
+    if target == 'path':
+        tracker['path'] = dict(rows=path_rows)
+    elif target == 'boundary':
+        block = dict(field=boundary_field)
+        if segment is not None:
+            block['segment'] = [[float(segment[0]), float(segment[1])], [float(segment[2]), float(segment[3])]]
+        tracker['boundary'] = block
+    elif target == 'object':
+        block = {}
+        if object_field:
+            block['field_name'] = object_field
+        if object_threshold is not None:
+            block['threshold'] = _number(object_threshold, '--object-threshold')
+        tracker['object'] = block
+    if target_config:
+        extra = json.loads(Path(target_config).read_text(encoding='utf-8'))
+        for key, value in extra.items():
+            tracker[key] = dict(tracker.get(key) or {}, **value) if isinstance(value, dict) else value
     if dt_seconds is not None:
         case['dt_seconds'] = _number(dt_seconds, '--dt-seconds')
     step = _number(case['dt_seconds'], 'dt_seconds')
@@ -158,19 +251,42 @@ def author_case(path, *, track, cycle, storm=None, best_track=False, template=No
         raise MovingCaseError('--hours must contain a whole number of tracker intervals')
     if physics_args is not None:
         case['physics_args'] = list(physics_args)
-    case.update(case=Path(path).stem, description='Track-authored moving fine region; model-state following',
+    describe = {'tc': 'Track-authored moving fine region; model-state following',
+                'low': 'Setup-following fine region: a surface low, followed on model state',
+                'cape_shear': 'Setup-following fine region: the dominant CAPE x shear area, followed on model state',
+                'boundary': f'Setup-following fine region: a {boundary_field} boundary, followed on model state',
+                'object': 'Setup-following fine region: a thresholded feature, followed on model state',
+                'path': "Fine region on the user's path (not a tracker)"}[target]
+    case.update(case=Path(path).stem, description=describe,
                 start_time=analysis.strftime('%Y-%m-%d_%H:%M:%S'), hours=duration, init_source=source)
-    case['storm'] = dict(initial_center_deg=center,
-        initial_center_source='selected track position at the analysis time',
+    if lead:
+        case['init_cycle'] = source_cycle.strftime('%Y-%m-%d_%H:%M:%S')
+        case['init_lead_hours'] = lead
+    from .source_horizon import beyond_source
+    extension = beyond_source(source_row, source_cycle, lead, duration)
+    if extension:
+        # Breakage it prevents: a run past the source's last hour read as if the source covered it. The moving
+        # region's globe needs no boundaries, so the extra hours are a free run of our own model.
+        case['beyond_source'] = extension
+    origin = ({'tc': 'selected track position at the analysis time' if track is not None else 'the given point at the start time',
+               'path': "the user's path at the start time"}.get(target)
+              or ('the midpoint of the drawn segment' if point is None and segment is not None
+                  else 'the given point at the start time'))
+    case['storm'] = dict(initial_center_deg=center, initial_center_source=origin, target=target,
         initial_motion=dict(heading_deg=heading, speed_kmh=speed,
                             source='positions at and before analysis' if past else 'no prior fix within 6 h; stationary seed'))
     if best_track and identifier:
         case['storm']['ibtracs_sid'] = identifier
-    case['authoring'] = dict(schema='gpuwm-hex.moving-author/v1', track=str(track_path),
-        track_sha256=hashlib.sha256(track_path.read_bytes()).hexdigest(), track_id=identifier,
-        kind='best-track analysis seed' if best_track else 'tracks analysis seed',
-        analysis_utc=analysis.isoformat(), motion_times_utc=motion_times,
-        future_positions_used=False, runtime_fixes='model state',
+    case['authoring'] = dict(schema='gpuwm-hex.moving-author/v1',
+        track=None if track_path is None else str(track_path),
+        track_sha256=None if track_path is None else hashlib.sha256(track_path.read_bytes()).hexdigest(),
+        track_id=identifier, target=target, point=None if point is None else list(map(float, point)),
+        segment=None if segment is None else list(map(float, segment)),
+        kind=('best-track analysis seed' if best_track else 'tracks analysis seed' if track is not None
+              else "user's path" if target == 'path' else 'point seed'),
+        analysis_utc=analysis.isoformat(), source_cycle_utc=source_cycle.isoformat(), init_lead_hours=lead,
+        motion_times_utc=motion_times,
+        future_positions_used=target == 'path', runtime_fixes=("the user's path" if target == 'path' else 'model state'),
         template=str(Path(template).resolve()) if template else None)
     path = Path(path).expanduser().absolute()
     path.parent.mkdir(parents=True, exist_ok=True)

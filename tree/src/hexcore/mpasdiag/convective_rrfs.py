@@ -312,6 +312,21 @@ extern "C" __global__ void vertex_helicity(int nc,int nl,int nv,int degree,
     }
 }
 // RRFSx/MPAS-Model@1d6e370e MPAS-Model-rrfs/src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:297-681
+// The same scatter as a gather: one thread per (cell,level) adds its slots in
+// native scatter order from the same zero word (convective_v842.helicity_plan).
+extern "C" __global__ void vertex_helicity_gather(int nc,int nl,int degree,
+    const int* offsets,const int* entries,const float* kite,const float* vort,float* uh) {
+    long long t=(long long)blockDim.x*blockIdx.x+threadIdx.x;
+    if(t>=(long long)(nc+1)*nl) return;
+    int c=(int)(t/nl),k=(int)(t%nl);
+    R s=0.0f;
+    for(int e=offsets[c];e<offsets[c+1];e++) {
+        int ix=entries[e];
+        s=s+R(kite[ix])*R(vort[(long long)(ix/degree)*nl+k]);
+    }
+    uh[(long long)c*nl+k]=s.v;
+}
+// RRFSx/MPAS-Model@1d6e370e MPAS-Model-rrfs/src/core_atmosphere/diagnostics/mpas_convective_diagnostics.F:297-681
 extern "C" __global__ void split_helicity(int nc,int nl,const float* w,
     const float* area,float* positive,float* negative) {
     int c=blockDim.x*blockIdx.x+threadIdx.x;
@@ -529,6 +544,7 @@ class ConvectiveDiagnostics:
         # compute uses 17 nl-sized arrays and two extra interface entries.
         self._work = cp.empty((self.n_solve, 17*self.n_levels+3), dtype=cp.float32)
         self._uh = None
+        self._helicity_plan = None
 
     @staticmethod
     def _array(array, shape, name, dtype=np.float32):
@@ -594,8 +610,14 @@ class ConvectiveDiagnostics:
             vort = self._array(arrays['vorticity'], (nv, self.n_levels), 'vorticity')
             uh = cp.empty((nc+1,self.n_levels), dtype=cp.float32)
             neg = cp.empty_like(uh)
-            self._launch('vertex_helicity', self.n_levels,
-                (np.int32(nc),np.int32(self.n_levels),np.int32(nv),np.int32(degree),cov,kite,vort,uh))
+            key = (cov.shape, nc)
+            if self._helicity_plan is None or self._helicity_plan[0] != key:
+                from .convective_v842 import helicity_plan
+                # Mesh connectivity is fixed for a run; build the gather once.
+                self._helicity_plan = (key, helicity_plan(cov, nc))
+            offsets, entries = self._helicity_plan[1]
+            self._launch('vertex_helicity_gather', (nc+1)*self.n_levels,
+                (np.int32(nc),np.int32(self.n_levels),np.int32(degree),offsets,entries,kite,vort,uh))
             self._launch('split_helicity', nc+1,
                 (np.int32(nc),np.int32(self.n_levels),arrays['w'],arrays['areaCell'],uh,neg))
             maxedges = arrays['cellsOnCell'].shape[1]

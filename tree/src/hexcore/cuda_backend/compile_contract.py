@@ -77,6 +77,22 @@ def validate_module_key(module_key: str) -> str:
     return module_key
 
 
+#: The build id NVRTC 13.2.86 prints in its PTX banner ("Compiler Build ID:
+#: UNKNOWN"; a system CUDA 13.2 toolkit, 2026-10-23).
+#: That compiler carries no changelist, so its identity is the four-part build
+#: plus the loaded library's SHA-256, which the fingerprint always requires.
+#: THE BREAKAGE THIS ENDS: a bare install on a CUDA 13.2 machine refused its
+#: first forecast with "nvrtc_build_id is invalid" and lanes had to install a
+#: second NVRTC into their own venvs.
+UNKNOWN_BUILD_ID = "UNKNOWN"
+
+
+def build_id_accepted(build_id: str) -> bool:
+    """A changelist id (``CL-...``), or NVRTC's own UNKNOWN pinned by its library digest."""
+
+    return isinstance(build_id, str) and (build_id.startswith("CL-") or build_id == UNKNOWN_BUILD_ID)
+
+
 def validate_compile_platform_fingerprint(
     measured: Mapping[str, Any],
 ) -> dict[str, str]:
@@ -113,7 +129,7 @@ def validate_compile_platform_fingerprint(
             "gpuwm compile_platform_fingerprint.nvrtc_build does not identify "
             "the compiler at build resolution"
         )
-    if not normalized["nvrtc_build_id"].startswith("CL-"):
+    if not build_id_accepted(normalized["nvrtc_build_id"]):
         raise CompileContractError(
             "gpuwm compile_platform_fingerprint.nvrtc_build_id is invalid"
         )
@@ -313,6 +329,7 @@ class CompileManifest:
             )
         self._binding = {"fingerprint": fingerprint, "sha256": digest}
         self._modules: dict[str, dict[str, Any]] = {}
+        self._shape_origins: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
 
     @property
@@ -390,12 +407,48 @@ class CompileManifest:
                 names.append(kernel_name)
                 names.sort()
 
+    def record_shape_origin(
+        self,
+        module_key: str,
+        *,
+        generic_source_sha256: str,
+        dimensions: Iterable[tuple[str, int]],
+    ) -> None:
+        """Bind a shape-specialized module to the generic source it came from.
+
+        A shape module bakes one rank's own mesh dimensions into its source, so
+        its source digest differs between ranks by design. The generic source
+        and the dimension names are what two ranks must share.
+        """
+
+        key = validate_module_key(module_key)
+        if not isinstance(generic_source_sha256, str) or _SHA256_RE.fullmatch(
+            generic_source_sha256
+        ) is None:
+            raise CompileContractError("shape origin needs the generic source SHA-256")
+        origin = {
+            "generic_source_sha256": generic_source_sha256,
+            "dimensions": [[str(name), int(value)] for name, value in dimensions],
+        }
+        with self._lock:
+            if key not in self._modules:
+                raise CompileContractError(
+                    f"CUDA module_key {key!r} was not declared"
+                )
+            previous = self._shape_origins.get(key)
+            if previous is not None and previous != origin:
+                raise CompileContractError(
+                    f"CUDA shape module {key!r} was bound to two generic origins"
+                )
+            self._shape_origins[key] = origin
+
     def snapshot(self) -> dict[str, Any]:
         """Return an isolated, deterministic, JSON-ready manifest."""
 
         with self._lock:
             modules = json.loads(json.dumps(self._modules, sort_keys=True))
-        return {
+            shape_origins = json.loads(json.dumps(self._shape_origins, sort_keys=True))
+        document = {
             "schema": COMPILE_MANIFEST_SCHEMA,
             "compile_platform": {
                 "fingerprint": dict(self._binding["fingerprint"]),
@@ -403,6 +456,9 @@ class CompileManifest:
             },
             "modules": modules,
         }
+        if shape_origins:
+            document["shape_origins"] = shape_origins
+        return document
 
 
 __all__ = [

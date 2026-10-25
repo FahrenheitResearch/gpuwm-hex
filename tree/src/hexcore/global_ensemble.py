@@ -28,7 +28,9 @@ WHAT THIS DOES, composing doors that exist:
             next group's process does its imports, init reads and host
             preparation while the current one integrates, and builds on the card
             the moment the current one releases it, before that one's host-only tail.
-  the rest  products, export and score run per member on its own history.
+  the rest  products, export and score run per member on its own history.  Each member's maps are
+            drawn hour by hour while its group integrates (a first look per member, first_look.py),
+            and its full products pass then draws only what the live draws left.
 
 Each member's history lands in ``RUN/ensemble/gNN/memNNN/`` and the plan
 (``global-plan.json``) lists it; ``ensemble.json`` maps every member to its
@@ -59,6 +61,8 @@ from .errors import MpasPortError
 
 SCHEMA = "gpuwm-hex.global-ensemble/v1"
 REFUSED_GROUP = "co-tenancy refuses"
+#: Members' live draws (products processes) that run at once on the host; auto is one per 8 cores.
+LIVE_DRAWS = os.environ.get("GPUWM_HEX_ENSEMBLE_LIVE_DRAWS", "auto")
 
 
 class EnsembleDoorError(MpasPortError):
@@ -420,6 +424,53 @@ def run_inits(value: Mapping[str, Any], members: list[dict[str, Any]], args, sta
             "source_inputs": len(unique), "bound_members": len(members)}
 
 
+def member_case(value: Mapping[str, Any], member: Mapping[str, Any]) -> str:
+    """The case folder a member's maps go into: the products door's own name (mesh row and start), named on both the
+    first look and the full pass so the two write one tree."""
+    from .global_door import runtime_mesh_name
+    from .products_door import case_token
+    return case_token(None, Path(value["paths"]["grid"]), str(member["start_time"]),
+                      runtime_mesh_name(value["mesh"]["id"]))
+
+
+def member_labels(member: Mapping[str, Any], count: int, args) -> list[str]:
+    """The label flags of a member's maps. Every member draws the same titles; the credit names the member so two
+    members' maps differ on the picture, not only by folder."""
+    from .products_door import label_argv
+    return ["--source-label", f"Hex forecast, member {member['run_id']} of {count}", *label_argv(args)]
+
+
+def live_draw_gate(count: int) -> threading.Semaphore:
+    """How many members' live draws run at once: GPUWM_HEX_ENSEMBLE_LIVE_DRAWS, else one per 8 host cores."""
+    if LIVE_DRAWS not in ("", "auto"):
+        return threading.Semaphore(max(1, int(LIVE_DRAWS)))
+    return threading.Semaphore(max(1, min(count, (os.cpu_count() or 4) // 8)))
+
+
+def member_looks(value: Mapping[str, Any], group: Sequence[dict[str, Any]], out: Path, count: int, args,
+                 gate: threading.Semaphore) -> dict[str, Any]:
+    """One first look per member of a group (first_look.py), started before the group's forecast process.
+
+    THE BREAKAGE THIS PREVENTS (a hex global-120km ensemble, 2 members, GFS 2026-10-24 00Z,
+    6 h): the ensemble door ran no first look, so no member had a map until the whole forecast and every member's
+    full products pass had ended; the site's live revision stayed empty and all 610 maps arrived at the end. Each
+    member's look follows its own forecast folder (``<out>/<run_id>``) and draws into the tree and case of the
+    member's full pass, with that pass's labels; its receipt and logs live in the member's own folder, since the
+    members of a group share one forecast parent."""
+    from .first_look import FirstLook
+    work = Path(value["paths"]["work"])
+    looks = {}
+    for m in group:
+        own = work / "members" / m["run_id"]
+        own.mkdir(parents=True, exist_ok=True)
+        looks[m["run_id"]] = FirstLook(out / m["run_id"], grid=value["paths"]["grid"], init=m["init"],
+                                       start_time=str(m["start_time"]), out=own / "products",
+                                       case=member_case(value, m), extra=member_labels(m, count, args),
+                                       log=own / "first-look.log", receipt=own / "live-frames.json", gate=gate)
+        looks[m["run_id"]].start()
+    return looks
+
+
 def forecast_argv(value: Mapping[str, Any], roster: Path, out: Path, scratch: Path, first_init: str) -> list[str]:
     argv = list(value["commands"]["forecast"])
     argv[argv.index("--init") + 1] = first_init
@@ -431,8 +482,11 @@ def forecast_argv(value: Mapping[str, Any], roster: Path, out: Path, scratch: Pa
     return [*argv, "--members", str(roster)]
 
 
-def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args, status, env) -> dict[str, Any]:
+def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args, status, env,
+                  live: bool = False) -> dict[str, Any]:
+    """``live``: the products stage follows, so each member's maps are drawn while its group integrates."""
     work = Path(value["paths"]["work"])
+    gate = live_draw_gate(len(members)) if live else None
     limit = group_limit(value, args)
     cards = forecast_devices(args.devices)
     pending: "queue.Queue[list[dict[str, Any]]]" = queue.Queue()
@@ -491,11 +545,20 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
         began = time.monotonic()
         done = threading.Event()
         threading.Thread(target=_signal_on_ticket, args=(ticket, started, done), daemon=True).start()
+        looks = member_looks(value, group, out, len(members), args, gate) if gate is not None else {}
         try:
             rc = _cli(argv, log, {**env, "CUDA_VISIBLE_DEVICES": card, GATE_ENV: str(gate_path(card)),
                                   TICKET_ENV: str(ticket)})
         finally:
             done.set()
+            # The forecast has ended: each look lets a draw in progress land; what it rendered, its member's full
+            # pass keeps (products --live-frames).
+            for m in group:
+                look = looks.get(m["run_id"])
+                if look is not None:
+                    m["first_look"] = look.finish()
+                    receipt = look.receipt()
+                    m["live_frames"] = str(receipt) if receipt else None
         row = {"group": name, "card": card, "members": [m["run_id"] for m in group], "returncode": rc,
                "seconds": round(time.monotonic() - began, 1), "log": str(log), "out": str(out)}
         try:
@@ -573,7 +636,8 @@ def restore_forecasts(value, members):
                     or any(row.get(key) != member.get(key) for key in ("start_time", "hours", "history_from_minutes"))
                     or not forecast.is_dir() or not forecast.resolve().is_relative_to((work / "ensemble").resolve())):
                 raise ValueError(f"no matching forecast folder for {member['run_id']}")
-            member.update({key: row[key] for key in ("forecast", "group", "card", "forecast_returncode") if key in row})
+            member.update({key: row[key] for key in ("forecast", "group", "card", "forecast_returncode", "live_frames")
+                           if key in row})
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise EnsembleDoorError(f"cannot resume member postprocessing from {work / 'ensemble.json'}: {error}; run the forecast stage first") from None
 
@@ -598,7 +662,7 @@ def run_ensemble(value: dict[str, Any], args: argparse.Namespace, stages: list[s
             if name == "init":
                 record["stages"]["init"] = run_inits(value, members, args, status, env)
             elif name == "forecast":
-                result = run_forecasts(value, members, args, status, env)
+                result = run_forecasts(value, members, args, status, env, live="products" in stages)
                 record["stages"]["forecast"] = result
                 if result["failed"]:
                     raise EnsembleDoorError(
@@ -609,14 +673,12 @@ def run_ensemble(value: dict[str, Any], args: argparse.Namespace, stages: list[s
                     forecast = member["forecast"]
                     out = work / "members" / member["run_id"]
                     if name == "products":
-                        # Every member draws the same titles; the credit names the member
-                        # so two members' maps differ on the picture, not only by folder.
-                        from .products_door import label_argv
-
+                        # The case is named, so the member's first look and this pass write one tree; the hours
+                        # the look rendered are kept (--live-frames) and this pass draws the rest.
                         argv = ["products", forecast, "--out", str(out / "products"),
-                                "--source-label",
-                                f"Hex forecast, member {member['run_id']} of {len(members)}",
-                                *label_argv(args)]
+                                "--case", member_case(value, member), *member_labels(member, len(members), args)]
+                        if member.get("live_frames"):
+                            argv += ["--live-frames", member["live_frames"]]
                     elif name == "export":
                         argv = ["export", forecast, "--out", str(out / "export"), "--window", "global",
                                 "--field-set", args.export_field_set, "--overwrite"]

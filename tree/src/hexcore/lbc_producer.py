@@ -109,8 +109,13 @@ def run_stream(arguments, engine):
     return 0
 
 
-def source_endpoint_commands(*, source, cycle, hours, out_dir, staged=(), member=None, table=None):
-    """Plan source-table endpoints, including the first endpoint beyond the run."""
+def source_endpoint_commands(*, source, cycle, hours, out_dir, staged=(), member=None, table=None, lead_hours=0):
+    """Plan source-table endpoints, including the first endpoint beyond the run.
+
+    ``lead_hours`` starts the run at that forecast hour of ``cycle`` (a forecast row only): the run's start is
+    cycle + lead_hours, and endpoint ``index`` reads the same cycle at lead_hours + index * cadence. Before it, a
+    run could only start at a cycle's first hour, so a run over a source's day-14 pattern had no front door.
+    """
     import math
     from .init_sources import load_table, resolve_source, Cycle, plan_products
     from .errors import MpasPortError
@@ -120,12 +125,17 @@ def source_endpoint_commands(*, source, cycle, hours, out_dir, staged=(), member
         raise MpasPortError("limited-area hours must be finite and positive")
     cadence = row.get("forecast", {}).get("interval_hours", 1)
     count = math.ceil(hours / cadence)
-    start = Cycle.parse(cycle)
+    if lead_hours and not row.get("forecast"):
+        raise MpasPortError(
+            f"--lead-hours {lead_hours}: {row['id']} is an analysis source with no forecast hours; "
+            "start from one of its analysis times instead")
+    issued = Cycle.parse(cycle)
+    start = Cycle(issued.when + timedelta(hours=lead_hours))
     commands = []
     for index in range(count + 1):
         lead = index * cadence
-        source_cycle = start if row.get("forecast") else Cycle(start.when + timedelta(hours=lead))
-        source_lead = lead if row.get("forecast") else 0
+        source_cycle = issued if row.get("forecast") else Cycle(start.when + timedelta(hours=lead))
+        source_lead = lead_hours + lead if row.get("forecast") else 0
         # Validate cadence, member, and product templates before any transfer.
         plan_products(row, source_cycle, member, source_lead)
         argv = ["init-source", "--source", row["id"], "--cycle", source_cycle.when.strftime("%Y-%m-%dT%H"),

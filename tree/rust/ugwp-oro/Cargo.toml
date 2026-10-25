@@ -1,0 +1,20 @@
+[package]
+name = "hex-ugwp-oro"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "GSL orographic drag statistics (<mesh>.ugwp_oro_data.nc fields) for any hex mesh, from 30-arc-second terrain, on every core"
+
+[[bin]]
+name = "rw_hex_ugwp_oro"
+path = "src/main.rs"
+
+[dependencies]
+rayon = "1"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+
+[workspace]

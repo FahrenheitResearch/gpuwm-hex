@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.5
+
+Requires gpuwm>=2.9.7,<2.10.
+
+New:
+- The MPAS physics route runs every hex shape: limited-area regions, storm-following regions and ensembles, local time stepping, Hex with Regional, add-nest, restart, IAU, stochastic physics, chemistry, member rosters and two or more cards, with no native library.
+- The MPAS physics route is faster: the host is off the step path, and Thompson, MYNN, Grell-Freitas and radiation run their GPU fast paths. Strict numerics still matches native MPAS-A bit for bit over a whole 24 h convection-permitting forecast.
+- Hex with Regional in three shapes: a nest placed at launch, a nest added mid-run, and a nest that spawns when a storm attribute you set crosses its threshold.
+- Doors start from any posted forecast hour with `--lead-hours`, from GFS, GEFS, IFS 0.25 and 0.1 degree, IFS ENS, AIFS and AIFS ENS.
+- Regions take drawn shapes (`--shape`, `--ellipse`), open-ended resolution, and can be kept as inits.
+- Every run writes the any-point column store for every output hour, so soundings can be drawn anywhere after the run.
+- Maps stream every hour on region doors and ensemble members too.
+- GSL drag statistics are built for any hex mesh.
+- The MPAS route writes reflectivity (REFC) from its diagnostics stream.
+- Moving regions: `--lead-hours`, `--from-last-hour`, and following targets set at launch.
+
+Fixed:
+- 2-card runs: per-card modules, the compile check, the Noah stack limit, the Grell-Freitas halo and a local-time-stepping race.
+- Kernel packs match the loaded NVRTC on new boxes, with a CUDA 13.0 row and all-cores compile.
+- f000 carries the first physics call's surface diagnosis (10 m wind, fluxes, PBL height) on both routes.
+- Local time stepping on a limited-area region imposes the interface flux.
+- Storm-following runs keep their rendezvous at every check.
+- Off-mesh sounding points are dropped with a note; limited-area runs default to cities on the mesh.
+- A geography folder with a hidden file is accepted.
+- `--skip score` queues no scorer, and the scorer never waits for frames valid in the future.
+- Sonde scoring reads the year-to-date IGRA2 snapshot.
+- GFS fetches fall back to the older AWS layout and the NCAR GDEX archive.
+- A hydrometeor number neither carried nor diagnosed is never published.
+- Region prepares build the parent's static from the region's halo instead of the whole globe.
+- Storm-following segments resume on every core, and an MPAS-route segment moved over a geography with lakes no longer stops at its first land-surface call.
+- MPAS-route exports carry terrain height and reflectivity, so keep-as-init, the column store and Hex with Regional work on that route.
+- The ArWen route runs on gpuwm 2.9.7.
+- Moving runs on column suites (HRRR shape) and over sea ice move past their first move, and a new member's sea ice brings its own albedo, emissivity and ice fraction.
+
 ## 0.4.4
 
 Requires gpuwm>=2.9.4,<2.10.

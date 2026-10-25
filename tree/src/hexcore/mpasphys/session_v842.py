@@ -24,6 +24,12 @@ from ..cuda_physics_v841 import CudaMpasStageSourcesV842
 def native_working_directory(path: Path):
     """Native table paths are relative; mpas_atmphys_control.F:393-440."""
     before = Path.cwd()
+    if before == Path(path).resolve():
+        # Same-host rank threads share one process working directory; the
+        # launcher enters it once (samehost_v842). A per-thread chdir/restore
+        # would race.
+        yield
+        return
     os.chdir(path)
     try:
         yield

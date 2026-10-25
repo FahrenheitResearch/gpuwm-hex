@@ -18,9 +18,13 @@ from hexcore.device_memory_release import (
     LMEM_MIN_FRAME_KNOB,
     LMEM_WAIT_KNOB,
     POOL_KNOB,
+    POOL_MIN_BYTES_KNOB,
     DevicePhaseRelease,
     knob_enabled,
 )
+
+#: The mechanism tests below use tiny fake sizes: release every idle block and every grown frame.
+_EVERY = {POOL_MIN_BYTES_KNOB: "0", LMEM_MIN_FRAME_KNOB: "0"}
 
 
 class _Pool:
@@ -59,6 +63,12 @@ class _Runtime:
     def getDevice(self) -> int:
         return 0
 
+    free_bytes = 90 << 30        # a card with room unless a test says otherwise
+    total_bytes = 96 << 30
+
+    def memGetInfo(self):
+        return self.free_bytes, self.total_bytes
+
     def deviceGetLimit(self, limit: int) -> int:
         assert limit == self.cudaLimitStackSize
         return self.stack
@@ -89,7 +99,7 @@ def test_knobs_default_on_and_switch_off():
 
 def test_phase_returns_cached_blocks_on_both_sides_and_shrinks_the_frame_store():
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     pool.held = 400  # 300 cached by the previous phase
     with release.phase("slot:microphysics"):
         assert pool.held == pool.used == 100  # returned before the phase allocates
@@ -107,7 +117,7 @@ def test_phase_returns_cached_blocks_on_both_sides_and_shrinks_the_frame_store()
 
 def test_frame_growth_outside_a_phase_is_kept():
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     runtime.stack = 2048  # the dycore's own frame, grown between phases
     with release.phase("arwen:phase1"):
         runtime.stack = 7216
@@ -125,13 +135,13 @@ def test_knobs_off_touch_nothing():
 
 def test_each_knob_alone():
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={LMEM_KNOB: "off"})
+    release = DevicePhaseRelease(cp, environ={**_EVERY, LMEM_KNOB: "off"})
     pool.held = 400
     with release.phase("p"):
         runtime.stack = 9000
     assert runtime.sets == [] and pool.held == 100
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={POOL_KNOB: "off"})
+    release = DevicePhaseRelease(cp, environ={**_EVERY, POOL_KNOB: "off"})
     pool.held = 400
     with release.phase("p"):
         runtime.stack = 9000
@@ -140,7 +150,7 @@ def test_each_knob_alone():
 
 def test_failed_phase_is_left_alone():
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     with pytest.raises(FloatingPointError):
         with release.phase("p"):
             pool.held, runtime.stack = 500, 9000
@@ -150,13 +160,13 @@ def test_failed_phase_is_left_alone():
 
 def test_capture_and_nesting_do_nothing():
     cp, pool, runtime = _fake_cp(capturing=True)
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     pool.held = 400
     with release.phase("p"):
         runtime.stack = 9000
     assert pool.frees == 0 and runtime.sets == []
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     with release.phase("outer"):
         with release.phase("inner"):
             runtime.stack = 9000
@@ -171,7 +181,7 @@ def test_nesting_is_per_thread():
     import threading
 
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     inside = threading.Event()
     done = threading.Event()
 
@@ -195,7 +205,7 @@ def test_nesting_is_per_thread():
 
 def test_wide_frame_store_is_grown_back_on_entry_before_the_phase_runs():
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     with release.phase("slot:microphysics"):
         runtime.stack = 43440
     assert runtime.sets == [1024]
@@ -210,12 +220,12 @@ def test_wide_frame_store_is_grown_back_on_entry_before_the_phase_runs():
 
 def test_min_frame_knob_keeps_narrow_frames():
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     with release.phase("slot:radiation_lw"):
         runtime.stack = 2048  # by default every grown store is released
     assert runtime.stack == 1024
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={LMEM_MIN_FRAME_KNOB: "4096"})
+    release = DevicePhaseRelease(cp, environ={**_EVERY, LMEM_MIN_FRAME_KNOB: "4096"})
     with release.phase("slot:radiation_lw"):
         runtime.stack = 2048  # longwave's frame: under the knob, kept
     assert runtime.stack == 2048 and runtime.sets == []
@@ -233,7 +243,7 @@ def test_refused_regrow_returns_own_blocks_waits_then_keeps_the_store(capsys):
         naps.append(seconds)
         now[0] += seconds
 
-    release = DevicePhaseRelease(cp, environ={}, sleep=sleep, clock=lambda: now[0])
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY), sleep=sleep, clock=lambda: now[0])
     with release.phase("slot:microphysics"):
         runtime.stack = 43440
     runtime.refuse = 3  # a co-tenant took the memory between steps
@@ -258,7 +268,7 @@ def test_regrow_wait_runs_out_with_an_error_naming_the_knob():
     def sleep(seconds: float) -> None:
         now[0] += seconds
 
-    release = DevicePhaseRelease(cp, environ={LMEM_WAIT_KNOB: "5"}, sleep=sleep,
+    release = DevicePhaseRelease(cp, environ={**_EVERY, LMEM_WAIT_KNOB: "5"}, sleep=sleep,
                                  clock=lambda: now[0])
     with release.phase("slot:microphysics"):
         runtime.stack = 43440
@@ -270,10 +280,32 @@ def test_regrow_wait_runs_out_with_an_error_naming_the_knob():
 
 def test_other_driver_errors_are_not_waited_on():
     cp, pool, runtime = _fake_cp()
-    release = DevicePhaseRelease(cp, environ={})
+    release = DevicePhaseRelease(cp, environ=dict(_EVERY))
     with release.phase("slot:microphysics"):
         runtime.stack = 43440
     runtime.refuse, runtime.refuse_status = 1, 1  # cudaErrorInvalidValue
     with pytest.raises(_CUDARuntimeError):
         with release.phase("slot:microphysics"):
             pass
+
+
+def test_defaults_keep_small_idle_pools_and_narrow_frames():
+    """U-MPASPHYS-1: by default a boundary keeps under 8 GiB of idle blocks and frames under 4 KiB."""
+    from hexcore.device_memory_release import POOL_MIN_BYTES_DEFAULT
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    assert release.min_frame == 4096 and release.pool_min_bytes == POOL_MIN_BYTES_DEFAULT == 8 << 30
+    with release.phase("slot:gwdo"):
+        runtime.stack = 2736          # GWDO/PBL frame: kept, no reset/regrow pair per step
+    assert runtime.stack == 2736 and runtime.sets == []
+    assert release.receipt()["pool_release"]["releases"] == 0   # fake pool idles far below 4 GiB
+
+
+def test_card_pressure_returns_idle_blocks_under_the_keep():
+    """U-MPASPHYS-1: the keep yields when the card has under a tenth of its memory free."""
+    cp, pool, runtime = _fake_cp()
+    release = DevicePhaseRelease(cp, environ={})
+    runtime.free_bytes = 5 << 30
+    with release.phase("slot:pbl"):
+        pool.held = 400            # this phase left idle blocks behind
+    assert pool.held == pool.used and release.receipt()["pool_release"]["releases"] == 1

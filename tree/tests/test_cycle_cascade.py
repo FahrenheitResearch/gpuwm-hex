@@ -579,3 +579,28 @@ def test_the_door_has_no_per_phenomenon_flag():
     assert "--parent-history" in flags
     offending = [flag for flag in flags if FORBIDDEN_TOKENS.search(flag)]
     assert not offending, f"per-phenomenon flags on the cycle door: {offending}"
+
+
+def test_the_fine_forecast_carries_the_callers_forecast_flags_last(tmp_path, monkeypatch):
+    """hex parity run group 7, #27: `cycle run` had no flag that could ask for a physics suite."""
+
+    from hexcore.cycle.door import _add_arguments, _config
+
+    door = argparse.ArgumentParser()
+    _add_arguments(door)
+    paths = {flag: str(tmp_path / flag.strip("-")) for flag in (
+        "--out", "--parent-grid", "--parent-static", "--parent-init", "--coarse-history",
+        "--coarse-parent-grid")}
+    arguments = door.parse_args([item for pair in paths.items() for item in pair] + [
+        "--parent-row", "parent", "--forecast-arg=--physics-suite=convection_permitting"])
+    config = _config(arguments)
+    assert config.forecast_args == ("--physics-suite=convection_permitting",)
+    seen = {}
+    monkeypatch.setattr(chain, "_run", lambda argv, **_: seen.setdefault("argv", argv) and 0)
+    chain.run_fine_forecast(
+        config, mesh_row="cull", grid=tmp_path / "g.nc", static=tmp_path / "s.nc", init=tmp_path / "i.nc",
+        lbc_dir=tmp_path / "lbc", start=datetime(2025, 5, 19, 12), out=tmp_path / "o", scratch=tmp_path / "x",
+        receipt=tmp_path / "r.json", label="slot", rows_file=tmp_path / "rows.json", ledger_dir=tmp_path / "l",
+        log=tmp_path / "log")
+    assert seen["argv"][-1] == "--physics-suite=convection_permitting"
+    assert seen["argv"].index("--dt") < len(seen["argv"]) - 1

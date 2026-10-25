@@ -24,6 +24,9 @@ from .partition_executor_v841 import ExecutorError
 __all__ = ["SameHostCompileMismatch", "compare_samehost_compile_manifests"]
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+#: cuda_shape.specialize: a generic module key plus the first 20 hex digits of
+#: the specialized source's SHA-256. Each rank bakes its own mesh dimensions.
+_SHAPE_KEY = re.compile(r"^(?P<base>.+)\.shape_(?P<tag>[0-9a-f]{20})$")
 
 
 class SameHostCompileMismatch(ExecutorError):
@@ -101,7 +104,11 @@ def _validate_manifest(rank: int, manifest: Any) -> dict[str, Any]:
     modules = manifest.get("modules")
     if not isinstance(modules, Mapping) or not modules:
         raise SameHostCompileMismatch(f"{where}: no compiled module inventory was recorded")
+    origins = manifest.get("shape_origins", {})
+    if not isinstance(origins, Mapping):
+        raise SameHostCompileMismatch(f"{where}: shape origins are not a mapping")
     normalized = {}
+    shapes: dict[str, list[dict[str, Any]]] = {}
     for key, entry in modules.items():
         try:
             validate_module_key(key)
@@ -118,13 +125,53 @@ def _validate_manifest(rank: int, manifest: Any) -> dict[str, Any]:
         if entry.get("compile_platform_fingerprint_sha256") != digest:
             raise SameHostCompileMismatch(f"{label}: module compiler binding contradicts its platform")
         flags, images = _observations(entry, label)
+        shape = _SHAPE_KEY.fullmatch(key)
+        if shape is not None:
+            # The rank's dimensions are its own by design, so its specialized
+            # source and image differ from the other rank's. What must agree is
+            # the generic source, the dimension names, options, compiler and
+            # kernel inventory; the key must name its own specialized source.
+            if shape["tag"] != source[:20]:
+                raise SameHostCompileMismatch(f"{label}: shape key does not name its specialized source")
+            origin = origins.get(key)
+            if not isinstance(origin, Mapping):
+                raise SameHostCompileMismatch(f"{label}: shape module has no recorded generic source")
+            generic = _digest(origin.get("generic_source_sha256"), f"{label} generic source")
+            dimensions = origin.get("dimensions")
+            if (not isinstance(dimensions, list) or not dimensions or any(
+                    not isinstance(item, list) or len(item) != 2 or not isinstance(item[0], str)
+                    or isinstance(item[1], bool) or not isinstance(item[1], int) for item in dimensions)):
+                raise SameHostCompileMismatch(f"{label}: shape dimensions are malformed")
+            shapes.setdefault(shape["base"], []).append({
+                "key": key,
+                "identity": {"generic_source_sha256": generic,
+                    "dimension_names": [item[0] for item in dimensions],
+                    "requested_options": list(options),
+                    "compile_platform_fingerprint_sha256": digest, "resolved_kernels": sorted(kernels)},
+                "dimensions": {item[0]: item[1] for item in dimensions},
+                "flags": flags, "images": images,
+            })
+            continue
         normalized[key] = {
             "identity": {"source_sha256": source, "requested_options": list(options),
                 "compile_platform_fingerprint_sha256": digest, "resolved_kernels": sorted(kernels)},
             "flags": flags, "images": images,
             "module_cache_key": entry.get("module_cache_key"),
         }
-    return {"platform": {"fingerprint": fingerprint, "sha256": digest}, "modules": normalized}
+    for base, variants in shapes.items():
+        generic = normalized.get(base)
+        if generic is None:
+            continue
+        for variant in variants:
+            if (variant["identity"]["generic_source_sha256"] != generic["identity"]["source_sha256"]
+                    or variant["identity"]["requested_options"] != generic["identity"]["requested_options"]):
+                raise SameHostCompileMismatch(
+                    f"{where} module {variant['key']!r}: shape module does not derive from its generic module {base!r}")
+    return {"platform": {"fingerprint": fingerprint, "sha256": digest}, "modules": normalized, "shapes": shapes}
+
+
+def _shape_identities(variants: list[dict[str, Any]]) -> list[str]:
+    return sorted(json.dumps(variant["identity"], sort_keys=True) for variant in variants)
 
 
 def compare_samehost_compile_manifests(manifests: Mapping[int, Any]) -> dict[str, Any]:
@@ -163,6 +210,12 @@ def compare_samehost_compile_manifests(manifests: Mapping[int, Any]) -> dict[str
             if entry["identity"] != reference["modules"][key]["identity"]:
                 differing = [field for field in entry["identity"] if entry["identity"][field] != reference["modules"][key]["identity"][field]]
                 raise SameHostCompileMismatch(f"rank {rank} module {key!r}: stable compile inputs differ at {differing}")
+        if set(current["shapes"]) != set(reference["shapes"]):
+            raise SameHostCompileMismatch(f"rank {rank}: shape-specialized module inventory differs from rank {ranks[0]}")
+        for base, variants in current["shapes"].items():
+            if _shape_identities(variants) != _shape_identities(reference["shapes"][base]):
+                raise SameHostCompileMismatch(
+                    f"rank {rank} shape modules of {base!r}: generic source, dimension names, options or kernels differ")
     modules = {}
     for key, reference_entry in sorted(reference["modules"].items()):
         entries = {rank: normalized[rank]["modules"][key] for rank in ranks}
@@ -189,10 +242,25 @@ def compare_samehost_compile_manifests(manifests: Mapping[int, Any]) -> dict[str
             "mutually_compared_images": comparisons,
             "all_rank_common_image_kinds": sorted(common_kinds) if len(ranks) > 1 else [],
         }
+    shape_modules = {}
+    for base in sorted(reference["shapes"]):
+        observed_flags = {variant["flags"] for rank in ranks for variant in normalized[rank]["shapes"][base]
+                          if variant["flags"] is not None}
+        if len(observed_flags) > 1:
+            raise SameHostCompileMismatch(f"shape modules of {base!r}: mutually observed effective NVRTC flags differ")
+        shape_modules[base] = {
+            "inputs": [json.loads(item) for item in _shape_identities(reference["shapes"][base])],
+            "effective_flags": list(next(iter(observed_flags))) if observed_flags else None,
+            "rank_modules": {str(rank): [{"key": variant["key"], "dimensions": variant["dimensions"],
+                "captured_images": variant["images"]} for variant in normalized[rank]["shapes"][base]]
+                for rank in ranks},
+        }
     return {
         "schema": "mpas-port.samehost-compile-comparison/v1", "ranks": ranks,
         "inputs_compatible": True, "compile_platform": reference["platform"],
-        "modules": modules, "rank_manifests": originals,
+        "modules": modules, "shape_modules": shape_modules,
+        "shape_module_images_law": "each rank bakes its own dimensions into a shape module, so its source and image are its own; the generic source, dimension names, options, compiler and kernels are compared",
+        "rank_manifests": originals,
         "captured_image_identity_complete": len(ranks) > 1 and all(entry["all_rank_common_image_kinds"] for entry in modules.values()),
         "captured_cubin_identity_complete": len(ranks) > 1 and all("cubin" in entry["all_rank_common_image_kinds"] for entry in modules.values()),
         "loaded_kernel_binary_identity_proved": False,

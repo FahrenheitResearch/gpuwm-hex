@@ -436,3 +436,24 @@ def test_ou1_background_refuses_an_init_outside_mpas_global_order(tmp_path):
     with pytest.raises(jc.ContractRefusal, match="not 1..7 in file order"):
         _identity_background(tmp_path, init)
     assert not (tmp_path / "mpasout.nc").exists()
+
+
+def test_background_caller_attribute_replaces_the_default_once(tmp_path):
+    """The MPAS-physics route names its own ``source``: written once, the caller's value."""
+
+    from netCDF4 import Dataset
+
+    fields, provenance, _ = _tiny_fields()
+    record = jc.write_background(
+        tmp_path / "mpasout.nc", fields=fields, provenance=provenance,
+        valid=datetime(2026, 10, 3, 15), n_cells=7, n_edges=19, n_levels=3,
+        soil_levels=9, scalar_names=jc.DEFAULT_SCALAR_NAMES,
+        global_attributes={"hex_physics_route": "MPAS native physics",
+                           "source": "gpuwm-hex: MPAS CUDA dynamics and MPAS native physics"},
+    )
+    with Dataset(record.path) as dataset:
+        names = dataset.ncattrs()
+        assert names.count("source") == 1
+        assert dataset.getncattr("source") == "gpuwm-hex: MPAS CUDA dynamics and MPAS native physics"
+        assert dataset.getncattr("hex_physics_route") == "MPAS native physics"
+        assert names[:3] == ["model_name", "core_name", "source"]

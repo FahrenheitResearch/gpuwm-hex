@@ -3553,8 +3553,21 @@ extern "C" __global__ void wsm6_initialized_state(const float *c,int hail,int me
 ''' + '\n'.join(branches) + '\n}\n'
 
 
-@lru_cache(maxsize=4)
+def _card() -> int:
+    """The calling card."""
+    import cupy as cp
+    # A CUDA module belongs to the card it was loaded on. Same-host ranks drive
+    # several cards from one process, so a cache keyed without the card hands
+    # the second card the first card's handle (CUDA_ERROR_INVALID_HANDLE at step 1).
+    return int(cp.cuda.Device().id)
+
+
 def _state_kernel(device_math_header):
+    return _state_kernel_on(_card(), device_math_header)
+
+
+@lru_cache(maxsize=8)
+def _state_kernel_on(device, device_math_header):
     """Compile replay view of mp_wsm6.F90:73-191; mp_radar.F90:72-190."""
     # Initialization has no vertical arrays; avoid allocating storage for the
     # unused column entrypoints present in the same compilation unit.
@@ -3601,15 +3614,23 @@ def _compile_cuda(source: str, names):
     return tuple(module.get_function(lowered[name]) for name in names)
 
 
-@lru_cache(maxsize=16)
 def _kernels(device_math_header: str, max_levels=MAX_LEVELS, corrections=()):
+    return _kernels_on(_card(), device_math_header, max_levels, corrections)
+
+
+@lru_cache(maxsize=32)
+def _kernels_on(device, device_math_header: str, max_levels=MAX_LEVELS, corrections=()):
     """Compile launcher entrypoints for mp_wsm6.F90:213-1468."""
     names = ("wsm6_columns", "wsm6_from_mpas", "wsm6_radar_to_mpas", "wsm6_to_mpas")
     return _compile_cuda(cuda_source(device_math_header, max_levels=max_levels, corrections=corrections), names)
 
 
-@lru_cache(maxsize=16)
 def _workspace_size_kernel(device_math_header, max_levels):
+    return _workspace_size_kernel_on(_card(), device_math_header, max_levels)
+
+
+@lru_cache(maxsize=32)
+def _workspace_size_kernel_on(device, device_math_header, max_levels):
     """Storage metadata for mp_wsm6.F90:213-2444 automatic arrays."""
     text = cuda_source(device_math_header, max_levels=max_levels) + r'''
 // MPAS-A v8.4.2 mp_wsm6.F90:213-2444; automatic storage metadata only.

@@ -463,6 +463,22 @@ own layout, and advances its own boundary clock by its own class step.
   at rate 1 the zone is forced exactly as the fixed run forces it. The two
   rings keep every relaxation stencil inside the class.
   `GPUWM_HEX_LTS_BOUNDARY_RATE` is an experiment knob for the A/B.
+* **The matched interface flux on a regional driver.** A regional class
+  driver launches `acoustic_ru_regional_v841` (the specified-zone pgrad mask)
+  through its own regional kernel table, not `acoustic_ru_v841`, so the
+  coarse-side tap goes on the kernel the driver launches
+  (`cuda_fullstep_lts_scalars.tap_acoustic_momentum`). Before 0.4.5 the tap
+  sat only on the global kernel, never fired on a region, and the first class
+  step of any region with an interior interface stopped with "class 0 imposed
+  the child's interface flux 0 times". Measured 2026-10-24 (box L, one RTX
+  PRO 6000): a 1400 km cap cut from a 120-15 km globe (7,173 cells; 4,082 at
+  rate 1, 3,091 at rate 2), GFS 2024-05-06 18Z, ArWen physics, 1 h. Stock
+  0.4.4 stopped at the first class step; fixed, it runs, the interior budget
+  closes to 8.3e-11 (the parent globe's own LTS run: dry mass drift 2.4e-10),
+  and against the uniform 90 s step at +1 h: surface pressure RMS 3.5 Pa,
+  10 m wind RMS 0.07 m/s, lowest-level theta RMS 0.04 K, all of it in the
+  rate-2 ring, none at the class interface or in the zone. LTS off: the
+  history files are byte-identical before and after (strict numerics).
 * **Timing.** Every boundary-file time inside the run is a class-clock event:
   a class step that straddled one would integrate part of a step on the
   expired interval's tendency, and classes would disagree about when the
@@ -630,3 +646,25 @@ Default: off. On this mesh LTS is slower than the fixed step at four cards
 with physics (0.85) and at five cards without (0.67), the 48 h scored
 forecast has not been run, and the one-card physics run is not yet
 independent of the history cadence.
+
+## On the MPAS suite route (`--physics-suite`)
+
+Full-step LTS runs on the MPAS-physics route as on the ArWen route (`hexcore.mpasphys.lts_v842`):
+
+* `--fullstep-local-timestep --fullstep-lts-mode active` steps every rate class at its own whole step with the
+  MPAS suite as each class's physics. The coordinator is the same `FullStepLtsActive` (mailboxes, matched
+  interface flux, reflux). Each class runs the ported route on its own local mesh, and the physics runs on every
+  local column. Class 0 writes the global history and diag frames from every class's owned words.
+* `--fullstep-local-timestep` alone is the shadow: the same observer as on the ArWen route, on the fixed step.
+
+Measured on a 54,422-cell 3-to-192 km variable mesh (one card, 1 h, GFS 2026-10-24 00Z, four classes at
+rates 1/2/4/8): the MPAS route's LTS-minus-fixed difference matches the ArWen route's band by band (surface
+pressure 21.2 Pa RMS on cells of 40 km and coarser on both, theta 0.198 K RMS in the 20-40 km band on both),
+and the maps show no seam at a class boundary. On a mesh this small LTS does not pay on either route: each class
+step costs a fixed host time. The MPAS route takes about 1.9 times the ArWen route's time with LTS on and with
+it off.
+
+Refused by name on this route: `--local-timestep` (the acoustic ladder needs RK3 with six sub-steps and no FCT
+limiter), several cards, restart, DA cycling, IAU, stochastic forcing, chemistry, the balance series, nest
+triggers, timed surface updating, limited-area meshes and the forked RRFS dycore. A moving segment keeps the
+fixed step on this route (its move hooks are single-mesh).

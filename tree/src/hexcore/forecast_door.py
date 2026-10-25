@@ -2504,8 +2504,10 @@ def resolve_orographic_statistics(arguments, physics, mesh, grid, collected):
     without saying so (the engine refuses that at construction, after the
     card is reserved -- the wrong place to learn it).  The default is the
     mesh's own ``<mesh>.ugwp_oro_data.nc`` beside --grid, as the native
-    workflow lays it out; a file given for a run whose drag reads none is
-    refused, because it would be accepted and never read.
+    workflow lays it out; when that file is not there (every mesh RRFS does
+    not publish one for) it is built from the terrain (hexcore.ugwp_oro), so
+    the RRFS-shape suite runs on any mesh.  A file given for a run whose drag
+    reads none is refused, because it would be accepted and never read.
     """
 
     given = getattr(arguments, "orographic_statistics", None)
@@ -2539,6 +2541,18 @@ def resolve_orographic_statistics(arguments, physics, mesh, grid, collected):
             "statistics the mesh's static file carries.", collected)
     if given is None:
         given = Path(grid).parent / f"{mesh}.ugwp_oro_data.nc"
+        if not given.is_file():
+            # RRFS publishes this file for its own meshes only; every other mesh
+            # gets it built from the 30" terrain the static reads (hexcore.
+            # ugwp_oro), or fetched from the preparation store beside the
+            # static. A preflight only reports; the real bind builds it.
+            if collected is not None:
+                return Path(given).expanduser().absolute()
+            from .ugwp_oro import UgwpOroError, ensure
+            try:
+                ensure(grid, given)
+            except UgwpOroError as error:
+                raise _refuse(f"the GSL drag's orographic statistics for {mesh} could not be built: {error}")
     return _require_file(
         Path(given).expanduser().absolute(), "--orographic-statistics",
         "The GSL drag (config_gwdo_scheme='bl_ugwp_gwdo') reads the mesh's "
@@ -2899,9 +2913,21 @@ def run_default_products(request: ForecastRequest, history: Sequence[Path],
 
 
 def history_files(out: Path) -> list[Path]:
-    """The history frames the driver wrote, in valid-time order."""
+    """The history frames the driver wrote, in valid-time order.
 
-    return sorted(Path(out).glob("cuda-history.*.nc"))
+    The ArWen route writes ``cuda-history.*.nc``.  The MPAS suite route writes MPAS's own stream files
+    (``history.*`` or the template its request names), found the way ``native_default_products`` finds them.
+    THE BREAKAGE THIS PREVENTS (hex parity run group 7, #27): ``pair --physics-suite ...`` reported
+    "frames control 0, treatment 0" beside legs that had each written their frames.
+    """
+
+    out = Path(out)
+    frames = sorted(out.glob("cuda-history.*.nc"))
+    if frames or not (out / "native-physics-request.json").is_file():
+        return frames
+    from .products_door import native_output_frames
+    return (sorted(out.glob("history.*.nc")) or sorted(out.glob("output.*.nc"))
+            or native_output_frames(out))
 
 
 def native_default_products(arguments: argparse.Namespace) -> None:
@@ -2916,8 +2942,16 @@ def native_default_products(arguments: argparse.Namespace) -> None:
     if not history:
         return
     plan = json.loads((out / "native-physics-request.json").read_text())
+    start = plan["start"]
+    from .fullstep_lts_admission import moving_launch_switches
+    if moving_launch_switches() and getattr(arguments, "start_time", None):
+        # A moving segment starts at its carrier's time, but its maps belong to the run: the ArWen route labels
+        # them with the run's init (the door's --start-time) and leads from it.  THE BREAKAGE THIS PREVENTS
+        # (HEX-PHYSICS-PARITY run group 2 #5/#6): after a move every MPAS-route map read "Init 10/24 01Z | +000:30"
+        # (the segment start) and filed under mn...-2026102401 instead of the run's 00Z init and +1:30 lead.
+        start = arguments.start_time
     request = SimpleNamespace(out=out, grid=Path(plan["grid"] or plan["init"]),
-                              init=Path(plan["init"]), start_time=plan["start"])
+                              init=Path(plan["init"]), start_time=start)
     run_default_products(request, history, arguments)
 
 
@@ -3371,21 +3405,53 @@ def mpas_suite_lts_refusal(arguments: argparse.Namespace, environ=None) -> str |
 
     if moving_launch_switches(environ):
         return None
-    named = [flag for flag, attribute in (("--fullstep-local-timestep", "fullstep_local_timestep"),
-                                          ("--local-timestep", "local_timestep"))
-             if getattr(arguments, attribute, False)]
-    if not named:
+    if getattr(arguments, "local_timestep", False):
+        # THE BREAKAGE THIS PREVENTS: --local-timestep is the acoustic rate ladder (hexcore.cuda_driver_lts),
+        # built on the RK3 six-sub-step schedule and refusing the FCT limiter; the MPAS suite's own transport is
+        # monotonic FCT (config_monotonic), so the ladder cannot step this configuration.  Full-step LTS can.
+        return ("--local-timestep is the acoustic rate ladder, which needs RK3 with six acoustic sub-steps and no "
+                "FCT limiter; the MPAS suite route steps MPAS-A's RK2 schedule with monotonic FCT transport.  Run "
+                "full-step local time stepping on this route instead: --fullstep-local-timestep "
+                "--fullstep-lts-mode active (or the shadow observer without --fullstep-lts-mode)")
+    knobs = {name: getattr(arguments, name, None) for name in
+             ("fullstep_lts_mode", "fullstep_lts_max_rate", "fullstep_lts_buffer_rings")}
+    if not getattr(arguments, "fullstep_local_timestep", False):
+        if any(value is not None for value in knobs.values()):
+            return "the requested LTS policy would be ignored; LTS-only knobs need --fullstep-local-timestep"
         return None
-    return (f"{' and '.join(named)} cannot run on the MPAS suite route: that route is the matched MPAS-A "
-            "v8.4.2 configuration and runs the fixed step only, and local time stepping is a different "
-            "time scheme, never identical to native MPAS.  Drop the flag to run the suite, or drop the "
-            "MPAS suite (--physics-suite or its namelist) to run LTS on the ArWen route")
+    # Retired (HEX-PHYSICS-PARITY run group 2 #8; owner ruling 2026-10-24: every hex capability works on every physics
+    # route): full-step LTS runs on this route, active (hexcore.mpasphys.lts_v842, every rate class with the MPAS
+    # suite as its physics) and shadow (the ArWen route's observer on the fixed step).  What stays refused is
+    # named below and in lts_v842.admission_refusal.
+    from types import SimpleNamespace
+    from .config_fullstep_lts import validate_fullstep_lts_request
+    from .errors import ConfigurationRefusal
+    try:
+        validate_fullstep_lts_request(SimpleNamespace(fullstep_local_timestep=True,
+            **{name: value for name, value in knobs.items() if value is not None}))
+    except ConfigurationRefusal as error:
+        return str(error)
+    if getattr(arguments, "samehost_devices", None) is not None:
+        if knobs["fullstep_lts_mode"] != "active":
+            return ("the full-step shadow runs on one device: the partitioned shadow has no owner-only donor "
+                    "reduction (halo duplicates would corrupt the rate census)")
+        return ("active local time stepping on the MPAS suite route runs on one card: its classes rendezvous on one "
+                "device; several cards need the ArWen route's class blocks across cards, which carry no MPAS "
+                "physics pools yet.  Drop --samehost-devices (one card)")
+    return None
 
 
 def run_forecast(arguments: argparse.Namespace) -> int:
     if getattr(arguments, "members", None) is not None:
         from .multi_member import run_members
         return run_members(arguments, sys.modules[__name__])
+    triggers = getattr(arguments, "nest_triggers", None)
+    if triggers is not None:
+        # [hex_nests] (hexcore.nest_triggers): the driver's step loop arms its
+        # look from this; refused there by name if the table cannot be read.
+        if not Path(triggers).is_file():
+            raise ForecastDoorRefusal(f"--nest-triggers {triggers} is not a file")
+        os.environ["GPUWM_HEX_NEST_TRIGGERS"] = str(Path(triggers).resolve())
     time_ledger.configure(getattr(arguments, "out", None))
     time_ledger.emit("prep.door", "begin")
     time_ledger.emit("forecast.construct", "begin")
@@ -3565,11 +3631,18 @@ def _run_forecast(arguments: argparse.Namespace) -> int:
             lts_refusal = mpas_suite_lts_refusal(arguments)
             if lts_refusal is not None:
                 raise ValueError(lts_refusal)
-            if getattr(arguments, "balance_series", False):
-                # THE BREAKAGE THIS PREVENTS: the balance series is sampled by the ArWen route's executors; the
-                # MPAS suite route has no sampler, so the flag would be accepted and nothing written.
-                raise ValueError("--balance-series is sampled by the ArWen route's executors; the explicit MPAS "
-                                 "suite route has no balance-series sampler")
+            # Retired (hex parity run group 7, #25): --balance-series is sampled on this route too
+            # (mpasphys.runtime_v842, the same hexcore.iau_forcing.BalanceSeries on the dycore's own state).
+            if getattr(arguments, "source_table", None) is not None:
+                # THE BREAKAGE THIS PREVENTS (hex parity run group 7, #27): this route returns before
+                # resolve_request, the only reader of --source-table, so `pair --physics-suite ...` ran a treatment
+                # leg byte-identical to its control (80 of 80 history variables) and no receipt named the table.
+                # The ArWen route refuses the table the same way on every in-tree row (resolve_run_row).
+                raise ValueError(
+                    f"--source-table {arguments.source_table} was given, but the MPAS suite route carries no "
+                    "point source and no seam to release one into; the table would be accepted and never read. "
+                    "A point source runs on a --physics-backend row that declares one (none of the in-tree rows "
+                    "does), without --physics-suite")
             # Retired (named gap W1-G2): the suite route applies IAU now (mpasphys.runtime_v842.SuiteIau, MPAS's
             # atm_add_tend_anal_incr once per step).  The door's IAU flags become MPAS's own &iau group and iau
             # stream input, so a flag run and a namelist run execute the same code.
@@ -4098,6 +4171,9 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--out", type=Path, default=None, metavar="DIR",
         help="fresh directory for history frames and the run receipt")
+    parser.add_argument("--nest-triggers", type=Path, default=None, metavar="TOML",
+                        help="arm a [hex_nests] table: the loop looks on the card every cadence_s and "
+                             "writes each firing to <out>/nest-triggers.jsonl for `add-nest --watch`")
     parser.add_argument("--stochastic", default=None, metavar="JSON",
                         help="per-member SPPT/SKEB configuration, default off; see stochastic.py")
     parser.add_argument("--members", type=Path, default=None, metavar="JSON",

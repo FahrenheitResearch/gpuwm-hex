@@ -3227,16 +3227,22 @@ def _shared_tables_source(source: str) -> str:
     return source
 
 
-@lru_cache(maxsize=2)
-def _module_for(shared: bool):
+@lru_cache(maxsize=None)
+def _module_for(device: int, shared: bool):
+    """One module per card: the stack limit is a per-device setting, so a
+    process-wide cache reserved 8 KiB only on the first card and the second
+    card faulted at the 1 KiB default with shared tables off."""
+    import cupy as cp
     source = _device_math_source() + _CORE_CUDA + _ENTRY_CUDA + _LANDUSE_CUDA + _MPAS_IO_CUDA + _STATE_CUDA
-    if shared:
-        return _compile_module(_shared_tables_source(source), reserve_stack=False)
-    return _compile_module(source)
+    with cp.cuda.Device(device):
+        if shared:
+            return _compile_module(_shared_tables_source(source), reserve_stack=False)
+        return _compile_module(source)
 
 
 def _module():
-    return _module_for(shared_tables_enabled())
+    import cupy as cp
+    return _module_for(int(cp.cuda.Device().id), shared_tables_enabled())
 
 
 def replay_columns(scheme, floats, integers, tables, *, stream=None,
@@ -3607,10 +3613,10 @@ def register_hex_cuda(registry, arguments):
         # a forecast after the CUDA equivalent has refused a column.
         if status.size:
             import cupy as cp
+            from .deferred_checks_v842 import defer
+            # Read off the step path inside a forecast (deferred_checks_v842, U-MPASPHYS-1).
             with kwargs.get('stream') or cp.cuda.get_current_stream():
-                line = int(cp.max(status).item())
-            if line:
-                raise RuntimeError(f'MPAS Noah refused a column at native source line {line}')
+                defer(status, 'MPAS Noah refused a column at native source line {value}', error=RuntimeError)
         return status
 
     # Native driver dispatch position; mpas_atmphys_driver.F:286-308.
@@ -3735,8 +3741,8 @@ def run_slot(call):
     status = run_mpas_surface(**arguments)
     if status.size:
         import cupy as cp
+        from .deferred_checks_v842 import defer
+        # Read off the step path inside a forecast (deferred_checks_v842, U-MPASPHYS-1).
         with arguments.get('stream') or cp.cuda.get_current_stream():
-            line = int(cp.max(status).item())
-        if line:
-            raise RuntimeError(f'MPAS Noah native fatal condition at source line {line}')
+            defer(status, 'MPAS Noah native fatal condition at source line {value}', error=RuntimeError)
     return status

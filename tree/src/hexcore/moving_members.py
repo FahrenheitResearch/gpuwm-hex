@@ -135,17 +135,23 @@ def stage_case(case_path: Path, casedir: Path, *, source: str | None = None, sta
     source_id = source or case.get("init_source") or "gfs"
     row = init_sources.resolve_source(table, source_id)
     cycle = init_sources.Cycle.parse(cycle_of(case))
+    # A case started from the source's forecast at a lead (moving case --lead-hours / --from-last-hour): the
+    # products are the source cycle's at that lead, the init clock is the case start (cycle + lead).
+    lead = int(case.get("init_lead_hours") or 0)
+    from datetime import timedelta
+    source_cycle = init_sources.Cycle(cycle.when - timedelta(hours=lead))
     source_member = case.get("init_member")
     if source_member is not None and (type(source_member) is not int or source_member < 0):
         raise MovingCaseError("init_member must be a nonnegative integer source-member number")
     # Validate against the source table before either fetching or reusing a stage.
-    plans = init_sources.plan_products(row, cycle, source_member)
+    plans = init_sources.plan_products(row, source_cycle, source_member, lead)
     out_dir = casedir / "source"
     previous = casedir / STAGE_FILE
     if previous.is_file():
         stage = json.loads(previous.read_text())
         same_source = (stage.get("source") == row["id"]
                        and stage.get("cycle") == cycle.start_time
+                       and int(stage.get("lead_hours") or 0) == lead
                        and stage.get("source_member") == source_member)
         if not same_source and (casedir / "family.json").is_file():
             raise MovingCaseError(
@@ -172,6 +178,7 @@ def stage_case(case_path: Path, casedir: Path, *, source: str | None = None, sta
     decoded = init_sources.decode(row, inputs, cycle, out_dir, writer)
     stage = dict(schema="gpuwm-hex.moving-stage/v1", created_utc=_now(), case=case["_path"],
                  source=row["id"], source_member=source_member, cycle=cycle.start_time,
+                 source_cycle=source_cycle.start_time, lead_hours=lead,
                  met=decoded["met"], products=products,
                  decode=decoded, remap=remap, seconds=round(time.monotonic() - began, 1))
     if best_track:
@@ -492,7 +499,8 @@ def build_operator(source: Path, target: Path, out: Path) -> dict[str, Any]:
     with stage(stages, "read-operator-geometry", parallelism={"device": "CPU", "threads": 1}):
         source_cells, target_cells = SphericalCells.read(source), SphericalCells.read(target)
     with stage(stages, "build-conservative-operator", parallelism={"device": "CPU"}) as timing:
-        weights = ConservativeMap.build(source_cells, target_cells)
+        weights = ConservativeMap.build(source_cells, target_cells,
+            progress=lambda row: print(json.dumps(row), file=sys.stderr, flush=True))
         execution = weights.receipt["overlap_execution"]
         timing["parallelism"] = {"device": "CPU", "executor": execution["executor"],
                                  "workers": execution["workers"],
@@ -507,7 +515,7 @@ def build_operator(source: Path, target: Path, out: Path) -> dict[str, Any]:
     # Keep execution evidence in the controller's log after disposable NPZs
     # are retired. This is the same receipt saved inside the operator archive.
     return dict(source=str(source), target=str(target), out=str(out), seconds=time.monotonic() - began,
-                stages=stages, overlap_execution=execution)
+                stages=stages, overlap_execution=execution, operator_receipt=weights.receipt)
 
 
 def build_zone(source_grid, target_grid, source_static, target_static, source_init, target_init,
@@ -529,6 +537,45 @@ ENSEMBLE_SCHEMA = "gpuwm-hex.moving-ensemble/v1"
 ROSTER_SCHEMA = "gpuwm-hex.moving-ensemble-roster/v1"
 
 
+def case_physics_suite(case) -> str | None:
+    """The explicit MPAS suite a moving case's ``physics_args`` select, or None for the ArWen route.
+
+    Read through the forecast door's own parser and :func:`hexcore.mpasphys.forecast_v842.native_route`,
+    so a ``--physics-suite``, a ``--physics-namelist`` or ``--physics-backend mpasphys`` all count, exactly
+    as the segment's forecast door will decide.
+    """
+    import argparse
+    args = [str(a) for a in case.get("physics_args", []) or []]
+    if not any(a.startswith(("--physics-suite", "--physics-namelist", "--physics-backend")) for a in args):
+        return None
+    from .forecast_door import add_forecast_arguments
+    from .mpasphys.forecast_v842 import native_route
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    add_forecast_arguments(parser)
+    namespace, _ = parser.parse_known_args(args)
+    config, _ = native_route(namespace, default_mode="correct")
+    if config is None:
+        return None
+    options = getattr(config, "options", None) or {}
+    return str(options.get("config_physics_suite") or getattr(namespace, "physics_suite", None) or "mpas")
+
+
+def roster_physics_rows(default, suite: str | None):
+    """The packaged roster's physics rows for the route a case runs on.
+
+    The ArWen route alternates its two microphysics schemes (``physics``).  An MPAS suite route runs the
+    suite's own slot schemes only (the ported glue admits convection_permitting's slots and no other), so
+    its physics diversity comes from that suite's own Registry options (``mpas_suite_physics``); a suite
+    with no listed rows takes its default physics, and its members differ by SPPT/SKEB and member identity.
+    THE BREAKAGE THIS PREVENTS (HEX-PHYSICS-PARITY run group 2 #6): the ArWen rows on the MPAS route
+    asked for mp_wsm6, which the route refuses, so half the default ensemble could never run there.
+    """
+    if suite is None:
+        return default["physics"]
+    rows = (default.get("mpas_suite_physics") or {}).get(suite)
+    return rows or [dict(id=f"{suite}-default", forecast_flags=[])]
+
+
 def moving_roster(case_path, casedir, *, manifest=None, count=8, seed=53):
     """Resolve weighted metadata rows to independent moving forecasts."""
     import math
@@ -540,10 +587,11 @@ def moving_roster(case_path, casedir, *, manifest=None, count=8, seed=53):
     case = load_case(case_path)
     default = json.loads((Path(__file__).with_name("data") / "moving-ensemble.v1.json").read_text())
     if manifest is None:
+        physics_rows = roster_physics_rows(default, case_physics_suite(case))
         body = dict(schema=ROSTER_SCHEMA, source_members=1, members=[
             dict(id=f"member-{i+1:03d}", weight=1.0,
-                 physics=default["physics"][i % len(default["physics"])]["id"],
-                 forecast_flags=default["physics"][i % len(default["physics"])]["forecast_flags"])
+                 physics=physics_rows[i % len(physics_rows)]["id"],
+                 forecast_flags=physics_rows[i % len(physics_rows)]["forecast_flags"])
             for i in range(count)])
         base = Path(case["_path"]).parent
     else:
@@ -1018,14 +1066,29 @@ def run_moving_ensemble(args):
             for future in futures:
                 future.result()
         receipt["status"] = "passed" if all(r.get("status") == "passed" for r in rows) else "failed"
-        completed = [r for r in rows if (Path(r.get("out", ".")) / "controller.json").is_file()]
+        failures = {r["id"]: member_failure(r) for r in rows if r.get("status") != "passed"}
+        if failures:
+            # Named first: a member that never ran leaves no fixes, and the track products below would
+            # otherwise be the only error anyone sees (run group 2 #6: "native track plume failed").
+            receipt["member_failures"] = failures
+            for name, why in failures.items():
+                print(f"gpuwm-hex: moving-ensemble member {name} failed: {why}", file=sys.stderr, flush=True)
+        completed = [r for r in rows if (Path(r.get("out", ".")) / "controller.json").is_file()
+                     and json.loads((Path(r["out"]) / "controller.json").read_text()).get("frames")]
         if completed:
             started = time.monotonic()
-            product = moving_ensemble_products(rows, output)
-            receipt["pictures"] = [render_moving_tracks(product, output, cycle_of(case)),
-                                   plot_moving_ensemble(product, output)]
+            try:
+                product = moving_ensemble_products(completed, output)
+                receipt["pictures"] = [render_moving_tracks(product, output, cycle_of(case)),
+                                       plot_moving_ensemble(product, output)]
+            except MovingCaseError as error:
+                if not failures:
+                    raise
+                receipt["products_error"] = str(error)
             receipt["stages"].append(dict(name="receipt-analysis-products", wall_seconds=time.monotonic()-started,
                                            parallelism="native Rust track map; CPU scalar receipt analysis chart"))
+        if failures and receipt.get("error") is None:
+            receipt["error"] = "; ".join(f"{name}: {why}" for name, why in failures.items())
         return 0 if receipt["status"] == "passed" else 1
     except BaseException as error:
         receipt.update(status="failed", error=f"{type(error).__name__}: {error}")
@@ -1037,6 +1100,21 @@ def run_moving_ensemble(args):
             signal.signal(signum, handler)
         receipt["wall_seconds"] = time.monotonic()-began
         write_json(output / "ensemble-receipt.json", receipt)
+
+
+def member_failure(row) -> str:
+    """Why one ensemble member failed, from its controller's own last words."""
+    if row.get("status") == "cancelled":
+        return "cancelled before it started"
+    log = Path(row.get("log", ""))
+    lines = log.read_text(errors="replace").splitlines()[-80:] if log.is_file() else []
+    for line in reversed(lines):
+        text = line.strip()
+        if text.startswith("segment ") and ": " in text:
+            return text  # the controller's SystemExit text (hexcore.moving_run)
+        if text.startswith(("SystemExit:", "gpuwm-hex:", "RuntimeError:", "MovingCaseError:", "ValueError:")):
+            return text.split(":", 1)[1].strip() or text
+    return f"controller exited {row.get('returncode')}"
 
 
 def add_moving_ensemble_arguments(parser):

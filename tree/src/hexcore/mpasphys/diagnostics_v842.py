@@ -69,8 +69,16 @@ def output_diagnostics(atmosphere, names, cache, cp):
     return theta, rho, pressure
 
 
-def initialize_thermodynamics(atmosphere, cache):
-    """Cold-start EOS with native powf; mpas_atm_time_integration.F:7628-7650."""
+def initialize_thermodynamics(atmosphere, cache, *, base_only=False):
+    """Cold-start EOS with native powf; mpas_atm_time_integration.F:7628-7650.
+
+    ``base_only`` (a restart) forms the base state alone (exner_base, pressure_base depend only on zz and
+    rtheta_base) and leaves the carried perturbation state untouched: MPAS reads both from its restart
+    stream, where the base words are the ones this cold start wrote.  THE BREAKAGE IT FIXES: a restart kept
+    the init file's base words instead, which differ from the cold start's by one unit in the last place in
+    about 900 cells, so every restart drifted away from the straight run from its first step (HEX-PHYSICS-
+    PARITY run group 6 #21: 48 of 101 variables differed after 1 h).
+    """
     saved, reference = atmosphere.saved, atmosphere.reference
     count = atmosphere.state.rho.size
     rgas, cp = np.float32(287.0), np.float32(1004.5)
@@ -79,5 +87,6 @@ def initialize_thermodynamics(atmosphere, cache):
     kernel(((count + 127) // 128,), (128,), (
         np.int32(count), rgas, np.float32(1.e5), np.float32(rgas / np.float32(cp-rgas)),
         atmosphere.vertical.zz, saved.rho_theta_perturbation, reference.rho_theta_base,
-        saved.exner, reference.exner_base, saved.pressure_perturbation,
+        (saved.exner.copy() if base_only else saved.exner), reference.exner_base,
+        (saved.pressure_perturbation.copy() if base_only else saved.pressure_perturbation),
         reference.pressure_base))

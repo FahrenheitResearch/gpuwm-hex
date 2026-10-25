@@ -299,15 +299,29 @@ class HeightConservativeMap:
 
     def mass_intensive(self,values,density=None):
         """Conservatively integrate mass products and record host wall time."""
+        result, domain, positivity = self.mass_intensive_receipted(values, density=density)
+        self.last_domain_reconciliation = domain
+        self.last_positivity_roundoff = positivity
+        return result
+
+    def mass_intensive_receipted(self, values, density=None):
+        """:meth:`mass_intensive` returning ``(result, domain reconciliation, positivity roundoff)``.
+
+        It leaves ``last_domain_reconciliation`` / ``last_positivity_roundoff`` untouched, so several
+        products can be integrated on concurrent threads (moving_balance, moving_state) and each keeps
+        its own receipt.  The arithmetic is the same call; only where the two receipts go differs.
+        """
         from .stage_timing import stage
         gpu = (self.backend == 'cuda' and len(self.source_dzw) == len(self.target_dzw))
         from .host_parallel import threads
+        receipt = {}
         with stage(self.execution_timings, 'physical-height-mass-integration',
                    parallelism={'device': 'GPU plus CPU' if gpu else 'CPU',
                                 'host_threads': threads(), 'host_schedule': 'bounded columns'}):
-            return self._mass_intensive(values, density=density)
+            result = self._mass_intensive(values, density=density, receipt=receipt)
+        return result, receipt.get('domain'), receipt.get('positivity')
 
-    def _mass_intensive(self,values,density=None):
+    def _mass_intensive(self,values,density=None,receipt=None):
         """Map computational mass density, integrating physical layer profiles.
 
         ``density`` (absolute-height transfer only): the source computational
@@ -370,17 +384,19 @@ class HeightConservativeMap:
             # above-top extrapolation can change a column's carried mass.
             target_cumulative[-1]=np.bincount(self.rows,weights=self.areas*cumulative[-1,self.cols],
                                              minlength=len(self.target_area))
-        self.last_positivity_roundoff=None
+        if receipt is None:
+            receipt={}
+        receipt['positivity']=None
+        receipt['domain']=None
         if positive:
-            target_cumulative,self.last_positivity_roundoff=positive_cumulative_roundoff(
+            target_cumulative,receipt['positivity']=positive_cumulative_roundoff(
                 target_cumulative, absolute_height=not self.endpoint_alignment)
         result=np.diff(target_cumulative,axis=0)/(self.target_dzw[:,None]*self.target_area)
-        self.last_domain_reconciliation=None
         if not self.endpoint_alignment:
             before=self.totals(values,source=True)[0]
             raw=self.totals(result,source=False)[0]
             if self.domain_reconciliation=='local':
-                return self._reconcile_local_columns(values,result,target_cumulative[-1],before,raw)
+                return self._reconcile_local_columns(values,result,target_cumulative[-1],before,raw,receipt)
             if positive:
                 if raw<=0 and before!=0:raise ValueError('positive absolute-height integral is not positive')
                 factor=1. if before==raw==0 else before/raw
@@ -390,7 +406,7 @@ class HeightConservativeMap:
                 offset=(before-raw)/(self.target_area.sum()*self.target_dzw.sum())
                 result+=offset
                 correction=dict(policy='uniform signed computational-density correction',offset=float(offset))
-            self.last_domain_reconciliation=dict(correction,source_total=float(before),
+            receipt['domain']=dict(correction,source_total=float(before),
                 absolute_height_total_before_reconciliation=float(raw),redistributed_total=float(before-raw),
                 relative_to_source_abs_integral=float((before-raw)/self.totals(abs(values),source=True)[0])
                     if np.any(values) else 0.)
@@ -442,7 +458,7 @@ class HeightConservativeMap:
         slope=np.clip(slope,-2*means[0]/self.source_dz[0],2*means[0]/self.source_dz[0])
         return np.minimum(slope,means[0]/self.source_bottom_reach)
 
-    def _reconcile_local_columns(self, values, result, target_integrated, before, raw):
+    def _reconcile_local_columns(self, values, result, target_integrated, before, raw, receipt=None):
         """Return displaced material in the lower part of its own target column.
 
         This is an opt-in domain correction, not a balance fix. The target
@@ -514,7 +530,9 @@ class HeightConservativeMap:
             raise ValueError('local target-column integral exceeds its bounded arithmetic allowance')
         if positive and np.any(result<0):
             raise ValueError('local positive-product reconciliation produced negative material')
-        self.last_domain_reconciliation=dict(
+        if receipt is None:
+            receipt={}
+        receipt['domain']=dict(
             policy='local lower-column domain reconciliation',positive_product=bool(positive),
             source_total=float(before),absolute_height_total_before_reconciliation=float(raw),
             redistributed_total=float(before-raw),

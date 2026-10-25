@@ -21,6 +21,11 @@ exclude src/hexcore/data/kernel-pack*.json
 graft rust/host-prep
 prune rust/host-prep/target
 
+# The GSL drag's orographic statistics generator (hexcore.ugwp_oro), which setup.py
+# builds into the wheel.
+graft rust/ugwp-oro
+prune rust/ugwp-oro/target
+
 # The MPAS physics suites' table decoders, which setup.py builds into the wheel
 # (gpuwm-hex physics-resources).
 graft rust/physics-tables

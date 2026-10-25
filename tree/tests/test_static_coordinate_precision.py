@@ -1,6 +1,6 @@
 """A generated grid's static holds the binary64 coordinates it declares.
 
-THE BREAKAGE (ARWEN-VS-HEX-TIMING-2026-10-15).  gpuwm 2.9.0's
+THE BREAKAGE (2026-10-15).  gpuwm 2.9.0's
 ``rw_mpas_static``, and every build of gpuwm integrate/hex-mpas before
 46c8a71513e (24b6f08c among them), reads every grid through binary32.  A
 grid the point door GENERATES asks its static for binary64 coordinates
@@ -212,7 +212,7 @@ def test_the_wheel_bundles_a_static_builder_that_holds_binary64() -> None:
 
     pins = json.loads(PINS.read_text(encoding="utf-8"))
     row = pins["bridges"]["rw_mpas_static"]
-    assert row["source"] == "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_static.rs"
+    assert row["source"] == "tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_static/main.rs"  # a bin directory since gpuwm 2.9.7
     assert row["builder_source"] == "tools/rustwx/crates/rw-mpas/src/static_builder.rs"
     assert len(row["builder_source_sha256"]) == 64
     assert "binary64" in row["holds"]

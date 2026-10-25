@@ -1149,7 +1149,66 @@ SAMEHOST_RANK_ENVELOPE_PEAK_BYTES = 65_123 * MIB
 SAMEHOST_RANK_ENVELOPE_LOCAL_CELLS = 334_756
 
 
-def samehost_rank_model(model: ShapedFootprintModel) -> ShapedFootprintModel:
+@dataclass(frozen=True)
+class SameHostRankPeak:
+    """One same-host rank's whole-run per-card peak, measured on a card of this SM count."""
+
+    multiprocessors: int
+    levels: int
+    local_cells: int
+    peak_mib: float
+    receipt: str
+    #: 1 for the single-card loop, otherwise the same-host rank count measured.
+    ranks: int = 2
+
+
+#: Whole-run per-card peaks of ONE same-host rank on its own card, measured.
+#:
+#: THE BREAKAGE IT PREVENTS (2026-10-24, 2 x RTX PRO 6000): the 30 km
+#: globe on two cards, 331,942 local columns per rank, was priced from the
+#: single-card core plus :data:`SAMEHOST_RANK_BYTES_PER_CELL` at 22,705 MiB
+#: (25,907 MiB with the margin), so the run declared 26,000 MiB to the box
+#: lease; each card peaked at 29,538 MiB, and the pool admitted other jobs to
+#: those cards against 3.5 GB that was not there.  The slope two ranks on ONE
+#: card measured does not see what a rank on its own card holds (its own
+#: context, pool arena and halo staging), so a rank is never priced below the
+#: line through its card's measured peak.
+SAMEHOST_RANK_PEAKS: tuple[SameHostRankPeak, ...] = (
+    SameHostRankPeak(
+        multiprocessors=188, levels=55, local_cells=331_942, peak_mib=29_538.0,
+        receipt=("x1.655362 30 km globe, 2 cards, 24 h, GFS 2026-10-22 12Z, ArWen physics, fast numerics, "
+                 "the hex 0.4.5 multi-card fix + gpuwm 2.9.5; the pool over-budget record "
+                 "(nvidia-smi, the larger of the two cards), 2026-10-24")),
+    # The single-card loop on the same case and card: its row predicts 39,877 MiB (43,080 MiB with
+    # the margin) and the run peaked at 48,032 MiB.  Priced only into the lease estimate
+    # (hexcore.drivers.samehost_forecast_v841.lease_vram_mib), not the single-card admission.
+    SameHostRankPeak(
+        multiprocessors=188, levels=55, local_cells=655_362, peak_mib=48_032.0, ranks=1,
+        receipt=("x1.655362 30 km globe, 1 card, 24 h, GFS 2026-10-22 12Z, ArWen physics, fast numerics, "
+                 "the hex 0.4.5 multi-card fix + gpuwm 2.9.5; the pool over-budget record "
+                 "(nvidia-smi), 2026-10-24")),
+)
+
+
+def _through_measured_rank_peaks(model: ShapedFootprintModel, *, single_card: bool = False) -> ShapedFootprintModel:
+    """``model`` with its per-column slope raised so it is never below a measured rank peak."""
+
+    for peak in SAMEHOST_RANK_PEAKS:
+        if ((peak.ranks == 1) != single_card
+                or peak.multiprocessors != model.card.multiprocessors or peak.levels != model.levels
+                or model.predict_bytes(peak.local_cells) >= peak.peak_mib * MIB):
+            continue
+        cells = peak.local_cells
+        slope = (peak.peak_mib * MIB - float(model.core_bytes) - float(model.tiled_bytes(cells))
+                 - float(model.restated_bytes_per_cell) * cells) / cells
+        model = replace(model, bytes_per_cell=slope,
+                        provenance=model.provenance + "; MEASURED RANK PEAK: slope "
+                        f"{slope:,.1f} B/column through the measured {peak.peak_mib:,.0f} MiB at "
+                        f"{cells:,} local columns ({peak.receipt})")
+    return model
+
+
+def samehost_rank_model(model: ShapedFootprintModel, *, ranks: int = 2) -> ShapedFootprintModel:
     """Price one resident same-host rank from same-host measurements.
 
     THE BREAKAGE IT PREVENTS (measured 2026-10-12, G3, 4 x RTX PRO 6000, hex
@@ -1183,15 +1242,20 @@ def samehost_rank_model(model: ShapedFootprintModel) -> ShapedFootprintModel:
         # Today's build (CURRENT_GLOBAL_ROW, measured or derived for this card):
         # the rank carries the card's single-card core and tiled workspaces and
         # the measured same-host slope per local column.
+        # The measured 2-rank peak line (SAMEHOST_RANK_PEAKS) prices a rank that
+        # shares the run with others; a run of ONE rank is not raised to it.
+        # Breakage: extrapolated to one 1,216,922-column rank it refused a
+        # 96 GB card the single-card measurements admit.
+        through = _through_measured_rank_peaks if int(ranks) > 1 else (lambda value: value)
         if model.bytes_per_cell >= SAMEHOST_RANK_BYTES_PER_CELL:
-            return model
-        return replace(model, bytes_per_cell=SAMEHOST_RANK_BYTES_PER_CELL,
+            return through(model)
+        return through(replace(model, bytes_per_cell=SAMEHOST_RANK_BYTES_PER_CELL,
                        rollback_bytes_per_cell=0.0, measured=model.measured,
                        derived_from=model.derived_from,
                        provenance=model.provenance + "; SAME-HOST RANK: "
                        f"{SAMEHOST_RANK_BYTES_PER_CELL:,.1f} B per local column, measured "
                        "with two ranks on one RTX 5090 at x1.40962 and x1.163842 "
-                       "(hex/mem-census-cuts); bare and armed ranks priced alike")
+                       "(hex/mem-census-cuts); bare and armed ranks priced alike"))
     row = SHAPED_ROWS["global/188sm"]
     if (model.configuration != "global" or model.card.multiprocessors != 188
             or model.bytes_per_cell != row["bytes_per_cell"]

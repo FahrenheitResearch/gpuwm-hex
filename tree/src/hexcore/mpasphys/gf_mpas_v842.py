@@ -62,6 +62,15 @@ inline float __fsqrt_rn(float a){return sqrtf(a);}
 inline float gfk_log(float a){return logf(a);}
 inline float gfk_pow(float a,float b){return powf(a,b);}
 #endif
+#ifdef HEX_NUMERICS_FAST
+// Native word repair and explicit rounding belong to the strict proof path.
+// Plain binary32 expressions let NVRTC contract multiply/add in fast mode.
+using GFReal = float;
+__device__ inline GFReal gf_add_rhs(GFReal a,GFReal b){return a+b;}
+__device__ inline GFReal gf_log(GFReal a){return logf(a);}
+__device__ inline GFReal gf_pow(GFReal a,GFReal b){return powf(a,b);}
+__device__ inline GFReal gf_sqrt(GFReal a){return sqrtf(a);}
+#else
 struct GFReal {
   float value;
   __device__ GFReal() = default;
@@ -141,6 +150,7 @@ __device__ inline bool operator<=(GFReal a,GFReal b){return a.value<=b.value;}
 __device__ inline bool operator>=(GFReal a,GFReal b){return a.value>=b.value;}
 __device__ inline bool operator==(GFReal a,GFReal b){return a.value==b.value;}
 __device__ inline bool operator!=(GFReal a,GFReal b){return a.value!=b.value;}
+#endif
 // GNU/x86 MIN/MAX_EXPR selects its second operand on an unordered compare.
 // MPAS module_cu_gf.mpas.F:4935-5026; retain native nonfinite closure words.
 template<class A,class B> __device__ inline auto gf_max(A a,B b)->decltype(a+b){return a>b?decltype(a+b)(a):decltype(a+b)(b);}
@@ -149,7 +159,9 @@ template<class T> __device__ inline T gf_abs(T a){return a<T(0)?-a:a;}
 // MPAS module_cu_gf.mpas.F:2071-2072,3539: REAL ABS clears the sign bit,
 // including negative zero and negative NaN; a comparison cannot do that.
 __device__ inline GFReal gf_abs(GFReal a){
-#ifdef GF_HOST_WITNESS
+#if defined(HEX_NUMERICS_FAST)
+  return fabsf(a);
+#elif defined(GF_HOST_WITNESS)
   return fabsf(a.value);
 #else
   float value;
@@ -158,9 +170,11 @@ __device__ inline GFReal gf_abs(GFReal a){
 #endif
 }
 
+#ifndef HEX_NUMERICS_FAST
 __device__ inline GFReal gf_log(GFReal a){return gf_native_nan(gfk_log(a.value),a.value,0.f);}
 __device__ inline GFReal gf_pow(GFReal a,GFReal b){return gf_native_nan(gfk_pow(a.value,b.value),a.value,b.value);}
 __device__ inline GFReal gf_sqrt(GFReal a){return gf_native_nan(__fsqrt_rn(a.value),a.value,0.f);}
+#endif
 // Only non-folded integer power in GNU's tree is x**3 (MPAS :2071-2072).
 __device__ inline GFReal gf_powi(GFReal a,int p){return (a*a)*a;}
 typedef char GFText[50];
@@ -24391,12 +24405,16 @@ extern "C" __global__ void gf_mpas_columns(int ncols,int nz,float* lev,float* su
  float* outlev,float* outsurface,int* outint,int* control,float* constants,
  unsigned char* scratch,unsigned long long scratch_bytes,unsigned int* diagnostics,
  unsigned long long* highwater){
- int col=blockIdx.x*blockDim.x+threadIdx.x;if(col>=ncols)return;
- GFWorkspace ws={(char*)scratch+col*scratch_bytes,scratch_bytes,0,0,0};
- gf_column(nz,(GFReal*)lev+col*15*nz,(GFReal*)surface+col*8,isurface+col,
- (GFReal*)outlev+col*6*nz,(GFReal*)outsurface+col*6,outint+col*3,
- control,(GFReal*)constants,ws);
- diagnostics[col]=ws.diagnostics;highwater[col]=ws.highwater;
+ int slot=blockIdx.x*blockDim.x+threadIdx.x;
+ // Reuse each thread's bounded scratch on device, across all columns.
+ // Columns are independent; each still executes the complete source order.
+ for(int col=slot;col<ncols;col+=gridDim.x*blockDim.x){
+   GFWorkspace ws={(char*)scratch+slot*scratch_bytes,scratch_bytes,0,0,0};
+   gf_column(nz,(GFReal*)lev+col*15*nz,(GFReal*)surface+col*8,isurface+col,
+   (GFReal*)outlev+col*6*nz,(GFReal*)outsurface+col*6,outint+col*3,
+   control,(GFReal*)constants,ws);
+   diagnostics[col]=ws.diagnostics;highwater[col]=ws.highwater;
+ }
 }
 #else
 extern "C" void gf_port_host(int nz,float* lev,float* surface,int* isurface,
@@ -24432,11 +24450,17 @@ COMPILER_OPTIONS = ("--std=c++17", "--fmad=false", "--ftz=false", "--prec-div=tr
 MPAS_DRIVER_CONSTANTS = (2500000., 1004.5, 9.80616, 461.6)
 
 
+@lru_cache(maxsize=1)
+def _lowered_source():
+    from .gf_lanes import lower
+    return lower(_SUPPORT, _SCHEME_SOURCE, _ENTRY)
+
+
 def cuda_source():
     """Assemble the MPAS source with the engine's shared glibc device math."""
     from gpuwm.core import kernels
     header = Path(kernels.__file__).with_name("glibc_flt32.cuh").read_text(encoding="utf-8")
-    return header + "\n" + _SUPPORT + "\n" + _SCHEME_SOURCE + "\n" + _ENTRY
+    return header + "\n" + _lowered_source()
 
 
 def _compile_module(source, device):
@@ -24499,28 +24523,87 @@ def _module(device):
     return _compile_module(cuda_source(), device)
 
 
-def _tile_columns(ncol, scratch_bytes, processors, free_bytes):
-    """Expose one warp per SM, within one eighth of currently free memory."""
-    budget = max(128 * scratch_bytes, free_bytes // 8)
-    affordable = max(128, (budget // scratch_bytes // 32) * 32)
-    return min(ncol, max(128, 32 * processors), affordable)
+def _scratch_bytes(nz):
+    """Bound live array storage at the one-column driver boundary.
+
+    Every allocation is 16-byte aligned and every procedure restores its
+    entry position. Dimension arguments are fixed by gf_column and the
+    ensemble literals in cu_grell_freitas: maxiens/maxens/maxens2=1,
+    maxens3/ensdim=16, ens4=9. Allocation classes:
+
+      cu_grell_freitas: 864 + 25*level + ensemble
+      cup_gf:          800 + 81*level
+      cup_gf_sh:       288 + 59*level
+      cup_up_moisture:  16 +  5*level
+      cup_env:         48 +    level
+      cup_forcing_ens_3d: 320; all other children: at most 160
+
+    Deep and shallow calls reuse storage. The deep path bounds the shallow
+    path for every level>=16; its largest child is moisture or forcing.
+    The ten fixed-size arrays (xff_shal, seed, ...) are counted although
+    they stay thread-local. The allocator's overflow trap stays active.
+    Bytes count one lane; the lane-interleaved slab holds 128 of them.
+    """
+    level = (max(4 * nz, 1) + 15) & ~15
+    ensemble = (max(36 * nz, 1) + 15) & ~15
+    return 1664 + 106 * level + ensemble + max(16 + 5 * level, 320)
 
 
-def launch_columns(levels, surface, kpbl, *, control, constants):
+def _tile_columns(ncol, workspace_bytes, processors, blocks_per_processor, free_bytes):
+    """Workspace slots: whole 128-column slabs, every resident block, within 1/8 of free memory."""
+    from .gf_lanes import LANES
+    budget = max(LANES * workspace_bytes, free_bytes // 8)
+    affordable = max(LANES, (budget // workspace_bytes // LANES) * LANES)
+    wanted = min(((ncol + LANES - 1) // LANES) * LANES, LANES * processors * blocks_per_processor)
+    return min(max(LANES, wanted), affordable)
+
+
+def _blocks_per_processor(function, properties):
+    """Resident 128-thread blocks per SM from the loaded image's registers."""
+    from cupy.cuda import driver
+    from .gf_lanes import LANES
+    registers = max(int(driver.funcGetAttribute(driver.CU_FUNC_ATTRIBUTE_NUM_REGS, function.ptr)), 1)
+    by_registers = int(properties["regsPerMultiprocessor"]) // (((registers * 32 + 255) // 256) * 256 * (LANES // 32))
+    by_threads = int(properties["maxThreadsPerMultiProcessor"]) // LANES
+    return max(1, min(by_registers, by_threads))
+
+
+def launch_columns(levels, surface, kpbl, *, control, constants, lanes=False, order=None):
     """MPAS module_cu_gf.mpas.F:54-453, raw driver boundary on CUDA.
 
-    Layouts: levels[ncol,15,nz], surface[ncol,8], kpbl[ncol].
+    Layouts: levels[ncol,15,nz] (or, lanes=True, the kernel's own
+    lane-interleaved [ceil(ncol/128),15,nz,128] from X_from_MPAS(lanes=True)),
+    surface[ncol,8], kpbl[ncol]. order (lane layout only): the int32
+    position -> column permutation the levels were packed with; outputs come
+    back in column order.
     control=(itimestep,deep_closure,shallow_closure,ishallow), and
     constants=(xlv,cp,g,r_v), supplied by the MPAS driver. Returned arrays
-    retain source ordering and binary32 precision. Scratch is bounded by
-    tiling; the allocator traps on overflow rather than corrupting a column.
+    retain source ordering and binary32 precision. Column arrays are
+    lane-interleaved (gf_lanes) in bounded scratch reused by a grid-stride
+    loop; the allocator traps on overflow rather than corrupting a column.
     No host weather-data processing occurs.
     """
     import cupy as cp
     import numpy as np
-    if not isinstance(levels, cp.ndarray) or levels.dtype != cp.float32 or levels.ndim != 3 or levels.shape[1] != 15:
-        raise ValueError("GF levels must be a CUDA float32 array [ncol,15,nz]")
-    ncol, _, nz = levels.shape
+    from .gf_lanes import LANES, CHARACTER_BYTES
+    if lanes:
+        if not isinstance(surface, cp.ndarray) or surface.ndim != 2:
+            raise ValueError("GF surface must be float32 [ncol,8]")
+        ncol = surface.shape[0]
+        if (not isinstance(levels, cp.ndarray) or levels.dtype != cp.float32 or levels.ndim != 4
+                or levels.shape[0] != (ncol + LANES - 1) // LANES or levels.shape[1] != 15
+                or levels.shape[3] != LANES or not levels.flags.c_contiguous):
+            raise ValueError("GF lane levels must be a contiguous CUDA float32 array [slab,15,nz,128]")
+        nz = levels.shape[2]
+        if order is not None and (not isinstance(order, cp.ndarray) or order.shape != (ncol,)
+                                  or order.dtype != cp.int32):
+            raise ValueError("GF column order must be an int32 [column] permutation")
+    else:
+        if order is not None:
+            raise ValueError("GF column order needs the lane layout (lanes=True)")
+        if not isinstance(levels, cp.ndarray) or levels.dtype != cp.float32 or levels.ndim != 3 or levels.shape[1] != 15:
+            raise ValueError("GF levels must be a CUDA float32 array [ncol,15,nz]")
+        ncol, _, nz = levels.shape
     if not isinstance(surface, cp.ndarray) or surface.shape != (ncol, 8) or surface.dtype != cp.float32:
         raise ValueError("GF surface must be float32 [ncol,8]")
     if not isinstance(kpbl, cp.ndarray) or kpbl.shape != (ncol,) or kpbl.dtype != cp.int32:
@@ -24535,32 +24618,49 @@ def launch_columns(levels, surface, kpbl, *, control, constants):
     k = np.asarray(constants, dtype=np.float32)
     if k.shape != (4,):
         raise ValueError("GF constants must contain xlv, cp, g, r_v")
-    levels, surface, kpbl = (cp.ascontiguousarray(x) for x in (levels, surface, kpbl))
-    outputs = {"levels": cp.zeros((ncol, 6, nz), dtype=cp.float32),
-               "surface": cp.zeros((ncol, 6), dtype=cp.float32),
-               "integer": cp.zeros((ncol, 3), dtype=cp.int32),
-               "diagnostics": cp.zeros(ncol, dtype=cp.uint32),
-               "scratch_highwater": cp.zeros(ncol, dtype=cp.uint64)}
+    surface, kpbl = (cp.ascontiguousarray(x) for x in (surface, kpbl))
+    outputs = {"levels": cp.empty((ncol, 6, nz), dtype=cp.float32),
+               "surface": cp.empty((ncol, 6), dtype=cp.float32),
+               "integer": cp.empty((ncol, 3), dtype=cp.int32),
+               "diagnostics": cp.empty(ncol, dtype=cp.uint32),
+               "scratch_highwater": cp.empty(ncol, dtype=cp.uint64)}
     if ncol == 0:
         return outputs
-    scratch_bytes = 4096 * (nz + 1) + 65536
-    # The former 128-column tile launched only four warps across the whole
-    # device. Columns have disjoint workspaces and no shared reductions.
-    # Keep the same per-column kernel and arithmetic while exposing the SMs.
+    scratch_bytes = _scratch_bytes(nz)
+    slabs = (ncol + LANES - 1) // LANES
+    padded = slabs * LANES
+    # Level payloads are lane-interleaved, [slab][field][level][lane]: the
+    # forecast path packs them that way; other callers get one relayout.
+    # Outputs come back with one transposing copy; untouched words keep
+    # their initial positive zero.
+    if lanes:
+        lanes_in = levels
+    else:
+        lanes_in = cp.zeros((padded, 15, nz), dtype=cp.float32)
+        lanes_in[:ncol] = levels
+        lanes_in = cp.ascontiguousarray(lanes_in.reshape(slabs, LANES, 15, nz).transpose(0, 2, 3, 1))
+    lanes_out = cp.zeros((slabs, 6, nz, LANES), dtype=cp.float32)
+    outputs["surface"].fill(0)
+    outputs["integer"].fill(0)
     properties = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
     free_bytes, _ = cp.cuda.runtime.memGetInfo()
-    tile = _tile_columns(ncol, scratch_bytes, properties['multiProcessorCount'], free_bytes)
-    scratch = cp.empty((tile, scratch_bytes), dtype=cp.uint8)
-    cdev, kdev = cp.asarray(c), cp.asarray(k)
     kernel = _module(cp.cuda.runtime.getDevice()).get_function("gf_mpas_columns")
-    for first in range(0, ncol, tile):
-        last = min(first + tile, ncol)
-        count = last - first
-        kernel(((count+31)//32,), (32,),
-               (np.int32(count), np.int32(nz), levels[first:last], surface[first:last], kpbl[first:last],
-                outputs["levels"][first:last], outputs["surface"][first:last], outputs["integer"][first:last],
-                cdev, kdev, scratch, np.uint64(scratch_bytes), outputs["diagnostics"][first:last],
-                outputs["scratch_highwater"][first:last]))
+    slot_bytes = scratch_bytes + CHARACTER_BYTES
+    tile = _tile_columns(ncol, slot_bytes, properties['multiProcessorCount'],
+                         _blocks_per_processor(kernel, properties), free_bytes)
+    scratch = cp.empty(tile * slot_bytes, dtype=cp.uint8)
+    kernel((tile // LANES,), (LANES,),
+           (np.int32(ncol), np.int32(nz), lanes_in, surface, kpbl,
+            lanes_out, outputs["surface"], outputs["integer"],
+            order if order is not None else np.uint64(0),
+            *(np.int32(x) for x in c), *(np.float32(x) for x in k),
+            scratch, np.uint64(scratch_bytes), outputs["diagnostics"],
+            outputs["scratch_highwater"]))
+    by_position = lanes_out.transpose(0, 3, 1, 2).reshape(padded, 6, nz)[:ncol]
+    if order is None:
+        outputs["levels"][...] = by_position
+    else:
+        outputs["levels"][order] = by_position
     return outputs
 
 
@@ -24570,7 +24670,11 @@ _PACK_SURFACE = r'''
 __device__ void gf_surface_column(float ht,float hfx,float qfx,float xland,float gsw,
  float density,float area,float len_disp,float dt,float* p){
  p[0]=ht;p[1]=hfx;p[2]=qfx;p[3]=xland;p[4]=gsw;
+#ifdef HEX_NUMERICS_FAST
+ p[5]=len_disp/powf(density,0.25f);p[6]=area;p[7]=dt;
+#else
  p[5]=__fdiv_rn(len_disp,gfk_pow(density,0.25f));p[6]=area;p[7]=dt;
+#endif
 }
 #ifndef GF_HOST_WITNESS
 // MPAS mpas_atmphys_driver_convection.F:743-743.
@@ -24596,37 +24700,102 @@ extern "C" void gf_pack_surface_host(int n,const float* ht,const float* hfx,
 _ENTRY += _PACK_SURFACE
 
 
-def X_from_MPAS(fields, *, len_disp, dt):
-    """MPAS mpas_atmphys_driver_convection.F:650-749, GF preparation.
+# Source strides are passed by value, in float elements. Native solve-cell
+# slices may retain halo columns, interface levels or Fortran storage order.
+_PACK_LEVEL_SOURCES = ("u", "v", "w", "t", "q", "p", "pi", "rho", "dz8w", "p8w",
+                       "rthdynten", "rqvdynten", "rthratenlw", "rthratensw",
+                       "rthblten", "rqvblten")
+_PACK_VECTOR_SOURCES = ("ht", "hfx", "qfx", "xland", "gsw", "meshDensity", "areaCell")
+_PACK_INPUTS = r'''
+#ifndef GF_HOST_WITNESS
+#define GF_INPUT2(a) const float* a,long long a##_k,long long a##_c
+#define GF_INPUT1(a) const float* a,long long a##_c
+#define GF_AT2(a) a[(long long)k*a##_k+(long long)c*a##_c]
+#define GF_AT1(a) a[(long long)c*a##_c]
+// MPAS mpas_atmphys_driver_convection.F:650-749. Read each pool directly;
+// radiation addition retains the original binary32 operation and ordering.
+extern "C" __global__ void gf_mpas_pack_inputs(int n,int nz,
+ GF_INPUT2(u),GF_INPUT2(v),GF_INPUT2(w),GF_INPUT2(t),GF_INPUT2(q),
+ GF_INPUT2(p),GF_INPUT2(pi),GF_INPUT2(rho),GF_INPUT2(dz8w),GF_INPUT2(p8w),
+ GF_INPUT2(rthdynten),GF_INPUT2(rqvdynten),GF_INPUT2(lw),GF_INPUT2(sw),
+ GF_INPUT2(rthblten),GF_INPUT2(rqvblten),
+ GF_INPUT1(ht),GF_INPUT1(hfx),GF_INPUT1(qfx),GF_INPUT1(xland),
+ GF_INPUT1(gsw),GF_INPUT1(density),GF_INPUT1(area),
+ float len_disp,float dt,float* levels,float* surface,int lanes,const int* position){
+ int i=blockIdx.x*blockDim.x+threadIdx.x;
+ if(i>=n*nz)return;
+ int c=i%n,k=i/n;
+ // lanes!=0: the column kernel's lane-interleaved layout (gf_lanes,
+ // [slab][field][level][128]), column c stored at position[c] when given;
+ // otherwise [column][field][level].
+ long long at=position?position[c]:c;
+ long long base=lanes?((long long)(at/128)*15*nz+k)*128+at%128:(long long)c*15*nz+k;
+ long long f=lanes?(long long)nz*128:(long long)nz;
+ levels[base+0*f]=GF_AT2(u);levels[base+1*f]=GF_AT2(v);
+ levels[base+2*f]=GF_AT2(w);levels[base+3*f]=GF_AT2(t);
+ levels[base+4*f]=GF_AT2(q);levels[base+5*f]=GF_AT2(p);
+ levels[base+6*f]=GF_AT2(pi);levels[base+7*f]=GF_AT2(rho);
+ levels[base+8*f]=GF_AT2(dz8w);levels[base+9*f]=GF_AT2(p8w);
+ levels[base+10*f]=GF_AT2(rthdynten);
+ levels[base+11*f]=GF_AT2(rqvdynten);
+ levels[base+12*f]=__fadd_rn(GF_AT2(lw),GF_AT2(sw));
+ levels[base+13*f]=GF_AT2(rthblten);
+ levels[base+14*f]=GF_AT2(rqvblten);
+ if(k==0)gf_surface_column(GF_AT1(ht),GF_AT1(hfx),GF_AT1(qfx),GF_AT1(xland),
+   GF_AT1(gsw),GF_AT1(density),GF_AT1(area),len_disp,dt,surface+8*c);
+}
+#undef GF_INPUT2
+#undef GF_INPUT1
+#undef GF_AT2
+#undef GF_AT1
+#endif
+'''
+_ENTRY += _PACK_INPUTS
 
-    fields includes the common driver's already converted u,v,w,t,q,p,pi,
-    rho,dz8w,p8w [level,column], and GF's MPAS pool fields. Field names for
-    advective and radiation rates follow the native convection driver.
+
+def X_from_MPAS(fields, *, len_disp, dt, lanes=False, order=None):
+    """Gather native strided pool views in one CUDA kernel, without copies.
+
+    lanes=True writes the column kernel's lane-interleaved level layout
+    [slab,15,nz,128] directly (zero-filled past the last column), so the
+    forecast path needs no relayout copy; with order (a device int32
+    permutation, position -> column) column order[p] is stored at position p.
     """
     import cupy as cp
     import numpy as np
-    arrays = dict(fields)
-    arrays["rthften"] = fields["rthdynten"]
-    arrays["rqvften"] = fields["rqvdynten"]
-    lw, sw = (cp.ascontiguousarray(fields[name]) for name in ("rthratenlw", "rthratensw"))
-    if lw.dtype != cp.float32 or sw.dtype != cp.float32 or lw.shape != sw.shape:
-        raise ValueError("GF radiation rates must be matching single-precision RKIND arrays")
-    combined = cp.empty_like(lw)
-    if lw.size:
-        _module(cp.cuda.runtime.getDevice()).get_function("gf_mpas_add_radiation")(
-            ((lw.size+127)//128,), (128,), (np.int32(lw.size), lw, sw, combined))
-    arrays["rthraten"] = combined
-    levels = cp.ascontiguousarray(cp.stack([arrays[name].T for name in LEVEL_INPUTS], axis=1))
-    n = levels.shape[0]
-    names = ("hfx", "qfx", "xland", "gsw", "meshDensity", "areaCell")
-    vectors = [cp.ascontiguousarray(fields[name]) for name in names]
-    ht = cp.ascontiguousarray(fields["zgrid"][0])
-    if levels.dtype != cp.float32 or ht.dtype != cp.float32 or ht.shape != (n,) or any(x.dtype != cp.float32 or x.shape != (n,) for x in vectors):
-        raise ValueError("MPAS GF pool fields must use single-precision RKIND and the same column extent")
+    shape = fields["u"].shape
+    if len(shape) != 2 or shape[0] < 1:
+        raise ValueError("GF profiles must have shape [positive levels,column]")
+    nz, n = shape
+    profiles = [fields[name] for name in _PACK_LEVEL_SOURCES]
+    vectors = [fields["zgrid"][0]] + [fields[name] for name in _PACK_VECTOR_SOURCES[1:]]
+    if any(not isinstance(x, cp.ndarray) or x.dtype != cp.float32 or x.shape != shape for x in profiles):
+        raise ValueError("MPAS GF profiles must use matching float32 [level,column] arrays")
+    if any(not isinstance(x, cp.ndarray) or x.dtype != cp.float32 or x.shape != (n,) for x in vectors):
+        raise ValueError("MPAS GF surface fields must use matching float32 [column] arrays")
+    if lanes:
+        from .gf_lanes import LANES
+        assert LANES == 128, "gf_mpas_pack_inputs interleaves 128 lanes"
+        levels = cp.zeros(((n + LANES - 1) // LANES, 15, nz, LANES), dtype=cp.float32)
+    else:
+        levels = cp.empty((n, 15, nz), dtype=cp.float32)
     surface = cp.empty((n, 8), dtype=cp.float32)
-    kernel = _module(cp.cuda.runtime.getDevice()).get_function("gf_mpas_pack_surface")
     if n:
-        kernel(((n+127)//128,), (128,), (np.int32(n), ht, *vectors, np.float32(len_disp), np.float32(dt), surface))
+        arguments = [np.int32(n), np.int32(nz)]
+        for value in profiles:
+            arguments.extend((value, np.int64(value.strides[0]//4), np.int64(value.strides[1]//4)))
+        for value in vectors:
+            arguments.extend((value, np.int64(value.strides[0]//4)))
+        position = None
+        if order is not None:
+            if not lanes or order.shape != (n,) or order.dtype != cp.int32:
+                raise ValueError("GF column order must be an int32 [column] permutation, lane layout only")
+            position = cp.empty_like(order)
+            position[order] = cp.arange(n, dtype=cp.int32)
+        arguments.extend((np.float32(len_disp), np.float32(dt), levels, surface, np.int32(bool(lanes)),
+                          position if position is not None else np.uint64(0)))
+        _module(cp.cuda.runtime.getDevice()).get_function("gf_mpas_pack_inputs")(
+            ((n*nz+127)//128,), (128,), tuple(arguments))
     return levels, surface, cp.ascontiguousarray(fields["kpbl"])
 
 
@@ -24645,14 +24814,104 @@ def X_to_MPAS(result):
     return fields
 
 
-def run_mpas(fields, *, config, constants, len_disp, dt, itimestep, ishallow):
-    """MPAS mpas_atmphys_driver_convection.F:482-516, complete GF dispatch."""
+
+_SCATTER_LEVEL_NAMES = LEVEL_OUTPUTS[:4] + ("qc_cu", "qi_cu")
+_SCATTER_SURFACE_NAMES = ("cutop", "cubot", "xmb_total", "xmb_shallow", "raincv", "cuprec")
+_SCATTER_OUTPUTS = r'''
+#ifndef GF_HOST_WITNESS
+#define GF_IO2(a) const float* a##_s,long long a##_sk,long long a##_sc,\
+ float* a##_d,long long a##_dk,long long a##_dc
+#define GF_IO1(a,T) const T* a##_s,long long a##_sc,T* a##_d,long long a##_dc
+#define GF_COPY2(a) a##_d[(long long)k*a##_dk+(long long)c*a##_dc]=\
+ a##_s[(long long)k*a##_sk+(long long)c*a##_sc]
+#define GF_COPY1(a) a##_d[(long long)c*a##_dc]=a##_s[(long long)c*a##_sc]
+// MPAS mpas_atmphys_driver_convection.F:900-956. Only solve cells are written.
+extern "C" __global__ void gf_mpas_scatter_outputs(int n,int nz,
+ GF_IO2(rthcuten),GF_IO2(rqvcuten),GF_IO2(rqccuten),GF_IO2(rqicuten),
+ GF_IO2(qc_cu),GF_IO2(qi_cu),
+ GF_IO1(cutop,float),GF_IO1(cubot,float),GF_IO1(xmb_total,float),
+ GF_IO1(xmb_shallow,float),GF_IO1(raincv,float),GF_IO1(cuprec,float),
+ GF_IO1(k22_shallow,int),GF_IO1(kbcon_shallow,int),GF_IO1(ktop_shallow,int)){
+ int i=blockIdx.x*blockDim.x+threadIdx.x;
+ if(i>=n*nz)return;
+ int c=i%n,k=i/n;
+ GF_COPY2(rthcuten);GF_COPY2(rqvcuten);GF_COPY2(rqccuten);GF_COPY2(rqicuten);
+ GF_COPY2(qc_cu);GF_COPY2(qi_cu);
+ if(k==0){
+   GF_COPY1(cutop);GF_COPY1(cubot);GF_COPY1(xmb_total);
+   GF_COPY1(xmb_shallow);GF_COPY1(raincv);GF_COPY1(cuprec);
+   GF_COPY1(k22_shallow);GF_COPY1(kbcon_shallow);GF_COPY1(ktop_shallow);
+ }
+}
+#undef GF_IO2
+#undef GF_IO1
+#undef GF_COPY2
+#undef GF_COPY1
+#endif
+'''
+_ENTRY += _SCATTER_OUTPUTS
+
+
+def _couple_outputs(result, tend, diag, nz, n):
+    """Copy all GF outputs into strided solve-cell views in one CUDA kernel."""
+    if not n:
+        return
+    import cupy as cp
+    import numpy as np
+    arguments = [np.int32(n), np.int32(nz)]
+    for name in _SCATTER_LEVEL_NAMES:
+        destination = tend if name in LEVEL_OUTPUTS[:4] else diag
+        for value in (result[name], destination[name]):
+            arguments.extend((value, np.int64(value.strides[0]//4), np.int64(value.strides[1]//4)))
+    for name in _SCATTER_SURFACE_NAMES + INTEGER_OUTPUTS:
+        for value in (result[name], diag[name]):
+            arguments.extend((value, np.int64(value.strides[0]//4)))
+    _module(cp.cuda.runtime.getDevice()).get_function("gf_mpas_scatter_outputs")(
+        ((n*nz+127)//128,), (128,), tuple(arguments))
+
+
+def run_mpas(fields, *, config, constants, len_disp, dt, itimestep, ishallow, order=None):
+    """MPAS mpas_atmphys_driver_convection.F:482-516, complete GF dispatch.
+
+    order: optional device int32 permutation (position -> column) used only to
+    place columns of like activity in the same warps; every column's words are
+    the same in any order (columns are independent).
+    """
     if config["config_convection_scheme"] != SCHEME:
         raise ValueError("GF MPAS backend requires config_convection_scheme=cu_grell_freitas")
     control = (itimestep, config["config_gfconv_closure_deep"],
                config["config_gfconv_closure_shallow"], ishallow)
-    levels, surface, kpbl = X_from_MPAS(fields, len_disp=len_disp, dt=dt)
-    return X_to_MPAS(launch_columns(levels, surface, kpbl, control=control, constants=constants))
+    levels, surface, kpbl = X_from_MPAS(fields, len_disp=len_disp, dt=dt, lanes=True, order=order)
+    return X_to_MPAS(launch_columns(levels, surface, kpbl, control=control, constants=constants,
+                                    lanes=True, order=order))
+
+
+def activity_order(diag, n):
+    """Columns sorted by last call's GF activity: deep, then shallow, then none.
+
+    A warp runs at the pace of its busiest column, so grouping like columns
+    keeps quiet warps quiet (zoom capture, step 19: 82 -> 44 ms on a shared
+    card, identical words). Read from the MPAS pools GF itself wrote
+    (raincv, k22_shallow); zero pools give the natural order. Positions come
+    from three device prefix sums (stable, the same order for the same pools)
+    rather than a sort, so nothing waits on the host.
+    """
+    import cupy as cp
+    if n < 1024:
+        return None
+    try:
+        rain, shallow = diag["raincv"][:n], diag["k22_shallow"][:n]
+    except (KeyError, LookupError):
+        return None
+    deep = rain > 0
+    shallow = (shallow != 0) & ~deep
+    quiet = ~(deep | shallow)
+    first, second, third = (cp.cumsum(x, dtype=cp.int32) for x in (deep, shallow, quiet))
+    position = cp.where(deep, first - 1, cp.where(shallow, first[-1] + second - 1,
+                                                   first[-1] + second[-1] + third - 1)).astype(cp.int32)
+    order = cp.empty(n, dtype=cp.int32)
+    order[position] = cp.arange(n, dtype=cp.int32)
+    return order
 
 
 _PREPARED_FIELDS = {
@@ -24665,7 +24924,7 @@ def _discard_native_profile_inputs(prepared):
     """Retire ten input-only copies after GF has coupled its outputs.
 
     module_cu_gf.mpas.F:109-110 declares these profiles INTENT(IN).
-    X_from_MPAS stacks them into separate scheme storage; native variables,
+    X_from_MPAS gathers them into separate scheme storage; native variables,
     including halos/interface levels, remain authoritative. Ordinary mapping
     callers keep their existing behavior. Active flags and tendencies commit.
     """
@@ -24729,13 +24988,8 @@ def run_slot(call):
                       constants=pools.get("gf_constants", MPAS_DRIVER_CONSTANTS),
                       len_disp=(pools["len_disp"] if "len_disp" in pools
                                 else call.options["config_len_disp"]), dt=pools["dt_dyn"],
-                      itimestep=call.itimestep, ishallow=1)
-    for name, value in result.items():
-        destination = tend if name in LEVEL_OUTPUTS[:4] else diag
-        if value.ndim == 2:
-            destination[name][:nz, :n] = value
-        else:
-            destination[name][:n] = value
+                      itimestep=call.itimestep, ishallow=1, order=activity_order(diag, n))
+    _couple_outputs(result, tend, diag, nz, n)
     pools["cu_act_flag"][:n].fill(False)
     _discard_native_profile_inputs(prepared)
     return result

@@ -38,9 +38,11 @@ def history_index(member, attempts):
         if member["run_id"] not in attempt["members"]:
             continue
         root = Path(attempt["out"]) / member["run_id"]
-        for path in root.glob("cuda-history.*.nc"):
+        from .forecast_door import history_files
+        # Either physics route's frames: the MPAS suite route writes history.*.nc (forecast_door.history_files).
+        for path in history_files(root):
             try:
-                valid = datetime.strptime(path.name, "cuda-history.%Y-%m-%d_%H.%M.%S.nc")
+                valid = datetime.strptime(path.name.split(".", 1)[1], "%Y-%m-%d_%H.%M.%S.nc")
             except ValueError:
                 continue
             # The history writer atomically installs the final .nc, then a

@@ -1,6 +1,6 @@
 """Blocking TCP peer link for the two-rank v8.4.1 executor (multi-GPU v1).
 
-Design source: ``MPAS-MULTIGPU-DESIGN-2026-08-17.md`` D3.  The measured 25 GbE
+Design source: the 2026-08-17 multi-GPU design, D3.  The measured 25 GbE
 link moves 3.09 GB/s on a single plain TCP stream and does not degrade under
 load, so v1 is one persistent socket pair, ``TCP_NODELAY``, length-prefixed
 frames, and nothing else.  The frame sequence number doubles as the cross-node

@@ -130,10 +130,10 @@ class MovingControl:
     def _await_verdict(self, model_seconds: float) -> dict[str, Any] | None:
         """Hold at this frame for the controller's verdict, only while it has asked for that.
 
-        The controller writes ``await-verdict.json`` while a prepared member is ready, so
-        a move it decides on THIS frame happens at this frame instead of one check
-        later.  Without the request the forecast never waits.  A controller that does
-        not answer within ``timeout_seconds`` is treated as "continue".
+        With member waiting enabled the controller holds every check, so a move
+        decided on this frame can wait for its mesh and land on this frame.
+        Without the request the forecast never waits. A missing reply is a
+        controller failure, never permission to advance outside the fine region.
         """
         path = self.directory / AWAIT_NAME
         if not path.is_file():
@@ -159,8 +159,8 @@ class MovingControl:
                     return verdict
             time.sleep(0.5)
         self._append(PROGRESS_NAME, {"verdict": None, "model_seconds": float(model_seconds),
-                                     "waited_seconds": time.monotonic() - began, "reason": "timeout; continuing"})
-        return None
+                                     "waited_seconds": time.monotonic() - began, "reason": "timeout; refusing to advance"})
+        raise TimeoutError(f"moving controller did not answer frame {model_seconds:g} s before its verdict deadline")
 
     def frame_written(self, *, model_seconds: float, history_path: str, final: bool) -> None:
         """A history frame is closed on disk: the controller may read it now."""

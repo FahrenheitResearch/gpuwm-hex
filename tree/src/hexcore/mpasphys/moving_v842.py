@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from fractions import Fraction
 import hashlib
 import json
 import os
@@ -134,10 +135,39 @@ def load_carrier(path) -> dict[str, Any]:
     """Read this route's own carrier after its sealed receipt matches (never an untrusted download)."""
     path = Path(path)
     receipt = json.loads(path.with_suffix(path.suffix + ".json").read_text())
-    if _sha256(path) != receipt["sha256"] or path.stat().st_size != receipt["bytes"]:
+    if path.stat().st_size != receipt["bytes"]:
         raise ValueError("moving carrier does not match its sealed receipt")
-    with path.open("rb") as stream:
-        payload = pickle.load(stream)
+    # One read of the file: each block is hashed on a second thread while the next is read, and the
+    # bytes are unpickled from memory only after the whole-file hash matches. THE COST THIS REMOVES:
+    # a full hash pass and then a full pickle read of the ~3 GB carrier, one after the other, on one
+    # core at the start of every resumed segment (box-aws2x 2026-10-24).
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
+    data = np.empty(receipt["bytes"], dtype=np.uint8)
+    view = memoryview(data)
+    digest = hashlib.sha256()
+    block = 64 << 20
+    with path.open("rb", buffering=0) as stream, ThreadPoolExecutor(max_workers=1) as hasher:
+        pending = None
+        for start in range(0, len(data), block):
+            chunk = view[start:start + block]
+            filled = 0
+            while filled < len(chunk):
+                got = stream.readinto(chunk[filled:])
+                if not got:
+                    raise ValueError("moving carrier does not match its sealed receipt")
+                filled += got
+            if pending is not None:
+                pending.result()
+            pending = hasher.submit(digest.update, chunk)
+        if pending is not None:
+            pending.result()
+        if stream.read(1):
+            raise ValueError("moving carrier does not match its sealed receipt")
+    if digest.hexdigest() != receipt["sha256"]:
+        raise ValueError("moving carrier does not match its sealed receipt")
+    payload = pickle.loads(view)
+    del view, data
     if payload.get("schema") != SCHEMA:
         raise ValueError("this moving carrier was sealed on the ArWen route; a moving run keeps one physics "
                          "route from its first segment to its last (the case's physics_args select it)")
@@ -149,10 +179,21 @@ def _write_sealed(path: Path, payload: dict[str, Any], summary: dict[str, Any]) 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".partial")
+    digest = hashlib.sha256()
+
+    class HashingWriter:
+        # The receipt hash comes from the bytes as pickle writes them, in order: no second full read of
+        # the ~3 GB carrier on one core after writing it (box-aws2x 2026-10-24).
+        def __init__(self, stream):
+            self.stream = stream
+
+        def write(self, data):
+            digest.update(data)
+            return self.stream.write(data)
     with temporary.open("wb") as stream:
-        pickle.dump(payload, stream, protocol=5)
+        pickle.dump(payload, HashingWriter(stream), protocol=5)
     temporary.replace(path)
-    receipt = dict(schema=SCHEMA, path=str(path), bytes=path.stat().st_size, sha256=_sha256(path),
+    receipt = dict(schema=SCHEMA, path=str(path), bytes=path.stat().st_size, sha256=digest.hexdigest(),
                    time_seconds=payload["time_seconds"], valid_time=payload["valid_time"], registers_empty=True,
                    **summary, wall_seconds=time.perf_counter() - began)
     # The receipt is written last: its presence means the carrier is complete (moving_control.wait_for_carrier).
@@ -163,12 +204,9 @@ def _write_sealed(path: Path, payload: dict[str, Any], summary: dict[str, Any]) 
 # --------------------------------------------------------------------------- physics field remap
 
 def largest_donors(weights) -> np.ndarray:
-    matrix = weights.overlap.tocsr()
-    donors = np.empty(matrix.shape[0], dtype=np.int64)
-    for i in range(matrix.shape[0]):
-        start, stop = matrix.indptr[i], matrix.indptr[i + 1]
-        donors[i] = matrix.indices[start + int(np.argmax(matrix.data[start:stop]))]
-    return donors
+    """Each target cell's largest-overlap donor (first on ties): the vectorized, cached moving_physics one."""
+    from ..moving_physics import largest_donors as donors
+    return donors(weights)
 
 
 def _roles(categories: dict[str, np.ndarray], threshold: float, ice_class: int) -> np.ndarray:
@@ -432,17 +470,57 @@ class MovingRoute:
                                               _unit_xyz(carrier["mesh"]), _unit_xyz(mesh))
             receipt["surface_donors"] = surface
         mapped_vectors = {}
+        computed = {}
         if weights is not None:
             from ..moving_physics import carry_horizontal_vector
+            from ..host_parallel import run_tasks
             names = {r["name"]: r for r in rows}
+            vector_tasks = []
             for u_name, v_name in VECTOR_PAIRS:
                 if u_name in names and v_name in names and names[u_name]["dimensions"][0] == LAYER_AXIS:
                     for level in range(1, names[u_name]["nlevels"] + 1):
-                        u = physics["pools"][_key(names[u_name], level)][..., :len(weights.source_area)]
-                        v = physics["pools"][_key(names[v_name], level)][..., :len(weights.source_area)]
-                        mu, mv = carry_horizontal_vector(u, v, weights, carrier["mesh"], mesh, atmospheric=True)
-                        mapped_vectors[_key(names[u_name], level)] = mu
-                        mapped_vectors[_key(names[v_name], level)] = mv
+                        vector_tasks.append((_key(names[u_name], level), _key(names[v_name], level)))
+
+            def carry_vector(u_key, v_key):
+                u = physics["pools"][u_key][..., :len(weights.source_area)]
+                v = physics["pools"][v_key][..., :len(weights.source_area)]
+                return carry_horizontal_vector(u, v, weights, carrier["mesh"], mesh, atmospheric=True)
+
+            def map_one(key, dims):
+                # Exactly the per-field branch the sequential loop ran; only the pool write stays below.
+                cells = physics["pools"][key][..., :len(weights.source_area)]
+                surface_field = len(dims) == 1 or dims[0] not in (LAYER_AXIS, INTERFACE_AXIS)
+                finite = bool(np.all(np.isfinite(cells))) if cells.dtype.kind == "f" else True
+                if not finite:
+                    # A word the scheme has not written yet (never a carried state): keep its pattern.
+                    return finite, cells[..., largest_donors(weights)], "largest-overlap donor (unset words)"
+                if key in mapped_vectors:
+                    return finite, mapped_vectors[key], "earth-Cartesian vector, physical height"
+                if np.issubdtype(cells.dtype, np.integer) and not surface_field:
+                    return finite, cells[..., largest_donors(weights)], "largest-overlap donor"
+                if surface_field and (len(dims) == 1 or dims[0] == "nSoilLevels"):
+                    return finite, map_field(cells, dims, weights, donors=donors), "coherent surface donor"
+                mapped = map_field(cells, dims, weights)
+                method = ("physical-height layers" if dims[0] == LAYER_AXIS and hasattr(weights, "layer_intensive")
+                          else "physical-height interfaces" if dims[0] == INTERFACE_AXIS
+                          and hasattr(weights, "interface_intensive") else "conservative overlap")
+                return finite, mapped, method
+
+            # THE COST THIS REMOVES: every carried physics field (vectors first) was mapped one after another on
+            # one thread, 7.9 s of a resumed MPAS-route storm-following segment (box-aws2x 2026-10-24, sampled).
+            # The maps are independent calls; they run on all cores, and the native pool writes stay in order.
+            largest_donors(weights)  # cached on the map before any task needs it
+            if vector_tasks:
+                first, rest = vector_tasks[0], vector_tasks[1:]
+                results = [carry_vector(*first)]  # builds the map's device geometry once
+                results += run_tasks([lambda pair=pair: carry_vector(*pair) for pair in rest])
+                for (u_key, v_key), (mu, mv) in zip(vector_tasks, results):
+                    mapped_vectors[u_key] = mu
+                    mapped_vectors[v_key] = mv
+            jobs = [(_key(row, level), row["dimensions"]) for row in rows for level in range(1, row["nlevels"] + 1)]
+            for (key, _), result in zip(jobs, run_tasks([lambda key=key, dims=dims: map_one(key, dims)
+                                                         for key, dims in jobs])):
+                computed[key] = result
         for row in rows:
             dims = row["dimensions"]
             for level in range(1, row["nlevels"] + 1):
@@ -454,23 +532,7 @@ class MovingRoute:
                         raise ValueError(f"same-mesh moving resume: {key} layout differs")
                     mapped, method = source, "same mesh"
                 else:
-                    cells = source[..., :len(weights.source_area)]
-                    surface_field = len(dims) == 1 or dims[0] not in (LAYER_AXIS, INTERFACE_AXIS)
-                    finite = bool(np.all(np.isfinite(cells))) if cells.dtype.kind == "f" else True
-                    if not finite:
-                        # A word the scheme has not written yet (never a carried state): keep its pattern.
-                        mapped, method = cells[..., largest_donors(weights)], "largest-overlap donor (unset words)"
-                    elif key in mapped_vectors:
-                        mapped, method = mapped_vectors[key], "earth-Cartesian vector, physical height"
-                    elif np.issubdtype(cells.dtype, np.integer) and not surface_field:
-                        mapped, method = cells[..., largest_donors(weights)], "largest-overlap donor"
-                    elif surface_field and (len(dims) == 1 or dims[0] == "nSoilLevels"):
-                        mapped, method = map_field(cells, dims, weights, donors=donors), "coherent surface donor"
-                    else:
-                        mapped = map_field(cells, dims, weights)
-                        method = ("physical-height layers" if dims[0] == LAYER_AXIS and hasattr(weights, "layer_intensive")
-                                  else "physical-height interfaces" if dims[0] == INTERFACE_AXIS
-                                  and hasattr(weights, "interface_intensive") else "conservative overlap")
+                    finite, mapped, method = computed.pop(key)
                     if finite and not np.all(np.isfinite(mapped)):
                         raise ValueError(f"moving physics remap produced a non-finite value in {key}")
                     buffer[..., :n_target] = np.asarray(mapped).astype(buffer.dtype)
@@ -483,6 +545,31 @@ class MovingRoute:
         if self.remap_receipt is not None:
             self.remap_receipt["physics"] = receipt
         return receipt
+
+    def restore_alarm_phase(self, session, config) -> dict[str, Any] | None:
+        """Continue the carried physics alarms' phase on this segment's clock (correct mode).
+
+        MPAS-A v8.4.2 starts every recurring physics alarm again at a restart's start time
+        (mpas_atmphys_manager.F:385-766), so a checkpoint between two radiation calls (a 10-minute frame
+        under a 30-minute radiation interval) calls radiation at the restart and the restart leaves the
+        straight run.  THE BREAKAGE THIS FIXES: such a restart differed from the straight run in every
+        cell's glw at its first frame (HEX-PHYSICS-PARITY run group 6 #21, a 12:10 restart).  Exact mode keeps
+        MPAS's own reset (bit for bit native, restart included); correct mode, the door default, carries the
+        phase, so a restart from any checkpoint frame is the straight run.
+        """
+        carried = self.carrier["physics"].get("manager")
+        manager = getattr(getattr(session, "driver", None), "manager", None)
+        if carried is None or manager is None or getattr(config, "mode", "exact") == "exact":
+            return None
+        elapsed = Fraction(self.carrier["physics"]["manager_elapsed"])
+        if set(carried["alarms"]) != set(manager.alarms) or carried.get("dt") != str(manager.dt):
+            raise ValueError("the checkpoint's physics alarms or step differ from this run's suite")
+        for name, item in carried["alarms"].items():
+            alarm = manager.alarms[name]
+            if Fraction(item["period"]) != alarm.period:
+                raise ValueError(f"the checkpoint's {name} alarm interval differs from this run's")
+            alarm.next_ring = Fraction(item["next_ring"]) - elapsed
+        return {name: str(alarm.next_ring) for name, alarm in manager.alarms.items()}
 
     def _restore_windows(self, session, weights, donors):
         physics = self.carrier["physics"]
@@ -532,13 +619,18 @@ class MovingRoute:
                        isice=int(np.asarray(native.get_field(
                            "sfc_input", self._pool_name(layout, "sfc_input", "isice_lu"))).reshape(-1)[0]),
                        window=None if window is None else window.snapshot(),
-                       surface_service=None if service is None else service.restart_state())
+                       surface_service=None if service is None else service.restart_state(),
+                       # The physics alarms' phase (radiation, convection, buckets) on this segment's elapsed
+                       # clock, and that clock at the seal (restore_alarm_phase rebases it).
+                       manager=_manager_state(session), manager_elapsed=str(Fraction(str(step)) * Fraction(str(dt))))
         valid = (datetime.strptime(self.origin_time, TIME_FORMAT) + timedelta(seconds=model_seconds)).strftime(TIME_FORMAT)
         payload = dict(schema=SCHEMA, route="mpas-suite", time_seconds=float(model_seconds),
                        origin_time=self.origin_time, valid_time=valid, state=state, mesh=mesh, vertical=vertical,
                        scalar_names=list(names), physics=physics,
                        stochastic=(None if getattr(dycore, 'stochastic', None) is None else
-                                   dycore.stochastic.process.snapshot()))
+                                   dycore.stochastic.process.snapshot()),
+                       chemistry=(None if getattr(dycore, 'chemistry', None) is None else
+                                  dycore.chemistry.restart_state()))
         return _write_sealed(Path(path), payload, dict(
             physics_fields=len(rows), physics_words=int(sum(np.asarray(v).size for v in pools.values())),
             state={k: list(v.shape) for k, v in state.items()}))
@@ -591,6 +683,11 @@ class MovingRoute:
                 "moving_origin_time": self.origin_time, "tracker_frames": self.frames}
 
 
+def _manager_state(session):
+    manager = getattr(getattr(session, "driver", None), "manager", None)
+    return None if manager is None else manager.restart_state()
+
+
 def conservation(receipt: dict[str, Any]) -> dict[str, float]:
     """Largest relative change of dry mass, theta mass and each tracer across the move."""
     def relative(item):
@@ -632,4 +729,34 @@ def write_tracker_frame(path, *, mesh, native, layout, columns, vertical, cp) ->
         for target in ("u10", "v10"):
             value = column("diag_physics", target)
             d.createVariable(target, "f4", ("Time", "nCells"))[0] = zeros if value is None else value
+        # The setup targets' fields (moving_run.history_fields): cape_shear reads qv columns and its storms
+        # (refl10cm), boundary the 2 m fields. THE BREAKAGE THIS PREVENTS (owner run run_51882d2a2a758db6, CAPE x
+        # shear 3 km on MPAS convection-permitting, 2026-10-24): the frame carried only the cyclone fields and the
+        # controller stopped at the first frame with "IndexError: qv not found".
+        qv = scalar_column(native, layout, "qv", n, levels)
+        if qv is not None:
+            d.createVariable("qv", "f4", ("Time", "nCells", "nVertLevels"))[0] = qv
+        refl = column("diag_physics", "refl10cm_max")
+        if refl is not None:
+            d.createVariable("refl10cm", "f4", ("Time", "nCells"))[0] = np.asarray(refl).reshape(-1)[:n]
+        for target, source in (("t2m", "t2m"), ("q2", "q2")):
+            value = column("diag_physics", source)
+            if value is not None:
+                d.createVariable(target, "f4", ("Time", "nCells"))[0] = np.asarray(value).reshape(-1)[:n]
     temporary.replace(path)
+
+
+def scalar_column(native, layout, name, n, levels):
+    """One species of the native ``scalars`` var_array as (nCells, nVertLevels), or None when it is not active."""
+    row = next((r for r in layout.fields if r["name"] == "scalars"), None)
+    components = tuple((row or {}).get("components") or ())
+    if row is None or name not in components or (row["pool"], row["pool_name"]) not in native._fields:
+        return None
+    value = np.asarray(native.get_field(row["pool"], row["pool_name"]))
+    axis = next(a for a, size in enumerate(value.shape) if size == len(components))
+    species = np.take(value, components.index(name), axis=axis)
+    if species.ndim != 2:
+        return None
+    if species.shape[0] == levels and species.shape[1] != levels:
+        species = species.T
+    return np.ascontiguousarray(species[:n, :levels], dtype=np.float32)

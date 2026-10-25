@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -111,8 +112,10 @@ def _atomic_json(path, value):
 
 def asset_url(name, pins):
     release = pins['release_assets']
+    # A pack added after its siblings' asset release names its own release.
+    tag = (pins.get('assets', {}).get(name) or {}).get('release_tag') or release['tag']
     base = os.environ.get(URL_ENV) or (
-        f'https://github.com/{release["repository"]}/releases/download/{release["tag"]}')
+        f'https://github.com/{release["repository"]}/releases/download/{tag}')
     return base.rstrip('/') + '/' + name
 
 
@@ -214,9 +217,16 @@ def resolve_pack(identity):
                           if r.get('kind') == 'kernel-pack' and r.get('select', {}).get('nvrtc_major') == major]
             if not candidates:
                 return None, f'no kernel-pack pin for loaded NVRTC major {major}'
-            compatible = [(n, r) for n, r in candidates if r.get('compiler') == identity]
+            from hexcore.kernel_pack import same_compiler
+            compatible = [(n, r) for n, r in candidates if same_compiler(r.get('compiler'), identity)]
             if not compatible:
-                return None, f'compiler identity differs from the NVRTC {major} pin; no compatible pack is downloaded'
+                loaded = '.'.join(str(part) for part in version)
+                pinned = ', '.join(sorted({'.'.join(str(p) for p in r.get('compiler', {}).get('nvrtc', ()))
+                                           + ' (' + str(r.get('compiler', {}).get('nvrtc_package')) + ')'
+                                           for _, r in candidates}))
+                return None, (f'loaded NVRTC {loaded} (library sha256 '
+                              f'{str(identity.get("nvrtc_library_sha256"))[:12]}) matches no NVRTC {major} pin '
+                              f'[{pinned}]; no compatible pack is downloaded')
             name, row = compatible[0]
             reason = 'not staged'
             target = asset_path(name, row)
@@ -348,16 +358,30 @@ def add_fetch_assets_parser(commands):
 
 
 def pin(arguments):
+    """Pin every ``kernel-pack-cuda<N>[.<minor>].json`` in the directory.
+
+    One pack per loaded NVRTC: CUDA 12.9 pip, CUDA 13.4 pip, and CUDA 13.0
+    (the system toolkit of a driver-580 machine and the 13.0.88 pip wheel
+    carry the same library bytes, measured 2026-10-24).
+    """
     assets = {}
-    for major in (12, 13):
-        name = f'kernel-pack-cuda{major}.json'
+    names = sorted(path.name for path in Path(arguments.from_directory).glob('kernel-pack-cuda*.json'))
+    for name in names:
+        match = re.fullmatch(r'kernel-pack-cuda(\d+)(?:\.(\d+))?\.json', name)
+        if match is None:
+            raise AssetError(f'{name}: not a kernel-pack-cuda<N>[.<minor>].json name')
+        major = int(match.group(1))
         data = (arguments.from_directory / name).read_bytes()
         compiler = json.loads(data)['compiler']
         if compiler['nvrtc'][0] != major or len(compiler) != 9:
             raise AssetError(f'{name}: expected the CUDA {major} nine-key compiler identity')
+        if match.group(2) is not None and compiler['nvrtc'][1] != int(match.group(2)):
+            raise AssetError(f'{name}: built with NVRTC {compiler["nvrtc"]}, not {major}.{match.group(2)}')
         assets[name] = {'kind': 'kernel-pack', 'bytes': len(data),
                         'sha256': hashlib.sha256(data).hexdigest(),
                         'select': {'nvrtc_major': major}, 'compiler': compiler}
+    if not assets:
+        raise AssetError(f'{arguments.from_directory}: no kernel-pack-cuda*.json files')
     document = {'schema': SCHEMA,
                 'breakage': 'The 169 MB gpuwm-hex 0.4.1 wheel exceeds the PyPI 100,000,000 B per-file cap.',
                 'release_assets': {'repository': arguments.repository, 'tag': arguments.tag}, 'assets': assets}

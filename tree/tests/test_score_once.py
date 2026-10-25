@@ -31,16 +31,14 @@ def test_score_stage_joins_the_forecast_scorer_instead_of_scoring_again(tmp_path
     (root / "automatic-retry-receipt.json").write_text(json.dumps({"status": "PARTIALLY_MEASURED"}))
     joined = scorecard.join_automatic_scorer(run, config)
     assert joined is not None and joined["joined"] == "automatic"
-    # A still-running scorer whose last lead's observations are in: wait for it, then report it.
+    # A still-running scorer whose last lead's observations are in: reported at once, never waited for, so
+    # the door does not hold its card through CPU scoring (2026-10-24: ~15 min on the lease).
     (root / "automatic-retry-receipt.json").write_text(json.dumps({"status": "QUEUED", "pid": os.getpid()}))
     calls = []
-
-    def finish(_seconds):
-        calls.append(1)
-        (root / "automatic-retry-receipt.json").write_text(json.dumps({"status": "MEASURED"}))
-    monkeypatch.setattr(scorecard.time, "sleep", finish)
+    monkeypatch.setattr(scorecard.time, "sleep", lambda seconds: calls.append(seconds))
     joined = scorecard.join_automatic_scorer(run, config)
-    assert calls == [1] and "scored once" in joined["note"]
+    assert calls == [] and joined["status"] == "QUEUED" and joined["pid"] == os.getpid()
+    assert "no card is held" in joined["note"]
 
 
 def test_score_stage_scores_itself_for_a_new_config_or_a_dead_scorer(tmp_path, monkeypatch):

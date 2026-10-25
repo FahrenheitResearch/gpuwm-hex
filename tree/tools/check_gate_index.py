@@ -129,6 +129,14 @@ def check(root: Path, with_data: bool) -> list[str]:
                 key = RESOURCE_OPTIONS.get(text)
                 if key is not None and command[i + 1] != "{resource:" + key + "}":
                     findings.append(f"{entry['path']}: {text} names a path, not {{resource:{key}}}")
+            # THE BREAKAGE THIS PREVENTS: the published GPU headline demanded a site-built native MPAS library
+            # (and its Fortran runtime) that its route never loads, so a PyPI user could not rerun the proof.
+            # A headline with every slot on hex-cuda runs the ported framework (runtime_v842.framework_only).
+            backends = deck.get("headline_backends") or {}
+            if (deck.get("role") == "headline" and backends and set(backends.values()) == {"hex-cuda"}
+                    and "--native-physics-library" in command):
+                findings.append(f"{entry['path']}: an all-GPU headline names --native-physics-library; "
+                                "its route loads no native library")
             for key in re.findall(r"\{resource:([^}]*)\}", " ".join(command)):
                 if key not in RESOURCE_KEYS:
                     findings.append(f"{entry['path']}: unknown resource key {key}")

@@ -133,9 +133,13 @@ def harness(monkeypatch, tmp_path, *, resident, injected, fail_after=False):
             self.iau = None
             objects.coupling = self
 
-        def synchronize(self, atmosphere):
+        def synchronize(self, atmosphere, **kwargs):
             events.append(('synchronize', atmosphere.step))
             return NS(step=atmosphere.step)
+
+        def _registry_rows(self, scalars):
+            # The suite route's chemistry view (rg6): no appended species here.
+            return scalars
 
         def stage(self):
             events.append(('stage', objects.clock + 1))
@@ -266,6 +270,14 @@ def harness(monkeypatch, tmp_path, *, resident, injected, fail_after=False):
             assert (ru_p, rw_p) == ('device-ru-p', 'device-rw-p')
             events.append(('acoustic-output-capture', objects.clock + 1))
 
+        # Running maxima of a step without a due stream are deferred to the
+        # next step's synchronize (G1 output path); nothing accumulates here.
+        def defer(self, *, step, when):
+            pass
+
+        def flush(self):
+            pass
+
     module('hexcore.mpasphys.resident_output_diagnostics_v842',
            ResidentOutputDiagnostics=OutputDiagnostics)
     module('hexcore.mpasphys.framework_backend_v842', FrameworkPhysics=Native)
@@ -278,8 +290,10 @@ def harness(monkeypatch, tmp_path, *, resident, injected, fail_after=False):
     module('hexcore.cuda_physics_prep_v841',
            CudaMpasToPhysGeometryV841=NS(from_host=lambda mesh: object()))
     module('hexcore.physics_suites', load_table=lambda: {'mpasphys_v842': {}})
-    module('hexcore.mpasphys.diagnostics_v842', initialize_thermodynamics=lambda *args: None)
-    module('hexcore.device_memory_release', process_release=lambda: NS(receipt=lambda: {}))
+    module('hexcore.mpasphys.diagnostics_v842', initialize_thermodynamics=lambda *args, **kwargs: None)
+    module('hexcore.device_memory_release', process_release=lambda: NS(receipt=lambda: {}),
+           phase_release=lambda name, **kw: __import__('contextlib').nullcontext(),
+           mpas_half_keep_threshold=lambda: None)
     module('hexcore.mpasphys.surface_update_v842', RustSurfaceRecordReader=Reader)
     monkeypatch.setattr(resident_v842, 'ResidentPhysicsGlue', glue)
     for name, value in dict(NativePhysics=Native, NativePhysicsSession=Session,

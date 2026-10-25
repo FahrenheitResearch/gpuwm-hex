@@ -1005,6 +1005,39 @@ class CudaHorizontalV841(CudaHorizontal):
             for value, expected in zip(outputs, reference):
                 cuda_edge_hoist.compare(chunked, value, expected, cp)
 
+    def solve_vorticity(self, rho: Any, rho_u: Any, *, normal_velocity: Any | None = None) -> Any:
+        """Vertex relative vorticity alone: the edge state and vertex kernel of
+        solve_diagnostics (mpas_atm_time_integration.F atm_compute_solve_diagnostics),
+        launched identically, so the same words without the tangential, cell
+        and potential-vorticity passes. The running updraft-helicity maximum
+        reads nothing else (mpas_convective_diagnostics.F:99-198)."""
+        cp = self.cp
+        normal, _rho_edge, ke_edge = self._edge_state(rho, rho_u, normal_velocity)
+        vorticity = cp.empty((self.nlev, self.nvertices), dtype=cp.float32)
+        ke_vertex = cp.empty_like(vorticity)
+        pv_vertex = cp.empty_like(vorticity)
+        self._launch_v841(
+            "vertex_diagnostics_v841_f32",
+            self.nlev * self.nvertices,
+            (
+                normal,
+                ke_edge,
+                self.mesh.edges_on_vertex,
+                self.mesh.vertices_on_edge,
+                self.mesh.dc_edge,
+                self.v841.inv_area_triangle,
+                self.mesh.f_vertex,
+                np.int32(self.nlev),
+                np.int32(self.nedges),
+                np.int32(self.nvertices),
+                np.int32(self.vertex_degree),
+                vorticity,
+                ke_vertex,
+                pv_vertex,
+            ),
+        )
+        return vorticity
+
     def solve_diagnostics(
         self,
         rho: Any,

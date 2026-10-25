@@ -16,7 +16,7 @@ package already has and adds none of its own numerics:
 | forecast | the forecast door; it picks how many cards the mesh needs from its own capacity rows and spreads it over them (`--devices` names cards instead) | `forecast` |
 | products | the standard product set through the Rust renderer | `products` |
 | export | the history on a regular lat-lon grid as NetCDF, without drawing | `export` |
-| score | the observation scorecard over the whole globe; radiosondes from GDAS prepBUFR while NOMADS has the cycle, then IGRA2 (`rw_igra2`), so a past case scores too | `score` |
+| score | the observation scorecard over the whole globe, scored on the CPU; radiosondes from GDAS prepBUFR while NOMADS has the cycle, then from the IGRA2 year-to-date snapshot that covers the run (every case since 2021; only the run's soundings are kept), then the per-station IGRA2 files (`rw_igra2`), so a past case scores too | `score` |
 
 A stage with nothing to do says so in the log and in `events.jsonl`, with the
 digest that made the skip safe: a second cycle on the same mesh reuses the

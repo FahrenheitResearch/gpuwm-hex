@@ -17,6 +17,18 @@ class MpasPhysicsKernelCache(KernelCache):
 
     def raw_kernel(self, name, source, *, module_key, options=()):
         """Compile carrier/conversion kernels; mpas_atmphys_todynamics.F:98-498."""
+        # Same arguments, same numerics mode: the kernel the first resolution produced. Breakage it
+        # prevents: U-MPASPHYS-1, each per-step launch re-read three maths headers, rewrote and twice
+        # hashed its whole translation unit on the forecast's single host thread before launching.
+        memo_key = (name, module_key, source, tuple(options), _hex_numerics.is_strict())
+        hit = self._resolved.get(memo_key)
+        if hit is not None:
+            return hit[1] if hit[0] is None else self._observe(hit[0], hit[1], name, hit[2])
+        kernel = self._raw_kernel_v842(name, source, module_key=module_key, options=options)
+        self._resolved[memo_key] = self._last_resolution
+        return kernel
+
+    def _raw_kernel_v842(self, name, source, *, module_key, options=()):
         if module_key == 'hexcore.cuda_physics_prep_v841':
             from .math_v842 import bind_common_carrier_math
             source = bind_common_carrier_math(source)
@@ -24,8 +36,10 @@ class MpasPhysicsKernelCache(KernelCache):
         # arrives, the same direct compiler is owned entirely by this seam.
         if _hex_numerics.is_strict() and 'mpas_strict' in inspect.signature(KernelCache.raw_kernel).parameters:
             parent_raw_kernel = super().raw_kernel
-            return parent_raw_kernel(name, source, module_key=module_key,
-                                     options=options, mpas_strict=True)
+            kernel = parent_raw_kernel(name, source, module_key=module_key,
+                                       options=options, mpas_strict=True)
+            self._last_resolution = (None, kernel, module_key)  # already observed by the parent
+            return kernel
         from cupy.cuda import function
         from .strict_cache_v842 import compile_image
         module_key = validate_module_key(module_key)
@@ -51,4 +65,5 @@ class MpasPhysicsKernelCache(KernelCache):
             kernel = module.get_function(name)
             self._kernels[kernel_key] = kernel
         manifest.record_kernel(module_key, name)
+        self._last_resolution = (kernel_key, kernel, module_key)
         return self._observe(kernel_key, kernel, name, module_key)

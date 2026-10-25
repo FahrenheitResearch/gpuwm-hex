@@ -32,6 +32,19 @@ ALIASES = {"u": "normal_u", "uReconstructZonal": "u_zonal",
            "uReconstructMeridional": "v_meridional"}
 
 
+def history_name(dataset, target):
+    """The history variable holding ``target`` on either physics route.
+
+    The ArWen route's history names the winds ``normal_u``/``u_zonal``/``v_meridional`` (``ALIASES``); the MPAS
+    suite route writes MPAS's own stream, which uses the Registry names themselves (``u``,
+    ``uReconstructZonal``, ``uReconstructMeridional``).  THE BREAKAGE THIS PREVENTS: an MPAS-route ensemble's
+    export refused with "forecast history lacks u_zonal".  An
+    ArWen history carries the alias, so it reads exactly as before.
+    """
+    alias = ALIASES.get(target, target)
+    return alias if alias in dataset.variables or target not in dataset.variables else target
+
+
 class EnsembleRefusal(MpasPortError):
     pass
 
@@ -340,7 +353,7 @@ def export_native(history, template, output, valid_time, member_init=None):
                             if dim in var.dimensions:
                                 value = np.take(value,order,axis=var.dimensions.index(dim))
                         dst[name][:] = value
-            mappings = {target:ALIASES.get(target,target) for target in FIELDS}
+            mappings = {target:history_name(src, target) for target in FIELDS}
             mappings.update({name:name for name,var in src.variables.items()
                              if name in dst.variables and "Time" in var.dimensions})
             # These are the existing hex constructor's physical surface names.
@@ -477,8 +490,8 @@ def export_jedi_member(history, template, output, valid_time):
                 put("theta", theta[None], cube, "K")
                 put("pressure_base", base.astype(np.float32)[None], cube, "Pa")
                 put("pressure_p", (pressure - base).astype(np.float32)[None], cube, "Pa")
-                put("uReconstructZonal", cells_of(ALIASES["uReconstructZonal"])[None], cube, "m s^-1")
-                put("uReconstructMeridional", cells_of(ALIASES["uReconstructMeridional"])[None], cube, "m s^-1")
+                put("uReconstructZonal", cells_of(history_name(src, "uReconstructZonal"))[None], cube, "m s^-1")
+                put("uReconstructMeridional", cells_of(history_name(src, "uReconstructMeridional"))[None], cube, "m s^-1")
                 put("surface_pressure", cells_of("surface_pressure")[None], ("Time", "nCells"), "Pa")
                 for name in JEDI_SCALARS:
                     if name not in src.variables:
@@ -544,8 +557,8 @@ def extract_pressure_levels(history, zmid, output, regrid=None):
         ds.set_auto_mask(False)
         p = np.asarray(ds["pressure"][0], np.float64)
         theta = np.asarray(ds["theta"][0], np.float64)
-        u = np.asarray(ds[ALIASES["uReconstructZonal"]][0], np.float64)
-        v = np.asarray(ds[ALIASES["uReconstructMeridional"]][0], np.float64)
+        u = np.asarray(ds[history_name(ds, "uReconstructZonal")][0], np.float64)
+        v = np.asarray(ds[history_name(ds, "uReconstructMeridional")][0], np.float64)
         qv = np.asarray(ds["qv"][0], np.float64)
     t = theta * (p / 1.0e5) ** (RD / CP)
     out = {"mslp": (p[:, 0] * (1.0 + LAPSE * zmid[:, 0] / t[:, 0]) ** (G0 / (RD * LAPSE)) / 100.0).astype(np.float32)}
@@ -612,11 +625,13 @@ def consume_frames(history_dir, start_time, done, *, export_hours, template, exp
     history_dir = Path(history_dir)
     start = datetime.strptime(start_time, "%Y-%m-%d_%H:%M:%S")
     records, seen = [], set()
+    from .forecast_door import history_files
     def sweep():
-        for frame in sorted(history_dir.glob("cuda-history.*.nc")):
+        # history_files reads either route's frames (the MPAS suite route writes history.*.nc).
+        for frame in history_files(history_dir):
             if frame in seen or not durable_marker(frame).is_file():
                 continue
-            stamp = frame.name[len("cuda-history."):-len(".nc")]
+            stamp = frame.name.split(".", 1)[1][:-len(".nc")]
             valid = datetime.strptime(stamp, "%Y-%m-%d_%H.%M.%S")
             hour = (valid - start).total_seconds() / 3600
             valid_text = valid.strftime("%Y-%m-%d_%H:%M:%S")

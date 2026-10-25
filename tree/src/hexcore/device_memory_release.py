@@ -8,8 +8,8 @@ A hex process holds two kinds of device memory that no live array uses:
 1. **Cached pool blocks.**  CuPy's default pool keeps every block an array
    gave back, so the next request of a similar size is served without a
    cudaMalloc.  A request that none of those blocks can serve is met with
-   fresh memory *on top of* them.  The 2026-10-14 census
-   (``HEX-MEMORY-2026-10-14/CENSUS.md``) measured 3,960 MiB of such free
+   fresh memory *on top of* them.  The 2026-10-14 memory census
+   measured 3,960 MiB of such free
    blocks held at the route-B shortwave peak on x1.40962 (35 % of the pool)
    and 733 MiB at the route-A radiation peak; between radiation steps route A
    held 3.2 GiB of free radiation blocks through every dycore step.
@@ -40,10 +40,10 @@ physics slot, or route A's phase one or phase two):
   GWDO 2,528 B, longwave 2,048 B) has the limit set back to its value at entry, which makes the driver shrink the store to
   what it was before the phase, and the phase's free blocks are returned.
   ``GPUWM_HEX_LMEM_RELEASE_MIN_FRAME=<bytes>`` keeps frames narrower than
-  that (default 0, release every one): growing a store back with
-  cudaDeviceSetLimit on entry is cheap, and a kept narrow store sits on the
-  dycore's transport peak once the wide ones are gone (measured: keeping the
-  2,528 B store cost 160 MiB at that peak on a 70-SM card).
+  that (default 4096): a kept narrow store sits on the dycore's transport
+  peak (measured: keeping the 2,528 B store cost 160 MiB at that peak on a
+  70-SM card), but growing it back synchronizes the device every step (see
+  "WHAT A BOUNDARY COSTS" below).
 
 Measured on an RTX 5090: a 40,000-byte frame grows a 9,706 MiB store;
 setting the limit back returns all of it in about 4 ms.  Growing it with
@@ -98,8 +98,29 @@ KNOBS (each saving can be switched off for an A/B run)
 ------------------------------------------------------
 ``GPUWM_HEX_POOL_RELEASE=0``  keep cached pool blocks across phase boundaries
 ``GPUWM_HEX_LMEM_RELEASE=0``  keep the local-memory store across phase boundaries
-``GPUWM_HEX_LMEM_RELEASE_MIN_FRAME=<bytes>``  narrowest frame whose store is released (0)
+``GPUWM_HEX_LMEM_RELEASE_MIN_FRAME=<bytes>``  narrowest frame whose store is released (4096)
+``GPUWM_HEX_POOL_RELEASE_MIN_BYTES=<bytes>``  idle cached pool bytes a boundary may keep (8 GiB)
 ``GPUWM_HEX_LMEM_REGROW_WAIT_S=<seconds>``  how long to wait for a refused regrow (1800)
+
+WHAT A BOUNDARY COSTS (U-MPASPHYS-1, measured 2026-10-24)
+---------------------------------------------------------
+Both returns synchronize the device: cudaFree and cudaDeviceSetLimit wait for
+every queued kernel, so the single host thread cannot run ahead of the card.
+On the 216,187-cell MPAS-physics zoom (RTX PRO 6000, 55 levels) the release
+returned about 14 GB per step, 1.2 to 4.6 GB from each of microphysics, PBL,
+convection, surface layer and GWDO, and the same sizes were allocated again
+the next step; the GWDO and PBL stores (2,736 B frames) were reset and regrown
+every step.  Profiled: 41 s of free_all_blocks and 32 s of cudaDeviceSetLimit
+over 39 steps, 1.9 s per step of a 4 s outer-physics stage; with a 4 GiB keep
+the PBL, convection, microphysics and surface-layer transients (1.9-6.6 GiB a
+step each) still went back and came again, 74 % of the remaining outer-physics
+host time.  So a boundary keeps up to ``GPUWM_HEX_POOL_RELEASE_MIN_BYTES``
+(8 GiB) of idle cached blocks, and returns them anyway whenever the card has
+under a tenth of its memory free (another process needs it; cudaMemGetInfo
+does not synchronize).  Measured cost of keeping every block on that mesh:
+peak 32.3 GB instead of 24.6 GB.  Frames narrower than 4 KiB keep their store
+(GWDO 2,528-2,736 B, longwave 2,048 B; WSM6's 7,216 B store is still
+released).  0 restores the release of every block or frame.
 
 Both savings are on by default (fixed means default).  Inside a CUDA stream
 capture, and in a phase nested inside another on the same thread, the bracket
@@ -130,6 +151,12 @@ POOL_KNOB = "GPUWM_HEX_POOL_RELEASE"
 LMEM_KNOB = "GPUWM_HEX_LMEM_RELEASE"
 LMEM_MIN_FRAME_KNOB = "GPUWM_HEX_LMEM_RELEASE_MIN_FRAME"
 LMEM_WAIT_KNOB = "GPUWM_HEX_LMEM_REGROW_WAIT_S"
+POOL_MIN_BYTES_KNOB = "GPUWM_HEX_POOL_RELEASE_MIN_BYTES"
+#: Defaults; see "WHAT A BOUNDARY COSTS" above (U-MPASPHYS-1).
+LMEM_MIN_FRAME_DEFAULT = 4096
+POOL_MIN_BYTES_DEFAULT = 8 << 30
+#: A boundary returns idle blocks regardless of the keep when the card's free memory is below this fraction.
+POOL_PRESSURE_FREE_FRACTION = 0.10
 _OFF = frozenset({"0", "off", "false", "no"})
 _CUDA_ERROR_MEMORY_ALLOCATION = 2
 
@@ -161,7 +188,8 @@ class DevicePhaseRelease:
         self._cp = cp
         self.pool = knob_enabled(POOL_KNOB, environ) if pool is None else bool(pool)
         self.lmem = knob_enabled(LMEM_KNOB, environ) if lmem is None else bool(lmem)
-        self.min_frame = int(_knob_number(LMEM_MIN_FRAME_KNOB, 0, environ))
+        self.min_frame = int(_knob_number(LMEM_MIN_FRAME_KNOB, LMEM_MIN_FRAME_DEFAULT, environ))
+        self.pool_min_bytes = int(_knob_number(POOL_MIN_BYTES_KNOB, POOL_MIN_BYTES_DEFAULT, environ))
         self.regrow_wait_s = _knob_number(LMEM_WAIT_KNOB, 1800.0, environ)
         self._sleep, self._clock = sleep, clock
         # Nesting is tracked per thread: same-host ranks step on their own
@@ -207,8 +235,13 @@ class DevicePhaseRelease:
         # The default pool acts on the calling thread's current device.
         pool = cp.get_default_memory_pool()
         held = int(pool.total_bytes())
-        if held == int(pool.used_bytes()):
+        idle = held - int(pool.used_bytes())
+        if idle == 0:
             return
+        if idle < self.pool_min_bytes:
+            free, total = cp.cuda.runtime.memGetInfo()
+            if free >= POOL_PRESSURE_FREE_FRACTION * total:
+                return
         pool.free_all_blocks()
         returned = held - int(pool.total_bytes())
         if returned:
@@ -319,6 +352,7 @@ class DevicePhaseRelease:
             "schema": "hex-device-phase-release-v2",
             "pool_release": {"enabled": self.pool, "knob": POOL_KNOB,
                              "releases": self.pool_releases,
+                             "min_idle_bytes": self.pool_min_bytes,
                              "bytes_returned": self.pool_bytes_returned},
             "lmem_release": {"enabled": self.lmem, "knob": LMEM_KNOB,
                              "min_frame_bytes": self.min_frame,

@@ -117,7 +117,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         "src/hexcore/history_writer.py": "b0b6f8d27fce8478f0d78d3c4cc73bdc12bf5f4a625b7f45515b8f1206fd64a1",
         "src/hexcore/cuda_arwen_helper_scope_v2.py": "cf179cb9e5650d5db36ccb8d60905a88140b360da9d54c6d8f94a8e032e00e07",
         "src/hexcore/radiation_source_sets.json": "f0357c3b4613f2cd136d62f5cd2391d034d471acc59d6f956683082cc1fdc5a2",
-        "src/hexcore/data/profiles/engine-helper-sets.v1.json": "f86f96bd257ad443abede893d46d7e15fac9f6c64364e385f263201efa7f5893",
+        "src/hexcore/data/profiles/engine-helper-sets.v1.json": "d7c155621833e4950ea39237f6b6bf736534c3c437b684525d7f353c41fa82c4",
         "src/hexcore/step_anchors.py": (
             "31201be7d3692dc07ed2c9689c2a9d0211236e3f68d7484b68df018426dc4e0e"
         ),
@@ -134,7 +134,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
             "af22e7a450d1bbdf1a1dc9dcdf2a7a9d0da13f7d230751941cdf0a3418f0f00b"
         ),
         "src/hexcore/cuda_physics_v841.py": (
-            "a8ca96d41d3cc79fa148caf8cbf60a020e626ee39a82fa33a4e791417ac1bd23"
+            "43aa675137139bde8e71d52d76e2acac7363623c711eda17ebfe18b449e29761"
         ),
         # Re-frozen 2026-08-26 for the convection ruling: the physics cadence
         # table reports convection: None when no scheme is selected; and again
@@ -149,7 +149,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # Re-frozen 2026-10-05 for the startup lane (host-preparation cache);
         # the rationale lives beside the runner's pin.
         "src/hexcore/cuda_driver.py": (
-            "433a0e51eb948d7235fbab3aa7605c4f6135056e6c717abbbbaa0e6972fc1c0c"
+            "9034951ee871ace985ccc7eacfa8559d1798d653cb0a7c64a1e353dcce5b22ef"
         ),
         # New pin (startup lane, 2026-10-05): the frozen driver executes host
         # preparation through this module; the rationale lives beside the
@@ -183,7 +183,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # Re-frozen 2026-10-11: variable-resolution meshes decided per cell;
         # the rationale lives beside the runner's pin.
         "src/hexcore/convection_admission.py": (
-            "874b0351d61f554e6bfe3d7d0dfbd8bfbe3ecea26fa06abc202f9a164137b27e"
+            "9128972130e8022538e6fea8c41ab50df70246736f58515439e7dc2adb317f5e"
         ),
         # New pin (the timestep-anchor campaign): the frozen config ADMITS config_dt from this
         # module, so the pinned config's meaning depends on these bytes.
@@ -228,7 +228,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # export became declinable (default armed).  The rationale lives
         # beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "49b72c512239cff9e70d71c836754c0eb57455c472cafeed804ff1cf4aead0ef"
+            "241a576d3b059d8abec0c52d2b9161225d0d008968bee01ce5f14458269ce649"
         ),
         # New pin 2026-10-05 (New Tiedtke row); the rationale lives beside the
         # runner's pin.
@@ -253,11 +253,11 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
             "d4e4face383eab6f19f21598613b7bd58e37eb75e067b7b9e817060a2ec015cd"
         ),
         "src/hexcore/cuda_horizontal_v841.py": (
-            "0f26e1e54ab4935aa4ce9c25d189d15b76b046e84dd015e15d2326c3a6bddf7d"
+            "41a07db0b5dbe343b7c1df421ebe7f83ba6ca0fac1b689b0d8b5452452b54520"
         ),
         # Current d15ea3482cc5 cache-key correction; archived proofs unchanged.
         "src/hexcore/cuda_transport_v841.py": (
-            "32720d050fe1fa002c983f30dce85b823edf39b593c3811aa562de43e0a86255"
+            "222fbfa4cb6266435070f15057607cc7b6bf4241998cfa51c02545024a9a0ef1"
         ),
         "src/hexcore/cuda_transport.py": (
             "013ed46f8ef3bcc1a445b2e81135e262c23c49950e52e5b62b22e4274644b15e"
@@ -280,10 +280,10 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
             "b544707943ab75ce27e1972a7a57dd9a3eeed7aa23b2fa332e92594983de97e4"
         ),
         "src/hexcore/partition_executor_v841.py": (
-            "09e5a13e21a22087442e5834d0af0b7f6dd4716d92af3327d0914959df1907c7"
+            "9821e7e3b7c7238d48e40edadbc2c99afbf7e157d08b078649b51cef2c445009"
         ),
         "src/hexcore/partition_net_v841.py": (
-            "30b0988b2d40bbda8d68be1ec236564ea87bb6690bfdcd08370eea12ca11753b"
+            "707a7c455641c45a7e6c42b72c40272cfb184258177feba7a6c8e70414d45134"
         ),
     }
 

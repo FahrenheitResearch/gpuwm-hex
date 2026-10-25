@@ -48,7 +48,7 @@ it is 2,778.75 m where the finest cell's scheme spacing is 3,000.28 m, and
 on the 60-3 km mesh the finest cell's is 3,034.9 m.  Read at ``min(dcEdge)``
 the 3 km ruling switched the scheme off for the WHOLE mesh, its 48-60 km
 cells included.  THE BREAKAGE THIS CLOSES, MEASURED (2026-10-11, the 48-3 km
-patch mesh, GFS 2026-10-03 12Z, ``AGI-SPRINT-2026-10-11/varmesh-convection``):
+patch mesh, GFS 2026-10-03 12Z):
 the bind logged "finest spacing 2778.8 m vs 3000 m threshold -> off" and
 the run made no convective rain in any cell.  So on a mesh whose per-cell
 spacing varies, the rulings' bands are read at the finest cell's scheme
@@ -609,8 +609,7 @@ VARIABLE_MESH_BREAKAGE: str = (
     "not the scheme's per-cell spacing, with the 3 km threshold: the 48-3 km "
     "patch mesh's min(dcEdge) of 2778.75 m (finest scheme spacing 3000.28 m) "
     "switched cumulus off for the whole mesh, its 48 km cells included.  "
-    "MEASURED (2026-10-11, GFS 2026-10-03 12Z, AGI-SPRINT-2026-10-11/"
-    "varmesh-convection): no convective rain in any cell"
+    "MEASURED (2026-10-11, GFS 2026-10-03 12Z): no convective rain in any cell"
 )
 
 

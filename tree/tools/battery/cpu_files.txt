@@ -127,6 +127,7 @@ tests/test_history_refl_q2.py
 # start state rather than published as the seam's pre-first-call placeholders
 # (+0 and 100000 Pa), from which every hour-0 2 m dewpoint map was drawn
 # with zero humidity.  Synthetic frames and a tiny netCDF; no card, no assets.
+tests/test_f000_first_call.py
 tests/test_f000_start_frame.py
 
 # ---------------------------------------------------------------------------
@@ -502,6 +503,9 @@ tests/test_wheel_platform_check.py
 tests/test_netcdf_copy_packaged.py
 # Prep store (prep-fast): mesh, static and ordering built once and fetched by key -- host-only.
 tests/test_prep_store.py
+# CUDA modules held per card (two-card sea-ice CUDA_ERROR_INVALID_HANDLE at step 1): the source
+# check is host-only; the two-card launch member is marked gpu and skips without two cards.
+tests/test_per_card_modules.py
 # Carried from golden 0.4.0 for verify-final-hex items 1-3: the 2.9.0 radiation helper row,
 # the convection-permitting LTS hold (6 km ring crash fix) and the multi-card LTS
 # third-stage theta capture -- all host-only.
@@ -714,7 +718,7 @@ tests/test_physics_route_resources.py
 # B5: the wheel bundles rw_mpas_geometry (hex-vertical-v1), rw_mpas_stream and rw_mpas_static, pinned by
 # SHA-256; the engines ladder reads hexcore/libexec first (no network, compiler or device).
 tests/test_engine_bridges_bundled.py
-# ARWEN-VS-HEX-TIMING-2026-10-15: a generated grid's static holds the binary64 coordinates it declares
+# 2026-10-15: a generated grid's static holds the binary64 coordinates it declares
 # (the point door's check on real files, the pins; the pinned builder itself where its bytes are present).
 tests/test_static_coordinate_precision.py
 
@@ -1006,3 +1010,78 @@ tests/test_scorer_build_target.py
 # measured runs; stand-in engines, no card, no network.
 tests/test_regional_door.py
 tests/test_regional_mint.py
+tests/test_suite_history_snapshot.py
+tests/test_skip_score_watcher.py
+# 0.4.5 folds: CPU tests the folded branches added (stand-ins, no card; checked with GPUWM_HEX_NO_LOCAL_GPU=1).
+tests/test_column_store.py
+tests/test_export_follow.py
+tests/test_extend_from_last_hour.py
+tests/test_handover_numbers.py
+tests/test_mesh_shape.py
+tests/test_mpas_route_frames.py
+tests/test_mpas_route_live_frames.py
+tests/test_mpas_route_nest_look.py
+tests/test_nest_addon_fixes.py
+tests/test_nest_checker_fixes.py
+tests/test_nest_physics_default.py
+tests/test_nest_review30_fixes.py
+tests/test_nest_triggers.py
+tests/test_regional_from_parent.py
+tests/test_setup_targets.py
+tests/test_source_ladders.py
+tests/test_start_from_lead.py
+# hex storm-following hurricane fixes (tc/hex-stormfollow port): CPU tests, stand-ins, no card.
+tests/test_hurricane_pressure_evidence.py
+tests/test_moving_area_reconciliation.py
+tests/test_moving_carrier_codec.py
+tests/test_moving_retention.py
+tests/test_moving_seaice.py
+tests/test_prognostic_ice_census.py
+tests/test_scorecard_future_frames.py
+# 0.4.5 folds, round 2 (host path, G6, regional MPAS suite, LTS region, region lead, GSL drag statistics, rg2): CPU members; members that reach CuPy are auto-marked gpu and skip.
+tests/test_deferred_checks_v842.py
+tests/test_fullstep_lts_regional_tap.py
+tests/test_kernel_resolution_memo.py
+tests/test_moving_ensemble_mpas_route.py
+tests/test_mpas_host_orchestration_g6.py
+tests/test_mpas_resident_sync_v842.py
+tests/test_mpas_suite_limited_area.py
+tests/test_regional_lead.py
+tests/test_ugwp_oro.py
+# G3 Grell-Freitas lane-interleaved column arrays (fix/hex-mpasphys-gf): host compiles of the lowered entry
+# against the contiguous transcription on real zoom columns, and the fused pack/scatter kernels; g++ only,
+# no card. Breakage it prevents: test_tier_membership refuses an untiered file.
+tests/test_gf_grid_stride.py
+tests/test_gf_pack_inputs.py
+
+# G1 output path: deferred maxima (CPU) and the gather/multi-block diagnostic kernels (GPU, MPAS_CONVECTIVE_GPU=1).
+tests/test_mpas_output_path.py
+# 0.4.5 MPAS-route speed groups (G2 radiation, G4 MYNN, G5 Thompson): CPU members; members that reach CuPy are auto-marked gpu and skip.
+tests/test_mcica_kiss_jump_v842.py
+tests/test_mpas_mynn_batched_copies.py
+tests/test_mpas_mynn_dynamic_columns.py
+tests/test_mpas_mynn_fast_helpers.py
+tests/test_thompson_fast_arithmetic.py
+tests/test_thompson_phases.py
+
+# the both-routes gate leg (tools/both_routes_gate.py): every command in tools/battery/both_routes.json parses
+# with the real parser on both physics routes, every family names both routes, GPU steps lease by VRAM in pool
+# mode, and the word comparison counts every differing value
+tests/test_both_routes_gate.py
+
+# the full-step LTS shadow's audited digest of cuda_driver.py is the shipped driver's (re-audit on any change)
+tests/test_fullstep_lts_shadow_pin.py
+
+# A device command's exit runs threading's hooks before atexit, so an idle pool worker never holds it (the hl-3 headline run).
+tests/test_device_process_exit.py
+
+# MPAS-route speed integration: the parallel owner assembly of a multi-rank frame writes the serial words
+# (CPU, stand-ins). Breakage it prevents: test_tier_membership refuses an untiered file.
+tests/test_mpas_samehost_parallel_assembly.py
+
+# MPAS LTS moving segments: admission of carrier resumes and plain moving routes, the one-real-cell edge geometry,
+# the one-collective moving frame gather (CPU).
+tests/test_mpas_lts_moving_and_assembly.py
+tests/test_mpas_frame_async_capture.py
+# MPAS-route moving tracker frame carries qv, refl10cm and the 2 m fields for setup targets (H-MPAS-SETUP).
+tests/test_mpas_tracker_frame_setup.py

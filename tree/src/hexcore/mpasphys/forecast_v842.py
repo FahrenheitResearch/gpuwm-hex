@@ -212,12 +212,66 @@ def native_route(arguments: Any, *, default_mode: str = 'exact'):
             owners = [name for name,keys in registry_groups.items() if option in keys]
             group = (spec['backend_namelist_group'] if option in backend_options
                      else owners[0] if owners else 'physics')
+            value = override_literal(key.strip(), value.strip(), spec)
             parsed = parse_fortran_namelist(f'&{group}\n{key}={value}\n/')[group]
             groups.setdefault(group, {}).update(parsed)
         text = '\n'.join('&'+name+'\n'+'\n'.join(f'{k}={_literal(v)}' for k,v in values.items())+'\n/'
                          for name,values in groups.items())
         config = route_namelist(text, **mode)
     return config, text
+
+
+def _registry_option_kinds() -> dict[str, str]:
+    """``config_* -> Registry type`` for every nml_option of the bundled MPAS-A Registry (casefolded keys)."""
+    global _OPTION_KINDS
+    if _OPTION_KINDS is None:
+        from .pool_v842 import registry_text
+        root = Path(__file__).resolve().parents[1] / 'data' / 'mpasphys-framework'
+        kinds: dict[str, str] = {}
+        try:
+            tree = ET.fromstring(registry_text(root / 'src/core_atmosphere/Registry.xml'))
+            for option in tree.findall('.//nml_option'):
+                if option.get('name') and option.get('type'):
+                    kinds[option.get('name').casefold()] = option.get('type')
+        except (OSError, ET.ParseError):
+            kinds = {}
+        _OPTION_KINDS = kinds
+    return _OPTION_KINDS
+
+
+_OPTION_KINDS: dict[str, str] | None = None
+
+
+def override_literal(key: str, value: str, spec: Mapping[str, Any] | None = None) -> str:
+    """One ``--physics KEY=VALUE`` value as a namelist literal, the way the ArWen route reads it.
+
+    The ArWen route's ``physics_suites.parse_override`` takes ``KEY=VALUE`` with the value quoted or bare
+    (``config_microp_scheme=mp_thompson``); this route used to paste the bare text into a namelist record,
+    where an unquoted character value is not a scalar, so every bare spelling was refused
+    (HEX-PHYSICS-PARITY run group 2 #6: the packaged moving-ensemble roster, Thompson members included).
+    A value already quoted, or one that reads as a logical, integer or real, is kept as given; a bare word
+    is quoted when the option is a character option in the Registry, a backend selector, or not a Registry
+    option at all (WOOF-only selectors).  A bare word for a logical/integer/real option stays bare, so the
+    namelist parser still refuses it by name.
+    """
+    text = value.strip()
+    if not text or text[0] in '\'"':
+        return text
+    try:
+        parse_fortran_namelist(f'&probe\n{key}={text}\n/')
+        return text
+    except Exception:
+        pass
+    option = key.strip().casefold()
+    kind = _registry_option_kinds().get(option)
+    defaults = (spec or {}).get('registry_defaults', {}) if isinstance(spec, Mapping) else {}
+    for name, row in defaults.items():
+        if name.casefold() == option and isinstance(row, Mapping):
+            kind = row.get('type', kind)
+    backend = option.endswith('_backend')
+    if kind in (None, 'character') or backend:
+        return repr(text)
+    return text
 
 
 def bind_door_iau(arguments: Any, text: str) -> str:
@@ -340,6 +394,52 @@ def bind_init_start(text: str, init: Any) -> str:
     import sys
     print(f'gpuwm-hex: MPAS suite start {start} (the init\'s xtime)', file=sys.stderr, flush=True)
     return set_namelist_options(text, {'nhyd_model': {'config_start_time': start}})
+
+
+def bind_limited_area(arguments: Any, text: str) -> str:
+    """``--lbc-dir`` on the MPAS suite route is MPAS's own limited-area run: ``config_apply_lbcs = .true.``.
+
+    THE BREAKAGE THIS FIXES: the suite route never read ``--lbc-dir``.  A region, point, country, swath or cycle fine
+    forecast with ``--physics-suite convection_permitting`` reached the route's global dycore build with a culled mesh
+    and stopped in its terrain coupling ("cells_on_edge contains a missing or out-of-range cell", 2026-10-24 run group
+    1 #3, after 13 min of prep), so no limited-area run could take MPAS physics.  With the flag, the pools decode the
+    limited_area package and runtime_v842 opens the regional dycore (the ArWen route's boundary driver, which already
+    carries the MPAS-A v8.4.1 specified and relaxation zones) under the same physics glue.
+
+    Combinations whose state the regional dycore does not carry yet are refused by name below.  A namelist that says
+    ``config_apply_lbcs = .false.`` beside ``--lbc-dir`` names two different runs and is refused.
+    """
+    lbc_dir = getattr(arguments, 'lbc_dir', None)
+    if lbc_dir is None:
+        named = namelist_option(text, 'limited_area', 'config_apply_lbcs')
+        if named is True or str(named).strip().lower() in ('.true.', 'true', 't'):
+            # THE BREAKAGE THIS PREVENTS: a namelist limited-area run with no boundary series would run its relaxation
+            # zone against nothing.
+            raise ValueError('the namelist sets config_apply_lbcs = .true. but the run names no --lbc-dir: a limited-'
+                             'area MPAS suite run needs its lateral-boundary series')
+        return text
+    directory = Path(lbc_dir).expanduser()
+    if not directory.is_dir():
+        raise ValueError(f'--lbc-dir {directory} is not a directory')
+    named = namelist_option(text, 'limited_area', 'config_apply_lbcs')
+    if named is not None and not (named is True or str(named).strip().lower() in ('.true.', 'true', 't')):
+        raise ValueError('--lbc-dir names a limited-area run and the namelist sets config_apply_lbcs = .false.; '
+                         'give one')
+    gaps = []
+    if getattr(arguments, 'samehost_devices', None):
+        gaps.append('more than one card (the regional dycore runs on one card on every route)')
+    if getattr(arguments, 'iau_window_seconds', None) is not None or getattr(arguments, 'iau_increment', None):
+        gaps.append('IAU (the increment is held on the unpadded extent; the regional dycore carries a garbage column)')
+    if getattr(arguments, 'jedi_background', False) or getattr(arguments, 'da_analysis', None):
+        gaps.append('the JEDI background / analysis hand-off (it carries the global extent only)')
+    if getattr(arguments, 'stochastic', None):
+        gaps.append('stochastic physics (its pattern is built on the unpadded mesh)')
+    if getattr(arguments, 'chemistry_config', None):
+        gaps.append('chemistry transport (its tracer rows are not driven by the lateral-boundary series)')
+    if gaps:
+        raise ValueError('a limited-area MPAS suite run (--lbc-dir) cannot take ' + '; '.join(gaps) +
+                         ' yet.  Drop that option, or run the region on the default ArWen physics')
+    return set_namelist_options(text, {'limited_area': {'config_apply_lbcs': True}})
 
 
 def _mpas_interval(seconds: float) -> str:
@@ -491,6 +591,17 @@ def read_streams(path: Path, layout: Any, list_directory: Path | None = None, *,
     return tuple(streams)
 
 
+def _marked_durable(frame: Path, marker: Path) -> bool:
+    """Whether ``frame`` already carries a durable sidecar that names its current size and mtime."""
+    try:
+        receipt = json.loads(marker.read_text(encoding='utf-8'))
+        stat = frame.stat()
+    except (OSError, ValueError):
+        return False
+    return (isinstance(receipt, dict) and receipt.get('bytes') == stat.st_size
+            and receipt.get('mtime_ns') == stat.st_mtime_ns)
+
+
 def run_forecast(arguments: Any, config: Any, text: str) -> int:
     """Hydrate Registry pools for resident physics; core.F:589-596."""
     pin_set = getattr(config, 'pin_set', None) or 'v8.4.2'
@@ -571,8 +682,13 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
                         if name != 'surface' or not config.options['config_sst_update'])
     sources = list(dict.fromkeys((*sources,*table_bindings.values(),*startup_bindings)))
     text = apply_start_time(text, getattr(arguments, 'start_time', None))
+    text = bind_limited_area(arguments, text)
     from .checkpoint_v842 import resolve_route
     moving, text = resolve_route(arguments, text)
+    if moving is not None and getattr(arguments, 'lbc_dir', None) is not None:
+        # THE BREAKAGE THIS PREVENTS: a moving region carries its own boundary (its parent's frames through the move
+        # hooks); a second, fixed --lbc-dir series would drive a zone that no longer sits where the files were cut.
+        raise ValueError('a moving region on the MPAS suite route takes its boundary from the move hooks; drop --lbc-dir')
     text = bind_init_start(text, getattr(arguments, 'init', None))
     from ..stage_timing import stage
     timings = []
@@ -632,12 +748,30 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
     if getattr(arguments,'preflight',False):
         print(json.dumps(dict(status='native-pool-preflight',identity_checked=False,request=plan)))
         return 0
+    # The start record (hexcore.forecast_start), before the first step, as the ArWen route writes it: a door that
+    # joins this live run (gpuwm-hex add-nest, a site drawing hours as they land) reads mesh, init, start, hours
+    # and cadence here instead of a receipt complete only at the end.
+    history = next((s for s in streams if s.name == 'output' and 'output' in s.directions), None)
+    try:
+        history_seconds = None if history is None else interval_seconds(history.output_interval)
+    except ValueError:  # an interval with no fixed length (a calendar month, initial_only): no cadence to record
+        history_seconds = None
+    history_minutes = getattr(arguments, 'history_every_minutes', None)
+    if history_minutes is None and history_seconds:
+        history_minutes = float(history_seconds) / 60.0
+    from ..forecast_start import write_start_record
+    write_start_record(out, paths={'grid': getattr(arguments, 'grid', None) or arguments.init,
+                                   'static': getattr(arguments, 'static', None), 'init': arguments.init},
+                       schedule={'start_time': start, 'forecast_hours': float(duration) / 3600.0,
+                                 'history_every_minutes': history_minutes,
+                                 'history_from_minutes': getattr(arguments, 'history_from_minutes', None)})
     from .features_v842 import run_native_dynamics
     parallelism = {'device':'GPU plus Python framework' if library is None else 'GPU plus native CPU','cards':1,
                    'requested_omp_threads':int(os.environ.get('OMP_NUM_THREADS','1'))}
     if getattr(arguments, 'samehost_devices', None):
         from ..drivers.samehost_forecast_v841 import device_list
-        parallelism.update(device='MPI GPU ranks plus native CPU',
+        parallelism.update(device=('same-host GPU rank threads plus Python framework' if library is None
+                                   else 'MPI GPU ranks plus native CPU'),
                            cards=len(device_list(arguments.samehost_devices)))
     try:
         with stage(timings, 'native-forecast-runtime', parallelism=parallelism):
@@ -646,12 +780,15 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
                                      start, stop, float(dt), int(duration/dt), out,
                                      moving=moving)
         if rc == 0:
-            from ..history_writer import mark_closed_frame_durable
+            from ..history_writer import durable_marker, mark_closed_frame_durable
             from ..products_door import native_output_frames
+            # Frames in a file of their own were published by the writer as each closed
+            # (streams_output_v842._publish_closed); only multi-record files are left here.
             with stage(timings, 'native-history-durability', parallelism={'device':'CPU','threads':1},
                        timeline='post.native.history_durability'):
                 for frame in native_output_frames(out):
-                    mark_closed_frame_durable(frame)
+                    if not _marked_durable(frame, durable_marker(frame)):
+                        mark_closed_frame_durable(frame)
         return rc
     finally:
         save_timings()

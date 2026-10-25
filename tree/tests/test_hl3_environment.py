@@ -25,18 +25,45 @@ def test_exact_environment_accepts_relocated_sources():
 
 
 @pytest.mark.parametrize('key', env.KEYS)
-def test_each_changed_pin_is_environment(key):
+def test_each_pin_changed_during_the_run_is_environment(key):
     changed = record(); changed['pins'][key] = 'different'
     verdict = env.judge(record(), record(), changed)
     assert verdict['verdict'] == 'ENVIRONMENT'
     assert verdict['failures']
 
 
-@pytest.mark.parametrize('which', ['reference','before','after'])
+OTHER = dict(engine_version='2.9.6', engine_git_sha='f'*40, engine_wheel_sha256='e'*64,
+             engine_content_sha256='d'*64, math_headers={'glibc_flt32.cuh': 'f'*64},
+             cuda_toolkit='nvcc release 13.4', cuda_runtime=13020, nvrtc=[13, 4],
+             cupy_version='14.2.0', driver='580.95', gpu_uuid='GPU-other')
+
+
+@pytest.mark.parametrize('key', sorted(OTHER))
+def test_each_pin_differing_from_the_reference_is_listed_not_refused(key):
+    reference = record(); reference['pins'][key] = OTHER[key]
+    verdict = env.judge(reference, record(), record())
+    assert verdict['verdict'] == 'DIFFERS' and verdict['failures'] == []
+    assert verdict['reference_differences'] == [key]
+
+
+def test_no_reference_is_recorded_not_refused():
+    """A deck needs no hand-captured record: the receipt's own capture is the record."""
+    verdict = env.judge(None, record(), record())
+    assert verdict['verdict'] == 'RECORDED' and verdict['failures'] == []
+
+
+@pytest.mark.parametrize('which', ['before','after'])
 def test_missing_as_run_cannot_be_reconstructed(which):
     records = dict(reference=record(), before=record(), after=record())
     records[which] = None
     assert env.judge(records['reference'], records['before'], records['after'])['verdict'] == 'ENVIRONMENT'
+
+
+def test_fast_numerics_is_environment():
+    fast = record(); fast['pins']['numerics'] = 'fast'
+    verdict = env.judge(None, fast, fast)
+    assert verdict['verdict'] == 'ENVIRONMENT'
+    assert 'before: strict landing requires numerics=strict' in verdict['failures']
 
 
 def test_collector_hashes_actual_override_headers_and_git(tmp_path, monkeypatch):
@@ -85,11 +112,35 @@ def test_unpinned_gate_does_not_start_a_forecast(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, 'comparator_path', lambda _: tmp_path/'comparator')
     monkeypatch.setattr(gate, 'native_manifest', lambda *a:(tmp_path/'native.json',{}))
     monkeypatch.setattr(gate, 'proof_physics_mode', lambda c,n:(c,{}))
-    monkeypatch.setattr(env, 'capture', lambda *a:record())
+    fast = record(); fast['pins']['numerics'] = 'fast'
+    monkeypatch.setattr(env, 'capture', lambda *a:fast)
     monkeypatch.setattr(gate.subprocess, 'run', lambda *a,**kw:pytest.fail('forecast started'))
     result=gate.verify(SimpleNamespace(deck=deck,comparator=None,work_root=tmp_path/'work',hex_output=None))
     assert result['verdict'] == 'ENVIRONMENT'
     assert result['model_execution'] is False and result['passed'] is False
+
+
+def test_deck_without_reference_starts_the_forecast(tmp_path, monkeypatch):
+    """hex 0.4.1-0.4.4 refused every shipped deck here ('reference: missing as-run strict environment')."""
+    inputs = {}
+    for name in ['namelist','streams','init']:
+        p=tmp_path/name; p.write_text('<streams/>' if name == 'streams' else '')
+        inputs[name] = dict(path=str(p),sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+    deck=tmp_path/'deck.json'
+    deck.write_text(json.dumps(dict(schema='mpas-verification-deck-v1',
+        pin_set='example',mesh='mesh',date='date',id='deck',process_count=1,
+        inputs=inputs,native={},hex_command=['gpuwm-hex','forecast','--physics-namelist','{namelist}',
+        '--streams','{streams}','--init','{init}','--out','{out}'])))
+    monkeypatch.setattr(gate, 'comparator_path', lambda _: tmp_path/'comparator')
+    monkeypatch.setattr(gate, 'native_manifest', lambda *a:(tmp_path/'native.json',{}))
+    monkeypatch.setattr(gate, 'proof_physics_mode', lambda c,n:(c,{}))
+    monkeypatch.setattr(env, 'capture', lambda *a:record())
+    class Started(Exception): pass
+    def started(*a, **kw): raise Started
+    # The model-launch validation runs only after the environment check admits the arm.
+    monkeypatch.setattr(gate, 'validate_model_command', started)
+    with pytest.raises(Started):
+        gate.verify(SimpleNamespace(deck=deck,comparator=None,work_root=tmp_path/'work',hex_output=None))
 
 
 def test_refusal_still_records_capture_status(tmp_path, monkeypatch):
@@ -101,8 +152,10 @@ def test_refusal_still_records_capture_status(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('changed,words,verdict', [
-    (False,0,'GREEN'), (False,1,'RED'), (True,0,'ENVIRONMENT'), (True,1,'ENVIRONMENT')])
-def test_receipt_verdict_requires_same_environment(tmp_path, monkeypatch, changed, words, verdict):
+    (False,0,'GREEN'), (False,1,'RED'), (True,0,'GREEN'), (True,1,'ENVIRONMENT')])
+def test_receipt_verdict_attributes_only_in_the_reference_environment(tmp_path, monkeypatch, changed, words, verdict):
+    """Identical words are the proof in any strict environment; a difference is a
+    source regression only in the reference environment."""
     """Use comparison fixtures to exercise receipt/ratchet policy end to end."""
     def ref(name, value):
         p=tmp_path/name; p.write_text(json.dumps(value))
@@ -142,7 +195,9 @@ def test_receipt_verdict_requires_same_environment(tmp_path, monkeypatch, change
     assert result['data_words_differing'] == words
     assert result['passed'] == (verdict == 'GREEN')
     assert result['ratchet_eligible'] == (not changed)
-    if changed: assert result['ratchet_regressions'] == []
+    if changed:
+        assert result['ratchet_regressions'] == []
+        assert result['environment']['reference_differences'] == ['driver']
 
 
 def test_nvrtc_wheel_toolkit_is_pinned_without_nvcc(tmp_path, monkeypatch):
@@ -193,8 +248,66 @@ def test_installed_wheel_archive_and_record_identity_is_accepted(tmp_path, monke
 def test_installed_wheel_without_record_is_refused(tmp_path, monkeypatch):
     observed = installed_wheel_capture(tmp_path, monkeypatch, installed_record=None)
     assert observed['pins']['engine_wheel_sha256'] == 'd'*64
-    assert 'installed engine RECORD SHA256 is missing or invalid' in env.problems(observed)
+    assert any(p.startswith('engine identity needs') for p in env.problems(observed))
     assert env.judge(observed, observed, observed)['verdict'] == 'ENVIRONMENT'
+
+
+def pypi_install(tmp_path, monkeypatch, tamper=False):
+    """A wheel installed the way pip installs from PyPI: RECORD, no direct_url.json."""
+    import base64
+    import importlib.metadata as metadata
+    import zipfile
+    test_collector_hashes_actual_override_headers_and_git(tmp_path, monkeypatch)
+    site = tmp_path/'pypi-site'
+    files = {'gpuwm/__init__.py': b'', 'gpuwm/core/kernels/first.cuh': b'first',
+             'gpuwm/libexec/bridges/rw_mpas_static': b'binary'}
+    def row(name, data):
+        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b'=').decode()
+        return f'{name},sha256={digest},{len(data)}'
+    rows = [row(n, d) for n, d in files.items()]
+    wheel = tmp_path/'gpuwm-2.9.6-py3-none-any.whl'
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+        archive.writestr('gpuwm-2.9.6.dist-info/METADATA', 'Name: gpuwm\nVersion: 2.9.6\n')
+        archive.writestr('gpuwm-2.9.6.dist-info/RECORD',
+                         '\n'.join(rows + ['gpuwm-2.9.6.dist-info/RECORD,,']) + '\n')
+    for name, data in files.items():
+        (site/name).parent.mkdir(parents=True, exist_ok=True)
+        (site/name).write_bytes(data)
+    info = site/'gpuwm-2.9.6.dist-info'
+    info.mkdir()
+    (info/'METADATA').write_text('Metadata-Version: 2.1\nName: gpuwm\nVersion: 2.9.6\n')
+    (info/'INSTALLER').write_text('pip\n')
+    script = b'#!/venv/bin/python3\nimport gpuwm\n'
+    (info/'RECORD').write_text('\n'.join(rows + [row('../../../bin/gpuwm', script),
+        row('gpuwm-2.9.6.dist-info/INSTALLER', b'pip\n'), 'gpuwm-2.9.6.dist-info/RECORD,,',
+        'gpuwm/__pycache__/__init__.cpython-314.pyc,,']) + '\n')
+    if tamper:
+        (site/'gpuwm/core/kernels/first.cuh').write_bytes(b'edited after install')
+    dist = metadata.PathDistribution(info)
+    monkeypatch.setattr(env.importlib.metadata, 'distribution', lambda _: dist)
+    monkeypatch.setattr(env.importlib.util, 'find_spec', lambda _: SimpleNamespace(
+        submodule_search_locations=[str(site/'gpuwm')]))
+    return env.capture('strict'), wheel
+
+
+def test_pypi_install_identity_is_its_verified_files(tmp_path, monkeypatch):
+    """hex 0.4.1-0.4.4 refused every PyPI-installed engine: pip records no wheel hash."""
+    observed, wheel = pypi_install(tmp_path, monkeypatch)
+    assert observed['pins']['engine_wheel_sha256'] is None
+    assert observed['pins']['engine_git_sha'] is None
+    assert env.problems(observed) == []
+    # Recomputable from the published wheel alone, without installing it.
+    assert observed['pins']['engine_content_sha256'] == env.wheel_content_sha256(wheel)
+    assert env.judge(None, observed, observed)['verdict'] == 'RECORDED'
+
+
+def test_pypi_install_with_an_edited_file_is_refused(tmp_path, monkeypatch):
+    observed, _ = pypi_install(tmp_path, monkeypatch, tamper=True)
+    assert ('installed engine file differs from its RECORD: gpuwm/core/kernels/first.cuh'
+            in env.problems(observed))
+    assert env.judge(None, observed, observed)['verdict'] == 'ENVIRONMENT'
 
 
 def test_checkout_identity_and_legacy_reference_are_unchanged(tmp_path, monkeypatch):
@@ -234,3 +347,28 @@ def test_comparator_loader_failure_names_first_stderr_line(tmp_path, monkeypatch
     with pytest.raises(gate.VerificationRefusal) as refusal:
         gate.comparator_path(path)
     assert str(refusal.value) == 'Rust comparator ABI probe failed (exit 127): '+error
+
+
+def test_installed_multicall_comparator_is_found(tmp_path, monkeypatch):
+    """rw_mpas_verify ships only as rw_mpas_static's verify tool; a PyPI install must find it."""
+    from hexcore import engines
+    package = tmp_path/'gpuwm'
+    bridges = package/'libexec/bridges'
+    bridges.mkdir(parents=True)
+    tool = bridges/engines.executable_name('rw_mpas_static')
+    tool.write_bytes(b'x')
+    monkeypatch.setattr(engines, '_gpuwm_package_dir', lambda: package)
+    monkeypatch.delenv('GPUWM_HEX_RW_MPAS_VERIFY', raising=False)
+    monkeypatch.setattr(gate.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(gate.os, 'access', lambda path, mode: True)
+    seen = []
+    def probe(argv, **kw):
+        seen.append(argv)
+        # hex's own older static builder has no verify tool: it prints its door ABI.
+        older = 'hexcore' in Path(argv[0]).parts
+        return SimpleNamespace(returncode=0, stdout='GRID\tWROTE' if older else gate.ABI, stderr='')
+    monkeypatch.setattr(gate.subprocess, 'run', probe)
+    assert gate.comparator_path(None) == tool.resolve()
+    assert seen[-1] == [str(tool.resolve()), 'verify', '--abi']
+    assert gate.comparator_argv(tool) == [str(tool), 'verify']
+    assert gate.comparator_argv(tmp_path/'rw_mpas_verify') == [str(tmp_path/'rw_mpas_verify')]

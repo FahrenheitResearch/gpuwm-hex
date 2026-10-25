@@ -8,17 +8,25 @@ import pytest
 from hexcore.verify_mpas import VerificationRefusal, build_headline, digest
 
 
+NAMELIST = "&physics\n    config_physics_suite = 'convection_permitting'\n/\n"
+#: The ten slots convection_permitting runs (hl-3's landed list); ngw and oml are off in it.
+ACTIVE = ('config_sfclayer_backend', 'config_lsm_backend', 'config_convection_backend', 'config_radt_cld_backend',
+          'config_microp_backend', 'config_seaice_backend', 'config_pbl_backend', 'config_gwdo_backend',
+          'config_radt_lw_backend', 'config_radt_sw_backend')
+
+
 @pytest.fixture
 def case(tmp_path):
     def ref(name):
         path = tmp_path / name
-        path.write_text(name)
+        path.write_text(NAMELIST if name == 'namelist' else name)
         return {'path': name, 'sha256': digest(path)}
     parent = dict(schema='mpas-verification-deck-v1', id='parent', pin_set='pin',
                   mesh='mesh', date='date', physics='on', suite='suite',
                   process_count=1, ranks=1, duration_steps=3,
                   inputs={k: ref(k) for k in ('namelist', 'streams', 'init')},
-                  native=ref('publication'), hex_command=['gpuwm-hex', 'forecast'])
+                  native=ref('publication'),
+                  hex_command=['gpuwm-hex', 'forecast', '--native-physics-library', '{resource:native-library}'])
     path = tmp_path / 'parent.json'
     path.write_text(json.dumps(parent))
     index = dict(schema='mpas-gate-index-v1', gates={'G1': [{'path': str(path), 'sha256': digest(path)}],
@@ -47,7 +55,11 @@ def test_land_then_regenerate_preserves_retired_allowance(case):
     generated = read(args.out / 'headline-deck.json')
     assert generated['headline_backends']['surface_layer'] == 'hex-cuda'
     assert set(generated['headline_backends'].values()) == {'native-cpu', 'hex-cuda'}
-    assert sum(v == 'hex-cuda' for v in generated['headline_backends'].values()) == 1
+    # The landed slot plus the two slots convection_permitting leaves off (they run nothing).
+    assert {k for k, v in generated['headline_backends'].items() if v == 'hex-cuda'} == {
+        'surface_layer', 'ngw', 'oml'}
+    # Active slots still on the CPU: the native library stays.
+    assert generated['hex_command'][2:4] == ['--native-physics-library', '{resource:native-library}']
     assert generated['native']['sha256'] == parent['native']['sha256']
     assert Path(generated['native']['path']).is_absolute()
     first_index = read(args.out / 'mpas-gate-index.json')
@@ -68,6 +80,17 @@ def test_land_then_regenerate_preserves_retired_allowance(case):
     assert second['entries'] == first['entries']
     assert read(args.out/'headline-deck.json')['headline_backends']['land_surface'] == 'hex-cuda'
     assert len(read(args.out/'mpas-gate-index.json')['gates']['G2']) == 2
+
+
+def test_an_all_gpu_headline_names_no_native_library(case):
+    args, *_ = case
+    args.slots.write_text(''.join(f'{name}=hex-cuda\n' for name in ACTIVE))
+    assert build_headline(args) == 0
+    generated = read(args.out / 'headline-deck.json')
+    assert set(generated['headline_backends'].values()) == {'hex-cuda'}
+    assert '--native-physics-library' not in generated['hex_command']
+    overlay = generated['hex_command'][generated['hex_command'].index('--physics') + 1]
+    assert "config_ngw_backend='hex-cuda'" in overlay and "config_oml_backend='hex-cuda'" in overlay
 
 
 @pytest.mark.parametrize('text', ['typo=hex-cuda', 'config_lsm_backend=off',

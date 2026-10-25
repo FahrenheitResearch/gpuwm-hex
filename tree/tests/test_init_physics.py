@@ -58,7 +58,20 @@ def test_a_suite_the_init_door_does_not_initialize_is_refused_by_name():
 
     with pytest.raises(MpasPortError, match="init_atmosphere"):
         init_selection("hrrrv5", None)
-    with pytest.raises(MpasPortError, match="no --physics-suite"):
-        init_selection("mesoscale_reference", None)
     with pytest.raises(MpasPortError, match="rrfs_v2_dev"):
         init_selection("no_such_suite", None)
+
+
+def test_an_mpas_v842_suite_is_initialized_by_the_plain_init_and_named():
+    # hex parity run group 7, #28: `init --physics-suite convection_permitting` refused ("drop the flag"),
+    # though the suite runs from the init written with no suite.
+    import pytest
+    from hexcore.errors import MpasPortError
+
+    for suite in ("convection_permitting", "mesoscale_reference"):
+        selection = init_selection(suite, None)
+        assert selection["land_surface"] == "noah" and selection["scalar_names"] == ()
+        assert selection["physics_initialization"]["suite"] == suite
+    assert init_selection("convection_permitting", None)["scalar_names"] == init_selection(None, None)["scalar_names"]
+    with pytest.raises(MpasPortError, match="four soil levels"):
+        init_selection("convection_permitting", "ruc")

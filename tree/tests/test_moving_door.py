@@ -150,6 +150,36 @@ def test_segment_environment_sets_run_state_and_keeps_knobs(tmp_path, monkeypatc
     assert zone["GPUWM_HEX_MOVING_CHECKPOINT_IN"] == str(tmp_path / "in.pkl")
 
 
+@pytest.mark.parametrize('whole_domain', [False, True])
+def test_corridor_transfer_selection_reaches_carrier_and_survives_resume(tmp_path, monkeypatch, whole_domain):
+    """Corridor geometry used to force zone carry, bypassing the all-domain balance solver."""
+    from hexcore.moving_run import Controller
+    from hexcore import moving_members
+
+    case = _case(tmp_path)
+    monkeypatch.setattr(Controller, 'adopt_start_member', lambda self: 'start')
+    monkeypatch.setattr(Controller, 'read_member', lambda *args: dict(mesh_rows='rows.json', status='ready'))
+    monkeypatch.setattr(moving_members, 'read_stage', lambda path: dict(source='gfs'))
+    argv = ['moving', 'run', '--case', str(case), '--casedir', str(tmp_path / 'case'),
+            '--out', str(tmp_path / 'run'), '--hours', '6']
+    if whole_domain:
+        argv.append('--whole-domain-remap')
+    controller = Controller(build_parser().parse_args(argv))
+    assert controller.stitch and controller.a.zone_carry  # geometry is unchanged
+    path = controller.operator_path('start', 'next')
+    env = controller.segment_env(dict(mesh_rows='rows.json'), tmp_path / 'control', tmp_path / 'out.pkl',
+                                 tmp_path / 'in.pkl', path, 'source.nc')
+    assert ('GPUWM_HEX_MOVING_OPERATOR' in env) == whole_domain
+    assert ('GPUWM_HEX_MOVING_ZONE' in env) != whole_domain
+    resumed = Controller(build_parser().parse_args([*argv, '--resume']))
+    assert resumed.state['transfer'] == controller.state['transfer']
+    changed = [value for value in argv if value != '--whole-domain-remap']
+    if not whole_domain:
+        changed.append('--whole-domain-remap')
+    with pytest.raises(SystemExit, match='retain the original transfer route'):
+        Controller(build_parser().parse_args([*changed, '--resume']))
+
+
 @pytest.mark.skipif(os.name != "posix" or shutil.which("sh") is None, reason="process groups are POSIX")
 def test_stopping_a_child_stops_its_whole_tree(tmp_path):
     from hexcore.moving_run import start_child, stop_process_tree

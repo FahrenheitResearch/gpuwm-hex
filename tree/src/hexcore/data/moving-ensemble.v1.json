@@ -1,8 +1,14 @@
 {
   "schema": "gpuwm-hex.moving-ensemble-roster/v1",
-  "description": "Equal-weight analysis branches with GPU SPPT/SKEB and two microphysics choices.",
+  "description": "Equal-weight analysis branches with GPU SPPT/SKEB and two microphysics choices (ArWen route), or two cloud-radiation couplings of the suite's own Thompson (MPAS convection_permitting route).",
   "physics": [
     {"id": "wsm6", "forecast_flags": ["--physics", "config_microp_scheme=mp_wsm6"]},
     {"id": "thompson", "forecast_flags": ["--physics", "config_microp_scheme=mp_thompson"]}
-  ]
+  ],
+  "mpas_suite_physics": {
+    "convection_permitting": [
+      {"id": "thompson-radii-off", "forecast_flags": ["--physics", "config_microp_re=false"]},
+      {"id": "thompson-radii-on", "forecast_flags": ["--physics", "config_microp_re=true"]}
+    ]
+  }
 }

@@ -84,3 +84,25 @@ Set `GPUWM_HEX_NO_LOCAL_GPU=1` (or `GPUWM_NO_LOCAL_GPU=1`, honoured so a box
 configured for the engine behaves the same) to ban device contact outright:
 the gates skip by name and `CUDA_VISIBLE_DEVICES` is set to `-1` so that a
 transitive allocation the markers cannot see still finds no device.
+
+## Both routes — `both_routes.json` — one real run per capability family, on each physics route
+
+```sh
+HEX_GPU_LEASE=<pool admission program> PYTHONPATH=src python tools/both_routes_gate.py --work DIR \
+    --staged GFS_DIR --geog WPS_GEOG --best-track IBTRACS.csv --storm-staged GFS_F000 [--jobs 3] [--clean]
+PYTHONPATH=src python tools/both_routes_gate.py --plan     # every command, nothing run
+```
+
+Every hex capability has to work on the ArWen-physics route and on the MPAS-physics route, and a fix to one
+route has to reach the other. This leg runs each capability family once on each route: a 120 km globe for 1-2 h
+(global door with live frames, maps and export; keep-as-init export with `HGT`, radar and the column store;
+2 cards = 1 card; restart with SPPT+SKEB = straight; IAU; JEDI background; chemistry; balance series; trigger
+nests arming; a member roster), a small variable-resolution globe with and without local time stepping, a
+limited-area country point and a storm-following moving region. Each check names what it proves; the receipt
+(`DIR/both-routes.json`) and matrix (`DIR/both-routes.md`) carry the verdict, median step time and sampled peak
+VRAM per route.
+
+It never holds a card exclusively. GPU steps go through `HEX_GPU_LEASE` (invoked as
+`<program> --vram-mib N [--cards K] <lane> -- <command>`, K only for the two-card leg) or the site GPU queue
+without `--proof`, so a timed arm in flight keeps its card. The CPU tier's `tests/test_both_routes_gate.py`
+parses every command with the real parser, so a renamed flag is red there, before any card is asked for.

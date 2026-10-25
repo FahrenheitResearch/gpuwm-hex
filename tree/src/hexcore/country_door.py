@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 import time
 from datetime import datetime, timedelta
@@ -90,9 +91,25 @@ def region_request(args):
         bounds = dict(west=west, east=east, south=min(lats), north=max(lats))
         view = [lat, lon, max(100, (east-west)*111*math.cos(math.radians(lat))), max(100, (max(lats)-min(lats))*111)]
     import hashlib
-    identity = "region-" + hashlib.sha256(json.dumps(geometry, sort_keys=True).encode()).hexdigest()[:12]
+    # A finer region (--fine-dx-m, with --background-km): the generator's
+    # halving ladder from that background down to the asked spacing, and a
+    # step of 6 s per km of it (the zoom globes' MPAS rule) where that is
+    # shorter than the table's.  Part of the region's identity, so a finer
+    # region never reuses a coarser one's prepared mesh.
+    resolution = {}
+    fine = getattr(args, "fine_dx_m", None)
+    background = getattr(args, "background_km", None)
+    if fine is not None or background is not None:
+        from .mesh_point import ladder_rungs
+        fine = float(fine if fine is not None else row["mesh"]["fine_dx_m"])
+        background = float(background if background is not None else row["mesh"]["background_km"])
+        ladder_rungs(background, fine)
+        step = min(float(row["mesh"]["dt_seconds"]), 6.0 * fine / 1000.0)
+        resolution = {"fine_dx_m": fine, "background_km": background, "dt_seconds": step}
+    keyed = {**geometry, **({"resolution": resolution} if resolution else {})}
+    identity = "region-" + hashlib.sha256(json.dumps(keyed, sort_keys=True).encode()).hexdigest()[:12]
     row.update(id=identity, geometry=geometry)
-    row["mesh"].update(id=identity, point_deg=[lat, lon])
+    row["mesh"].update(id=identity, point_deg=[lat, lon], **resolution)
     row["scorecard"]["region"] = {**bounds, "step_degrees": 0.25}
     args.row = identity
     products = ["--no-global", "--no-mesh-view", "--region", "region=region:" + ",".join(map(str, view)), "--jobs", "2", "--frame-jobs", "1"]
@@ -110,6 +127,49 @@ def region_specification(row):
     return {"name": row["id"], "background_km": mesh["background_km"],
         "regions": [{"shape": row["geometry"], "spacing_km": mesh["fine_dx_m"]/1000,
                      "transition_km": mesh["transition_km"]}]}
+
+
+def _suite_parent_init(value, parent_init, mesh):
+    """The parent init completed for the planned forecast's physics suite, or None when it needs nothing.
+
+    THE BREAKAGE THIS PREVENTS (3 km region from GFS 2026-10-23 18Z f348 with
+    rrfs_v2_dev, box L, 2026-10-24): RUC integrates 9 soil levels, the init
+    writes Noah's 4, and the forecast door replays the soil from the init's
+    recorded source analysis -- which a CUT init does not carry, so every
+    RRFS-shape region refused ("ruc needs 9 soil levels; mesh.init.nc has 4 and
+    no source-analysis provenance").  The parent init still has its provenance:
+    complete it for the suite here (soil replayed from the source analysis,
+    the suite's species initialized) and cut that, so the region's init is the
+    suite's from the start.
+    """
+    from .global_door import forecast_arg_physics
+    forecast = [str(a) for a in value["commands"]["forecast"]]
+    named = forecast_arg_physics([a.split("=", 1)[1] if a.startswith("--forecast-arg=") else a for a in forecast])
+    if "suite" not in named:
+        return None
+    from .physics_suites import load_table
+    if named["suite"] in set(load_table().get("mpasphys_v842", {}).get("suite_routes", {})):
+        # An MPAS-A v8.4.2 suite runs from the plain init (case-7 fields, Noah's four soil levels; the forecast
+        # allocates the suite's species), so there is nothing to complete. THE BREAKAGE THIS PREVENTS: the ArWen
+        # column seam below refused convection_permitting ("config_radt_cld_scheme='cld_fraction' is refused"),
+        # so every `country --forecast-arg=--physics-suite=convection_permitting` region stopped after its init.
+        return None
+    overrides = []
+    for i, item in enumerate(forecast):
+        text = item.split("=", 1)[1] if item.startswith("--forecast-arg=") else item
+        if text == "--physics" and i + 1 < len(forecast):
+            overrides.append(tuple(forecast[i + 1].split("=", 1)))
+        elif text.startswith("--physics="):
+            overrides.append(tuple(text.split("=", 1)[1].split("=", 1)))
+    from .physics_suites import resolve_physics
+    from .init_physics import prepare_forecast_init
+    physics = resolve_physics(named["suite"], overrides or None, mesh=mesh["id"],
+                              nominal_dx_m=mesh.get("fine_dx_m")).receipt()
+    out = Path(parent_init).with_name("init.suite.nc")
+    for stale in (out, out.with_name(out.name + ".provenance.json")):
+        stale.unlink(missing_ok=True)
+    prepared, receipt = prepare_forecast_init(Path(parent_init), out, physics, None)
+    return Path(prepared) if receipt is not None else None
 
 
 def _prepare_region(args, value, status):
@@ -155,13 +215,39 @@ def _prepare_region(args, value, status):
     # keys the current geometry/engine and grid/geography before reusing bytes.
     measured("mesh", lambda: run_or_fetch([engine("rw_mpas_mesh"), "--spec", str(spec), "--out", str(grid),
                       "--receipt", str(parent / "mesh-receipt.json"), "--clobber"]))
-    measured("static", lambda: run_or_fetch([engine("rw_mpas_static"), "--grid", str(grid),
-                      *(["--geog", str(args.geog)] if args.geog else []), "--out", str(static),
-                      "--receipt", str(parent / "static-receipt.json"), "--clobber"]))
+    # The parent's static from the cut's halo and the parent's terrain (hexcore.region_static: a new box spent
+    # 15.5 min here building the whole parent globe's static for a 600 km region); the whole parent's static
+    # only when the halo does not hold.
+    from .region_static import build_parent_static
+    center = mesh.get("point_deg") or row["geometry"].get("center_deg")
+
+    def halo_static():
+        if not center:
+            return {"built": False, "why": "the region row names no centre to build a halo around"}
+        try:
+            return build_parent_static(
+                parent_grid=grid, region=root / "region.json", center_deg=tuple(center), geog=args.geog,
+                mesh_exe=Path(engine("rw_mpas_mesh")), static_exe=Path(engine("rw_mpas_static")), out=static,
+                receipt=parent / "static-receipt.json", work=parent, run=run_or_fetch)
+        except Exception as error:  # the whole parent's static below still builds the region, as before
+            return {"built": False, "why": f"{type(error).__name__}: {error}"}
+    halo = measured("halo-static", halo_static)
+    timings["halo_static"] = {k: v for k, v in halo.items() if k not in ("halo_checks", "assembly")}
+    if not halo["built"]:
+        print(f"gpuwm-hex country: the region's halo static was not used ({halo.get('why')}); building the "
+              f"whole parent's static", file=sys.stderr)
+        measured("static", lambda: run_or_fetch([engine("rw_mpas_static"), "--grid", str(grid),
+                          *(["--geog", str(args.geog)] if args.geog else []), "--out", str(static),
+                          "--receipt", str(parent / "static-receipt.json"), "--clobber"]))
     status.note("initializing the global parent from the selected source")
     rc = measured("init", lambda: main(value["commands"]["init"]))
     if rc:
         return rc
+    suite_init = measured("suite-init", lambda: _suite_parent_init(value, parent / "init" / "init.nc", mesh))
+    if suite_init is not None:
+        cull = list(value["commands"]["cull"])
+        cull[cull.index("--parent-init") + 1] = str(suite_init)
+        value["commands"]["cull"] = cull
     rc = measured("cull", lambda: main(value["commands"]["cull"]))
     if rc:
         return rc
@@ -171,6 +257,9 @@ def _prepare_region(args, value, status):
         point_deg=tuple(mesh["point_deg"]), fine_dx_m=mesh["fine_dx_m"], core_radius_km=mesh["core_radius_km"],
         background_km=mesh["background_km"], dt_seconds=mesh["dt_seconds"], n_levels=mesh["n_levels"], admission=admission)
     cut_admission = measured("regional-admission", lambda: admit_pair(root / "mesh.grid.nc", root / "mesh.static.nc", fine_dx_m=mesh["fine_dx_m"]))
+    # The RRFS-shape suite's GSL drag reads the cut mesh's own orographic statistics (hexcore.ugwp_oro).
+    from .ugwp_oro import prepare_for_forecast
+    measured("ugwp-oro-data", lambda: prepare_for_forecast(value["commands"]["forecast"], root / "mesh.grid.nc", args.geog))
     cut = mesh_rows.describe_cull(name=mesh["id"], parent=registered, grid=root / "mesh.grid.nc", static=root / "mesh.static.nc",
         cull_receipt=root / "mesh.cull.json", cull_region=row["geometry"], cull_pad_scale=1.0,
         lbc_source=f"{row['init_source']} source table endpoints in {root / 'lbc'}", admission=cut_admission,
@@ -182,9 +271,12 @@ def _prepare_region(args, value, status):
 
 def plan(args):
     try:
-        datetime.strptime(args.cycle, "%Y-%m-%dT%H")
+        issued = datetime.strptime(args.cycle, "%Y-%m-%dT%H")
     except ValueError as error:
         raise MpasPortError("country cycle must be YYYY-MM-DDTHH; it determines the init's valid time") from error
+    lead = int(getattr(args, "lead_hours", 0) or 0)
+    if lead < 0:
+        raise MpasPortError(f"--lead-hours {lead} is negative; it is the forecast hour of --cycle the run starts from")
     row, products, data_dir = region_request(args)
     from .init_sources import load_table, resolve_source
     if "geometry" in row:
@@ -202,19 +294,31 @@ def plan(args):
     init = args.init or root / "init" / "init.nc"
     spec = (root / "region-mesh.spec.json" if "geometry" in row else (data_dir / mesh["spec"]).resolve())
     vertical = (data_dir / row["vertical_spec"]).resolve()
-    start = args.cycle.replace("T", "_") + ":00:00"
+    # The run starts at the cycle's forecast hour --lead-hours (0: the cycle itself): the init is that hour's
+    # forecast and every boundary endpoint reads the same cycle further on (lbc_producer.source_endpoint_commands).
+    start = (issued + timedelta(hours=lead)).strftime("%Y-%m-%d_%H:00:00")
+    issued_label = f"{args.cycle} f{lead:03d}" if lead else args.cycle
     common = ["--grid", str(grid), "--static", str(static)]
     initialization = ["init-source", "--source", row["init_source"], "--cycle", args.cycle,
                       "--out-dir", str(root / "init"), *common, "--vertical-spec", str(vertical)]
+    if lead:
+        initialization += ["--lead-hours", str(lead)]
     for staged in args.staged:
         initialization += ["--staged", str(staged)]
     if getattr(args, "source_table", None):
         initialization += ["--table", str(args.source_table)]
     if getattr(args, "member", None) is not None:
         initialization += ["--member", str(args.member)]
+    # A named suite (--forecast-arg=--physics-suite=NAME) takes the step the forecast door gives that
+    # suite, as the global door does (global_door.forecast_physics_arm): the mesh's own --dt is the
+    # ArWen column's and is not passed beside it.
+    from .global_door import forecast_arg_physics
+    extra = [str(item) for item in getattr(args, "forecast_arg", None) or ()]
+    named = forecast_arg_physics(extra)
+    step = [] if (named.get("suite") or named.get("namelist")) else ["--dt", str(mesh["dt_seconds"])]
     forecast = ["forecast", "--mesh", mesh["id"], *common, "--init", str(init),
-                "--start-time", start, "--init-source", f"{row['init_source']} {args.cycle}; country row {args.row}",
-                "--hours", str(args.hours), "--dt", str(mesh["dt_seconds"]),
+                "--start-time", start, "--init-source", f"{row['init_source']} {issued_label}; country row {args.row}",
+                "--hours", str(args.hours), *step,
                 "--history-every-minutes", str(args.history_every_minutes), "--out", str(root / "forecast"),
                 "--scratch", str(root / "scratch"), "--no-products"]
     if args.gpuwm_checkout is not None:
@@ -225,6 +329,8 @@ def plan(args):
     for key in ("samehost_devices", "samehost_layouts", "samehost_part"):
         if getattr(args, key, None) is not None:
             forecast += ["--" + key.replace("_", "-"), str(getattr(args, key))]
+    # The caller's forecast flags come last, so a --physics-suite (or a --dt) given here wins.
+    forecast += extra
     from .products_door import label_argv
 
     product_argv = ["products", str(root / "forecast"), "--out", str(root / "products"), *products,
@@ -246,7 +352,7 @@ def plan(args):
         from .lbc_producer import source_endpoint_commands
         endpoints = source_endpoint_commands(source=source["id"], cycle=args.cycle, hours=args.hours,
             out_dir=root / "boundary-source", staged=args.staged, member=getattr(args, "member", None),
-            table=getattr(args, "source_table", None))
+            table=getattr(args, "source_table", None), lead_hours=lead)
         parent = root / "parent"
         endpoints[0]["argv"][endpoints[0]["argv"].index("--out-dir") + 1] = str(parent / "init")
         initialization[initialization.index("--grid") + 1] = str(parent / "mesh.grid.nc")
@@ -265,7 +371,12 @@ def plan(args):
         forecast[forecast.index("--init") + 1] = str(root / "mesh.init.nc")
         init = root / "mesh.init.nc"
         extra = {"cull": cut, "lbc": boundary}
-    return {"schema": "gpuwm-hex.country-plan/v1", "row": row, "cycle": args.cycle,
+    # The case named, not read from the forecast's receipt afterwards: the first look draws into it while the
+    # forecast runs, before that receipt exists (the same name the receipt gives, the mesh row and the cycle).
+    from .products_door import case_token
+    product_argv += ["--case", case_token(None, Path(forecast[forecast.index("--grid") + 1]), start, mesh["id"])]
+    return {"schema": "gpuwm-hex.country-plan/v1", "row": row, "cycle": args.cycle, "lead_hours": lead,
+            "start_time": start,
             "paths": {"grid": str(grid), "static": str(static), "init": str(init), "spec": str(spec)},
             "commands": {"init": initialization, "forecast": forecast, "products": product_argv, "score": score, **extra},
             **({"boundary_endpoints": endpoints} if "geometry" in row else {}),
@@ -306,6 +417,9 @@ def _prepare(args, value, status):
                       "--out", str(paths["static"]),
                       "--receipt", str(root / "static-receipt.json")], runner=build_static)
     mesh = value["row"]["mesh"]
+    # The RRFS-shape suite's GSL drag reads the mesh's orographic statistics (hexcore.ugwp_oro).
+    from .ugwp_oro import prepare_for_forecast
+    prepare_for_forecast(value["commands"]["forecast"], paths["grid"], args.geog)
     registered = mesh_rows.describe_generated(name=mesh["id"], grid=paths["grid"], static=paths["static"],
         spec_path=paths["spec"], generator_receipt=root / "mesh-receipt.json", static_receipt=root / "static-receipt.json",
         point_deg=tuple(mesh["point_deg"]), fine_dx_m=mesh["fine_dx_m"], core_radius_km=mesh["core_radius_km"],
@@ -319,7 +433,32 @@ def _prepare(args, value, status):
     return main(value["commands"]["init"])
 
 
-def _run_stage(name, args, value, status):
+def first_look(value, root):
+    """The region's maps hour by hour while its forecast runs (first_look.py), into the full pass's tree and case.
+
+    THE BREAKAGE THIS PREVENTS (WOOF hex region runs on gpuwm-hex 0.4.4, 2026-10-24): the country door had no first
+    look, so a region run showed no map until its forecast and its full products pass had both ended, while global
+    runs streamed every hour. The draws take the products pass's own view and label flags, without point soundings
+    (the full pass draws those at the row's points)."""
+    from .first_look import FirstLook
+    forecast, products = value["commands"]["forecast"], value["commands"]["products"]
+    flags, skip = [], {"--out", "--case", "--points"}
+    rest = products[2:]
+    i = 0
+    while i < len(rest):
+        if rest[i] in skip:
+            i += 2
+            continue
+        flags.append(str(rest[i]))
+        i += 1
+    return FirstLook(root / "forecast", grid=forecast[forecast.index("--grid") + 1],
+                     init=forecast[forecast.index("--init") + 1], start_time=forecast[forecast.index("--start-time") + 1],
+                     out=products[products.index("--out") + 1], case=products[products.index("--case") + 1],
+                     extra=[*flags, "--no-points"])
+
+
+def _run_stage(name, args, value, status, stages=(), state=None):
+    state = {} if state is None else state
     if name == "prepare":
         return {"returncode": _prepare(args, value, status)}
     root = args.work_dir.resolve()
@@ -334,16 +473,29 @@ def _run_stage(name, args, value, status):
             status.note(joined["note"])
             print(json.dumps(joined), flush=True)
             return {**joined, "returncode": 0}
-    status.note("gpuwm-hex " + " ".join(value["commands"][name]))
+    command = list(value["commands"][name])
+    if name == "products" and state.get("live_receipt") is not None:
+        command += ["--live-frames", str(state["live_receipt"])]  # the hours drawn live keep their maps
+    status.note("gpuwm-hex " + " ".join(command))
+    look = first_look(value, root) if name == "forecast" and "products" in stages else None
+    if look is not None:
+        look.start()
     # The forecast runs in its own process, so its device memory ends with it (cli.DEVICE_COMMANDS).
     from . import cli
-    rc = cli.run_stage(value["commands"][name])
+    try:
+        rc = cli.run_stage(command)
+    finally:
+        if look is not None:
+            state["first_look"] = look.finish()
+            state["live_receipt"] = look.receipt()
+            status.note(f"first look: {state['first_look'].get('status')}, "
+                        f"{state['first_look']['live']['drawn']} frames drawn while the forecast ran")
     if name == "score" and rc == 3:
         completed = completed_scorecard(root / "forecast", config)
         if completed is not None:
             status.note(completed["note"])
             return {**completed, "scorer_returncode": rc}
-    return {"returncode": rc}
+    return {"returncode": rc, **({"first_look": state["first_look"]} if look is not None else {})}
 
 
 def run_country(args):
@@ -366,15 +518,19 @@ def run_country(args):
                "row": args.row, "cycle": args.cycle, "stages": {}}
     rows_env = os.pathsep.join(filter(None, [str(root / "mesh-rows.json"), os.environ.get("GPUWM_HEX_MESH_ROWS")]))
     env = {"GPUWM_HEX_MESH_ROWS": rows_env, "GPUWM_HEX_OBSERVATION_CONFIG": str(config)}
+    if "score" in set(args.skip or []):
+        # --skip score: the forecast door queues no automatic scorer either (observation_scorecard.SCORING_ENV).
+        env["GPUWM_HEX_OBSERVATION_SCORING"] = "off"
     saved = {key: os.environ.get(key) for key in env}
     os.environ.update(env)
+    state: dict = {}
     try:
         for name in stages:
             started = time.monotonic()
             status.stage(name)
             timing = receipt["stages"][name] = {"started_utc": utc_now()}
             try:
-                result = _run_stage(name, args, value, status)
+                result = _run_stage(name, args, value, status, stages, state)
             finally:
                 timing.update(seconds=time.monotonic() - started, finished_utc=utc_now())
             timing.update(result)
@@ -408,12 +564,20 @@ def add_country_parser(commands):
     selection.add_argument("--point", help="LAT,LON for an arbitrary limited-area cap")
     selection.add_argument("--polygon", type=Path, help="Shape polygon JSON, vertices in latitude,longitude order")
     parser.add_argument("--radius-km", type=float)
+    parser.add_argument("--fine-dx-m", type=float, default=None,
+                        help="with --point or --polygon: the region's spacing, a rung of the halving ladder "
+                             "under --background-km (default the table's 30 km)")
+    parser.add_argument("--background-km", type=float, default=None,
+                        help="with --fine-dx-m: the ladder's coarsest spacing (default the table's 120 km)")
     parser.add_argument("--source", help="init-source row override, used for init and every boundary endpoint")
     parser.add_argument("--source-table", type=Path)
     parser.add_argument("--member", type=int)
     parser.add_argument("--endpoint-workers", type=int, default=2)
     parser.add_argument("--table", type=Path, default=TABLE)
     parser.add_argument("--cycle", required=True, help="YYYY-MM-DDTHH, the init cycle")
+    parser.add_argument("--lead-hours", type=int, default=0, metavar="H",
+                        help="start from this forecast hour of --cycle (a forecast source's own cadence, e.g. GFS "
+                             "2026-10-23T18 --lead-hours 348): the init is that hour and the boundaries follow it")
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--stage", choices=("plan", "all", *STAGES), default="all",
                         help="run all stages (default), one named stage, or print the plan")
@@ -437,4 +601,7 @@ def add_country_parser(commands):
     parser.add_argument("--samehost-devices")
     parser.add_argument("--samehost-layouts", type=Path)
     parser.add_argument("--samehost-part", type=Path)
+    parser.add_argument("--forecast-arg", action="append", default=[], metavar="ARG",
+                        help="a flag for the forecast door, e.g. --forecast-arg=--physics-suite=rrfs_v2_dev "
+                             "(`gpuwm-hex physics list`); repeat for several")
     parser.set_defaults(handler=run_country)

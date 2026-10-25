@@ -25,5 +25,5 @@ def test_294_source_set_is_admitted_on_the_ordinary_route():
 
 def test_the_floor_engine_has_an_admitted_helper_set():
     floor = engine_pin.gpuwm_floor()
-    assert floor == "2.9.4"
+    assert floor == "2.9.7"
     assert any(f"engine-{floor}" in mode for mode in scope.ADMITTED_SOURCE_SETS)

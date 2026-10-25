@@ -325,6 +325,12 @@ class KernelCache:
         self._kernels: dict[str, Any] = {}
         self._compile_seconds: dict[str, float] = {}
         self._observed: dict[str, _PostLaunchKernel] = {}
+        #: Resolution memo: (name, module_key, source, options) -> (kernel_key, kernel, module_key).
+        #: A repeat request with the same arguments returns the kernel its first resolution produced,
+        #: skipping the two sha256 passes over the source and the manifest bookkeeping that the first
+        #: resolution already recorded. Breakage it prevents: U-MPASPHYS-1, every per-step launch on
+        #: the MPAS-physics route re-hashed its whole translation unit on the forecast's one host thread.
+        self._resolved: dict[tuple[Any, ...], tuple[str, Any, str]] = {}
         # Operational timing belongs outside the byte-identity manifest.
         self._load_timings: list[dict[str, Any]] = []
         #: Optional per-launch observer, set only by the regional lane.  When
@@ -360,6 +366,23 @@ class KernelCache:
         return digest.hexdigest()
 
     def raw_kernel(
+        self,
+        name: str,
+        source: str,
+        *,
+        module_key: str,
+        options: Sequence[str] = (),
+    ) -> Any:
+        memo_key = (name, module_key, source, tuple(str(value) for value in options))
+        hit = self._resolved.get(memo_key)
+        if hit is not None:
+            return self._observe(hit[0], hit[1], name, hit[2])
+        kernel = self._raw_kernel_resolve(name, source, module_key=module_key, options=options)
+        kernel_key = f"{self._module_key(source, memo_key[3])}:{name}"
+        self._resolved[memo_key] = (kernel_key, self._kernels[kernel_key], validate_module_key(module_key))
+        return kernel
+
+    def _raw_kernel_resolve(
         self,
         name: str,
         source: str,
@@ -467,6 +490,22 @@ class KernelCache:
             raise CudaRefusal(f"cuda.compile_manifest refused: {error}") from error
         return self._observe(kernel_key, kernel, name, stable_module_key)
 
+    def record_shape_origin(
+        self, module_key: str, generic_source: str,
+        dimensions: Sequence[tuple[str, int]],
+    ) -> None:
+        """Record which generic source a shape-specialized module came from."""
+
+        try:
+            self._compile_manifest.record_shape_origin(
+                module_key,
+                generic_source_sha256=hashlib.sha256(
+                    generic_source.encode("utf-8")).hexdigest(),
+                dimensions=dimensions,
+            )
+        except CompileContractError as error:
+            raise CudaRefusal(f"cuda.compile_manifest refused: {error}") from error
+
     def raw_kernels(
         self,
         names: Sequence[str],
@@ -501,6 +540,7 @@ class KernelCache:
                 "scope": "host module resolution includes synchronization; NVRTC calls are nested, not additive"}
 
     def clear_memory_cache(self) -> None:
+        self._resolved.clear()
         self._kernels.clear()
         self._modules.clear()
         self._compile_seconds.clear()

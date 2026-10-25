@@ -112,6 +112,31 @@ def _publish_stream(staged: Path, path: Path, mode: str) -> None:
         os.close(directory_fd)
 
 
+def _handoff_root(fields: Mapping[str, Any], fallback: Path) -> Path:
+    """Where raw field words wait for rw_mpas_stream: memory, not the disk.
+
+    The handoff was written to the output disk and read back by the bridge
+    before it wrote the same bytes again as NetCDF: a 1.5 GB history frame
+    cost about 3 GB of disk traffic per frame, longer than the hour between
+    frames at 60 km, so the forecast waited on the previous frame. A tmpfs
+    (GPUWM_HEX_STREAM_HANDOFF, default /dev/shm) holds them when it has room
+    for the frame twice over; otherwise the output scratch is used as before.
+    """
+    from .output import HistoryField
+    choice = os.environ.get('GPUWM_HEX_STREAM_HANDOFF', '/dev/shm')
+    if not choice or choice == 'scratch':
+        return fallback
+    root = Path(choice)
+    try:
+        need = sum(np.asarray(v.values).nbytes if isinstance(v, HistoryField) else
+                   getattr(v, 'nbytes', 0) for v in fields.values())
+        if root.is_dir() and os.access(root, os.W_OK) and shutil.disk_usage(root).free > 2*need:
+            return root
+    except OSError:
+        pass
+    return fallback
+
+
 def write_stream(path: str | Path, stream: Stream | str, mesh: object,
                  fields: Mapping[str, Any], valid_time: datetime | str, *,
                  initial_time: datetime | str,
@@ -121,8 +146,13 @@ def write_stream(path: str | Path, stream: Stream | str, mesh: object,
                  field_attrs: Mapping[str, Mapping[str, Any]] | None = None,
                  scratch: str | Path | None = None,
                  record_index: int | None = None,
-                 registry_attributes: bool = True) -> Path:
+                 registry_attributes: bool = True,
+                 extra_fields: Mapping[str, Any] | None = None) -> Path:
     """MPAS src/core_atmosphere/Registry.xml:498-1349, strict stream snapshot.
+
+    ``extra_fields`` (name -> (float32 array, its axes without Time, units)) appends variables the Registry
+    does not declare after the stream's own: the suite route's chemistry species and products
+    (hexcore.mpasphys.chemistry_v842).  None (every other caller) writes exactly the Registry stream.
 
     Every active field is required. Arrays are handed over in their named
     in-memory axes; Rust reorders to reversed Registry axes. Connectivity is
@@ -158,8 +188,10 @@ def write_stream(path: str | Path, stream: Stream | str, mesh: object,
     if missing: raise ValueError(f'{stream.name}: missing active native fields: {", ".join(missing)}')
     scratch_root = Path(scratch) if scratch else path.parent
     scratch_root.mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.mpas-stream-',dir=scratch_root) as temporary:
-        stage=Path(temporary); variables=[]; dimension_order=[]
+    handoff_root = _handoff_root(fields, scratch_root)
+    with tempfile.TemporaryDirectory(prefix='.mpas-stream-',dir=scratch_root) as temporary, \
+         tempfile.TemporaryDirectory(prefix='.mpas-handoff-',dir=handoff_root) as raw:
+        stage=Path(temporary); handoff_dir=Path(raw); variables=[]; dimension_order=[]
         for index,name in enumerate(names):
             definition=field_definition(name,physics=physics)
             logical_dims=tuple(definition['dimensions'])
@@ -219,12 +251,34 @@ def write_stream(path: str | Path, stream: Stream | str, mesh: object,
                             raise ValueError(f'{name}: {dim}={size} differs from authority {sizes[dim]}')
                         sizes[dim]=int(size)
                     # Raw contiguous host handoff; native file encoding is Rust.
-                    handoff=stage/f'field-{index}.raw'
+                    handoff=handoff_dir/f'field-{index}.raw'
                     array.tofile(handoff)
                     variable.update(filename=str(handoff),shape=array.shape,input_dimensions=dims,input_dtype=input_dtype,
                                     connectivity_offset=1 if name in converted else 0)
             variable['attribute_order']=list(variable['attrs'])
             variables.append(variable)
+        for offset,(name,(array,dims,units)) in enumerate((extra_fields or {}).items()):
+            if name in names:
+                raise ValueError(f'{stream.name}: extra field {name} is a Registry field of this stream')
+            array=np.ascontiguousarray(array,dtype=np.float32); dims=tuple(dims)
+            if len(dims)!=array.ndim:
+                raise ValueError(f'{name}: extra field axes {dims} do not match shape {array.shape}')
+            for dim,size in zip(dims,array.shape):
+                if dim in sizes and sizes[dim]!=size:
+                    raise ValueError(f'{name}: {dim}={size} differs from authority {sizes[dim]}')
+                sizes[dim]=int(size)
+            logical=tuple(sorted(dims,key=lambda d:('nVertLevels','nVertLevelsP1','nSoilLevels','nCells').index(d)
+                                 if d in ('nVertLevels','nVertLevelsP1','nSoilLevels','nCells') else 9))+('Time',)
+            for dim in logical:
+                if dim not in dimension_order:
+                    dimension_order.append(dim)
+            handoff=stage/f'extra-{offset}.raw'
+            array.tofile(handoff)
+            attrs={'units':str(units),'long_name':name}
+            variables.append({'name':name,'dtype':'f8' if precision=='double' else 'f4',
+                              'dimensions':tuple(reversed(logical)),'attrs':_json_attrs(attrs),
+                              'filename':str(handoff),'shape':array.shape,'input_dimensions':dims,
+                              'input_dtype':'f4','connectivity_offset':0,'attribute_order':list(attrs)})
         used={d for v in variables for d in v['dimensions']}
         absent=used-set(sizes)
         if absent: raise ValueError(f'{stream.name}: missing dimension sizes {sorted(absent)}')

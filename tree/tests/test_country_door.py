@@ -109,7 +109,7 @@ def test_country_dispatches_selected_stages_with_global_status(tmp_path, monkeyp
     assert args.stage == "all"
     args.stage, args.skip = stage, skip
     called = []
-    def execute(name, args, value, status):
+    def execute(name, args, value, status, *rest):
         called.append(name)
         return {"returncode": 0}
     monkeypatch.setattr(country_door, "_run_stage", execute)
@@ -129,7 +129,7 @@ def test_country_failure_stops_following_stages_and_restores_environment(tmp_pat
     from hexcore import country_door
     args = arguments(tmp_path)
     called = []
-    def execute(name, args, value, status):
+    def execute(name, args, value, status, *rest):
         called.append(name)
         assert os.environ["GPUWM_HEX_MESH_ROWS"].startswith(str(args.work_dir / "mesh-rows.json"))
         return {"returncode": 7 if name == "forecast" else 0}
@@ -257,3 +257,63 @@ def test_country_missing_geography_keeps_fetch_command_and_refused_receipt(tmp_p
     receipt = json.loads((args.work_dir / "country-receipt.json").read_text())
     assert "gpuwm fetch-geog --datasets mesh" in receipt["refused"]
     assert json.loads((args.work_dir / "status.json").read_text())["state"] == "refused"
+
+
+def test_region_maps_stream_while_the_forecast_runs_and_the_full_pass_skips_them(tmp_path, monkeypatch):
+    """WOOF hex region runs on 0.4.4 (2026-10-24): no first look, so no map until the forecast and the full pass ended.
+    The forecast stage now runs a first look into the full pass's tree and case, and the products stage takes its
+    receipt."""
+    from pathlib import Path
+    from hexcore import cli, country_door, first_look
+    value = plan(arguments(tmp_path))
+    products = value["commands"]["products"]
+    case = products[products.index("--case") + 1]
+    assert case == "ph48-3-2025110300"            # the name the forecast's receipt gives, known before it exists
+    looks, commands = [], []
+
+    class Look:
+        def __init__(self, forecast, **kw):
+            looks.append({"forecast": forecast, **kw})
+
+        def start(self):
+            pass
+
+        def finish(self):
+            return {"status": "drawn", "live": {"drawn": 3}}
+
+        def receipt(self):
+            return Path(tmp_path / "run" / "live-frames.json")
+
+    monkeypatch.setattr(first_look, "FirstLook", Look)
+    monkeypatch.setattr(cli, "run_stage", lambda argv: commands.append(list(argv)) or 0)
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "mesh-rows.json").write_text("[]")
+    status = type("S", (), {"note": lambda self, text: None})()
+    state: dict = {}
+    args = arguments(tmp_path)
+    for name in ("forecast", "products"):
+        assert country_door._run_stage(name, args, value, status, ("forecast", "products"), state)["returncode"] == 0
+    look = looks[0]
+    forecast = value["commands"]["forecast"]
+    assert look["forecast"] == tmp_path / "run" / "forecast"
+    assert look["grid"] == forecast[forecast.index("--grid") + 1] and look["case"] == case
+    assert look["start_time"] == "2025-11-03_00:00:00"
+    assert "--region" in look["extra"] and "--no-points" in look["extra"] and "--points" not in look["extra"]
+    assert commands[1][-2:] == ["--live-frames", str(tmp_path / "run" / "live-frames.json")]
+    # No products stage: no first look (nothing would replace its pictures).
+    looks.clear()
+    country_door._run_stage("forecast", args, value, status, ("forecast",), {})
+    assert looks == []
+
+
+def test_an_mpas_v842_suite_region_takes_the_plain_parent_init(tmp_path, monkeypatch):
+    """country --forecast-arg=--physics-suite=convection_permitting: the parent init is not completed through the
+    ArWen column seam (which refuses cld_fraction); the MPAS suite route runs from the plain init."""
+    from hexcore import country_door, physics_suites
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the ArWen column seam was asked to resolve an MPAS-A v8.4.2 suite")
+
+    monkeypatch.setattr(physics_suites, "resolve_physics", refuse)
+    value = {"commands": {"forecast": ["forecast", "--init", "x.nc", "--physics-suite=convection_permitting"]}}
+    assert country_door._suite_parent_init(value, tmp_path / "init.nc", {"id": "m", "fine_dx_m": 30000.0}) is None

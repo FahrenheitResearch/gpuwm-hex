@@ -2023,6 +2023,14 @@ def couple_mpas_physics_tendencies_v842(
     return MappingProxyType(outputs)
 
 
+def _with_zero_garbage_column(value: Any) -> Any:
+    """``value`` (levels, cells) plus native's zero garbage column (levels, cells + 1)."""
+    cp = _cp()
+    padded = cp.zeros((value.shape[0], value.shape[1] + 1), dtype=value.dtype)
+    padded[:, :value.shape[1]] = value
+    return padded
+
+
 def project_mpas_momentum_v842(
     *, geometry: CudaPhysicsGeometryV841, zonal: Any, meridional: Any,
     invalid_flag: Any, kernel_cache: KernelCache,
@@ -2158,9 +2166,12 @@ class CudaMpasCouplingV842:
     def __init__(self, *, selectors: Mapping[str, str], scalar_names: Sequence[str],
                  geometry: CudaPhysicsGeometryV841, kernel_cache: KernelCache,
                  exchange_halo_group: Any, pbl_edge: Any, convection_edge: Any,
-                 tend_u_phys: Any):
+                 tend_u_phys: Any, regional_garbage: bool = False):
         if not callable(exchange_halo_group):
             raise TypeError('MPAS coupling requires an explicit halo exchange callback')
+        # A limited-area mesh: ``geometry`` carries native's garbage cell as its last column (every ring-7 boundary
+        # edge names it), and the cell tendencies gain a zero column there before projection, native's word.
+        self.regional_garbage = bool(regional_garbage)
         self.selectors, self.scalar_names = dict(selectors), tuple(scalar_names)
         self.geometry, self.kernel_cache = geometry, kernel_cache
         self.exchange_halo_group = exchange_halo_group
@@ -2179,8 +2190,12 @@ class CudaMpasCouplingV842:
                      'physics:cuten','rucuten','rvcuten',self.convection_edge)):
                 if active:
                     self.exchange_halo_group(group)
+                    zonal_rate, meridional_rate = tendencies[zonal], tendencies[meridional]
+                    if self.regional_garbage:
+                        zonal_rate, meridional_rate = (_with_zero_garbage_column(zonal_rate),
+                                                       _with_zero_garbage_column(meridional_rate))
                     projected = project_mpas_momentum_v842(
-                        geometry=self.geometry,zonal=tendencies[zonal],meridional=tendencies[meridional],
+                        geometry=self.geometry,zonal=zonal_rate,meridional=meridional_rate,
                         invalid_flag=invalid_flag,kernel_cache=self.kernel_cache)
                     require_resident_array(group+' edge cache',target,dtype=np.float32,shape=projected.shape)
                     cp.copyto(target,projected)

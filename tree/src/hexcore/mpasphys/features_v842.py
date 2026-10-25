@@ -112,7 +112,27 @@ class MpiCycling(CyclingExecution):
 def run_native_dynamics(arguments, config, layout, payload, streams, library,
                         start, stop, dt, steps, out, *, moving=None):
     """Dispatch only requested native features; ordinary native calls are unchanged."""
+    from .lts_v842 import lts_requested, moving_admitted
+    if (library is None and lts_requested(arguments) and moving_admitted(moving)
+            and not (moving is not None and getattr(arguments, 'samehost_devices', None))):
+        # --fullstep-local-timestep --fullstep-lts-mode active: every rate class at its own step, each with the
+        # MPAS suite as its physics (hexcore.mpasphys.lts_v842).  A moving segment carries the controller's own
+        # LTS flags (moving_run.segment_command) and runs on the classes with the move hooks at macro boundaries,
+        # as the ArWen route's moving segments do.  THE BREAKAGE THIS PREVENTS: moving segments on this route ran
+        # the fixed step, 2.4x the ArWen route's LTS segments on the same storm-following mesh and card
+        # (MPAS-ROUTE-SPEED-2026-10-24).  A moving region on several cards keeps the same-host ranks' fixed step.
+        from .lts_v842 import run_lts_classes
+        return run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt, steps, out,
+                               moving=moving)
     if getattr(arguments, 'samehost_devices', None):
+        if library is None:
+            # The forecast door's ported route: rank threads on the same-host
+            # device transport, no native library and no MPI (H15).
+            from .samehost_v842 import run_samehost_ranks
+            return run_samehost_ranks(arguments, config, layout, payload, streams,
+                start, stop, dt, steps, out, moving=moving)
+        # Explicit native-referee proof tools only: the native library owns
+        # MPI_COMM_WORLD, so its ranks are MPI processes.
         from .launch_v842 import run_native_ranks
         return run_native_ranks(arguments, config, layout, payload, streams,
             library, start, stop, dt, steps, out, moving=moving)

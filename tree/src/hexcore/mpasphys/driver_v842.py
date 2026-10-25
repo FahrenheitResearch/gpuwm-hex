@@ -36,7 +36,7 @@ PHYSICS_MODES = ("exact", "correct")
 #: finding, the run is not refused (coordinator ruling 2026-10-14, default correct): the finding is left out
 #: of the run as a whole and listed as a NAMED GAP in the receipt and on the console.  "owners" names the
 #: follow-up owner of each such gap (the lane that owns the slot implementation; a dict when it depends on the
-#: scheme), from CORRECT-MODE-2026-10-13/mpas-rad-pbl-lsm-seaice/REPORT.md "Scheme lanes still to do".
+#: scheme), from the 2026-10-13 radiation/PBL/LSM/sea-ice scheme review ("Scheme lanes still to do").
 #: Follow-up owners of the findings that act outside the MPAS suite route (rows with "hex_route" below).
 _ENGINE_OWNER = "gpuwm engine with gpuwm.correct_mode (engine 2.9.0 and later)"
 _LBC_OWNER = "gpuwm engine rw_mpas_lbc with --physics-mode (engine 2.9.0 and later)"

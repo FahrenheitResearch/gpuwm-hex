@@ -125,8 +125,18 @@ def cull_one(
     graph: Path | None = None,
     clobber: bool = False,
     provenance_grid: Path | None = None,
+    mark_parent: Path | None = None,
 ) -> dict[str, Any]:
-    """Cut one file, and return what the engine said it did."""
+    """Cut one file, and return what the engine said it did.
+
+    ``mark_parent`` is the parent GRID the region is marked on (rw_mpas_mesh
+    ``--cull-mark-parent``) when the file being cut is another file of the
+    same mesh.  THE BREAKAGE IT PREVENTS (hex shapes study, 2026-10-23): a
+    native MPAS static stores its coordinates in binary32, the cut's
+    boundary walk breaks near-ties on them, and a CONUS cut of NCAR
+    x1.163842's native static put six of the grid cut's 4,766 cells in other
+    boundary rings, so ``--cull-provenance-grid`` refused the static.
+    """
 
     receipt = out.with_suffix(out.suffix + ".cull-receipt.json")
     argv = [
@@ -142,10 +152,13 @@ def cull_one(
     ]
     if graph is not None:
         argv += ["--graph", str(graph)]
-    if provenance_grid is not None:
+    if provenance_grid is not None or mark_parent is not None:
         help_result = subprocess.run([str(engine), "--help"], capture_output=True, text=True)
-        if "--cull-provenance-grid" in (help_result.stdout + help_result.stderr):
+        engine_help = help_result.stdout + help_result.stderr
+        if provenance_grid is not None and "--cull-provenance-grid" in engine_help:
             argv += ["--cull-provenance-grid", str(provenance_grid)]
+        if mark_parent is not None and "--cull-mark-parent" in engine_help:
+            argv += ["--cull-mark-parent", str(mark_parent)]
     if clobber:
         argv.append("--clobber")
     started = time.perf_counter()
@@ -332,6 +345,9 @@ def run_cull(arguments: argparse.Namespace) -> int:
             graph=graph,
             clobber=bool(getattr(arguments, "clobber", False)),
             provenance_grid=Path(rows["grid"]["out"]) if role == "static" else None,
+            # Every other file is subset against the grid, so it is marked on the
+            # grid's own coordinates (cull_one says why).
+            mark_parent=None if role == "grid" else parents["grid"],
         )
         cells = rows[role].get("receipt", {}).get("region_cells")
         parent_cells = rows[role].get("receipt", {}).get("parent_cells")

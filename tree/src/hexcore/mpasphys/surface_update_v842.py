@@ -128,8 +128,17 @@ extern "C" __global__ void accumulate(int n,int begin,int end,float dt,float buc
 }
 '''
 
-@lru_cache(maxsize=1)
 def _module():
+    """The surface-update module loaded on the calling card."""
+    import cupy as cp
+    # A CUDA module belongs to the card it was loaded on. Same-host ranks drive
+    # several cards from one process, so a cache keyed without the card hands
+    # the second card the first card's handle (CUDA_ERROR_INVALID_HANDLE at step 1).
+    return _module_on(int(cp.cuda.Device().id))
+
+
+@lru_cache(maxsize=None)
+def _module_on(device: int):
     """mpas_atmphys_update_surface.F:373-417; shared pinned GNU float maths."""
     import cupy as cp
     from cupy.cuda import compiler
@@ -138,9 +147,10 @@ def _module():
     # subnormal accumulation words. Direct NVRTC preserves --ftz=false.
     binary, _ = compiler.compile_using_nvrtc(
         _CUDA, options=(*_hex_numerics.options(CUDA_OPTIONS, keep_ftz=True), f"-I{directory}"),
-        arch=cp.cuda.Device().compute_capability)
-    module = cp.cuda.function.Module()
-    module.load(binary)
+        arch=cp.cuda.Device(device).compute_capability)
+    with cp.cuda.Device(device):
+        module = cp.cuda.function.Module()
+        module.load(binary)
     return module
 
 

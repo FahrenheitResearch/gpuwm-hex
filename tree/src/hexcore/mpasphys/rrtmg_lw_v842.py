@@ -317,6 +317,33 @@ extern "C" __global__ void mpas_vinterp_level(int nc,int nl,int nz,int k,const f
             RLW_MU(lower_ozone,dpu)),RLW_AD(dpl,dpu));
     }
 }
+// MPAS: module_ra_rrtmg_vinterp.F:114-165. mpas_vinterp_level with the next
+// level's common search start reduced on the device: starts[k] holds
+// min(nz-1, every column's upper after level k+1), as mpas_vinterp_start
+// computes it serially. THE BREAKAGE THIS PREVENTS: the one-thread start
+// kernel walked all 216,187 columns at every level of every LW call (G2).
+extern "C" __global__ void mpas_vinterp_level_chain(int nc,int nl,int nz,int k,const float* pmid,
+    const float* pin,const float* ozone,int* starts,int* upper,float* out){
+    int c=blockIdx.x*blockDim.x+threadIdx.x;
+    int u=0x7fffffff;
+    if(c<nc){
+        float p=pmid[c*nl+k];u=upper[c];
+        for(int kk=starts[k];kk<nz-1;++kk)if(pin[kk]<p && p<=pin[kk+1]){u=kk;break;}
+        upper[c]=u;
+        if(p<pin[0])out[c*nl+k]=RLW_DV(RLW_MU(ozone[c*nz],p),pin[0]);
+        else if(p>pin[nz-1])out[c*nl+k]=ozone[c*nz+nz-1];
+        else{
+            float lower_pin=(u+1<nz)?pin[u+1]:0.0f;
+            float lower_ozone=(u+1<nz)?ozone[c*nz+u+1]:0.0f;
+            float dpu=RLW_SU(p,pin[u]),dpl=RLW_SU(lower_pin,p);
+            out[c*nl+k]=RLW_DV(RLW_AD(RLW_MU(ozone[c*nz+u],dpl),
+                RLW_MU(lower_ozone,dpu)),RLW_AD(dpl,dpu));
+        }
+    }
+    if(k==0)return;
+    for(int offset=16;offset>0;offset>>=1)u=min(u,__shfl_down_sync(0xffffffffu,u,offset));
+    if((threadIdx.x&31)==0)atomicMin(starts+k-1,u);
+}
 // MPAS: module_ra_rrtmg_lw.F:11817-11821.
 extern "C" __global__ void mpas_layer_counts(int nc,int nm,const float* interfaces,int* counts){
     // MPAS: module_ra_rrtmg_lw.F:11817-11821; NINT ties away from zero.
@@ -445,6 +472,96 @@ extern "C" __global__ void mpas_lw_mcica(int nc,int nl,int overlap,int idcor,int
     int c=blockIdx.x*blockDim.x+threadIdx.x;if(c>=nc)return;
     mpas_mcica_make(nl,overlap,idcor,julday,surface+c*6,a+c*12*nl,0,150,nullptr,nullptr,0,nullptr,nullptr,nullptr,
         cloud+c*nl*140,liquid+c*nl*140,ice+c*nl*140,snow+c*nl*140);
+}
+// MPAS: module_ra_rrtmg_lw.F:2705-2737. Jump-ahead of the KISS components, so
+// each g-point of a column starts from exactly the state the sequential stream
+// reaches there. The four components evolve independently: the LCG and the
+// xorshift are advanced by their own n-step maps (affine, and linear over
+// GF(2) from a host table), and each multiply-with-carry s=a*(s&65535)+(s>>16)
+// is, once in its canonical range s <= m = a*65536-1 (reached within three
+// steps from any word), multiplication by a modulo m (b*s' = m*x + s, so
+// s' = a*s mod m; s = 0 and s = m are fixed points).
+__device__ unsigned int mpas_lcg_jump(unsigned int s,unsigned int n){
+    unsigned int ra=1u,rc=0u,pa=69069u,pc=1327217885u;
+    while(n){if(n&1u){rc=pa*rc+pc;ra=pa*ra;}pc=pa*pc+pc;pa=pa*pa;n>>=1;}
+    return ra*s+rc;
+}
+__device__ unsigned int mpas_mwc_jump(unsigned int s,unsigned int a,unsigned int n){
+    const unsigned long long m=(unsigned long long)a*65536ull-1ull;
+    while(n&&(unsigned long long)s>m){s=a*(s&65535u)+(s>>16);--n;}
+    if(!n||(unsigned long long)s==m||s==0u)return s;
+    unsigned long long r=1ull,base=a;
+    while(n){if(n&1u)r=r*base%m;base=base*base%m;n>>=1;}
+    return (unsigned int)((unsigned long long)s*r%m);
+}
+__device__ unsigned int mpas_xorshift_jump(unsigned int s,const unsigned int* columns){
+    unsigned int v=0u;
+    for(int i=0;i<32;++i)if((s>>i)&1u)v^=columns[i];
+    return v;
+}
+// MPAS: module_ra_rrtmg_lw.F:2432-2440,12175-12185 (IRNG=0, seed=150), 2252-2697.
+// Per wrapper column: the KISS state after the permutation draws and the
+// per-layer exponential overlap weights, with mpas_mcica_make's arithmetic
+// (the same rlw_exp of the same operands).
+extern "C" __global__ void mpas_lw_mcica_seeds(int nc,int nl,int overlap,int idcor,int julday,int permuteseed,
+    const float* surface,const float* abase,unsigned int* seeds,float* weights){
+    int c=blockIdx.x*blockDim.x+threadIdx.x;if(c>=nc)return;
+    const float* a=abase+(long long)c*12*nl;
+    unsigned int seed[4];
+    for(int k=0;k<4;++k){seed[k]=0u;if(k<nl){float p=RLW_MU(A(0,k),100.0f);seed[k]=(unsigned int)(int)RLW_MU(RLW_SU(p,(float)(int)p),1.e9f);}}
+    for(int j=0;j<permuteseed;++j)mpas_kiss(seed);
+    for(int k=0;k<4;++k)seeds[c*4+k]=seed[k];
+    if(overlap<4)return;
+    float length=2500.0f;
+    if(idcor==1){
+        float am3=RLW_MU(julday>181?(-28.0f/365.0f):(28.0f/365.0f),(float)(julday-(julday>181?272:91)));
+        float delta=RLW_SU(surface[c*6+5],am3);
+        length=RLW_MU(RLW_AD(1.4315f,RLW_MU(2.1219f,rlw_exp(RLW_DV(-RLW_MU(delta,delta),(-25.584f*-25.584f))))),1000.0f);
+    }
+    float inverse=RLW_DV(1.0f,length);
+    for(int k=0;k<nl;++k)weights[(long long)c*nl+k]=k?rlw_exp(RLW_MU(-RLW_SU(A(2,k),A(2,k-1)),inverse)):0.0f;
+}
+// MPAS: module_ra_rrtmg_lw.F:2252-2697, the wrapper's subcolumns, one thread per
+// (column, g-point). Each thread jumps its column's stream to its g-point's
+// first draw (draws = KISS draws per g-point: 1 maximum, nl random/max-random,
+// 2*nl exponential) and runs mpas_mcica_make's layer loop for that g-point
+// unchanged. Neighbouring threads hold neighbouring g-points, so the four slabs
+// are written as contiguous rows. THE BREAKAGE THIS PREVENTS: one thread per
+// column walked 140 x nl draws in sequence and wrote four slabs at a column
+// stride, 1.9 s of a 3.5 s radiation call on 216,187 cells (fix group G2).
+extern "C" __global__ void mpas_lw_mcica_gpoint(int nc,int nl,int overlap,int draws,const float* abase,
+    const unsigned int* seeds,const float* weights,const unsigned int* xorshift,
+    float* cloud,float* liquid,float* ice,float* snow){
+    long long t=(long long)blockIdx.x*blockDim.x+threadIdx.x;if(t>=(long long)nc*140)return;
+    const int ig=(int)(t%140);const long long c=t/140;
+    const float* a=abase+c*12*nl;
+    const unsigned int n=(unsigned int)ig*(unsigned int)draws;
+    unsigned int seed[4];
+    seed[0]=mpas_lcg_jump(seeds[c*4],n);
+    seed[1]=mpas_xorshift_jump(seeds[c*4+1],xorshift+ig*32);
+    seed[2]=mpas_mwc_jump(seeds[c*4+2],18000u,n);
+    seed[3]=mpas_mwc_jump(seeds[c*4+3],30903u,n);
+    const float* weight=weights+(overlap>=4?c*nl:0);
+    float prev=0.0f,prevcf=0.0f,shared=0.0f;
+    if(overlap==3)shared=mpas_kiss(seed);
+    for(int k=0;k<nl;++k){
+        float cf=A(5,k);if(cf<1.e-20f)cf=0.0f;
+        float cdf=overlap==3?shared:mpas_kiss(seed);
+        if(overlap>=4){float cdf2=mpas_kiss(seed);
+            float alpha=weight[k];
+            if(overlap==5&&cf==0.0f&&prevcf>0.0f)alpha=0.0f;
+            if(k&&cdf2<alpha)cdf=prev;
+        }else if(overlap==2&&k){float threshold=RLW_SU(1.0f,prevcf);cdf=prev>threshold?prev:RLW_MU(cdf,threshold);}
+        bool cloudy=cdf>=RLW_SU(1.0f,cf);const long long idx=(c*nl+k)*140+ig;
+        cloud[idx]=cloudy?1.0f:0.0f;liquid[idx]=cloudy?A(6,k):0.0f;ice[idx]=cloudy?A(7,k):0.0f;snow[idx]=cloudy?A(8,k):0.0f;
+        prev=cdf;prevcf=cf;
+    }
+}
+// MPAS: module_ra_rrtmg_lw.F:11817-11821, histogram of the wrapper layer counts.
+// Bins [base, base+nbins); anything outside lands in bin nbins (host falls back).
+extern "C" __global__ void mpas_layer_histogram(int nc,int base,int nbins,const int* counts,int* hist){
+    int c=blockIdx.x*blockDim.x+threadIdx.x;if(c>=nc)return;
+    int b=counts[c]-base;atomicAdd(hist+((b<0||b>=nbins)?nbins:b),1);
 }
 // MPAS: module_ra_rrtmg_lw.F:2099-2248.
 extern "C" __global__ void mpas_mcica_column(int nl,int overlap,int idcor,int julday,const float* surface,const float* a,
@@ -769,17 +886,13 @@ def solve_device(ncol, nlay, icld, play, plev, tlay, tlev,
         del (totuflux, totdflux, totuclfl, totdclfl, fnet, fnetc, htr,
              htrc)
 
-    def _cldprmc_verdict(errors):
-        """MPAS: module_ra_rrtmg_lw.F:2775-3036."""
-        failed = np.flatnonzero(errors)
-        err = int(errors[failed[0]]) if failed.size else 0
-        if err:
-            raise ValueError(f"rlw_cldprmc device abort, code {err} "
-                             "(bounds violation, mirrors the Fortran stop)")
-
-    # Read now, or once per radiation call (gpuwm.core.deferred_device_checks).
-    from gpuwm.core.deferred_device_checks import check
-    check(err_flags, _cldprmc_verdict)
+    # MPAS: module_ra_rrtmg_lw.F:2775-3036 (cldprmc stop). The first nonzero chunk word refuses with
+    # the same message and type; inside a forecast it is read off the step path, at most one step
+    # later (deferred_checks_v842), elsewhere at once. THE BREAKAGE THIS PREVENTS: an immediate read
+    # per solver call was a full stream sync per wrapper batch (G2).
+    from .deferred_checks_v842 import defer
+    defer(err_flags, "rlw_cldprmc device abort, code {value} "
+          "(bounds violation, mirrors the Fortran stop)", reduce="first", error=ValueError)
     return {
         "uflx": uflx, "dflx": dflx, "hr": hr,
         "uflxc": uflxc, "dflxc": dflxc, "hrc": hrc,
@@ -865,16 +978,159 @@ def vinterp_ozn_device(pmid, pin, ozone):
     if pin.ndim!=1 or ozone.shape!=(nc,nz):
         raise ValueError('vinterp_ozn expects pin(levels) and ozone(columns,levels)')
     out=cp.empty_like(pmid)
-    if not nc:return out
+    if not nc or not nl:return out
     upper=cp.zeros(nc,dtype=cp.int32)
-    start=cp.empty(1,dtype=cp.int32)
+    # MPAS: module_ra_rrtmg_vinterp.F:114-120. starts[k] is the common search
+    # start of level k: min(nz-1, every column's upper) before that level. The
+    # first (top) level sees the zeroed uppers; each level reduces the next's.
+    starts=cp.full(nl,nz-1,dtype=cp.int32)
+    starts[nl-1]=min(nz-1,0)
+    kernel=_gpu_kernel('mpas_vinterp_level_chain')
+    grid=((nc+127)//128,)
     for k in range(nl-1,-1,-1):
-        _gpu_kernel('mpas_vinterp_start')((1,),(1,),
-            (np.int32(nc),np.int32(nz),upper,start))
-        _gpu_kernel('mpas_vinterp_level')(((nc+31)//32,),(32,),
+        kernel(grid,(128,),
             (np.int32(nc),np.int32(nl),np.int32(nz),np.int32(k),
-             pmid,pin,ozone,start,upper,out))
+             pmid,pin,ozone,starts,upper,out))
     return out
+
+
+#: Layer-count histogram width: wrapper counts are nm + max(NINT(ptop/400 Pa),1), so every real
+#: top pressure lands in a few bins above nm+1; anything outside falls back to a full read.
+_LAYER_HISTOGRAM_BINS = 1024
+
+
+def _layer_groups(counts, nm, *, need_members=False):
+    """MPAS: module_ra_rrtmg_lw.F:11817-11821. Columns grouped by wrapper layer count.
+
+    Returns (layers, device column indices, host column list or None) per group, ascending in
+    layers, each group's columns in ascending column order. One small host read (the histogram).
+    Per-column words do not depend on grouping order or batch width (independent KISS state per
+    column, column-independent solver), so this matches the host grouping it replaces.
+    """
+    import cupy as cp
+    nc = int(counts.size)
+    if not nc:
+        return []
+    base = int(nm) + 1
+    hist = cp.zeros(_LAYER_HISTOGRAM_BINS + 1, dtype=cp.int32)
+    _gpu_kernel('mpas_layer_histogram')(((nc + 255) // 256,), (256,),
+        (np.int32(nc), np.int32(base), np.int32(_LAYER_HISTOGRAM_BINS), counts, hist))
+    order = cp.argsort(counts, kind='stable').astype(cp.int32)
+    sizes = hist.get()  # launch metadata: group shapes
+    if sizes[_LAYER_HISTOGRAM_BINS]:
+        layers = counts.get().tolist()
+        found = {}
+        for c, nl in enumerate(layers):
+            found.setdefault(nl, []).append(c)
+        return [(nl, cp.asarray(members, dtype=cp.int32), members if need_members else None)
+                for nl, members in sorted(found.items())]
+    groups, offset = [], 0
+    for bin_index in np.flatnonzero(sizes[:_LAYER_HISTOGRAM_BINS]).tolist():
+        size = int(sizes[bin_index])
+        indices = order[offset:offset + size]
+        groups.append((base + bin_index, indices, indices.get().tolist() if need_members else None))
+        offset += size
+    return groups
+
+
+_XORSHIFT_JUMPS = {}
+
+
+def _xorshift_step_columns():
+    """MPAS: module_ra_rrtmg_lw.F:2705-2737 (seed 2 of kissvec): the step's GF(2) columns."""
+    columns = []
+    for i in range(32):
+        v = 1 << i
+        v ^= (v << 13) & 0xffffffff
+        v ^= v >> 17
+        v ^= (v << 5) & 0xffffffff
+        columns.append(v)
+    return columns
+
+
+def _xorshift_apply(columns, v):
+    out, i = 0, 0
+    while v:
+        if v & 1:
+            out ^= columns[i]
+        v >>= 1
+        i += 1
+    return out
+
+
+def _xorshift_compose(outer, inner):
+    return [_xorshift_apply(outer, column) for column in inner]
+
+
+def xorshift_jump_table(draws, gpoints):
+    """Device table (gpoints, 32): the KISS xorshift advanced g*draws steps, for each g-point g.
+
+    Built and uploaded once per device, draw count and g-point count, then reused every call."""
+    import cupy as cp
+    key = (int(cp.cuda.Device().id), int(draws), int(gpoints))
+    table = _XORSHIFT_JUMPS.get(key)
+    if table is None:
+        identity = [1 << i for i in range(32)]
+        power, base, n = identity, _xorshift_step_columns(), int(draws)
+        while n:  # the step to the power draws, by squaring
+            if n & 1:
+                power = _xorshift_compose(base, power)
+            base = _xorshift_compose(base, base)
+            n >>= 1
+        rows, current = [], identity
+        for _ in range(int(gpoints)):
+            rows.append(current)
+            current = _xorshift_compose(power, current)
+        table = cp.asarray(np.asarray(rows, dtype=np.uint32))
+        _XORSHIFT_JUMPS[key] = table
+    return table
+
+
+def mcica_draws_per_gpoint(overlap, nl):
+    """MPAS: module_ra_rrtmg_lw.F:2466-2629 / module_ra_rrtmg_sw.F:1775-1940: KISS draws per g-point."""
+    overlap = int(overlap)
+    if overlap == 3:
+        return 1
+    return 2 * int(nl) if overlap >= 4 else int(nl)
+
+
+def _lw_mcica_wrapper(ng, nl, cldovrlp, idcor, julday, surface, a):
+    """MPAS: module_ra_rrtmg_lw.F:12175-12185,2099-2737. Wrapper McICA (IRNG=0, seed=150).
+
+    Every word of the four (columns, layers, 140) slabs is written when an overlap is selected;
+    overlap 0 leaves them zero exactly as native's early return over cleared arrays.
+    """
+    import cupy as cp
+    shape = (ng, nl, 140)
+    if not cldovrlp:
+        return tuple(cp.zeros(shape, dtype=cp.float32) for _ in range(4))
+    outputs = tuple(cp.empty(shape, dtype=cp.float32) for _ in range(4))
+    seeds = cp.empty((ng, 4), dtype=cp.uint32)
+    weights = cp.empty((ng, nl) if cldovrlp >= 4 else (1,), dtype=cp.float32)
+    _gpu_kernel('mpas_lw_mcica_seeds')(((ng + 127) // 128,), (128,),
+        (np.int32(ng), np.int32(nl), np.int32(cldovrlp), np.int32(idcor), np.int32(julday),
+         np.int32(150), surface, a, seeds, weights))
+    draws = mcica_draws_per_gpoint(cldovrlp, nl)
+    threads = ng * 140
+    _gpu_kernel('mpas_lw_mcica_gpoint')(((threads + 127) // 128,), (128,),
+        (np.int32(ng), np.int32(nl), np.int32(cldovrlp), np.int32(draws), a, seeds, weights,
+         xorshift_jump_table(draws, 140), *outputs))
+    return outputs
+
+
+#: Device bytes one wrapper column holds at once: five 140-g-point McICA slabs, the twelve-field
+#: prepared layer block, the gathered model/interface/surface/ozone rows and the solver outputs.
+_LW_WRAPPER_COLUMN_WORDS_PER_LAYER = 5 * 140 + 12 + 2 + 16 + 2 * 12 + 8
+_LW_WRAPPER_BUDGET_BYTES = 1 << 30
+
+
+def _lw_wrapper_chunk(ncol, nlayers):
+    """Wrapper columns per batch: at most 1 GiB, and at most an eighth of free memory, never below 256."""
+    import cupy as cp
+    per_column = 4 * _LW_WRAPPER_COLUMN_WORDS_PER_LAYER * max(1, int(nlayers))
+    free_bytes, _ = cp.cuda.runtime.memGetInfo()
+    budget = min(_LW_WRAPPER_BUDGET_BYTES, free_bytes // 8)
+    return int(min(max(1, ncol), max(256, budget // per_column)))
 
 
 def rrtmg_lwrad_device(model, interfaces, surface, tables, *, icloud,
@@ -903,10 +1159,16 @@ def rrtmg_lwrad_device(model, interfaces, surface, tables, *, icloud,
     # including its four 140-g-point McICA buffers, before solver chunking.
     # Defect: whole-layer-group allocation exhausted the shared card on the
     # forecasts in scratch/committed-lw-eight-suite-v10/{06,07}-job.log.
-    chunk = 256 if column_chunk is None else int(column_chunk)
+    nc,nfields,nm=model.shape
+    if column_chunk is None:
+        # Bounded by bytes, not a fixed 256 columns: 256 split a 216,187-cell mesh into 845 wrapper
+        # batches whose host launch work made every radiation step host-bound (U-MPASPHYS-1). Words
+        # are batch-invariant (independent per-column KISS state), so only memory sets the width.
+        chunk = _lw_wrapper_chunk(nc, nm + 32)  # added top layers: generous upper bound
+    else:
+        chunk = int(column_chunk)
     if chunk < 1:
         raise ValueError('column_chunk must be >= 1; prevents empty wrapper launches')
-    nc,nfields,nm=model.shape
     if nm < 1:
         raise ValueError('MPAS top extension requires at least one model layer')
     if nfields!=12 or interfaces.shape!=(nc,2,nm+1) or surface.shape!=(nc,6):
@@ -921,7 +1183,11 @@ def rrtmg_lwrad_device(model, interfaces, surface, tables, *, icloud,
     counts=cp.empty(nc,dtype=cp.int32)
     _gpu_kernel('mpas_layer_counts')(((nc+31)//32,),(32,),
         (np.int32(nc),np.int32(nm),interfaces,counts))
-    layers=counts.get().tolist()  # launch metadata, not weather fields
+    # Launch metadata, not weather fields: one read of a small layer-count
+    # histogram instead of every column's count, and the column lists stay on
+    # the device. THE BREAKAGE THIS PREVENTS: per-batch host index lists were
+    # uploaded from pageable memory, a full stream sync per wrapper batch (G2).
+    groups=_layer_groups(counts,nm,need_members=retain_profiles)
     tendency=cp.empty((nc,nm),dtype=cp.float32)
     radii=cp.empty((nc,3,nm),dtype=cp.float32)
     flux=cp.empty((nc,len(FLUX_FIELDS)),dtype=cp.float32)
@@ -932,12 +1198,13 @@ def rrtmg_lwrad_device(model, interfaces, surface, tables, *, icloud,
     inflag=5 if has_reqs else 4 if has_reqi else 3 if has_reqc else 2
     iceflag=5 if has_reqs else 4 if has_reqi else 3
     dummy=cp.zeros(2,dtype=cp.float32)
-    groups={}
-    for c,nl in enumerate(layers):groups.setdefault(nl,[]).append(c)
-    batches=((nl,members[first:first+chunk]) for nl,members in groups.items()
-             for first in range(0,len(members),chunk))
-    for nl,members in batches:
-        indices=cp.asarray(members,dtype=cp.int32);ng=len(members)
+    constant_gases={}
+    batches=((nl,indices[first:first+chunk],
+              None if members is None else members[first:first+chunk])
+             for nl,indices,members in groups
+             for first in range(0,int(indices.size),chunk))
+    for nl,indices,members in batches:
+        ng=int(indices.size)
         m=cp.ascontiguousarray(model[indices]);lev_in=cp.ascontiguousarray(interfaces[indices])
         s=cp.ascontiguousarray(surface[indices])
         oz=dummy if ozone is None else cp.ascontiguousarray(ozone[indices])
@@ -948,18 +1215,24 @@ def rrtmg_lwrad_device(model, interfaces, surface, tables, *, icloud,
             (i32(ng),i32(nm),i32(nl),i32(icloud),i32(has_reqc),i32(has_reqi),i32(has_reqs),
              i32(o3input),i32(0 if pin is None else pin.size),i32(presence),m,lev_in,
              s,dummy if pin is None else pin,oz,a,lev))
-        cloud,liquid,ice,snow=(cp.zeros((ng,nl,140),dtype=cp.float32) for _ in range(4))
-        # Latitude is passed as a device pointer: no surface field host read.
-        _gpu_kernel('mpas_lw_mcica')(grid,(32,),
-            (i32(ng),i32(nl),i32(cldovrlp),i32(idcor),i32(julday),s,a,cloud,liquid,ice,snow))
-        const=lambda value: cp.full((ng,nl),value,dtype=cp.float32)
+        cloud,liquid,ice,snow=_lw_mcica_wrapper(ng,nl,cldovrlp,idcor,julday,s,a)
+        # The solver runs the whole wrapper batch as one chunk (column_chunk=ng): its per-column
+        # kernels (setcoef, inatm, final) otherwise launched on ~2,300 columns at a time, a few
+        # threads per SM. Chunk width is workspace shape only (solve_device's contract).
+        # Read-only gas profiles (the solver copies them into its own slabs): one set per shape
+        # per call, not eight fills per batch.
+        gases=constant_gases.get((ng,nl))
+        if gases is None:
+            gases=constant_gases[(ng,nl)]={value:cp.full((ng,nl),value,dtype=cp.float32)
+                for value in (379.e-6,1774.e-9,319.e-9,.209488,.251e-9,.538e-9,.169e-9,.093e-9)}
+        const=gases.__getitem__
         out=solve_device(ng,nl,cldovrlp,a[:,0,:],lev[:,0,:],a[:,1,:],lev[:,1,:],
             s[:,0],a[:,3,:],a[:,4,:],const(379.e-6),const(1774.e-9),
             const(319.e-9),const(.209488),const(.251e-9),const(.538e-9),
             const(.169e-9),const(.093e-9),cp.broadcast_to(s[:,1:2],(ng,16)).copy(),
             inflag,iceflag,1,cloud,cp.zeros_like(cloud),ice,liquid,snow,
             a[:,10,:],a[:,9,:],a[:,11,:],cp.zeros((ng,nl,16),dtype=cp.float32),
-            tables,mcica_layout='column')
+            tables,column_chunk=ng,mcica_layout='column')
         tendency_group=cp.empty((ng,nm),dtype=cp.float32)
         radii_group=cp.empty((ng,3,nm),dtype=cp.float32)
         flux_group=cp.empty((ng,len(FLUX_FIELDS)),dtype=cp.float32)

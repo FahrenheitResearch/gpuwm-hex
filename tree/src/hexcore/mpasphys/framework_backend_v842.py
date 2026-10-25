@@ -211,10 +211,16 @@ class FrameworkPhysics:
                 np.any(ends < owned) or np.any(ends > ids.size) or np.any(np.diff(ends) < 0)):
             raise ValueError('halo ends must increase from owned count to total count')
         local = {int(v): i for i, v in enumerate(ids[:owned])}
-        try:
-            sources = np.array([local[int(v)] for v in ids[owned:]], dtype=np.intp)
-        except KeyError as error:
-            raise ValueError('one-process halo ID has no owned source: ' + str(error)) from error
+        if getattr(self.layout, 'samehost_partition', False):
+            # A same-host rank's halo IDs are owned by other ranks; its rank
+            # owner (samehost_v842.RankHalo and the dycore exchanger) fills
+            # them. No in-process source exists, so exchange_halo refuses.
+            sources = None
+        else:
+            try:
+                sources = np.array([local[int(v)] for v in ids[owned:]], dtype=np.intp)
+            except KeyError as error:
+                raise ValueError('one-process halo ID has no owned source: ' + str(error)) from error
         self._decompositions[element] = (owned, ids.copy(), ends.copy(), sources)
 
     def register_field(self, pool, name, *, dimensions=(), decomposed=False,
@@ -258,6 +264,11 @@ class FrameworkPhysics:
         if not 1 <= level <= self._fields[key][2]:
             raise ValueError('invalid halo time level')
         owned, ids, ends, sources = self._decompositions[row['dimensions'][-1]]
+        if sources is None:
+            # Breakage prevented: a framework exchange on a same-host rank would
+            # leave halo words stale (their owners live on other ranks).
+            raise RuntimeError(f'{name}: the halo of a same-host rank is exchanged by its rank owner '
+                               '(samehost_v842), not by the one-process framework')
         a = self._storage[key][level-1]
         if _layers is None:
             a[..., owned:ids.size] = a[..., sources]

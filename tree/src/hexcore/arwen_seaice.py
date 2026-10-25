@@ -47,6 +47,14 @@ def install_noahmp_seaice(backend, seam):
             rain = self.fields["rainbl"] + self._pending_rainbl
             base._run_noahmp(self, atmosphere, cfg, itimestep)
             service = getattr(backend, "_surface_updates", None)
+            if service is not None:
+                # Snapshot the layout actually handed to Noah-MP, before ice
+                # evolution or a later analysis record changes its categories.
+                # These are existing host counts: no device read or sync.
+                census = self.noahmp_params._surface_layout_cache[2]["census"]
+                service.physics_classification = dict(service.classification,
+                    sflx_land_columns=census["land"], open_water_columns=census["water"],
+                    sea_ice_columns=census["sea_ice"], glacier_columns=census["glacier"])
             if service is not None and getattr(service, "ocean", None) is not None:
                 service.ocean.step(self, atmosphere, self.bldt_seconds, rain)
             else:

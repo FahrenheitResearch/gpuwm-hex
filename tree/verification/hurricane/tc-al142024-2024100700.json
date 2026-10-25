@@ -1,0 +1,66 @@
+{
+  "case": "tc-al142024-2024100700",
+  "description": "TC-vitals seeded concentric global 48/3 km storm-following forecast",
+  "start_time": "2024-10-07_00:00:00",
+  "gfs_cycle": "2024100700",
+  "hours": 96,
+  "dt_seconds": 18.75,
+  "n_levels": 55,
+  "vertical_spec": "verification/vertical-specs/tc55-v1.json",
+  "physics_args": [],
+  "storm": {
+    "atcf_id": "AL142024",
+    "initial_center_deg": [
+      22.5,
+      -93.4
+    ],
+    "initial_center_source": "NHC TCVITALS at analysis time, tc-vitals/1 reader",
+    "initial_motion": {
+      "heading_deg": 90.0,
+      "speed_kmh": 11.16,
+      "source": "NHC TCVITALS motion at analysis time"
+    },
+    "vitals_record_sha256": "cad1a2888d736ee7f73fe16247a60743d4c8d70b18752f22799f17d866f079de",
+    "vitals_document_sha256": "f2fee3c629c120e0d371984c1921702b4ca5a7d3f4d77ddea0281dd448caab5f"
+  },
+  "mesh": {
+    "background_km": 48.0,
+    "fine_km": 3.0,
+    "fine_radius_km": 450.0,
+    "fine_transition_km": 54.0,
+    "rings": [
+      {
+        "spacing_km": 6.0,
+        "extra_radius_km": 162.0,
+        "transition_km": 108.0
+      },
+      {
+        "spacing_km": 12.0,
+        "extra_radius_km": 486.0,
+        "transition_km": 216.0
+      },
+      {
+        "spacing_km": 24.0,
+        "extra_radius_km": 1134.0,
+        "transition_km": 432.0
+      }
+    ]
+  },
+  "tracker": {
+    "mode": "tc",
+    "placement": {
+      "core_margin_km": 150.0,
+      "check_minutes": 15,
+      "max_dwell_minutes": 360.0,
+      "max_lead_minutes": 900.0,
+      "snap_deg": 0.25,
+      "fix_error_km": 25.0,
+      "motion_error_kmh": 6.0,
+      "min_move_km": 180.0,
+      "max_misses": 3,
+      "follow": "continuous",
+      "max_move_km": 360.0
+    }
+  },
+  "physics_note": "Full engine-default physics, including its scale-aware convection selection; no historical convection override."
+}

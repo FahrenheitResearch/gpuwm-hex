@@ -127,6 +127,13 @@ WHAT IS ADDED
      one, otherwise from the lowest model level, and ``psfc`` from the model's
      own surface pressure.  Every later frame is untouched, and so is the
      model state.
+  8. THE F000 FIRST-CALL DIAGNOSTICS (:func:`complete_f000_from_first_call`,
+     ``hexcore.f000_first_call``).  The start frame is captured before step 1
+     and finished after it: where the start file carries no 10 m wind or 2 m
+     temperature (the HRRR road writes the -1e30 missing value), and for the
+     fluxes and PBL depth (pre-first-call zeros), the frame takes the first
+     physics call's diagnosis of the start state, by the forecast's own
+     surface-layer scheme.
 
 FORK-EQUIVALENCE GATE.  Because this driver reaches the model through the
 proof module's own functions, a fork defect would show up as a changed
@@ -170,6 +177,7 @@ from hexcore import dt_admission  # noqa: E402
 from hexcore import shipped_sources  # noqa: E402
 from hexcore import history_writer, kernel_prewarm, mesh_snapshot, prep_cache  # noqa: E402
 from hexcore import time_ledger  # noqa: E402
+from hexcore import f000_first_call  # noqa: E402
 from hexcore.errors import ConfigurationRefusal  # noqa: E402
 from hexcore.species_row import species_row_for_scheme as _row_for_scheme  # noqa: E402
 from hexcore.mesh import (  # noqa: E402
@@ -186,12 +194,9 @@ SCHEMA = "mpas-port.cuda-v841-engineering-forecast/v1"
 from hexcore.analysis_door import IAU_ROUTE_DEFAULT, IAU_ROUTES  # noqa: E402
 RECEIPT_MODE = "engineering-forecast"
 
-#: Written into the output root before the first step: which mesh and init this forecast runs on,
-#: so a reader drawing each history hour as it lands (a site publishing a forecast while it runs)
-#: needs nothing but the output directory, even when the door derived the init (an analysis
-#: bundle's background, a remap onto a nest).
-START_RECORD_NAME = "forecast-start.json"
-START_RECORD_SCHEMA = "gpuwm-hex.forecast-start/1"
+#: The start record (which mesh and init, start, hours, cadence), written before the first step.
+#: One writer for both physics routes: hexcore.forecast_start.
+from hexcore.forecast_start import START_RECORD_NAME, START_RECORD_SCHEMA, write_start_record  # noqa: E402,F401
 
 
 def restore_refused_dycore_values(rollback: Any, step: int) -> None:
@@ -219,17 +224,6 @@ def restore_refused_dycore_values(rollback: Any, step: int) -> None:
                 rollback.cp.copyto(getattr(target, field.name), value)
 
 
-def write_start_record(output_root: Path, *, paths: Mapping[str, Any], schedule: Mapping[str, Any]) -> Path:
-    record = {"schema": START_RECORD_SCHEMA,
-              "grid": str(Path(paths["grid"]).resolve()),
-              "static": None if paths.get("static") is None else str(Path(paths["static"]).resolve()),
-              "init": str(Path(paths["init"]).resolve()),
-              "start_time": schedule.get("start_time")}
-    target = Path(output_root) / START_RECORD_NAME
-    partial = target.with_name(target.name + ".partial")
-    partial.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    partial.replace(target)
-    return target
 RECEIPT_NAME = "cuda-v841-forecast-receipt.json"
 
 
@@ -952,6 +946,30 @@ def _complete_f000_q2(
         "maximum": float(q2.max()),
         "sha256": proof.array_sha256(q2),
     }
+
+
+def complete_f000_from_first_call(
+    snapshot: dict[str, Any], first_call: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Complete the start frame's surface-layer diagnostics from the first physics call.
+
+    hexcore.f000_first_call says why.  Runs after
+    :func:`complete_f000_surface_diagnostics`; a first-call 2 m humidity replaces
+    the lowest-level fallback, never a q2 the start file carried.  The
+    ``receipt['arrays']`` rows of the replaced fields are recomputed.
+    """
+
+    receipt = snapshot["receipt"]
+    if int(receipt.get("step", -1)) != 0:
+        raise ValueError("the first-call completion applies to the step-0 frame only")
+    arrays = snapshot["arrays"]
+    record = f000_first_call.complete_arwen_start_frame(
+        arrays, first_call, receipt.get("f000_completed_surface_diagnostics"))
+    rows = receipt.get("arrays")
+    if isinstance(rows, dict):
+        for name in record.get("fields", {}):
+            rows[name] = _snapshot_array_record(arrays[name])
+    return record
 
 
 def install_capture_labels(labels: Mapping[int, str]) -> None:
@@ -3110,6 +3128,41 @@ def _mixing_treatment_proof(driver: Any, executed_steps: int) -> dict[str, Any]:
     return proof_block
 
 
+from hexcore.nest_triggers import NEST_TRIGGERS_ENV  # noqa: E402  (one name for both physics routes)
+
+
+def _arm_nest_trigger(*, host: Mapping[str, Any], schedule: Mapping[str, Any], output_root: Path,
+                      backend: Any, cp: Any, start_step: int):
+    """The armed ``[hex_nests]`` look, or None when the run names no table.
+
+    The table comes from the forecast door's ``--nest-triggers FILE``, carried
+    to this loop as ``GPUWM_HEX_NEST_TRIGGERS`` (the door sets it for its own
+    driver call only).  The fields a look can read on this route are the ones
+    the physics backend forms on the card; a table naming another is refused
+    here, before the first step, by :class:`hexcore.nest_triggers.LoopTrigger`.
+    The arming itself is :func:`hexcore.nest_triggers.arm_loop`, shared with
+    the MPAS-physics route.
+    """
+
+    table_path = host.get("nest_triggers") or os.environ.get(NEST_TRIGGERS_ENV)
+    if not table_path:
+        return None
+    from hexcore import nest_triggers
+
+    mesh = host["prepared"].mesh
+    return nest_triggers.arm_loop(
+        table_path, run_dir=output_root, start_text=str(schedule["start_time"]), start_step=start_step,
+        dt_s=float(DT_SECONDS),
+        # The parent's end is always known: the schedule's own step count (a
+        # schedule without forecast_hours skipped the "nest outlives the
+        # parent" check silently before 2026-10-24).
+        parent_seconds=(float(schedule["forecast_hours"]) * 3600.0
+                        if schedule.get("forecast_hours") is not None
+                        else float(schedule["steps"]) * float(DT_SECONDS)),
+        mesh=mesh, owned_cells=int(mesh.n_cells),
+        available_sources=["refl10cm"] if backend.computes_reflectivity() else [], cp=cp)
+
+
 def execute_forecast(
     *,
     host: Mapping[str, Any],
@@ -3464,6 +3517,10 @@ def execute_forecast(
         product_ready = HistoryReady(on_history_ready, session_factory=history_product_session,
                                      max_pending=history_product_max_pending,
                                      required_product_ids=required_product_ids)
+    # Nests that spawn on conditions ([hex_nests], hexcore.nest_triggers): armed
+    # only when the door names a table, so an unarmed run's loop is unchanged.
+    nest_trigger = _arm_nest_trigger(host=host, schedule=schedule, output_root=output_root,
+                                     backend=stack["backend"], cp=cp, start_step=start_step)
 
     from concurrent.futures import ThreadPoolExecutor
     from contextvars import copy_context
@@ -3472,15 +3529,97 @@ def execute_forecast(
     capture_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hex-capture") if async_capture else None
     capture_pending = []
     capture_finish_seconds = 0.0
+    # F000's surface-layer diagnostics come from the first physics call
+    # (hexcore.f000_first_call): the frame is captured before step 1 and
+    # finished after it.  A cycling run keeps the old frame: its step-0
+    # finish reads the live restart state, which step 1 would have moved.
+    # f000 only: a run resumed mid-forecast (start_step > 0) captures no f000 and
+    # its frames stay as they are.  A cycling run's live-state work at step 0
+    # (finish_cycling) still runs at the boundary.
+    first_call = (f000_first_call.FirstCallHandoff()
+                  if (0 in capture_steps and start_step == 0 and steps > 0)
+                  else None)
+    held_f000: list[Any] = []
 
-    def finish_capture(step, snapshot):
+    held_background: list[Any] = []
+
+    def finish_cycling(step, snapshot, defer_background=False):
+        # Reads the LIVE state at this step's boundary (restart state, checkpoint,
+        # JEDI background), so it runs at the boundary even when the frame's
+        # publication waits for the first physics call.
+        if cycling is None:
+            return
+        backend_state = None
+        if cycling["jedi_background"] or step in cycling["checkpoint_steps"]:
+            backend_state = stack["backend"].restart_state()
+        if cycling["jedi_background"]:
+            if "fields" not in init_fallback_cache:
+                init_fallback_cache["fields"] = _init_fallback_fields(
+                    Path(cycling["init_path"])
+                )
+            background = dict(
+                output_root=output_root,
+                stack=stack,
+                host=host,
+                snapshot=snapshot,
+                label=labels[step],
+                valid_time=schedule["valid_times"][step],
+                soil_levels=int(cycling["soil_levels"]),
+                init_fallback=init_fallback_cache["fields"],
+                init_path=Path(cycling["init_path"]),
+                backend_state=backend_state,
+                effective_radii=current_gf.get("radii"),
+            )
+            if defer_background:
+                # The f000 background's surface fields come from the completed
+                # frame (hexcore.f000_first_call), written after step 1.  Its
+                # live inputs are read now: the restart state is a host export
+                # and the pressure perturbation is copied to the host here.
+                from types import SimpleNamespace
+                background["stack"] = {"driver": SimpleNamespace(cp=cp, atmosphere=SimpleNamespace(
+                    saved=SimpleNamespace(pressure_perturbation=cp.asnumpy(
+                        stack["driver"].atmosphere.saved.pressure_perturbation))))}
+                held_background.append(background)
+            else:
+                jedi_files[str(step)] = write_jedi_background(**background)
+        if step in cycling["checkpoint_steps"]:
+            payload = download_forecast_checkpoint(
+                stack,
+                step=step,
+                label=labels[step],
+                valid_time=schedule["valid_times"][step],
+                dynamics_tendencies=current_gf["value"],
+            )
+            if iau is not None:
+                from hexcore.iau_native import IAU_WINDOW_KEY, window_record
+
+                payload[IAU_WINDOW_KEY] = window_record(iau)
+            target = output_root / f"checkpoint.{labels[step]}.pkl"
+            from hexcore.checkpoint_io import write_checkpoint
+            write_checkpoint(target, payload)
+            checkpoint_files[str(step)] = {
+                "path": str(target),
+                "bytes": target.stat().st_size,
+                "sha256": proof.sha256_file(target),
+                "atmosphere_fingerprint_sha256": proof.canonical_json_sha256(
+                    json.loads(json.dumps(payload["atmosphere_fingerprint"], sort_keys=True, default=str))
+                ),
+            }
+            del payload
+        del backend_state
+
+    def finish_capture(step, snapshot, cycling_done=False):
         nonlocal write_seconds, capture_finish_seconds
         finish_started = time.perf_counter()
         time_ledger.emit("forecast.output.capture.finish", "begin", attrs={"step": step})
         if step == 0:
-            snapshot["receipt"]["f000_completed_surface_diagnostics"] = (
-                complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"])
-            )
+            if "f000_completed_surface_diagnostics" not in snapshot["receipt"]:
+                snapshot["receipt"]["f000_completed_surface_diagnostics"] = (
+                    complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"])
+                )
+            if first_call is not None:
+                snapshot["receipt"]["f000_first_call_diagnostics"] = (
+                    complete_f000_from_first_call(snapshot, first_call.take()))
         physical_gates[str(step)] = proof.physical_snapshot_gate(
             snapshot,
             allow_initial_negative_qv=(step == 0),
@@ -3525,53 +3664,11 @@ def execute_forecast(
                 product_ready.submit(snapshot_files[str(step)], **context)
             else:
                 product_ready.watch(snapshot_files[str(step)], **context)
-        if cycling is not None:
-            backend_state = None
-            if cycling["jedi_background"] or step in cycling["checkpoint_steps"]:
-                backend_state = stack["backend"].restart_state()
-            if cycling["jedi_background"]:
-                if "fields" not in init_fallback_cache:
-                    init_fallback_cache["fields"] = _init_fallback_fields(
-                        Path(cycling["init_path"])
-                    )
-                jedi_files[str(step)] = write_jedi_background(
-                    output_root=output_root,
-                    stack=stack,
-                    host=host,
-                    snapshot=snapshot,
-                    label=labels[step],
-                    valid_time=schedule["valid_times"][step],
-                    soil_levels=int(cycling["soil_levels"]),
-                    init_fallback=init_fallback_cache["fields"],
-                    init_path=Path(cycling["init_path"]),
-                    backend_state=backend_state,
-                    effective_radii=current_gf.get("radii"),
-                )
-            if step in cycling["checkpoint_steps"]:
-                payload = download_forecast_checkpoint(
-                    stack,
-                    step=step,
-                    label=labels[step],
-                    valid_time=schedule["valid_times"][step],
-                    dynamics_tendencies=current_gf["value"],
-                )
-                if iau is not None:
-                    from hexcore.iau_native import IAU_WINDOW_KEY, window_record
-
-                    payload[IAU_WINDOW_KEY] = window_record(iau)
-                target = output_root / f"checkpoint.{labels[step]}.pkl"
-                from hexcore.checkpoint_io import write_checkpoint
-                write_checkpoint(target, payload)
-                checkpoint_files[str(step)] = {
-                    "path": str(target),
-                    "bytes": target.stat().st_size,
-                    "sha256": proof.sha256_file(target),
-                    "atmosphere_fingerprint_sha256": proof.canonical_json_sha256(
-                        json.loads(json.dumps(payload["atmosphere_fingerprint"], sort_keys=True, default=str))
-                    ),
-                }
-                del payload
-            del backend_state
+        if cycling is not None and not cycling_done:
+            finish_cycling(step, snapshot)
+        while held_background:
+            # the f000 JEDI background, from the completed frame
+            jedi_files[str(step)] = write_jedi_background(**held_background.pop())
         write_seconds += time.perf_counter() - mark
         del snapshot
         gc.collect()
@@ -3621,6 +3718,14 @@ def execute_forecast(
                 # If hand-off fails, nobody else owns the queued copies.
                 snapshot.transfer.wait()
                 raise
+        elif step == 0 and first_call is not None:
+            # Host arrays already; finished once the first call has run.  The
+            # start-file q2/psfc completion needs no physics call, so a cycling
+            # run's boundary work (JEDI background) still sees it.
+            snapshot["receipt"]["f000_completed_surface_diagnostics"] = (
+                complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"]))
+            finish_cycling(0, snapshot, defer_background=True)
+            held_f000.append(snapshot)
         else:
             finish_capture(step, snapshot)
         time_ledger.emit("forecast.output.capture", "end", attrs={"step": step})
@@ -3745,6 +3850,13 @@ def execute_forecast(
 
     stack["driver"].final_validation_reader = read_current_endpoint
 
+    def hand_f000_first_call(backend: Any) -> None:
+        with time_ledger.stage("forecast.output.f000_first_call"):
+            first_call.put(f000_first_call.read_arwen_first_call(
+                backend, cp, solve_cells=stack.get("solve_cells")))
+        if held_f000:
+            finish_capture(0, held_f000.pop(), cycling_done=True)
+
     try:
         for step in range(start_step + 1, steps + 1):
             if step == start_step + 1:
@@ -3770,7 +3882,8 @@ def execute_forecast(
                     physics_park=physics_park,
                     # WRF/native diagflag: the step ENDING at a history frame
                     # computes refl10cm inside its own microphysics call.
-                    refl_10cm_due=(step in capture_steps),
+                    refl_10cm_due=(step in capture_steps or
+                                   (nest_trigger is not None and nest_trigger.due(step))),
                     **({} if iau_forcing is None else {"held_forcing": (
                         lambda held, start, length, **context:
                         iau_forcing.add(0, held, start, length, **context))}),
@@ -3844,7 +3957,19 @@ def execute_forecast(
                 backend_receipt, executed=True, label=f"step {step} backend receipt"
             )
             receipt_writer.submit(step, elapsed, result, surface_execution)
+            if nest_trigger is not None:
+                if nest_trigger.due(step):
+                    refl = stack["backend"].peek_history_refl10cm()
+                    if refl is not None:
+                        nest_trigger.look(step, {"refl10cm": refl})
+                    if step not in capture_steps:
+                        # Formed only for the look: clear it so no later
+                        # capture is handed this step's reflectivity.
+                        stack["backend"].take_history_refl10cm()
+                nest_trigger.poll()
             pending_health = (step, current_health, stack["driver"].atmosphere)
+            if step == 1 and first_call is not None:
+                hand_f000_first_call(stack["backend"])
             # A capture re-prepares live diagnostics and consumes refl10cm. Drain
             # at that boundary so no successor changes any output byte or gate.
             output_due = (step in capture_steps or
@@ -3886,9 +4011,18 @@ def execute_forecast(
                     executed_steps = step
                     break
     finally:
+        if first_call is not None:
+            first_call.put(None)  # no first call will come; never leave a writer waiting
         with time_ledger.stage("post.forecast.step_receipts"):
             step_receipts = receipt_writer.close()
+    if held_f000:
+        finish_capture(0, held_f000.pop(), cycling_done=True)
     loop_seconds = time.perf_counter() - loop_started
+    if nest_trigger is not None:
+        nest_trigger.poll(final=True)
+        (output_root / "nest-trigger-receipt.json").write_text(
+            json.dumps(nest_trigger.receipt(), indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8", newline="\n")
     if last_step_clock is not None:
         if product_ready is not None:
             product_ready.forecast_ended(*last_step_clock)

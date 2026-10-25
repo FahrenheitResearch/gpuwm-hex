@@ -34,6 +34,26 @@ SCHEMA = "gpuwm.kernel-pack/v1"
 MAX_ENTRIES = 16000
 
 
+#: The identity fields that decide what a compile produces: the loaded NVRTC
+#: (its version and the SHA-256 of the library bytes) and CuPy's own key
+#: inputs.  ``cupy_package`` and ``nvrtc_package`` are pip metadata: they name
+#: what to install, not what is loaded.  THE BREAKAGE THIS ENDS
+#: (2026-10-24): a venv whose CuPy loaded the system CUDA 13.0 libnvrtc while
+#: pip metadata named another NVRTC, or one that carried the same library bytes
+#: under a different wheel, never matched any pack and compiled every module
+#: on one core (about 4 min per new box).
+CODE_KEYS = ("cupy", "nvrtc", "nvrtc_library_sha256", "cache_key", "use_ptx", "use_pch", "debug")
+
+
+def same_compiler(built, measured) -> bool:
+    """Whether a pack's recorded compiler produces what this process's compiler produces."""
+    if not isinstance(built, dict) or not isinstance(measured, dict):
+        return False
+    if any(key not in built or key not in measured for key in CODE_KEYS):
+        return built == measured
+    return all(built[key] == measured[key] for key in CODE_KEYS)
+
+
 def digest(arguments) -> str:
     return hashlib.sha256(json.dumps(arguments, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -59,7 +79,7 @@ def read(path, compiler) -> list[dict]:
     document = _load(Path(path))
     if not isinstance(document, dict) or document.get("schema") != SCHEMA:
         raise ValueError(f"{path}: not a {SCHEMA} document")
-    if document.get("compiler") != compiler:
+    if not same_compiler(document.get("compiler"), compiler):
         raise ValueError(f"{path}: built for compiler {document.get('compiler')!r}, "
                          f"this process has {compiler!r}")
     records = document.get("entries")

@@ -49,4 +49,11 @@ def specialize(source: str, name: str, dimensions: tuple[tuple[str, int], ...]) 
 def resolve(cache, name, source, module_key, dimensions=()):
     """Resolve once at the caller's existing shape/instance cache miss."""
     specialized, suffix = specialize(source, name, tuple(dimensions))
-    return cache.raw_kernel(name, specialized, module_key=module_key + suffix)
+    kernel = cache.raw_kernel(name, specialized, module_key=module_key + suffix)
+    if suffix:
+        # Same-host compile checks compare shape modules by this origin: each
+        # rank's dimensions are its own, the generic source must be shared.
+        recorder = getattr(cache, "record_shape_origin", None)
+        if recorder is not None:
+            recorder(module_key + suffix, source, tuple(dimensions))
+    return kernel

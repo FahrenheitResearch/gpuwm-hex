@@ -95,8 +95,16 @@ def _cp():
     return cupy
 
 
-@lru_cache(maxsize=1)
 def _module():
+    """The RRFS cloudiness module loaded on the calling card."""
+    # A CUDA module belongs to the card it was loaded on. Same-host ranks drive
+    # several cards from one process, so a cache keyed without the card hands
+    # the second card the first card's handle (CUDA_ERROR_INVALID_HANDLE at step 1).
+    return _module_on(int(_cp().cuda.Device().id))
+
+
+@lru_cache(maxsize=None)
+def _module_on(device: int):
     """RRFS MPAS-Model-rrfs/src/core_atmosphere/physics/mpas_atmphys_driver_cloudiness.F:291-370 @ 1d6e370e."""
     import gpuwm.core.kernels
     from cupy.cuda import compiler, function
@@ -104,9 +112,10 @@ def _module():
     source = (root / "glibc_flt32.cuh").read_text()
     source += (root / "glibc_trig_flt32.cuh").read_text() + CUDA_SOURCE
     binary, _ = compiler.compile_using_nvrtc(source, options=_hex_numerics.options(CUDA_OPTIONS),
-        arch=_cp().cuda.Device().compute_capability)
-    module = function.Module()
-    module.load(binary)
+        arch=_cp().cuda.Device(device).compute_capability)
+    with _cp().cuda.Device(device):
+        module = function.Module()
+        module.load(binary)
     return module
 
 

@@ -281,16 +281,18 @@ FROZEN_WSM6_COLUMN_ROW = PhysicsBackendRow(
 #: fills each slot -- is the ``mynn-ruc-gsl`` row of
 #: ``data/profiles/physics-suites.v1.json``.  Its species block is
 #: aerosol-aware Thompson's eleven scalars, of which the boundary stream
-#: drives the six masses; the number and aerosol moments ride the transport
-#: and the limiter like every scalar and are left to the physics at the
-#: rings.  It holds no earned anchor yet: the remedy names what earns one.
+#: drives the six masses and, where the stream carries them, the three
+#: hydrometeor numbers (see the Thompson row below); the aerosol moments ride
+#: the transport and the limiter like every scalar and are left to the
+#: physics at the rings.  It holds no earned anchor yet: the remedy names
+#: what earns one.
 MYNN_RUC_GSL_COLUMN_ROW = PhysicsBackendRow(
     name="mynn_ruc_gsl_column",
     adapter_module="hexcore.cuda_suite_physics_v841",
     batch_module="gpuwm.core.mpas_column_suite",
     batch_entrypoint="run_mpas_column_suite",
-    driven_scalar_names=("qv", "qc", "qr", "qi", "qs", "qg"),
-    appended_scalar_names=("ni", "nr", "nc", "nwfa", "nifa"),
+    driven_scalar_names=("qv", "qc", "qr", "qi", "qs", "qg", "ni", "nr", "nc"),
+    appended_scalar_names=("nwfa", "nifa"),
     anchor_configuration_class="v841-column-suite-mynn-ruc-gsl",
     anchored=False,
     unanchored_remedy=(
@@ -309,15 +311,20 @@ THOMPSON_AERO_COLUMN_ROW = PhysicsBackendRow(
     adapter_module="hexcore.thompson_column",
     batch_module="gpuwm.core.mpas_column_batch",
     batch_entrypoint="run_mpas_column_batch",
-    # The boundary drives the six masses only: an MPAS LBC stream carries
-    # lbc_qv..lbc_qg plus the two aerosols and no ni/nr/nc, and the door
-    # reads the driven block by POSITION, so naming all eleven refuses
-    # ("noncontiguous model species").  The number and aerosol moments ride
-    # the transport and the limiter and are left to the physics at the
-    # rings, exactly as the mynn_ruc_gsl_column row does; the array order
+    # The boundary drives the six masses and, when every boundary file
+    # carries them, the three hydrometeor numbers.  The door drives the
+    # contiguous PREFIX of this block that the stream supplies
+    # (select_lbc_scalar_names), so an MPAS/GFS LBC stream (lbc_qv..lbc_qg,
+    # no ni/nr/nc) drives the six masses exactly as before, while a region
+    # cut from a kept hex parent (hexcore.nest_boundary, which writes
+    # lbc_ni/lbc_nr/lbc_nc carried or diagnosed by hexcore.handover_numbers)
+    # drives its numbers with its masses.  THE BREAKAGE THIS PREVENTS
+    # (init-from-any-run proof, 2026-10-24): masses driven in at the rings
+    # with no number are sized at Thompson's limits.  The aerosol numbers
+    # stay appended (left to the physics at the rings); the array order
     # (driven, then appended) is still the engine's eleven.
-    driven_scalar_names=("qv", "qc", "qr", "qi", "qs", "qg"),
-    appended_scalar_names=("ni", "nr", "nc", "nwfa", "nifa"),
+    driven_scalar_names=("qv", "qc", "qr", "qi", "qs", "qg", "ni", "nr", "nc"),
+    appended_scalar_names=("nwfa", "nifa"),
     anchor_configuration_class="v841-arwen-column-thompson-aero",
     anchored=True,
     unanchored_remedy="",

@@ -17,15 +17,25 @@ from concurrent.futures import ThreadPoolExecutor
 
 SCHEMA = "gpuwm-hex.observation-scorecard/v1"
 LEVELS = [1000, 925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10]
+# The messages the native scorer reads from a reference, as .idx VAR:LEVEL selectors (NCEP naming): the
+# mandatory-level height, temperature and wind, the 2 m / 10 m / surface fields and terrain; precipitation is an
+# accumulation, which a file has only after its cycle's start. A row that names them is fetched as those byte
+# ranges only (74 of 743 GFS 0.25 messages, 59 of 548 MB).
+NCEP_IDX_SCORED_FIELDS = [f"{name}:{level} mb" for name in ("HGT", "TMP", "UGRD", "VGRD") for level in LEVELS] + [
+    "TMP:2 m above ground", "DPT:2 m above ground", "RH:2 m above ground", "SPFH:2 m above ground",
+    "UGRD:10 m above ground", "VGRD:10 m above ground", "PRES:surface", "HGT:surface"]
+NCEP_IDX_SCORED_ACCUMULATIONS = ["APCP:surface"]
 # A new reference or instrument is a metadata row, not a model-specific adapter.
 REFERENCES = [
-    {"label": "gfs_forecast", "model": "gfs", "source": "aws", "product": "pgrb2.0p25", "role": "forecast"},
+    {"label": "gfs_forecast", "model": "gfs", "source": "aws", "product": "pgrb2.0p25", "role": "forecast",
+     "var_patterns": NCEP_IDX_SCORED_FIELDS, "accumulation_patterns": NCEP_IDX_SCORED_ACCUMULATIONS},
     {"label": "ifs_forecast", "model": "ifs", "source": "ecmwf", "role": "forecast",
      "precipitation_cadence_hours": 3,
      "static_terrain": True,
      "url_template": "https://storage.googleapis.com/ecmwf-open-data/{YYYYMMDD}/{HH}z/ifs/0p25/oper/{YYYYMMDD}{HH}0000-{hour}h-oper-fc.grib2",
      "mirror_templates": ["https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/{YYYYMMDD}/{HH}z/ifs/0p25/oper/{YYYYMMDD}{HH}0000-{hour}h-oper-fc.grib2"]},
-    {"label": "gfs_analysis", "model": "gfs", "source": "aws", "product": "pgrb2.0p25", "role": "analysis"},
+    {"label": "gfs_analysis", "model": "gfs", "source": "aws", "product": "pgrb2.0p25", "role": "analysis",
+     "var_patterns": NCEP_IDX_SCORED_FIELDS, "accumulation_patterns": NCEP_IDX_SCORED_ACCUMULATIONS},
     {"label": "ifs_analysis", "model": "ifs", "source": "ecmwf", "role": "analysis",
      "url_template": "https://storage.googleapis.com/ecmwf-open-data/{YYYYMMDD}/{HH}z/ifs/0p25/oper/{YYYYMMDD}{HH}0000-{hour}h-oper-fc.grib2",
      "mirror_templates": ["https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/{YYYYMMDD}/{HH}z/ifs/0p25/oper/{YYYYMMDD}{HH}0000-{hour}h-oper-fc.grib2"]},
@@ -34,7 +44,15 @@ QPE = "MultiSensor_QPE_01H_Pass1_00.00"
 # Beside the queued scorer: the sha256 of the config file it was given (see join_automatic_scorer).
 SOURCE_CONFIG = "automatic-source-config.json"
 # Radiosonde archives in the order they are tried; a new archive is a row here plus its acquisition.
-SONDE_SOURCES = ("gdas_prepbufr", "igra2")
+# NOMADS prepBUFR for the last two days; then NCEI's IGRA2 year-to-date snapshot tar that covers the run
+# (every case since 2021: about 1.4 GB streamed for a 2025 globe, nothing kept but the window's rows); then
+# the per-station IGRA2 files (this year's, or the period of record for the stations the run needs).
+SONDE_SOURCES = ("gdas_prepbufr", "igra2_snapshot", "igra2")
+IGRA2_ROOT = "https://www.ncei.noaa.gov/data/integrated-global-radiosonde-archive"
+# A period-of-record read downloads each station's whole history (an active station is 10 to 100 MB zipped).
+# Breakage it prevents: the unfiltered read pulled 2,931 files (28 GB zipped, 51 GB on disk) for one 15 h run,
+# filled the box's disk so its products stage failed, and held the run's card lease for 15 min (2026-10-24).
+IGRA2_POR_MAX_BYTES = 8 << 30
 # The verification region and the observed-precipitation source are configuration rows. Absent, the scorer
 # keeps CONUS surface networks and MRMS. A run elsewhere names "region" (west/south/east/north degrees,
 # optional step_degrees) and, outside MRMS coverage, "satellite_qpe" (label, variable, units, files).
@@ -226,16 +244,21 @@ def discover(run, config=None):
     config.setdefault("qpe_product", QPE)
     config.setdefault("prepbufr_url_template", "https://nomads.ncep.noaa.gov/pub/data/nccf/com/obsproc/prod/gdas.{YYYYMMDD}/gdas.t{HH}z.prepbufr.nr")
     # Radiosonde archives, tried in order. NOMADS keeps GDAS prepBUFR about two days, so a past case
-    # falls through to IGRA2 (NCEI: the year-to-date files, or the period of record for an earlier year).
+    # falls through to IGRA2: the year-to-date snapshot that covers it, else the per-station files.
     config.setdefault("sonde_sources", list(SONDE_SOURCES))
     config.setdefault("igra2_fetch_timeout_seconds", 1500)
+    config.setdefault("igra2_archive_url", IGRA2_ROOT + "/archive/")
+    config.setdefault("igra2_station_list_url", IGRA2_ROOT + "/doc/igra2-station-list.txt")
+    config.setdefault("igra2_por_index_url", IGRA2_ROOT + "/access/data-por/")
+    config.setdefault("igra2_por_max_bytes", IGRA2_POR_MAX_BYTES)
     config.setdefault("observation_delay_hours", 7)
     config.setdefault("grib_parameters", json.loads((Path(__file__).parent / "data/observation-grib-parameters.json").read_text(encoding="utf-8")))
     config["run"] = str(run)
     return config, frames
 
 
-REFERENCE_OBJECT_KEYS = ("model", "source", "product", "url_template", "mirror_templates")
+REFERENCE_OBJECT_KEYS = ("model", "source", "product", "url_template", "mirror_templates", "var_patterns",
+                         "accumulation_patterns")
 
 
 def fetch_reference(row, valid, start, folder, commands):
@@ -265,11 +288,19 @@ def _fetch_reference_object(row, cycle, hour, folder, commands):
             raise RuntimeError("; ".join(errors))
         atomic_json(folder / "fetch.json", record)
         return str(path)
+    # No --cache-dir: with one, rw_fetch keeps the object three times (its chunk cache, the assembled cache
+    # copy and the named output: 1.64 GB for one 0.55 GB GFS file), and a 15 h globe's scratch held about
+    # 30 GB of GFS (2026-10-24). Without one it writes the named output only. A row's var_patterns
+    # are the messages the scorer reads; rw_fetch takes just those byte ranges from the .idx (auto mode
+    # falls back to the whole file when the source has no .idx); its accumulation_patterns join after the
+    # cycle's start (rw_fetch refuses a selector that matches nothing, and a 0 h file has no accumulation).
     argv = [binary("rw_fetch"), "fetch", "--model", row["model"], "--source", row["source"],
             "--date", cycle.strftime("%Y%m%d"), "--cycle", str(cycle.hour),
-            "--hours", str(hour), "--out", str(folder), "--cache-dir", str(folder / "cache")]
+            "--hours", str(hour), "--out", str(folder)]
     if row.get("product"):
         argv += ["--product", row["product"]]
+    for pattern in row.get("var_patterns", []) + (row.get("accumulation_patterns", []) if hour > 0 else []):
+        argv += ["--var-pattern", pattern]
     record = commands.run(argv)
     atomic_json(folder / "fetch.json", record)
     files = record.get("files", record.get("results", []))
@@ -311,13 +342,35 @@ def acquire_sondes_igra2(valid, folder, commands, config):
     frame of a scoring call: the files sit in the call's scratch and are deleted with it."""
     folder.mkdir(parents=True, exist_ok=True)
     collection = "y2d" if valid.year == datetime.now(timezone.utc).year else "por"
-    archive = Path(getattr(commands, "scratch", None) or folder) / f"igra2-{collection}"
+    shared = Path(getattr(commands, "scratch", None) or folder)
+    argv = [binary("rw_igra2"), "fetch", "--collection", collection]
+    if collection == "por":
+        # Only the stations whose record spans this year (and that lie in the region the scorer keeps), and
+        # only within the byte budget: a whole-archive read is the breakage named at IGRA2_POR_MAX_BYTES.
+        region = config.get("region") or {}
+        box = [str(region[k]) for k in ("west", "south", "east", "north")] if region else []
+        stations = _once(commands, ("igra2-stations", valid.year, tuple(box)), lambda: commands.run(
+            [binary("hex_obs_scorecard"), "--igra2-station-ids", config.get("igra2_station_list_url", IGRA2_ROOT + "/doc/igra2-station-list.txt"),
+             config.get("igra2_por_index_url", IGRA2_ROOT + "/access/data-por/"), str(valid.year), *box]))
+        budget = int(config.get("igra2_por_max_bytes", IGRA2_POR_MAX_BYTES))
+        if not stations.get("stations"):
+            raise LookupError(f"the IGRA2 station list has no station reporting in {valid.year}"
+                              + (" inside the verification region" if box else ""))
+        if stations["bytes"] > budget:
+            raise LookupError(f"IGRA2 keeps {valid.year} soundings only in per-station period-of-record files: the "
+                              f"{len(stations['stations'])} stations this run needs are {stations['bytes'] / 2**30:.1f} GiB "
+                              f"to download, over igra2_por_max_bytes ({budget / 2**30:.1f} GiB); raise it in the "
+                              "observation config to read them")
+        argv += ["--stations", ",".join(stations["stations"])]
+        archive = shared / f"igra2-por-{valid.year}-{hashlib.sha256(','.join(stations['stations']).encode()).hexdigest()[:12]}"
+    else:
+        archive = shared / f"igra2-{collection}"
     record_path = archive / "fetch.json"
 
     def walk():
         if record_path.is_file():
             return json.loads(record_path.read_text(encoding="utf-8"))
-        return commands.run([binary("rw_igra2"), "fetch", "--collection", collection, "--out", str(archive)],
+        return commands.run([*argv, "--out", str(archive)],
                             timeout=float(config.get("igra2_fetch_timeout_seconds", 1500)))
     # Frames run in parallel: one archive walk, never one per 00Z/12Z frame at once.
     record = _once(commands, ("igra2", str(archive)), walk)
@@ -332,6 +385,41 @@ def acquire_sondes_igra2(valid, folder, commands, config):
     if not decoded.get("soundings"):
         raise LookupError(f"IGRA2 {collection} holds no sounding within an hour of {stamp(valid)} yet "
                           "(NCEI refreshes the year-to-date files daily)")
+    return str(table)
+
+
+def acquire_sondes_igra2_snapshot(valid, folder, commands, config):
+    """IGRA2 soundings from the NCEI year-to-date snapshot tar that covers the scoring call's sonde frames.
+
+    NCEI keeps each year's year-to-date files as one tar (``archive/IGRA_v2.2_data-y2d_s..._e..._c....tar``,
+    every station, about 1.4 GB for 2025-01 to 2026-07). The native scorer streams it once per scoring call in
+    parallel byte ranges, decodes each station in memory on every core and writes only the soundings inside
+    the call's sonde window, so no archive lands on the disk. One stream serves every frame of the call."""
+    folder.mkdir(parents=True, exist_ok=True)
+    first, last = getattr(commands, "sonde_window", None) or (valid, valid)
+    if not first <= valid <= last:
+        first = last = valid
+    start, end = stamp(first - timedelta(hours=1)), stamp(last + timedelta(hours=1))
+    shared = Path(getattr(commands, "scratch", None) or folder)
+    shared.mkdir(parents=True, exist_ok=True)
+    table = shared / f"igra2-snapshot-{first:%Y%m%d%H}-{last:%Y%m%d%H}.csv"
+    url = config.get("igra2_archive_url", IGRA2_ROOT + "/archive/")
+    record_path = table.with_suffix(".json")
+
+    def stream():
+        if record_path.is_file():
+            return json.loads(record_path.read_text(encoding="utf-8"))
+        record = commands.run([binary("hex_obs_scorecard"), "--fetch-igra2-snapshot", url, start, end, str(table)],
+                              timeout=float(config.get("igra2_fetch_timeout_seconds", 1500)))
+        atomic_json(record_path, record)
+        return record
+    record = _once(commands, ("igra2-snapshot", url, start, end), stream)
+    atomic_json(folder / "decode.json", record)
+    near = sum(count for hour, count in record.get("soundings_by_nominal_hour", {}).items()
+               if abs((instant(hour) - valid).total_seconds()) <= 3600)
+    if not near:
+        raise LookupError(f"IGRA2 snapshot {record.get('snapshot', {}).get('name')} holds no sounding within an hour "
+                          f"of {stamp(valid)}")
     return str(table)
 
 
@@ -357,7 +445,8 @@ def acquire_sondes_prepbufr(valid, folder, commands, config):
     return str(listing)
 
 
-SONDE_ACQUISITIONS = {"gdas_prepbufr": acquire_sondes_prepbufr, "igra2": acquire_sondes_igra2}
+SONDE_ACQUISITIONS = {"gdas_prepbufr": acquire_sondes_prepbufr, "igra2_snapshot": acquire_sondes_igra2_snapshot,
+                      "igra2": acquire_sondes_igra2}
 
 
 SURFACE_HALF_WINDOW = timedelta(minutes=10)
@@ -397,17 +486,54 @@ def acquire_surface(valid, folder, commands, region=None):
     return str(decoded)
 
 
+_SHARED_LOCK = threading.Lock()
+
+
+def _drop_tree(path):
+    """Delete an acquisition's raw objects once they are decoded; the scorer reads only the decoded files."""
+    if path.is_dir():
+        for item in sorted(path.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            item.unlink() if item.is_file() or item.is_symlink() else item.rmdir()
+        path.rmdir()
+
+
+def _share_identical(commands, path):
+    """Keep one inode for byte-identical decoded files (an MRMS grid is 264 MB and the same every hour):
+    the first copy is kept and each identical later one becomes a hard link to it."""
+    import filecmp
+    with _SHARED_LOCK:
+        kept = commands.__dict__.setdefault("shared_files", {}).setdefault(path.name, [])
+        for first in kept:
+            if first.stat().st_size == path.stat().st_size and filecmp.cmp(first, path, shallow=False):
+                temp = path.with_name(path.name + ".link")
+                os.link(first, temp)
+                os.replace(temp, path)
+                return
+        kept.append(path)
+
+
 def acquire_rain(valid, previous, folder, commands, product):
     from gpuwm.verification_visuals import fetch_radar
     duration = int((valid - previous).total_seconds())
     if duration <= 0 or duration % 3600:
         raise ValueError("MRMS comparison needs a positive whole-hour accumulation interval")
     # Reuse the engine acquisition door, including pack QC and geometry. The hours are independent
-    # objects, fetched at once and kept in hour order.
+    # objects, fetched at once and kept in hour order. Each hour is fetched once per scoring call into the
+    # call's scratch (frames 3 h apart share two of their three hours), its raw object is dropped once
+    # decoded, and the grid, the same for every hour of a product, is kept once.
+    shared = Path(getattr(commands, "scratch", None) or folder) / "mrms"
+
+    def fetch(when):
+        target = shared / f"{product}-{when:%Y%m%dT%H%M}"
+        row = fetch_radar({"valid_time": stamp(when)}, {"product": product, "key": "precipitation_1h"},
+                          (-125, 22, -66, 50), target, timeout=min(commands.timeout, max(1, commands.deadline - time.monotonic())))
+        _drop_tree(target / "objects")
+        _share_identical(commands, Path(row["grid_path"]))
+        return row
+
     def one(hour):
         when = previous + timedelta(hours=hour)
-        row = fetch_radar({"valid_time": stamp(when)}, {"product": product, "key": "precipitation_1h"},
-                          (-125, 22, -66, 50), folder / str(hour), timeout=min(commands.timeout, max(1, commands.deadline - time.monotonic())))
+        row = _once(commands, ("mrms", product, stamp(when)), lambda: fetch(when))
         return {**row, "valid_time": stamp(when)}
     hours = range(1, duration // 3600 + 1)
     with ThreadPoolExecutor(max_workers=len(hours)) as pool:
@@ -693,6 +819,11 @@ def score(run, *, config=None, out=None, timeout=180, budget=1800, leads=None):
             lead = int((instant(frame["valid_time"]) - start).total_seconds() // 3600)
             if leads is None or lead in leads:
                 todo.append((index, frame))
+        # The sonde frames this call scores: one IGRA2 snapshot stream decodes all of them at once.
+        sonde_times = [instant(f["valid_time"]) for _, f in todo if sonde_applies(instant(f["valid_time"]))
+                       and instant(f["valid_time"]) <= datetime.now(timezone.utc)]
+        if sonde_times:
+            commands.sonde_window = (min(sonde_times), max(sonde_times))
         # Frames are independent until their rows join the card, so they are scored at once (the
         # acquisitions are network waits, the native scorer two threads each) and joined in frame order:
         # the card is the one a frame-by-frame loop writes.
@@ -730,8 +861,42 @@ def score(run, *, config=None, out=None, timeout=180, budget=1800, leads=None):
     return card
 
 
+def future_frames(frames, config, now=None):
+    """Frames whose valid time has not happened yet, so no observation of them can exist.
+
+    The automatic scorer never waits for these. Breakage it prevents: a 3 km region forecast from GFS f348
+    (valid 13 days ahead) left its watcher sleeping in the leased command's tree for 75 min, until it was
+    killed by PID, and the run's products step waited behind it (box L, 2026-10-24, INVENTORY F-SCORE-LEASE).
+    Each frame gets the time its observations can first be scored and the command that scores it then."""
+    now = now or datetime.now(timezone.utc)
+    delay = timedelta(hours=float(config.get("observation_delay_hours", 7)))
+    return {frame["valid_time"]: stamp(instant(frame["valid_time"]) + delay)
+            for frame in frames if instant(frame["valid_time"]) > now}
+
+
+def future_reason(valid_time, ready_at, run):
+    return (f"valid {valid_time} is in the future, so no observations exist yet; they can be scored from "
+            f"{ready_at} with: gpuwm-hex score {run}")
+
+
+#: Set to "off" by a door run with ``--skip score``: the forecast queues no scorer (no watcher, no downloads).
+SCORING_ENV = "GPUWM_HEX_OBSERVATION_SCORING"
+
+
 def forecast_hook(output, *, init, grid, start):
     """Schedule CPU scoring without retaining a forecast's GPU lease."""
+    if str(os.environ.get(SCORING_ENV, "")).strip().lower() == "off":
+        # `--skip score` on a door: the run asked for no scoring, so no watcher is started and nothing is
+        # downloaded (it had still started the watcher and its IGRA2 period-of-record download, ~50 GB over
+        # four 1 h runs on one box). The record says so instead of leaving the folder silent.
+        target = Path(output) / "observation-scorecard"
+        target.mkdir(parents=True, exist_ok=True)
+        record = {"schema": SCHEMA, "run": str(output), "status": "SKIPPED",
+                  "reason": f"{SCORING_ENV}=off (the door was run with --skip score)", "measured_metrics": 0}
+        atomic_json(target / "scorecard.json", record)
+        (target / "scorecard.md").write_text(f"# Observation scorecard\n\nSKIPPED: {record['reason']}\n",
+                                             encoding="utf-8")
+        return {"status": "SKIPPED", "path": str(target / "scorecard.json")}
     try:
         output = Path(output)
         provided = Path(os.environ.get("GPUWM_HEX_OBSERVATION_CONFIG") or output / "observation-scorecard.config.json")
@@ -754,6 +919,29 @@ def forecast_hook(output, *, init, grid, start):
             atomic_json(target / "scorecard.json", card)
             (target / "scorecard.md").write_text(markdown(card), encoding="utf-8")
             return {"status": "DEFERRED", "owner": owner, "path": str(target / "scorecard.json")}
+        future = future_frames(frames, config)
+        reasons = {valid: future_reason(valid, ready_at, output) for valid, ready_at in future.items()}
+        if len(future) == len(frames):
+            # Every frame is valid in the future: start no watcher and retain nothing. The record says why and
+            # when to score; the receipt lets a door's score stage report it at once (join_automatic_scorer).
+            rows = [row for frame in frames for source in ("radiosonde", "asos", rain_source(config))
+                    for row in missing_rows(frame, source, reasons[frame["valid_time"]], config)]
+            first = min(future.values())
+            reason = (f"every frame is valid in the future (last {frames[-1]['valid_time']}); no observations "
+                      f"exist yet, so no automatic scorer was started. Score from {first} (all frames from "
+                      f"{max(future.values())}) with: gpuwm-hex score {output}")
+            card = {"schema": SCHEMA, "run": str(output), "configuration": config, "status": "NOT_YET_OBSERVABLE",
+                    "reason": reason, "observable_from": future, "metrics": rows, "measured_metrics": 0,
+                    "paired": [], "sources": [], "commands": [], "deleted_files": []}
+            atomic_json(target / "configuration.json", config)
+            atomic_json(target / "scorecard.json", card)
+            (target / "scorecard.md").write_text(markdown(card) + f"\nNOT_YET_OBSERVABLE: {reason}\n", encoding="utf-8")
+            atomic_json(target / SOURCE_CONFIG, {"path": str(provided) if source is not None else None,
+                                                 "sha256": hashlib.sha256(source).hexdigest() if source is not None else None})
+            atomic_json(target / "automatic-retry-receipt.json", {"status": "NOT_YET_OBSERVABLE", "pid": None,
+                                                                  "reason": reason, "observable_from": future})
+            print(f"OBSERVATIONS NOT YET OBSERVABLE {target / 'scorecard.json'}: {reason}", flush=True)
+            return {"status": "NOT_YET_OBSERVABLE", "path": str(target / "scorecard.json"), "reason": reason}
         # Hold one shared inode, not a second prepared copy, while future
         # reports arrive. The worker releases its own link and marker.
         pin = target / "pending-init.nc"
@@ -770,7 +958,7 @@ def forecast_hook(output, *, init, grid, start):
                               "\n".join([f["history"] for f in frames] + [config["init"]]) + "\n", encoding="utf-8")
             config["owned_keep_marker"] = str(marker)
         rows = [row for frame in frames for source in ("radiosonde", "asos", rain_source(config))
-                for row in missing_rows(frame, source, "automatic observation scoring queued", config)]
+                for row in missing_rows(frame, source, reasons.get(frame["valid_time"], "automatic observation scoring queued"), config)]
         card = {"schema": SCHEMA, "run": str(output), "configuration": config, "status": "QUEUED", "metrics": rows,
                 "measured_metrics": 0, "paired": [], "sources": [], "commands": [], "deleted_files": []}
         atomic_json(target / "scorecard.json", card)
@@ -839,7 +1027,15 @@ def watch(run, plan):
         _, frames = discover(run, config)
         delay = timedelta(hours=float(config.get("observation_delay_hours", 7)))
         start = instant(config["start"])
-        remaining = {int((instant(f["valid_time"]) - start).total_seconds() // 3600): instant(f["valid_time"]) + delay for f in frames}
+        # Frames valid in the future are not waited for (future_frames): their rows say when to score them.
+        future = future_frames(frames, config)
+        remaining = {int((instant(f["valid_time"]) - start).total_seconds() // 3600): instant(f["valid_time"]) + delay
+                     for f in frames if f["valid_time"] not in future}
+        card_path = root / "scorecard.json"
+        card = json.loads(card_path.read_text(encoding="utf-8")) if card_path.is_file() else {"status": "NOT_MEASURED"}
+        if future:
+            print(f"not waiting for {len(future)} frame(s) valid in the future; observable from "
+                  f"{min(future.values())}: gpuwm-hex score {run}", flush=True)
         while remaining:
             now = datetime.now(timezone.utc)
             ready = {lead for lead, when in remaining.items() if when <= now}
@@ -850,7 +1046,11 @@ def watch(run, plan):
             for lead in ready:
                 remaining.pop(lead)
         ready_at = instant(frames[-1]["valid_time"]) + delay
-        atomic_json(root / "automatic-retry-receipt.json", {"status": card["status"], "completed_after": stamp(ready_at)})
+        receipt = {"status": card["status"], "completed_after": stamp(ready_at)}
+        if future:
+            receipt.update(observable_from=future, reason=f"{len(future)} frame(s) valid in the future were not waited "
+                           f"for; score them from {min(future.values())} with: gpuwm-hex score {run}")
+        atomic_json(root / "automatic-retry-receipt.json", receipt)
         released = []
         for key in ("owned_init_pin", "owned_keep_marker"):
             path = Path(config[key]) if config.get(key) else None
@@ -923,8 +1123,9 @@ def join_automatic_scorer(run, config_path, *, poll_seconds=10.0):
     """Join the forecast's automatic scorer when it was queued with this same config file.
 
     Returns None when the caller must score itself: no automatic scorer, a different config (an explicit
-    rescore), or its waiter died. Otherwise waits while it scores leads whose observations are already
-    in, and returns its result; a lead still waiting for observations stays its job, not a second scorer's."""
+    rescore), or its waiter died. A finished scorer's result is returned; a running one is left to its work and
+    reported at once. Scoring is CPU work, so a door holding a card never waits for it: the door ran ~15 min
+    on its card lease for a past case's scoring (2026-10-24). ``poll_seconds`` is kept for callers."""
     root = Path(run) / "observation-scorecard"
     source, receipt, plan = root / SOURCE_CONFIG, root / "automatic-retry-receipt.json", root / "automatic-retry.json"
     config_path = Path(config_path)
@@ -933,24 +1134,23 @@ def join_automatic_scorer(run, config_path, *, poll_seconds=10.0):
     if json.loads(source.read_text(encoding="utf-8")).get("sha256") != hashlib.sha256(config_path.read_bytes()).hexdigest():
         return None
     card_path = root / "scorecard.json"
-    while True:
-        state = json.loads(receipt.read_text(encoding="utf-8"))
-        if state.get("status") != "QUEUED":
-            card = json.loads(card_path.read_text(encoding="utf-8")) if card_path.is_file() else {}
-            status = card.get("status", state.get("status"))
-            return {"joined": "automatic", "status": status, "path": str(card_path),
-                    "note": f"scored once, by the forecast's automatic scorer: {status}, "
-                            f"{card.get('measured_metrics', 0)} measured metrics in {card_path}"}
-        if not _alive(state.get("pid")):
-            return None
-        config = json.loads(plan.read_text(encoding="utf-8"))
-        _, frames = discover(run, config)
-        last = instant(frames[-1]["valid_time"]) + timedelta(hours=float(config.get("observation_delay_hours", 7)))
-        if last > datetime.now(timezone.utc):
-            return {"joined": "automatic", "status": "QUEUED", "pid": state.get("pid"), "path": str(card_path),
-                    "note": f"the forecast's automatic scorer (pid {state.get('pid')}) owns this run and scores each "
-                            f"lead as its observations arrive, the last after {stamp(last)}: {card_path}"}
-        time.sleep(poll_seconds)
+    state = json.loads(receipt.read_text(encoding="utf-8"))
+    if state.get("status") != "QUEUED":
+        card = json.loads(card_path.read_text(encoding="utf-8")) if card_path.is_file() else {}
+        status = card.get("status", state.get("status"))
+        return {"joined": "automatic", "status": status, "path": str(card_path),
+                "note": f"scored once, by the forecast's automatic scorer: {status}, "
+                        f"{card.get('measured_metrics', 0)} measured metrics in {card_path}"}
+    if not _alive(state.get("pid")):
+        return None
+    config = json.loads(plan.read_text(encoding="utf-8"))
+    _, frames = discover(run, config)
+    last = instant(frames[-1]["valid_time"]) + timedelta(hours=float(config.get("observation_delay_hours", 7)))
+    when = (f"each lead as its observations arrive, the last after {stamp(last)}" if last > datetime.now(timezone.utc)
+            else "now, every lead's observations being in")
+    return {"joined": "automatic", "status": "QUEUED", "pid": state.get("pid"), "path": str(card_path),
+            "note": f"the forecast's automatic scorer (pid {state.get('pid')}) owns this run and scores it on the "
+                    f"CPU, {when}; no card is held for it: {card_path}"}
 
 
 if __name__ == "__main__":

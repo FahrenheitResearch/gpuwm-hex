@@ -64,6 +64,7 @@ def interp_tofixed_pressure(pres_in, field_in, pres_out):
     search is preserved even for unordered targets and nonmonotone inputs.
     """
     import cupy as cp
+    import numpy as np
     p = _real(pres_in, "pres_in")
     if p.ndim != 2 or p.shape[1] < 2:
         raise ValueError("fixed-pressure interpolation requires at least two levels")
@@ -73,9 +74,23 @@ def interp_tofixed_pressure(pres_in, field_in, pres_out):
         raise ValueError("pres_out column count must match pres_in")
     nc, ni = p.shape
     out = cp.empty_like(po)
-    if nc and po.shape[1]:
-        upper = cp.empty(nc, dtype=cp.int32)
-        _kernel("fixed_pressure")((1,), (128,), (nc, ni, po.shape[1], p, f, po, out, upper))
+    no = po.shape[1]
+    if nc and no:
+        # Whole-grid form of the one-block collective search (_kernels.py):
+        # three short launches per output level instead of one 128-thread
+        # block walking every column (about 1.2 s a frame at 216k cells).
+        upper = cp.zeros(nc, dtype=cp.int32)
+        start = cp.full(no + 1, ni - 1, dtype=cp.int32)
+        start[0] = 0  # min over the zero-initialised kupper
+        count = cp.zeros(no * ni, dtype=cp.int32)
+        stop = cp.empty(2 * no, dtype=cp.int32)
+        blocks = ((nc + 255) // 256,)
+        i32 = np.int32
+        nc32, ni32, no32 = i32(nc), i32(ni), i32(no)
+        for k32 in map(i32, range(no)):
+            _kernel("fixed_pressure_count")(blocks, (256,), (nc32, ni32, no32, k32, p, po, upper, start, count))
+            _kernel("fixed_pressure_scan")((1,), (1,), (nc32, ni32, k32, start, count, stop))
+            _kernel("fixed_pressure_apply")(blocks, (256,), (nc32, ni32, no32, k32, p, f, po, out, upper, start, stop))
     return out
 
 

@@ -1116,9 +1116,14 @@ def _register_backend_row(profile: Mapping[str, Any]) -> None:
 
     species = species_row_for_scheme(profile["microphysics"])
     names = tuple(species.names())
-    masses = ("qv", "qc", "qr", "qi", "qs", "qg")
-    driven = tuple(name for name in names if name in masses)
-    appended = tuple(name for name in names if name not in masses)
+    # The driven block is the leading run of the six masses and then the hydrometeor numbers a boundary stream may
+    # carry (the in-tree Thompson rows' split, hexcore.physics_backend_admission): a stream drives the prefix of it
+    # it supplies, so masses entering at the rings bring their numbers when the stream has them.
+    drivable = ("qv", "qc", "qr", "qi", "qs", "qg", "ni", "nr", "nc")
+    lead = 0
+    while lead < len(names) and names[lead] in drivable:
+        lead += 1
+    driven, appended = names[:lead], names[lead:]
     register_synthesized_row(PhysicsBackendRow(
         name=profile["backend_row"],
         adapter_module="hexcore.cuda_suite_physics_v841",

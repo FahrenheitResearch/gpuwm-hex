@@ -138,6 +138,11 @@ def test_the_helper_crate_notice_follows_the_bridge_pin() -> None:
     identities.update((row.get('gpuwm_source_rev', pins['gpuwm_source_rev']),
                        row.get('cargo_lock_sha256', pins['cargo_lock_sha256']))
                       for row in pins['bridges'].values())
+    # A source prebuilt built from its own engine commit (rw_sfc_series keeps its aaec6b4 build after the
+    # bridges moved to gpuwm 2.9.7) is the notice's resolving engine when it names its own commit and lock.
+    identities.update((row['gpuwm_source_rev'], row['cargo_lock_sha256'])
+                      for row in pins['source_prebuilts']['files'].values()
+                      if 'gpuwm_source_rev' in row and 'cargo_lock_sha256' in row)
     pin_hash = re.search(r"^  engine-bridges\.json +sha256 ([0-9a-f]{64})$", text, re.M)
     assert pin_hash and pin_hash.group(1) == hashlib.sha256(pin_bytes).hexdigest(), "regenerate the helper crate notice"
     assert commit and lock and (commit.group(1), lock.group(1)) in identities, "regenerate the helper crate notice"

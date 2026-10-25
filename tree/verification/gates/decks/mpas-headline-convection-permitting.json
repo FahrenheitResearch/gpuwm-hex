@@ -245,8 +245,8 @@
     "gwdo": "hex-cuda",
     "land_surface": "hex-cuda",
     "microphysics": "hex-cuda",
-    "ngw": "native-cpu",
-    "oml": "native-cpu",
+    "ngw": "hex-cuda",
+    "oml": "hex-cuda",
     "pbl": "hex-cuda",
     "radiation_lw": "hex-cuda",
     "radiation_sw": "hex-cuda",
@@ -268,12 +268,8 @@
     "{streams}",
     "--physics-backend",
     "mpasphys",
-    "--native-physics-library",
-    "{resource:native-library}",
     "--native-pool-reader",
     "{resource:pool-reader}",
-    "--mpas-source",
-    "{resource:mpas-source}",
     "--stream-list-directory",
     "{deck_dir}/../data/ref/native/af5f622ef456d9e356088b7ebf2652de78ec92ff5795d18621c6e360c5480bef",
     "--native-physics-tables",
@@ -281,7 +277,7 @@
     "--out",
     "{out}",
     "--physics",
-    "config_convection_backend='hex-cuda',config_gwdo_backend='hex-cuda',config_lsm_backend='hex-cuda',config_microp_backend='hex-cuda',config_ngw_backend='native-cpu',config_oml_backend='native-cpu',config_pbl_backend='hex-cuda',config_radt_cld_backend='hex-cuda',config_radt_lw_backend='hex-cuda',config_radt_sw_backend='hex-cuda',config_seaice_backend='hex-cuda',config_sfclayer_backend='hex-cuda'",
+    "config_convection_backend='hex-cuda',config_gwdo_backend='hex-cuda',config_lsm_backend='hex-cuda',config_microp_backend='hex-cuda',config_ngw_backend='hex-cuda',config_oml_backend='hex-cuda',config_pbl_backend='hex-cuda',config_radt_cld_backend='hex-cuda',config_radt_lw_backend='hex-cuda',config_radt_sw_backend='hex-cuda',config_seaice_backend='hex-cuda',config_sfclayer_backend='hex-cuda'",
     "--physics-resources",
     "{resource:physics-resources}"
   ],
@@ -289,9 +285,6 @@
     "headline-slots": {
       "path": "../data/headline/hl-3/headline-slots-99038ad0a4e0a0246bd9ddbe88a97e53e1fbc32008ebadcc0b5d3e257db1a144.txt",
       "sha256": "99038ad0a4e0a0246bd9ddbe88a97e53e1fbc32008ebadcc0b5d3e257db1a144"
-    },
-    "native-library": {
-      "resource": "native-library"
     },
     "pool-reader": {
       "resource": "pool-reader"

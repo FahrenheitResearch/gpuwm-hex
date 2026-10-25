@@ -443,6 +443,64 @@ def tap_kernel(module: Any, cache: Any, name: str, *, before: Any = None, after:
     table[key] = tapped
 
 
+def tap_regional_launch(kernels: Any, name: str, *, before: Any = None, after: Any = None,
+                        drop_tail: int = 0) -> None:
+    """Run ``before(args)`` / ``after(args)`` around one kernel of a limited-area runtime.
+
+    A limited-area driver launches its specified-zone-aware kernels through its
+    own ``CudaRegionalKernels.launch`` (``cuda_regional_v841``), never through
+    the global modules' ``_kernel`` table, so a ``tap_kernel`` on the global
+    kernel never fires there.  ``drop_tail`` trailing arguments (the regional
+    kernels' refusal flag) are cut from the view the hooks see, so a hook
+    written for the global kernel's argument list reads the same positions.
+    """
+
+    launch = kernels.launch
+    tapped_names = getattr(kernels, "lts_tapped_names", frozenset())
+    if name in tapped_names:
+        raise RuntimeError(f"{name} is already tapped for this regional runtime")
+
+    def tapped(kernel_name: str, count: int, args: tuple[Any, ...]) -> None:
+        if kernel_name != name or int(count) < 1:
+            return launch(kernel_name, count, args)
+        view = args[:len(args) - drop_tail] if drop_tail else args
+        if before is not None:
+            before(view)
+        launch(kernel_name, count, args)
+        if after is not None:
+            after(view)
+
+    kernels.launch = tapped
+    kernels.lts_tapped_names = frozenset(tapped_names | {name})
+
+
+def tap_acoustic_momentum(driver: Any, *, before: Any, after: Any,
+                          dimensions: tuple[tuple[str, int], ...]) -> None:
+    """Tap the acoustic normal-momentum update this driver actually launches.
+
+    Global and VR drivers launch ``acoustic_ru_v841``; a limited-area driver
+    (``driver.regional_v841`` set) launches ``acoustic_ru_regional_v841``
+    instead (the specified-zone pgrad mask), whose arguments are the global
+    kernel's with ``spec_zone_mask_edge`` inserted before ``zz`` and the
+    ``invalid`` flag appended.  The hooks read only ``nedges`` (1),
+    ``small_step`` (3) and the trailing ``ru_p``, ``ru_avg``, so dropping the
+    flag gives them the same view.  Breakage without the regional arm: the
+    matched interface flux was never imposed on a limited-area mesh with two
+    rate classes and the first class step stopped with "class 0 imposed the
+    child's interface flux 0 times" (hex 0.4.4, 2026-10-24).
+    """
+
+    regional = getattr(driver, "regional_v841", None)
+    if regional is None:
+        from . import cuda_acoustic_v841 as acoustic_module
+
+        tap_kernel(acoustic_module, driver.cache, "acoustic_ru_v841", before=before, after=after,
+                   dimensions=dimensions)
+        return
+    tap_regional_launch(regional.kernels, "acoustic_ru_regional_v841", before=before, after=after,
+                        drop_tail=1)
+
+
 class ClampAudit:
     """Sum the mass the native third stage clamps, for any driver (fixed arm included)."""
 

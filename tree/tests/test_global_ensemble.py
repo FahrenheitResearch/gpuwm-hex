@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -342,3 +343,63 @@ def test_planner_prices_members_like_the_roster_admission(monkeypatch):
         device_admission.admit_co_tenancy(mesh_kind="global", cells=cells, levels=55, members=2,
                                           card_bytes=card["total"], free_bytes=card["free"],
                                           solo_required_bytes=solo, member_additional_bytes=extra)
+
+
+def test_each_member_draws_its_own_hours_while_its_group_integrates(tmp_path, monkeypatch):
+    """A hex global-120km ensemble (2 members, GFS 2026-10-24 00Z, 6 h): no member map existed
+    until the forecast and every member's full products pass had ended, and all 610 maps reached the site at the end."""
+    from unittest import mock
+    from hexcore import first_look
+
+    value, args = _plan(tmp_path, source="gefs", members="1-2", members_per_card=2, devices="0")
+    members = value["members"]
+    runs, popens = [], []
+
+    def fake(argv, log, env):
+        out = Path(argv[argv.index("--out") + 1])
+        for m in json.loads(Path(argv[argv.index("--members") + 1]).read_text()):
+            folder = out / m["run_id"]
+            folder.mkdir(parents=True)
+            for h in range(2):
+                frame = folder / f"cuda-history.2026-10-16_{h:02d}.00.00.nc"
+                frame.write_bytes(b"frame")
+                with (folder / first_look.READY).open("a") as stream:
+                    stream.write(json.dumps({"step": h, "path": str(frame)}) + "\n")
+        deadline = time.monotonic() + 5  # the forecast is still running while the looks draw
+        while len(popens) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        log.write_text("ok")
+        return 0
+
+    def popen(argv, **kw):
+        popens.append(argv)
+        return mock.Mock(wait=lambda: 0, poll=lambda: 0)
+
+    monkeypatch.setattr(global_ensemble, "_cli", fake)
+    # The stand-in members need no allocation; a CPU host that hides its cards
+    # (CUDA_VISIBLE_DEVICES="") must not refuse them.
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    with mock.patch.object(first_look.subprocess, "run", side_effect=lambda a, **k: runs.append(a) or mock.Mock(returncode=0)), \
+            mock.patch.object(first_look.subprocess, "Popen", side_effect=popen):
+        result = global_ensemble.run_forecasts(value, members, args, _Status(), {}, live=True)
+    assert result["failed"] == []
+    for m in members:
+        own = tmp_path / "members" / m["run_id"]
+        mine = [a for a in runs + popens if a[a.index("--out") + 1] == str(own / "products")]
+        assert len(mine) == 2                                       # f000, then f001 while the forecast ran
+        assert all(a[a.index("--history") + 1].startswith(m["forecast"]) for a in mine)
+        assert all(a[a.index("--case") + 1] == global_ensemble.member_case(value, m) for a in mine)
+        assert all(a[a.index("--source-label") + 1] == f"Hex forecast, member {m['run_id']} of 2" for a in mine)
+        assert m["live_frames"] == str(own / first_look.LIVE_RECEIPT)
+        assert json.loads(Path(m["live_frames"]).read_text())["drawn"] == [f"cuda-history.2026-10-16_{h:02d}.00.00.nc" for h in range(2)]
+
+    calls = []
+    monkeypatch.setattr(global_door, "_run_door", lambda argv, env: calls.append(argv) or 0)
+    # A products-only run resumes from ensemble.json, live receipts included.
+    (tmp_path / "ensemble.json").write_text(json.dumps({"source": "gefs", "cycle": value["cycle"],
+                                                        "row": value["row"]["id"], "members": members}))
+    fresh, _ = _plan(tmp_path, source="gefs", members="1-2", members_per_card=2, devices="0")
+    global_ensemble.run_ensemble(fresh, args, ["products"], _Status(), {})
+    for argv, m in zip(calls, members):
+        assert argv[argv.index("--live-frames") + 1] == m["live_frames"]   # the full pass keeps the hours drawn live
+        assert argv[argv.index("--case") + 1] == global_ensemble.member_case(value, m)

@@ -88,12 +88,12 @@ from .cuda_physics_v841 import (
 
 
 CUDA_ARWEN_PHYSICS_V841_SCHEMA = "mpas-port.cuda-arwen-physics-v841/v2"
-ARWEN_BUILD_COMMIT = "71e29c7aa413f669d6bbb793a0a1786fe1248624"
+ARWEN_BUILD_COMMIT = "4726b689c6db142577eca3968a1f74256e3c057f"
 MPAS_SEAM_CONTRACT_SHA256 = (
     "5c629e23be2af20c0b1660d262443c415256126b812493f6681590bf07aff92a"
 )
 MPAS_SEAM_CONTRACT_SURFACE_SHA256 = (
-    "9570f2833b61807624f91988016ca1e4368af81f37941b7ee4daa684edc0aa38"
+    "649e5483357fa2748ab9b111dd3ecc974015a4bcbf4b5c0126f093798877108a"
 )
 ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
     "8b0589436845fbec04711b14b8f2a865062f018ad3108df969fe38749e4c78f1"
@@ -105,22 +105,22 @@ ARWEN_GLACIER_COMPOSED_TU_SHA256 = (
 ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
     {
         "gpuwm/core/mpas_column_batch.py": (
-            "802a8bc9d8968d22f9500c4b2e9de60832f1e883d7f622452aee76cead5e7ce5"
+            "f17c08bde1023fea39c3452fa88e7a19ada3ee9a56b47028c2103e3adab86125"
         ),
         "gpuwm/core/physics.py": (
-            "e9eea0d1b4b9400744ab6301fb02a92c0243032e08a3bb66ec0542752492bd37"
+            "1550a56a13b31172e43874586b84194e994359bbb3ea72fe034d94cd0b03b9fe"
         ),
         "gpuwm/core/microphysics.py": (
             "388f2018fa52e3b0d00523d55264221d239ad1251185fcb1f0d03f27cc2abb29"
         ),
         "gpuwm/core/gf.py": (
-            "acf8ec46f8596f562f8de85de0281ca6de0b9bbb7a0897fac105d3884dcd03d8"
+            "f4dd01070dfb8cf60760bc6190d3382e7bb47e721f00f12db60aa7192de014c4"
         ),
         "gpuwm/core/kernels/gf.cu": (
             "120dc7e606dae18cece64e1d1af899ec8930de339e82943dcab3457c9115532d"
         ),
         "gpuwm/core/rrtmg_legacy.py": (
-            "d63497754dd4b42c1b4562a8f2037aa73aa674a214a14ed9b11a7406ad3af888"
+            "8026dfe218e405c36f9ada1bc4713d97d0c19ee4966e87a9d7d7b1b9d9a4b1d3"
         ),
         "gpuwm/core/noahmp_runtime.py": (
             "a25f24c8acc070908a83c1fbc75b4e61727b676962b86c90ed8816af6365cc97"
@@ -135,7 +135,7 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "6aff082a02f4ed5883e6c7086c712e30324d79fe8b2dbe9a16665051a564b708"
         ),
         "gpuwm/core/kernels/__init__.py": (
-            "737c3ca23a79c22b222c79ab7efee76e1fa8863593ef059ecd579bce99b41285"
+            "cd5533e48c6b7c898aa49da76f480561c0983b1e616e5709d4f036de4a734d50"
         ),
         "gpuwm/core/kernels/noahmp_leaves.cu": (
             "4a3b6ce94993ab1c7055de39880e1209b54527751dcda07f26aa4b4a612f3497"
@@ -144,10 +144,10 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
             "14c6e57f2a2df7926a05101c89f2a6778b150ce68af58c78996e288bda8cd954"
         ),
         "gpuwm/config.py": (
-            "364d694ef55808fd6218f6d8ebed57e296dbceb9c1aa9b20f5d0c07b525c6ecb"
+            "66bd34317bb62c0a9336a148a3d5819f666d779b291288ddccbb65e7b061fccc"
         ),
         "gpuwm/io/restart.py": (
-            "0105bde5b0cdb1d788e710caaeca69feeff3dbaefb14f75912630c60a8602b47"
+            "90c820a8cde4450d88371b50cc05791f265b3a6028c4de90f790b13283024ef4"
         ),
         "docs/mpas-seam.md": (
             "4b734d8ebdf0686fe6bb40dd699c56dce6ae3460d32969c9056a1846b48f739e"
@@ -1290,6 +1290,29 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             )
         return MappingProxyType(normalized)
 
+    def noahmp_routing_census(self) -> dict[str, Any]:
+        """Independent pre-LSM layout counts, including evolving ice routing.
+
+        Extends the executed-layout fix from ec819d5 to uncoupled sea ice.
+        The surface service retains the preceding call through held steps and
+        analysis alarms. Without that service, Noah-MP's byte-checked layout
+        cache is the authority. Neither path reads device arrays.
+        """
+        service = getattr(self, "_surface_updates", None)
+        driver = getattr(self._seam, "_driver", None)
+        cached = getattr(getattr(driver, "noahmp_params", None), "_surface_layout_cache", None)
+        classification = (dict(self._constructor.expected_surface_classification())
+                          if service is None else dict(service.physics_classification or service.classification))
+        expected = (dict(cached[2]["census"]) if cached is not None and service is None else {
+            "land": classification["sflx_land_columns"],
+            "water": classification["open_water_columns"],
+            "sea_ice": classification["sea_ice_columns"],
+            "glacier": classification["glacier_columns"],
+        })
+        if expected["glacier"]:
+            expected["glacier_path"] = _GLACIER_CUDA_PROVENANCE
+        return expected
+
     def _validate_noahmp_census(
         self, *, require: bool
     ) -> Mapping[str, Any] | None:
@@ -1300,21 +1323,11 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             return None
         if not isinstance(raw, Mapping):
             raise TypeError("Arwen v2 last_noahmp_census is not a mapping")
-        service = getattr(self, "_surface_updates", None)
-        classification = (dict(self._constructor.expected_surface_classification())
-                          if service is None else dict(service.physics_classification or service.classification))
-        expected: dict[str, Any] = {
-            "land": classification["sflx_land_columns"],
-            "water": classification["open_water_columns"],
-            "sea_ice": classification["sea_ice_columns"],
-            "glacier": classification["glacier_columns"],
-        }
-        if classification["glacier_columns"]:
-            expected["glacier_path"] = _GLACIER_CUDA_PROVENANCE
+        expected = PersistentTwoPhaseCudaPhysicsBackendV841.noahmp_routing_census(self)
         normalized = dict(raw)
         if normalized != expected:
             raise ValueError(
-                "Arwen NoahMP census/provenance differs from sealed constructor "
+                "Arwen NoahMP census/provenance differs from executed layout "
                 f"authority: {normalized} != {expected}"
             )
         return MappingProxyType(normalized)
@@ -1396,6 +1409,7 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             "surface_classification": dict(
                 self._validate_surface_classification()
             ),
+            "noahmp_routing_census": self.noahmp_routing_census(),
             "last_noahmp_census": (
                 None
                 if self._validate_noahmp_census(require=False) is None
@@ -2246,6 +2260,22 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         self._committed_refl10cm = None
         return refl
 
+    def peek_history_refl10cm(self) -> Any | None:
+        """The committed one-frame ``refl10cm`` without consuming it.
+
+        A nest-trigger look (:mod:`hexcore.nest_triggers`) reads the same
+        resident array the history capture consumes, on the card, before the
+        capture takes it; on a look step that is not a history step the loop
+        then clears it with ``take_history_refl10cm`` so no stale frame is
+        left for a later capture.
+        """
+
+        if self._phase != "boundary":
+            raise RuntimeError(
+                "peek_history_refl10cm is legal only at a committed boundary"
+            )
+        return self._committed_refl10cm
+
     def history_diagnostic_snapshot(self):
         """Resident history fields; caller queues their copies before the next step.
 
@@ -2418,6 +2448,7 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             "surface_classification": dict(surface_classification),
             **({"surface_update": self._surface_updates.receipt()}
                if getattr(self, "_surface_updates", None) is not None else {}),
+            "noahmp_routing_census": self.noahmp_routing_census(),
             "last_noahmp_census": (
                 None if noahmp_census is None else dict(noahmp_census)
             ),
@@ -2436,6 +2467,7 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
                     "surface_classification": surface_classification,
                     **({"surface_update": self._surface_updates.receipt()}
                        if getattr(self, "_surface_updates", None) is not None else {}),
+                    "noahmp_routing_census": self.noahmp_routing_census(),
                     "last_noahmp_census": noahmp_census,
                     "gwdo_enabled": self._gwdo_static is not None,
                     "gwdo_calls": self._gwdo_calls,
@@ -2529,6 +2561,10 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         if adapter["last_gwdo_result_persisted"] is not False:
             raise ValueError("frozen Arwen v2 adapter restart does not persist trajectory-inert GWDO arrays")
         fresh = self._new_seam()
+        from .moving_seaice import prepare_restart_ice
+        # A seam payload without arrays (one with no prognostic sea ice) has
+        # nothing to allocate; restore_state below still checks the payload.
+        prepare_restart_ice(fresh, (payload["seam"] or {}).get("arrays") or {})
         fresh.restore_state(payload["seam"])
         self._seam = fresh
         self._surface_restart = payload.get("surface_updates")

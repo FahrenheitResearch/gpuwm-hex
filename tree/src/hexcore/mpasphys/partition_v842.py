@@ -45,6 +45,11 @@ def _maps(layout, partition):
     return maps
 
 
+def partition_maps(layout, partitions):
+    """Every partition's validated maps, for many gather_owned_field calls (each _maps sorts every id list)."""
+    return [_maps(layout, part) for part in partitions]
+
+
 def partition_layout(layout: RegistryLayout, partition) -> RegistryLayout:
     """Select local Registry extents, retaining species and pool identities.
 
@@ -96,6 +101,7 @@ def _project_buffer(buffer, row, layout, maps):
     dtype = np.dtype('<f4' if row['kind'] == 'real' else '<i4')
     if row['kind'] not in ('real', 'integer') or values.dtype != dtype:
         raise ValueError(f"{row['pool']}.{row['name']} is not a native word buffer")
+    fresh = False
     for axis, dim in enumerate(row['dimensions']):
         for entity, (ids, owned, _) in maps.items():
             if dim == entity:
@@ -106,7 +112,13 @@ def _project_buffer(buffer, row, layout, maps):
                 indices = ids[:owned]
             else:
                 continue
-            values = np.take(values, indices, axis=axis)
+            # Native buffers are Fortran-ordered: gather on the transposed (C-ordered) view, so the result is
+            # Fortran-ordered already and each entity's words are copied as one contiguous run.  THE COST THIS
+            # REMOVES: np.take on the Fortran array returned a C-ordered gather that the final copy then
+            # transposed word by word, 13.5 s for four LTS classes of the 98k-cell storm-following payload on one
+            # thread (0.8 s now), mostly under the GIL (MPAS-ROUTE-SPEED-2026-10-24).  The words are the same.
+            values = np.take(values.T, indices, axis=values.ndim - 1 - axis).T
+            fresh = True
             break
     referent = _REFERENCES.get(row['name']) if row['pool'] == 'mesh' else None
     if referent is not None:
@@ -115,9 +127,12 @@ def _project_buffer(buffer, row, layout, maps):
         inverse = maps[referent][2]
         if np.any(values > layout.dimensions[referent] + 1):
             raise ValueError(f"connectivity {row['name']} exceeds native {referent} dummy")
-        values = values.copy()
+        values = values if fresh else values.copy(order='F')
         positive = values > 0
         values[positive] = inverse[values[positive]]
+        fresh = True
+    if fresh and values.dtype == dtype and values.flags.f_contiguous:
+        return values                   # already a private Fortran-ordered copy of the words
     return np.array(values, dtype=dtype, order='F', copy=True)
 
 
@@ -128,32 +143,63 @@ def project_payload(layout: RegistryLayout, payload: Path, partition,
     The caller owns process creation and GPU selection. This function does
     not create a native session or claim that an executor supports ranks.
     """
+    return project_payloads(layout, payload, [partition], [output])[0]
+
+
+def project_payloads(layout: RegistryLayout, payload: Path, partitions, outputs, *, workers=None):
+    """``project_payload`` for several partitions at once, every field on its own worker.
+
+    Each source field is decoded once for every partition, and the fields are projected, written and hashed on
+    all cores.  THE COST THIS REMOVES: the MPAS LTS class executor projected the whole payload once per class,
+    field after field (numpy take, file write, sha256), about 30 s before the first step of a storm-following
+    segment on box-aws2x and the largest part of a resumed segment's 90 s preparation
+    (MPAS-ROUTE-SPEED-2026-10-24).  The bytes and manifests written are project_payload's.
+    """
+    import os
+    from concurrent.futures import ThreadPoolExecutor
     source = NativePoolHydration(None, layout, payload)
-    maps = _maps(layout, partition)
-    local = _partition_layout(layout, maps)
+    maps = [_maps(layout, partition) for partition in partitions]
+    locals_ = [_partition_layout(layout, item) for item in maps]
     # A fresh directory prevents a failed/reused rank from mixing manifests.
-    output.mkdir(parents=True, exist_ok=False)
-    records = []
-    for index, (row, field) in enumerate(zip(layout.fields, local.fields)):
-        record = {name: field[name] for name in
-                  ('pool', 'name', 'kind', 'dimensions', 'shape')}
+    for output in outputs:
+        output.mkdir(parents=True, exist_ok=False)
+
+    def field(index):
+        row = layout.fields[index]
         original = source.records[row['pool'], row['name']]
-        if row['kind'] == 'character':
-            record['text'] = original['text']
-        else:
-            words = _project_buffer(source.field_buffer(row['pool'], row['name']),
-                                    row, layout, maps).tobytes(order='F')
-            name = f'field-{index:06d}.bin'
-            (output / name).write_bytes(words)
-            record.update(payload=name, sha256=hashlib.sha256(words).hexdigest())
-        records.append(record)
-    (output / 'manifest.json').write_text(json.dumps({
-        'schema': 'mpas-native-pool-payload-v1', 'fields': records}, indent=2) + '\n')
-    NativePoolHydration(None, local, output)
-    return local
+        buffer = None if row['kind'] == 'character' else source.field_buffer(row['pool'], row['name'])
+        records = []
+        for mapping, local, output in zip(maps, locals_, outputs):
+            projected = local.fields[index]
+            record = {name: projected[name] for name in ('pool', 'name', 'kind', 'dimensions', 'shape')}
+            if 'origins' in original:
+                # Which input stream filled the words: SuiteIau admits an IAU run only
+                # when the iau stream read tend_iau, and a rank payload without origins
+                # refused every multi-rank IAU run before its first step.
+                record['origins'] = original['origins']
+            if row['kind'] == 'character':
+                record['text'] = original['text']
+            else:
+                words = _project_buffer(buffer, row, layout, mapping).tobytes(order='F')
+                name = f'field-{index:06d}.bin'
+                (output / name).write_bytes(words)
+                record.update(payload=name, sha256=hashlib.sha256(words).hexdigest())
+            records.append(record)
+        return records
+
+    count = len(layout.fields)
+    workers = max(1, min(count, workers or os.cpu_count() or 1))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='hex-project-payload') as pool:
+        per_field = list(pool.map(field, range(count)))
+    for which, (local, output) in enumerate(zip(locals_, outputs)):
+        (output / 'manifest.json').write_text(json.dumps({
+            'schema': 'mpas-native-pool-payload-v1', 'fields': [records[which] for records in per_field]},
+            indent=2) + '\n')
+        NativePoolHydration(None, local, output)
+    return locals_
 
 
-def gather_owned_field(row, layout, partitions, buffers):
+def gather_owned_field(row, layout, partitions, buffers, *, maps=None):
     """Assemble one carried/output field using owner words only.
 
     The result excludes native dummy storage. Connectivity is deliberately
@@ -171,7 +217,8 @@ def gather_owned_field(row, layout, partitions, buffers):
             for entity in _ENTITIES if dim in (entity, entity + 'All', entity + 'Solve')]
     if len(axes) > 1:
         raise ValueError('owned field assembly requires at most one decomposed axis')
-    maps = [_maps(layout, part) for part in partitions]
+    # ``maps``: the partitions' _maps, built once by a caller that assembles many fields (partition_maps).
+    maps = [_maps(layout, part) for part in partitions] if maps is None else maps
     dtype = np.dtype('<f4' if row['kind'] == 'real' else '<i4')
     for mapping, buffer in zip(maps, buffers):
         dimensions = dict(layout.dimensions)

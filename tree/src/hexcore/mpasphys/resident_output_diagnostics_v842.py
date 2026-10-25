@@ -45,8 +45,11 @@ class ResidentOutputDiagnostics:
     """
     produced = PRODUCED
 
-    def __init__(self, session, dycore):
+    def __init__(self, session, dycore, *, halo=None):
         self.session, self.dycore = session, dycore
+        # None on a closed single-rank mesh. A same-host rank's owner fills
+        # the halo cells the vertex pressure (isobaric.py) averages over.
+        self.halo = halo
         self.cp = session.device_pools.cp
         self.pools = {name: _Pools(self, name) for name in ('mesh', 'state', 'diag')}
         self.buffers = {}
@@ -56,6 +59,8 @@ class ResidentOutputDiagnostics:
         self.last_step = None
         self.acoustic = {}
         self.acoustic_captures = 0
+        self.pending = None
+        self.deferred_updates = 0
 
     def buffer(self, pool, name):
         key = pool, name
@@ -92,10 +97,13 @@ class ResidentOutputDiagnostics:
         self.when = writer.current_time(step=0, dt=0)
         self.utils = DiagnosticsUtils()
         self.utils.init(self.views)
-        self.isobaric = IsobaricDiagnostics(exchange_pressure_halo=lambda p: None)
+        self.isobaric = IsobaricDiagnostics(exchange_pressure_halo=(lambda p: None) if self.halo is None
+                                            else self.halo.exchange_pressure)
         self.isobaric.setup(self.pools, getattr(self.session.native, 'clock_state', None), self.utils)
         self.convective = ConvectiveDiagnosticsModule()
         self.convective.setup(self.pools, getattr(self.session.native, 'clock_state', None), self.utils)
+        if self.halo is not None:
+            self.convective.driver.vertex_order = self.halo.vertex_order()
         self.accumulates = any(self.utils.stream_inclusion_count(name, Direction.OUTPUT)
                                for name in MAXIMA)
 
@@ -111,22 +119,65 @@ class ResidentOutputDiagnostics:
                 dict.fromkeys(stream.fields(self.session.layout.packages, streams=self.writer.streams), True),
                 stream.interval('input'), stream.interval('output'))
 
-    def before_write(self, *, step, when):
+    def defer(self, *, step, when):
+        """Hold step's running-maximum update for the next synchronize.
+
+        mpas_atm_core.F:675-701 updates the maxima after every step from the
+        state that step left. When no stream is due, that state is unchanged
+        until the next step's outer physics synchronizes it into the pools
+        (winds, w, cell-reconstructed winds); flush() runs the update there,
+        on the same words, so no publication or host sync is forced per step.
+        """
+        if self.accumulates:
+            if self.pending is not None:
+                raise RuntimeError(f'maxima of step {self.pending[0]} were never folded')
+            self.pending = (step, when)
+
+    def flush(self):
+        """Fold the deferred step's maxima; call right after synchronize."""
+        if self.pending is None:
+            return
+        step, when = self.pending
+        self.pending = None
         self.when = when
-        if step == 0:
-            self.convective.reset()
+        # No stream is due on a deferred step, so only the maxima read the
+        # primary diagnostics: vorticity alone (divergence/KE are formed
+        # again by before_write whenever a stream needs them).
+        a, horizontal = self.dycore.atmosphere, self.dycore.horizontal
+        if hasattr(horizontal, 'solve_vorticity'):
+            value = horizontal.solve_vorticity(a.state.rho, a.state.rho_u,
+                                               normal_velocity=a.saved.normal_velocity)
+            target = self.buffer('diag', 'vorticity')
+            target[..., :value.shape[-1]] = value
+        else:
+            self._solve_primary()
+        self.convective.update()
+        self.updates += 1
+        self.deferred_updates += 1
+        self.last_step = step
+
+    def _solve_primary(self):
         # Final solve vorticity/KE/divergence depend only on normal velocity,
         # unchanged by subsequent scalar transport and microphysics. Reuse the
         # existing dycore operator, including native reduction order.
+        a, driver = self.dycore.atmosphere, self.dycore
+        solved = driver.horizontal.solve_diagnostics(a.state.rho, a.state.rho_u,
+            dt=driver.config.config_dt, apvm_upwinding=driver.config.config_apvm_upwinding,
+            normal_velocity=a.saved.normal_velocity, rk_step=3)
+        for name, value in (('vorticity', solved.vorticity),
+                            ('divergence', solved.divergence), ('ke', solved.kinetic_energy)):
+            target = self.buffer('diag', name)
+            target[..., :value.shape[-1]] = value
+
+    def before_write(self, *, step, when):
+        if self.pending is not None:
+            # A deferred update must be folded on its own state before this one.
+            raise RuntimeError(f'maxima of step {self.pending[0]} were not folded before step {step}')
+        self.when = when
+        if step == 0:
+            self.convective.reset()
         if self.accumulates or any(view.output_alarm for view in self.views()):
-            a, driver = self.dycore.atmosphere, self.dycore
-            solved = driver.horizontal.solve_diagnostics(a.state.rho, a.state.rho_u,
-                dt=driver.config.config_dt, apvm_upwinding=driver.config.config_apvm_upwinding,
-                normal_velocity=a.saved.normal_velocity, rk_step=3)
-            for name, value in (('vorticity', solved.vorticity),
-                                ('divergence', solved.divergence), ('ke', solved.kinetic_energy)):
-                target = self.buffer('diag', name)
-                target[..., :value.shape[-1]] = value
+            self._solve_primary()
         self.convective.update()
         self.isobaric.compute()
         self.convective.compute()
@@ -177,8 +228,10 @@ class ResidentOutputDiagnostics:
 
     def receipt(self):
         return dict(updates=self.updates, last_step=self.last_step,
+                    deferred_updates=self.deferred_updates,
                     produced=sorted(PRODUCED),
                     device_buffer_bytes=sum(value.nbytes for value in self.buffers.values()),
                     acoustic_captures=self.acoustic_captures,
                     acoustic_buffer_bytes=sum(value.nbytes for value in self.acoustic.values()),
-                    pressure_halo='closed single-rank mesh')
+                    pressure_halo='closed single-rank mesh' if self.halo is None
+                                  else 'same-host rank owner exchange')

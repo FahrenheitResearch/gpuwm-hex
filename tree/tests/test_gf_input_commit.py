@@ -37,8 +37,8 @@ def test_omitted_profiles_are_native_intent_in():
         assert re.search(r'\b' + argument + r'\s*=\s*' + profile + r'\b', driver)
     assert not set(_PREPARED_FIELDS).intersection(port.LEVEL_OUTPUTS)
     import ast, inspect
-    prepare = ast.parse(inspect.getsource(port.X_from_MPAS))
-    assert any(isinstance(n, ast.Call) and ast.unparse(n.func) == 'cp.stack' for n in ast.walk(prepare))
+    # Gather word preservation and independent storage are exercised by
+    # test_gf_pack_inputs.py, including padded native views.
     slot = ast.parse(inspect.getsource(port.run_slot)).body[0]
     assert ast.unparse(slot.body[-2]) == '_discard_native_profile_inputs(prepared)'
     assert ast.unparse(slot.body[-3]) == "pools['cu_act_flag'][:n].fill(False)"

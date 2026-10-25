@@ -106,6 +106,39 @@ aerosol numbers).
   `zs` against RUC's depths.
 * The GSL drag (`bl_ugwp_gwdo`) reads the mesh's `<mesh>.ugwp_oro_data.nc`;
   the door looks beside `--grid`, or takes `--orographic-statistics FILE`.
+  RRFS publishes that file only for its own meshes, so when it is not there the
+  door builds it (`hexcore.ugwp_oro`, the Rust generator `rw_hex_ugwp_oro`) from
+  the 30-arc-second terrain the static reads, on any mesh: global, zoom globe,
+  region, point mesh, storm-following member. The country and global doors
+  build it at their prepare stage, before any card; the preparation store
+  (`GPUWM_HEX_PREP_STORE`) keeps it beside the mesh's static (kind `ugwp_oro`).
+  By hand: `python -m hexcore.ugwp_oro --grid G.grid.nc --mesh NAME`.
+
+  The method, from Kim & Arakawa (1995), Kim & Doyle (2005), Beljaars et al.
+  (2004) and the GSL drag documentation: per cell, a lat/lon box with the side
+  of the cell's nominal spacing (`nominalMinDc / meshDensity**0.25`, else the
+  cell's mean `dcEdge`); the terrain minus its 20 km running mean; "ss" from
+  that field smoothed at 1.5 km on 30" pixels, "ls" smoothed at 3.5 km on
+  2.5' blocks ("ls" = "ss" where a box is under two 2.5' blocks tall, as in
+  RRFS's conus3km file); standard deviation, convexity (capped at 10),
+  asymmetry and effective length against the box mean in four directions.
+
+  Checked against RRFS's own files on RRFS's own meshes (correlation over land
+  cells, and the land mean RRFS / ours):
+
+  | field | conus12km (157,859 cells) | conus3km (2,341,818 cells) |
+  |---|---|---|
+  | var2dss | 0.996 (40.3 / 40.7 m) | 0.981 (15.7 / 15.3 m) |
+  | oa1ss-oa4ss | 0.95-0.96 | 0.82-0.88 |
+  | ol1ss-ol4ss | 0.78-0.79 | 0.64-0.77 |
+  | conss | 0.77 | 0.55 |
+  | var2dls | 0.95 (27.7 / 28.3 m) | = ss |
+  | oa1ls-oa4ls | 0.69-0.70 | = ss |
+  | ol1ls-ol4ls | 0.47-0.58 | = ss |
+
+  The large-scale fields at 12 km rest on 6-12 2.5' blocks per box, so a
+  block's placement moves their counts, and they match less closely than the
+  small-scale fields.
 * Aerosol-aware Thompson reads `freezeH2O.dat` and `qr_acr_qg_V4.dat`, which no
   wheel carries: run `gpuwm fetch-tables` once. The door refuses before the
   card if they are absent.

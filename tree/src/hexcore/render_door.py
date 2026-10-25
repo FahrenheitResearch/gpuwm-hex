@@ -1505,6 +1505,12 @@ def run_render(args) -> int:
         "invocations": invocations,
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }
+    # The any-point column store, every output hour (column_store.py), from the converted frames before the
+    # scratch they sit in is cleared. A composite blends several runs, so it is no run's own column: none.
+    if compose is None:
+        from .column_store import write as write_columns
+        manifest["columns"] = write_columns(sorted((scratch / "frames").glob("wrfout_*")),
+                                            out_root / view / "columns", field_set=args.field_set)
     # A second run into the same delivered tree is legitimate (one full
     # catalog pass plus a restricted pass is the proof shape); its receipt
     # must not overwrite the first run's.  Each view keeps its receipts in

@@ -219,7 +219,8 @@ def test_an_override_off_the_profiles_synthesizes_a_registered_row():
     row = resolve_backend(resolved.backend_row)
     assert row.adapter_module == "hexcore.cuda_suite_physics_v841"
     assert row.anchored is False
-    assert row.appended_scalar_names == ("ni", "nr", "nc", "nwfa", "nifa")
+    assert row.driven_scalar_names[-3:] == ("ni", "nr", "nc")
+    assert row.appended_scalar_names == ("nwfa", "nifa")
     # the same request resolves to the same row, every time
     again = ps.resolve_physics(
         "rrfs_v2_dev", {"config_lsm_scheme": "sf_noahmp", "config_frac_seaice": False})
@@ -569,7 +570,9 @@ def test_the_door_finds_the_drag_statistics_beside_the_grid(tmp_path, door_seams
     _needs_suite_engine()
     arguments = _namespace(tmp_path, "conus12km", "--physics-suite", "rrfs_v2_dev",
                            "--convection", "off")
-    with pytest.raises(door.ForecastDoorRefusal, match="ugwp_oro_data"):
+    # Missing, the door builds it from the 30" terrain (hexcore.ugwp_oro); with
+    # no geography staged that build is refused by name.
+    with pytest.raises(door.ForecastDoorRefusal, match="orographic statistics for conus12km could not be built"):
         door.resolve_request(arguments, registry=_registry())
     (tmp_path / "conus12km.ugwp_oro_data.nc").write_bytes(b"x")
     request = door.resolve_request(arguments, registry=_registry())

@@ -653,15 +653,22 @@ def write_background(
             dims_by_name["nVertices"] = schema.def_dim("nVertices", int(n_vertices))
         for name, size in dict(DA_STATE_DIMENSIONS if da_state_dimensions is None else da_state_dimensions).items():
             dims_by_name[name] = schema.def_dim(name, int(size))
-        schema.put_global_attr("model_name", "mpas")
-        schema.put_global_attr("core_name", "atmosphere")
-        schema.put_global_attr("source", "gpuwm-hex: MPAS-A v8.4.2 CUDA dycore, hex's own physics")
-        schema.put_global_attr("hex_contract_schema", SCHEMA)
-        schema.put_global_attr("hex_stream", "background (rrfs-workflow 85ea55c0 hrrrv5 stream list, 27 fields)")
-        schema.put_global_attr("hex_soil_mapping", soil_mapping_label(provenance))
-        schema.put_global_attr("config_start_time", mpas_xtime(valid))
-        for key, value in (global_attributes or {}).items():
-            schema.put_global_attr(key, str(value))
+        # The caller's attributes REPLACE a default of the same name, so every name is written once.  THE
+        # BREAKAGE THIS PREVENTS: the MPAS-physics route names its own ``source``, the writer refused the
+        # repeated name ("duplicate global attribute name 'source'") and that route could never write a JEDI
+        # background.  The ArWen route passes none: unchanged.
+        attributes = {
+            "model_name": "mpas",
+            "core_name": "atmosphere",
+            "source": "gpuwm-hex: MPAS-A v8.4.2 CUDA dycore, hex's own physics",
+            "hex_contract_schema": SCHEMA,
+            "hex_stream": "background (rrfs-workflow 85ea55c0 hrrrv5 stream list, 27 fields)",
+            "hex_soil_mapping": soil_mapping_label(provenance),
+            "config_start_time": mpas_xtime(valid),
+        }
+        attributes.update({key: str(value) for key, value in (global_attributes or {}).items()})
+        for key, value in attributes.items():
+            schema.put_global_attr(key, value)
         xtime = schema.def_var("xtime", "S1", (time, strlen))
         fixed: list[tuple[int, np.ndarray]] = []
         for name, values in identity.items():

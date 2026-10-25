@@ -2,8 +2,8 @@
 
 This is the brief-2 "missing middle": the machinery that lets one partition's
 device step consume owner-produced halo values from the far rank at exactly
-the points where the step's stencils read them.  Design source:
-``MPAS-MULTIGPU-DESIGN-2026-08-17.md`` (Probe 2/3, D2/D3/D4/D6).
+the points where the step's stencils read them (multi-GPU design of
+2026-08-17, probes 2/3, D2/D3/D4/D6).
 
 Everything here is DATA MOVEMENT, not numerics: pack is a fancy-index gather
 of owner-computed values, unpack is a contiguous tail assignment into the halo

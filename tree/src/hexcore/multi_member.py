@@ -430,12 +430,42 @@ def serial_netcdf():
 
 def roster_requests(arguments, door):
     """A roster supplies only member forcing and destinations; flags stay shared."""
+    requests = []
+    for run_id, member in roster_members(arguments, door):
+        if getattr(member, "analysis", None) is not None:
+            # The member's bundle is checked and rewritten into its own --init (and IAU inputs) by the same door
+            # code a one-forecast --analysis run takes; its derived files go to <out>/<run_id>.analysis-work.
+            from .analysis_door import AnalysisDoorRefusal, resolve_analysis
+
+            try:
+                member.analysis_receipt = resolve_analysis(member, registry_loader=lambda: door.load_registry(
+                    door.resolve_repo(getattr(member, "repo", None))))
+            except AnalysisDoorRefusal as error:
+                raise MultiMemberRefusal(f"member {run_id}: {error}") from None
+        requests.append((run_id, door.resolve_request(member)))
+    first = requests[0][1]
+    # Binding and the compiled kernel family are process-wide. Different
+    # meshes belong to separate groups rather than rebinding a live driver.
+    for _run_id, request in requests:
+        if request.preflight or getattr(arguments, "samehost_devices", None) is not None:
+            raise MultiMemberRefusal("resident members cannot combine preflight or partition-rank execution")
+        if request.mesh != first.mesh or request.grid != first.grid or request.static != first.static:
+            raise MultiMemberRefusal("resident members need the same pinned mesh, grid and static files")
+    return requests
+
+
+def roster_members(arguments, door):
+    """Each roster record as the member's own forecast arguments: ``[(run_id, namespace)]``.
+
+    Shared by the ArWen roster (``roster_requests``) and the MPAS suite roster (``run_suite_members``), so both
+    routes read the same records the same way.
+    """
     records = json.loads(Path(arguments.members).read_text(encoding="utf-8"))
     if not isinstance(records, list) or not 1 <= len(records) <= 4:
         raise MultiMemberRefusal("--members needs a JSON array of 1 to 4 member records")
     def stochastic_options(value):
         return {} if value is None else (json.loads(value) if isinstance(value, str) else dict(value))
-    requests, ids = [], set()
+    members, ids = [], set()
     # "analysis" names the member's own analysis bundle (hexcore.analysis_bundle): the member then starts from it
     # exactly as a one-forecast --analysis run does (direct insertion, or its background with the increment over
     # the window).  A roster-wide --analysis starts every member that names no init or bundle of its own.
@@ -471,26 +501,8 @@ def roster_requests(arguments, door):
         member.out = Path(arguments.out) / run_id
         member.scratch = Path(arguments.scratch) / run_id
         member.receipt = None
-        if getattr(member, "analysis", None) is not None:
-            # The member's bundle is checked and rewritten into its own --init (and IAU inputs) by the same door
-            # code a one-forecast --analysis run takes; its derived files go to <out>/<run_id>.analysis-work.
-            from .analysis_door import AnalysisDoorRefusal, resolve_analysis
-
-            try:
-                member.analysis_receipt = resolve_analysis(member, registry_loader=lambda: door.load_registry(
-                    door.resolve_repo(getattr(member, "repo", None))))
-            except AnalysisDoorRefusal as error:
-                raise MultiMemberRefusal(f"member {run_id}: {error}") from None
-        requests.append((run_id, door.resolve_request(member)))
-    first = requests[0][1]
-    # Binding and the compiled kernel family are process-wide. Different
-    # meshes belong to separate groups rather than rebinding a live driver.
-    for _run_id, request in requests:
-        if request.preflight or getattr(arguments, "samehost_devices", None) is not None:
-            raise MultiMemberRefusal("resident members cannot combine preflight or partition-rank execution")
-        if request.mesh != first.mesh or request.grid != first.grid or request.static != first.static:
-            raise MultiMemberRefusal("resident members need the same pinned mesh, grid and static files")
-    return requests
+        members.append((run_id, member))
+    return members
 
 
 class _Prepared(BaseException):
@@ -578,6 +590,8 @@ def run_members(arguments, door):
     root.mkdir()
     scratch.mkdir()
     try:
+        if suite_route(arguments, door):
+            return run_suite_members(arguments, door, root, scratch)
         return _run_members(arguments, door, root, scratch, admit_co_tenancy)
     except _RosterRefused as refused:
         import shutil
@@ -585,6 +599,103 @@ def run_members(arguments, door):
         shutil.rmtree(root, ignore_errors=True)
         shutil.rmtree(scratch, ignore_errors=True)
         raise refused.error from None
+
+
+def suite_route(arguments, door) -> bool:
+    """Whether the roster's shared flags name an MPAS suite route (``--physics-suite``, its namelist, or
+    ``--physics-backend mpasphys``), decided by the same ``native_route`` a one-member forecast takes.
+
+    THE BREAKAGE THIS PREVENTS: a roster (``global --members``, ``s2s``) went straight to the ArWen column
+    seam (``resolve_request`` -> ``physics_suites.resolve_physics``), so ``--forecast-arg=--physics-suite=
+    convection_permitting`` was refused in 0.5 s ("config_radt_cld_scheme='cld_fraction' is refused") while the
+    same flags on one member ran the MPAS port.
+    """
+    from .mpasphys.forecast_v842 import native_route
+
+    try:
+        config, _text = native_route(arguments, default_mode=getattr(door, "PHYSICS_MODE_DEFAULT", "correct"))
+    except ValueError as error:
+        raise _RosterRefused(error) from error
+    return config is not None
+
+
+def _suite_member_main(member, log_path) -> int:
+    """One MPAS-suite member, in its own process: exactly the one-member ``gpuwm-hex forecast`` door."""
+    import sys as _sys
+
+    log = open(log_path, "a", buffering=1, encoding="utf-8")
+    os.dup2(log.fileno(), 1)
+    os.dup2(log.fileno(), 2)
+    _sys.stdout = _sys.stderr = log
+    from . import cli
+    from .errors import MpasPortError
+
+    try:
+        cli._select_numerics(member)
+        return int(member.handler(member))
+    except (MpasPortError, OSError, ValueError) as error:
+        print(f"gpuwm-hex: {error}", file=_sys.stderr, flush=True)
+        return 2
+
+
+def _suite_member_process(member, log_path):
+    raise SystemExit(_suite_member_main(member, log_path))
+
+
+def run_suite_members(arguments, door, root, scratch):
+    """A roster on the MPAS suite route: every member runs the one-member MPAS route, all at once on this card.
+
+    Each member is its own process (the MPAS route keeps process-wide framework state, so members cannot share
+    one interpreter the way the ArWen roster's private modules do) started together, so the group is co-resident
+    on the card exactly as the ArWen roster's group is.  The card gate (``hexcore.card_handoff``) is held by this
+    process for the group, so the ensemble door's pipelining still sees one group per card.  A member writes the
+    same history, receipts and products a one-member ``forecast --physics-suite`` run writes, in
+    ``<out>/<run_id>``; its log is ``<out>/<run_id>.log``.
+    """
+    import multiprocessing
+
+    from .card_handoff import CardGate
+
+    try:
+        members = roster_members(arguments, door)
+    except Exception as error:
+        raise _RosterRefused(error) from error
+    gate = CardGate.from_environ()
+    # The members inherit no gate: this process holds it for the whole group.
+    from .card_handoff import GATE_ENV, TICKET_ENV
+    environment = {key: os.environ.pop(key) for key in (GATE_ENV, TICKET_ENV) if key in os.environ}
+    context = multiprocessing.get_context("spawn")
+    started = time.time()
+    result = {"schema": "gpuwm-hex.multi-member/v1", "route": "mpas-suite", "status": "incomplete",
+              "members": [], "default_enabled": False}
+    failed = 0
+    try:
+        if gate is not None:
+            gate.acquire()
+        processes = []
+        for run_id, member in members:
+            log = root / f"{run_id}.log"
+            process = context.Process(target=_suite_member_process, args=(member, str(log)),
+                                      name=f"hex-suite-member-{run_id}")
+            process.start()
+            processes.append((run_id, member, log, process))
+        for run_id, member, log, process in processes:
+            process.join()
+            rc = int(process.exitcode if process.exitcode is not None else 1)
+            failed += rc != 0
+            result["members"].append({"run_id": run_id, "returncode": rc, "out": str(member.out), "log": str(log)})
+            print(f"gpuwm-hex: member {run_id} (MPAS suite route) exited {rc}; log {log}", file=sys.stderr, flush=True)
+            if rc != 0 and log.is_file():
+                tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]
+                print("\n".join(f"  {run_id}| {line}" for line in tail), file=sys.stderr, flush=True)
+    finally:
+        os.environ.update(environment)
+        if gate is not None:
+            gate.release()
+            result["card_handoff"] = gate.receipt
+    result.update(status="complete" if not failed else "failed", wall_seconds=round(time.time() - started, 3))
+    (root / "multi-member-receipt.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return 0 if not failed else 1
 
 
 class _RosterRefused(Exception):

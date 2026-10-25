@@ -188,17 +188,30 @@ def test_incomplete_geog_builds_and_absent_geog_uses_the_declared_pin(env):
     assert ps.static_request(argv(geog), {}, pinned=pin) is None
 
 
-def test_corrupt_store_bytes_are_refused_and_nothing_is_published(env):
+def test_corrupt_store_bytes_are_refused_and_the_door_builds(env, capsys):
     tmp, store, box = env
     out = tmp / "a.nc"
     built = ps.run_or_fetch(_mesh_argv(tmp, out), runner=_runner)
     os.replace(box, store)
     (store / "mesh" / built["key"] / "grid.nc").write_bytes(b"not the grid")
     dest = tmp / "c" / "g.nc"
-    with pytest.raises(ps.PrepStoreError):
-        ps.run_or_fetch(_mesh_argv(tmp, dest), runner=_runner)
-    assert not dest.exists()
+    calls = []
+    got = ps.run_or_fetch(_mesh_argv(tmp, dest), runner=lambda a: calls.append(a) or _runner(a))
+    assert got["source"] == "built" and calls
+    assert dest.read_bytes() != b"not the grid"
     assert not list(dest.parent.glob(".*partial"))
+    assert "BAD STORE ENTRY REFUSED" in capsys.readouterr().err
+
+
+def test_store_missing_an_entry_file_builds(env):
+    tmp, store, box = env
+    out = tmp / "a.nc"
+    built = ps.run_or_fetch(_mesh_argv(tmp, out), runner=_runner)
+    os.replace(box, store)
+    (store / "mesh" / built["key"] / "grid.nc").unlink()
+    dest = tmp / "d" / "g.nc"
+    assert ps.run_or_fetch(_mesh_argv(tmp, dest), runner=_runner)["source"] == "built"
+    assert dest.exists() and not list(dest.parent.glob(".*partial"))
 
 
 def test_existing_output_without_clobber_runs_the_engine(env):

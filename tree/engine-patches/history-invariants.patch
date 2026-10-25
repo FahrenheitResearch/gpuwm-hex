@@ -1,0 +1,93 @@
+diff --git a/tools/rustwx/crates/rw-mpas/src/history.rs b/tools/rustwx/crates/rw-mpas/src/history.rs
+index b4ede90e79..a92388564f 100644
+--- a/tools/rustwx/crates/rw-mpas/src/history.rs
++++ b/tools/rustwx/crates/rw-mpas/src/history.rs
+@@ -363,8 +363,30 @@ pub struct InitFields {
+     pub absent: Vec<String>,
+ }
+ 
++/// Invariant fields a history may omit, read from the run's init only when the
++/// history does not carry them (WRF name, MPAS name).
++///
++/// THE BREAKAGE THIS PREVENTS (gpuwm-hex F-PG4 and F-MPAS-PRODUCTS,
++/// 2026-10-24): MPAS-A's own `output` stream writes no `ter`, and the hex
++/// MPAS-physics route writes exactly that stream, so every lat-lon frame from
++/// it had no `HGT`.  The renderer's wrfout import then dropped everything that
++/// needs the ground: MSLP ("mslp unavailable: HGT"), and with it the 2 m
++/// temperature and dewpoint maps that contour it, SBCAPE/MUCAPE, the 0 C
++/// height, IVT and simulated IR (column planes "read terrain"), precipitation
++/// type (height above ground); `gpuwm prep --source hex-global` refused the
++/// export (`terrain_height`) and no column store was written.  The init the
++/// converter already reads for PHB holds the terrain that run integrated on.
++/// A history that carries `ter` (the ArWen-physics route's) keeps its own
++/// words, so its frames are unchanged.
++pub const INIT_FALLBACK_FIELDS: &[(&str, &str)] = &[("HGT", "ter")];
++
++fn is_init_fallback(wrf_name: &str) -> bool {
++    INIT_FALLBACK_FIELDS.iter().any(|(wrf, _)| *wrf == wrf_name)
++}
++
+ /// Hash `path` (refusing a mismatch against `init_sha256`) and read every
+-/// init-sourced field of the field map from it.
++/// init-sourced field of the field map from it, plus the
++/// [`INIT_FALLBACK_FIELDS`] it carries.
+ pub fn read_init_fields(path: &Path, init_sha256: Option<&str>) -> MpasResult<InitFields> {
+     // The digest and the field reads are independent passes over the same
+     // file: run them side by side, then refuse a digest mismatch first, as
+@@ -381,6 +403,7 @@ pub fn read_init_fields(path: &Path, init_sha256: Option<&str>) -> MpasResult<In
+                 .iter()
+                 .filter(|mapping| mapping.source == FieldSource::Init)
+                 .filter_map(|mapping| mapping.mpas_name.map(|name| (mapping.wrf_name, name)))
++                .chain(INIT_FALLBACK_FIELDS.iter().copied())
+                 .collect();
+             let names: Vec<&str> = wanted.iter().map(|(_, name)| *name).collect();
+             let read = read_cell_fields_parallel(&init, &names, n_cells);
+@@ -391,6 +414,8 @@ pub fn read_init_fields(path: &Path, init_sha256: Option<&str>) -> MpasResult<In
+                     Some(value) => {
+                         fields.insert(wrf_name.to_string(), value);
+                     }
++                    // A fallback the init lacks is the history's to report.
++                    None if is_init_fallback(wrf_name) => {}
+                     None => absent.push(wrf_name.to_string()),
+                 }
+             }
+@@ -815,9 +840,19 @@ fn read_history_body(
+                 )));
+             }
+             for (name, value) in &init.fields {
+-                if requested(name) {
+-                    fields.insert(name.clone(), value.clone());
++                if !requested(name) {
++                    continue;
+                 }
++                // An invariant the history omitted comes from the init; one it
++                // carries keeps the history's words.
++                if is_init_fallback(name) {
++                    if !fields.contains_key(name) {
++                        fields.insert(name.clone(), value.clone());
++                        absent.retain(|missing| missing != name);
++                    }
++                    continue;
++                }
++                fields.insert(name.clone(), value.clone());
+             }
+             absent.extend(init.absent.iter().filter(|name| requested(name)).cloned());
+             init_resolved = Some(init.path.clone());
+@@ -1169,6 +1204,17 @@ pub fn read_history_cells_on_mesh(
+                     None => absent.push(wrf_name.to_string()),
+                 }
+             }
++            // The same invariants the frame path completes from the init
++            // ([`INIT_FALLBACK_FIELDS`]), for a wanted one the history omitted.
++            for (wrf_name, mpas_name) in INIT_FALLBACK_FIELDS.iter().copied() {
++                if !wanted.contains(&wrf_name) || fields.contains_key(wrf_name) {
++                    continue;
++                }
++                if let Some(value) = read_cell_field_at(&init, mpas_name, mesh_cells, cells)? {
++                    fields.insert(wrf_name.to_string(), value);
++                    absent.retain(|missing| missing != wrf_name);
++                }
++            }
+             init_resolved = Some(path.to_path_buf());
+         }
+         None => absent.extend(wanted_from(FieldSource::Init).map(|(w, _)| w.to_string())),

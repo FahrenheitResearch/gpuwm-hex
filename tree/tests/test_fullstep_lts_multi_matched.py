@@ -35,7 +35,7 @@ def test_both_sides_of_the_interface_are_wired():
     capture = _body("_attach_capture")
     assert "self._record_split_flux(" in capture       # fine side, at every split's third-stage recovery
     assert "self._impose_theta(" in capture            # coarse side, third-stage heat flux
-    assert '"acoustic_ru_v841"' in _body("_attach_matched_flux")   # coarse side, acoustic momentum
+    assert "tap_acoustic_momentum(" in _body("_attach_matched_flux")   # coarse side, acoustic momentum
     step = _body("_step_block")
     assert "imposed the child's interface flux" in step and "imposed the child's heat flux" in step
 

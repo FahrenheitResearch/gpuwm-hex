@@ -24,7 +24,22 @@ def test_fresh_process_store_returns_identical_image_and_mapping(tmp_path):
     second.pool.shutdown()
 
 
-@pytest.mark.parametrize("change", ["options", "source", "arch", "filename", "headers", "shape", "compiler"])
+def test_a_new_run_configuration_reuses_the_content_addressed_image(tmp_path):
+    """THE BREAKAGE THIS PREVENTS: artifacts were filed under the run's argv, so every new storm-following member
+    (a new --mesh/--grid) recompiled the MPAS suite's fast kernels inline, 15 s a moving segment
+    (MPAS-ROUTE-SPEED-2026-10-24).  The key binds the whole compiler request, so another run shares it."""
+    identity = dict(nvrtc=[13, 4], library="compiler-a")
+    args = dict(source="kernel", options=["--fmad=false"], arch="120", filename="k.cu")
+    first = Store(tmp_path, identity, '{"argv": ["forecast", "--mesh", "start"]}', workers=2)
+    first.call("nvrtc", args, lambda: (b"image", None))
+    first.flush()
+    first.pool.shutdown()
+    second = Store(tmp_path, identity, '{"argv": ["forecast", "--mesh", "mn02900e26450"]}', workers=2)
+    assert second.call("nvrtc", args, lambda: pytest.fail("a new run recompiled a cached request")) == (b"image", None)
+    second.pool.shutdown()
+
+
+@pytest.mark.parametrize("change", ["options", "source", "arch", "filename", "headers", "compiler"])
 def test_changed_compiler_inputs_cannot_serve_stale_image(tmp_path, change):
     include = tmp_path / "include"
     include.mkdir()
@@ -45,8 +60,6 @@ def test_changed_compiler_inputs_cannot_serve_stale_image(tmp_path, change):
         header.write_text("#define VALUE 2\n")
         import os
         os.utime(header, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns))
-    elif change == "shape":
-        shape = "shape-b"
     elif change == "compiler":
         next_identity["library"] = "compiler-b"
     elif change == "options":

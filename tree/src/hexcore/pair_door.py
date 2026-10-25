@@ -161,6 +161,10 @@ def _refuse(message: str) -> PairRefusal:
     return PairRefusal(message)
 
 
+#: What ``write_summary`` returns when a leg left no frame to difference.
+NO_FRAMES_WEIGHTING = "no frames to weight"
+
+
 def sha256_file(path: Path) -> str:
     """Digest a file without pulling it into memory."""
 
@@ -752,6 +756,15 @@ def run_pair(
     )
     print(f"MANIFEST {manifest_path}", flush=True)
     print(f"SUMMARY {summary_path}", flush=True)
+    if weighting == NO_FRAMES_WEIGHTING:
+        # THE BREAKAGE THIS PREVENTS (hex parity run group 7, #27): a pair whose legs left no frames this door
+        # can read printed "NO COMPARISON" and still exited 0, so a caller counted an empty experiment as done.
+        empty = [name for name in LEG_NAMES if not legs[name]["history"]]
+        raise _refuse(
+            f"NO COMPARISON: the {' and '.join(empty)} leg(s) exited 0 but left no history frame in "
+            f"{', '.join(str(legs[name]['out']) for name in empty)}, so there is nothing to difference.  "
+            f"The manifest ({manifest_path}) and the legs' logs say what each leg wrote."
+        )
     return manifest
 
 
@@ -904,7 +917,7 @@ def write_summary(
         destination.write_text(
             "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
         )
-        return "no frames to weight"
+        return NO_FRAMES_WEIGHTING
 
     control_names = [path.name for path in control_history]
     treatment_names = [path.name for path in treatment_history]

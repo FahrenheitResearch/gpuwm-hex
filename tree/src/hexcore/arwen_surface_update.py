@@ -183,7 +183,6 @@ class ArwenSurfaceUpdate:
         if self.backend._rollback_snapshot:
             self._saved = self.state(device=True)
         self.records(now)
-        self.physics_classification = dict(self.classification)
         s = self.pools()
         f = self.backend._seam._driver.fields
         # The engine publishes downwelling SW; MPAS skin consumes absorbed SW.

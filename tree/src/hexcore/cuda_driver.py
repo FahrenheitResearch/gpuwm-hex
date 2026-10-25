@@ -4814,8 +4814,20 @@ class CudaDryDycoreDriver:
                 normal_velocity=time_level_one.normal_velocity,
                 rk_step=3,
             )
+        # A limited-area MPAS suite run (the post-transport callback with its
+        # Registry mass-loading count) loads the air with every moist species
+        # exactly as the global suite route does (atm_compute_moist_coefficients,
+        # mpas_atm_time_integration.F:2125-2139, has no limited-area branch).
+        # The regional qv-only path below stays for the dycore's own regional
+        # runs, which carry one species.  THE BREAKAGE THIS PREVENTS: with
+        # Thompson's condensate the regional path would weigh qv alone.
+        regional_suite_loading = (
+            self.regional_v841 is not None
+            and physics_mass_loading_count is not None
+        )
         if (
             self.regional_v841 is not None
+            and not regional_suite_loading
             and moist_coefficients is None
             and bool(getattr(self.config, "config_moist_physics", False))
         ):
@@ -4824,7 +4836,7 @@ class CudaDryDycoreDriver:
             moist_coefficients = self.regional_v841.moist_coefficients(
                 outer_saved.scalars
             )
-        if self.regional_v841 is None and moist_coefficients is None:
+        if (self.regional_v841 is None or regional_suite_loading) and moist_coefficients is None:
             # Native atm_srk3 calls atm_compute_moist_coefficients on EVERY
             # step (mpas_atm_time_integration.F:2125-2139), physics suite
             # 'none' included: qtot/cqw/cqu enter dpdz, the Euler w and u

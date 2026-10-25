@@ -1188,6 +1188,23 @@ class Mesh:
     #: is keyed on it after all.
     prep_cache_provenance = ("grid_path", "static_path", "provenance")
 
+    #: Process-local device caches some consumers attach to a mesh (the stochastic spherical-harmonic basis,
+    #: hexcore.stochastic.MeshHarmonics.cached).  They hold CUDA arrays and events of this process.
+    _DEVICE_CACHES = ("_stochastic_harmonics",)
+
+    def __getstate__(self):
+        """A pickled mesh carries its host arrays, never a device cache of the process that pickled it.
+
+        THE BREAKAGE THIS PREVENTS: the MPAS-suite checkpoint pickles the mesh; with --stochastic the 1.18 GB
+        GPU harmonic basis rode inside it (a 2.45 GB checkpoint instead of 1.27 GB), and the restart unpickled
+        those CUDA arrays and events before its own CUDA setup and crashed at exit (rc 139, HEX-PHYSICS-PARITY
+        run group 6 #22).  The consumer rebuilds its cache on first use.
+        """
+        state = dict(self.__dict__)
+        for name in self._DEVICE_CACHES:
+            state.pop(name, None)
+        return state
+
     def __init__(
         self,
         *,

@@ -126,8 +126,17 @@ extern "C" __global__ void oml_init(const int n, const float hml0,
 """
 
 
-@lru_cache(maxsize=1)
 def _kernels():
+    """The OML kernels loaded on the calling card."""
+    import cupy as cp
+    # A CUDA module belongs to the card it was loaded on. Same-host ranks drive
+    # several cards from one process, so a cache keyed without the card hands
+    # the second card the first card's handle (CUDA_ERROR_INVALID_HANDLE at step 1).
+    return _kernels_on(int(cp.cuda.Device().id))
+
+
+@lru_cache(maxsize=None)
+def _kernels_on(device: int):
     """Compile whole OML and driver/init slices; module_sf_oml.F:9-160."""
     import cupy as cp
     from cupy.cuda import compiler
@@ -138,9 +147,10 @@ def _kernels():
         header + "\n" + CUDA_SOURCE,
         options=_hex_numerics.options(("--std=c++17", "--fmad=false", "--ftz=false",
                  "--prec-div=true", "--prec-sqrt=true")),
-        arch=cp.cuda.Device().compute_capability)
-    module = cp.cuda.function.Module()
-    module.load(binary)
+        arch=cp.cuda.Device(device).compute_capability)
+    with cp.cuda.Device(device):
+        module = cp.cuda.function.Module()
+        module.load(binary)
     return module.get_function("oml_run"), module.get_function("oml_init")
 
 

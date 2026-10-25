@@ -56,10 +56,11 @@ def load_pins(paths: list[Path]) -> list[dict]:
             size, digest = pin["bytes"], pin["sha256"]
             if type(size) is not int or size < 0 or not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise ValueError(f"{path}: invalid size or sha256 for {name}")
-            row = dict(tag=tag, repository=repository, name=name, bytes=size, sha256=digest)
-            key = (tag, name)
+            row_tag = safe_component(pin.get("release_tag", tag))
+            row = dict(tag=row_tag, repository=repository, name=name, bytes=size, sha256=digest)
+            key = (row_tag, name)
             if key in rows and rows[key] != row:
-                raise ValueError(f"conflicting pins for {tag}/{name}")
+                raise ValueError(f"conflicting pins for {row_tag}/{name}")
             rows[key] = row
     # Each of these releases must exist before the main version release.
     return sorted(rows.values(), key=lambda row: (row["tag"], row["name"]))

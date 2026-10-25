@@ -424,7 +424,7 @@ def bundled_candidate(spec: EngineSpec) -> Path:
     such file, so checkout runs keep resolving down the ladder as before.
 
     ``rw_mpas_static`` is bundled for the same reason
-    (ARWEN-VS-HEX-TIMING-2026-10-15): the 2.9.0 static builder reads every
+    (2026-10-15): the 2.9.0 static builder reads every
     grid through binary32, so a generated grid's static declares binary64
     coordinates it does not hold and the point door refused (its vertical
     check, then ``rw_mpas_mesh --cull-parent``).  Read first, the bundled

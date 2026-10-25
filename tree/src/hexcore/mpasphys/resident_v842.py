@@ -8,6 +8,7 @@ an explicit publication boundary. No native field operation may intervene.
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from types import SimpleNamespace
 
 import numpy as np
@@ -19,8 +20,12 @@ TARGET = dict(microphysics='mp_thompson', convection='cu_grell_freitas',
               surface_layer='sf_mynn', land_surface='sf_noah')
 
 
-def resident_requested(config, dimensions):
-    """Admit the global CUDA suite in either physics mode, or fail a request."""
+def resident_requested(config, dimensions, *, partitioned=False):
+    """Admit the global CUDA suite in either physics mode, or fail a request.
+
+    ``partitioned``: a same-host rank's local mesh (halo cells and edges beyond
+    nCellsSolve/nEdgesSolve) whose rank owner exchanges the physics halo groups.
+    """
     setting = os.environ.get('GPUWM_HEX_MPAS_RESIDENT', 'auto')
     if setting not in ('auto', '0', '1'):
         raise ValueError('GPUWM_HEX_MPAS_RESIDENT must be auto, 0 or 1')
@@ -28,8 +33,8 @@ def resident_requested(config, dimensions):
                  and all(config.selectors.get(k) == v for k, v in TARGET.items())
                  and all(str(config.backends[k]) == 'hex-cuda'
                          for k in config.selectors if config.active(k))
-                 and all(dimensions[e] == dimensions[e + 'Solve']
-                         for e in ('nCells', 'nEdges')))
+                 and (partitioned or all(dimensions[e] == dimensions[e + 'Solve']
+                                         for e in ('nCells', 'nEdges'))))
     if setting == '1' and not supported:
         raise ValueError('resident v8.4.2 requires the global convection_permitting CUDA suite')
     return setting != '0' and supported
@@ -67,6 +72,7 @@ def ported_route_refusal(config):
             'Run --physics-suite convection_permitting, or the default ArWen physics.')
 
 
+@lru_cache(maxsize=1)
 def preparation_source():
     """Native surface-pressure sum and interpolation writes, interface.F:437,479-483.
 
@@ -102,7 +108,7 @@ extern "C" __global__ void resident_latitude(int n,float degrad,const float *lat
 '''
 
 
-def native_physics_geometry(provider):
+def native_physics_geometry(provider, *, local_cells=None):
     """Retain initialized native vectors, mpas_atmphys_init.F:538-592.
 
     init_dirs_forphys normalizes its east/north vectors after evaluating
@@ -115,14 +121,23 @@ def native_physics_geometry(provider):
     from ..cuda_physics_v841 import CudaPhysicsGeometryV841
     cp = provider.cp
     dimensions = provider.session.layout.dimensions
+    if local_cells is None:
+        east = provider.field('mesh', 'east').T
+        north = provider.field('mesh', 'north').T
+    else:
+        # A same-host rank: owned edges reference halo cells, so the projected
+        # cell vectors cover every local cell (the halo-exchanged momentum
+        # tendencies are local-extent too), todynamics.F:501-552.
+        east = cp.asarray(provider.session.native.get_field('mesh', 'east')[:, :local_cells]).T
+        north = cp.asarray(provider.session.native.get_field('mesh', 'north')[:, :local_cells]).T
     geometry = CudaPhysicsGeometryV841(
         cells_on_edge=cp.ascontiguousarray(
             provider.field('mesh', 'cellsOnEdge').T - cp.int32(1)),
-        east_cell=cp.ascontiguousarray(provider.field('mesh', 'east').T),
-        north_cell=cp.ascontiguousarray(provider.field('mesh', 'north').T),
+        east_cell=cp.ascontiguousarray(east),
+        north_cell=cp.ascontiguousarray(north),
         edge_normal_vectors=cp.ascontiguousarray(
             provider.field('mesh', 'edgeNormalVectors').T),
-        n_cells=dimensions['nCellsSolve'],
+        n_cells=dimensions['nCellsSolve'] if local_cells is None else local_cells,
         n_edges=dimensions['nEdgesSolve'],
         # Uploads belong to the persistent provider's transfer receipt;
         # this layout adapter adds no direct host/device transfers.
@@ -132,10 +147,51 @@ def native_physics_geometry(provider):
     return geometry
 
 
+def regional_physics_geometry(provider):
+    """native_physics_geometry for a limited-area cull: native's garbage cell made explicit.
+
+    Every ring-7 boundary edge of a cull names no second cell (stored 0, which native maps to the garbage cell
+    nCells+1 at read time).  The projection kernel indexes cellsOnEdge directly, so the closed-sphere geometry would
+    read one column outside the tendency arrays.  Here that endpoint is the garbage cell, the last column of a padded
+    view whose east/north vectors are zero, and CudaMpasCouplingV842(regional_garbage=True) gives the tendencies a
+    zero column there: the edge takes half its one real cell's tendency, as native's tend_toEdges does with its zero
+    garbage tendency.  Those edges lie in the specified zone, whose tendencies the boundary driver replaces.
+    """
+    from ..cuda_backend.containers import TransferStats
+    from ..cuda_physics_v841 import CudaPhysicsGeometryV841
+    cp = provider.cp
+    dimensions = provider.session.layout.dimensions
+    n_cells = int(dimensions['nCellsSolve'])
+    cells = provider.field('mesh', 'cellsOnEdge').T - cp.int32(1)
+    cells = cp.where((cells >= 0) & (cells < n_cells), cells, cp.int32(n_cells)).astype(cp.int32)
+
+    def padded(name):
+        vectors = provider.field('mesh', name).T
+        out = cp.zeros((n_cells + 1, vectors.shape[1]), dtype=vectors.dtype)
+        out[:n_cells] = vectors[:n_cells]
+        return out
+
+    geometry = CudaPhysicsGeometryV841(
+        cells_on_edge=cp.ascontiguousarray(cells),
+        east_cell=padded('east'), north_cell=padded('north'),
+        edge_normal_vectors=cp.ascontiguousarray(provider.field('mesh', 'edgeNormalVectors').T),
+        n_cells=n_cells + 1, n_edges=dimensions['nEdgesSolve'],
+        h2d=TransferStats(0, 0.0), regional_garbage_cell=n_cells)
+    geometry.validate()
+    return geometry
+
+
+def _solved_edges_reference_dummy(native, n_cells_solve, n_edges_solve) -> bool:
+    """Whether a solved edge names no second real cell (native 1-based: 0 or the dummy nCells+1)."""
+    cells = np.asarray(native.get_field('mesh', 'cellsOnEdge'))
+    cells = cells.reshape(-1, cells.shape[-1])[:, :int(n_edges_solve)]
+    return bool(np.any((cells < 1) | (cells > int(n_cells_solve))))
+
+
 class ResidentPhysicsGlue:
     """GPU field authority and native-order driver glue for the admitted suite."""
 
-    def __init__(self, session, coupling, mesh):
+    def __init__(self, session, coupling, mesh, *, halo=None):
         from ..cuda_physics_v841 import CudaMpasCouplingV842
         from .surface_update_v842 import NativeSurfaceService
         from .sfclay_mm5_v842 import run_native_diagnostics
@@ -166,15 +222,44 @@ class ResidentPhysicsGlue:
         self.invalid = self.cp.zeros(1, dtype=self.cp.int32)
         self.rho_dry = self.cp.empty((self.nlev, self.ncells), dtype=self.cp.float32)
         self.number_scratch = {}
-        geometry = native_physics_geometry(p)
-        self.assembler = CudaMpasCouplingV842(
+        self.halo = halo
+        self.local_rates = {}
+        local_cells = None
+        if halo is not None:
+            local_cells = d['nCells']
+            # Native's full-extent momentum tendencies (nCells): owned columns
+            # from the schemes, halo columns from their owners, before the edge
+            # projection reads both cells of every owned edge.
+            for group in ('physics:blten', 'physics:cuten'):
+                for name in session.native._groups.get(group, ((),))[0]:
+                    self.local_rates[name] = self.cp.zeros((self.nlev, local_cells), dtype=self.cp.float32)
+        regional = bool(session.layout.configs.get('config_apply_lbcs', False))
+        if regional and halo is not None:
+            raise ValueError('a limited-area MPAS suite run runs on one card (bind_limited_area refuses more)')
+        # A solved edge whose second cell is the native dummy (or 0) has only one real cell: a limited-area cull's
+        # boundary ring, and an LTS rate class's outermost halo ring (lts_v842 solves every local entity).  The
+        # closed-sphere geometry indexes that endpoint as column nCellsSolve, one past the tendency arrays.
+        # THE BREAKAGE THIS PREVENTS: on an MPAS-suite LTS class the PBL edge projection read whatever followed
+        # rublten/rvblten in device memory into those edges' momentum tendency, and the first step of some class
+        # was refused by the dycore validation flag at time 0 (3 of 3 storm-following moving segments on box L
+        # and on an RTX 4090 host; every class with 0x7F-filled fresh pool blocks: 1,159 edges of the rate-4
+        # class at |tend| ~ 3e36, MPAS-ROUTE-SPEED-2026-10-24).  Such edges take the regional geometry's zero
+        # garbage column: half their one real cell's tendency, native's tend_toEdges word.
+        dummy_edges = (not regional and halo is None
+                       and _solved_edges_reference_dummy(session.native, d['nCellsSolve'], d['nEdgesSolve']))
+        geometry = (regional_physics_geometry(p) if regional or dummy_edges
+                    else native_physics_geometry(p, local_cells=local_cells))
+        self.assembler = CudaMpasCouplingV842(regional_garbage=regional or dummy_edges,
             selectors=session.config.execution_options, scalar_names=self.names,
             geometry=geometry, kernel_cache=self.cache,
             # Single-rank closed sphere: all cells and edges are owned, no
-            # neighbor MPI ranks and no boundary endpoint references the dummy.
-            exchange_halo_group=lambda group: None,
+            # neighbor ranks and no boundary endpoint references the dummy.
+            # A same-host rank exchanges the group's owner words before the
+            # edge projection reads halo cells (todynamics.F:380-412).
+            exchange_halo_group=(lambda group: None) if halo is None else self.exchange_group,
             pbl_edge=p.field('tend_physics', 'rublten_Edge'),
-            convection_edge=self.cp.zeros((self.nlev, d['nEdges']), dtype=self.cp.float32),
+            # Owned edges, like the other edge pools (equal to nEdges on one card).
+            convection_edge=self.cp.zeros((self.nlev, d['nEdgesSolve']), dtype=self.cp.float32),
             tend_u_phys=p.field('diag', 'tend_u_phys'))
         if session.surface_service is None:
             session.surface_service = NativeSurfaceService(session, self.cp)
@@ -205,6 +290,15 @@ class ResidentPhysicsGlue:
         session.hooks.external.update(operations)
         session.hooks.resident_operations = self.operations
         session.resident_glue = self
+
+    def exchange_group(self, group):
+        """exchange_halo_group(domain, group) on a same-host rank, todynamics.F:380-412."""
+        fields = []
+        for name in self.session.native._groups[group][0]:
+            local = self.local_rates[name]
+            local[:, :self.ncells] = self.provider.field('tend_physics', name)
+            fields.append((f'physics/{name}', local, 'cell'))
+        self.halo.exchange(group, fields)
 
     @staticmethod
     def noop(call):
@@ -285,6 +379,7 @@ class ResidentPhysicsGlue:
                  for row in self.session.layout.fields if row['pool'] == 'tend_physics'
                  and (row['pool_name'].endswith('ten')
                       or row['pool_name'] in ('rthratenlw', 'rthratensw'))}
+        rates.update(getattr(self, 'local_rates', {}))
         out = self.assembler.get_tend(mass=mass, mass_edge=p.field('diag', 'rho_edge'),
             theta_m=p.field('state', 'theta_m'), scalars=p.field('state', 'scalars'),
             tendencies=rates, n_cells_solve=self.ncells,

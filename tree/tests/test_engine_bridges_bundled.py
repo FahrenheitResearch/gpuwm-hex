@@ -8,7 +8,7 @@ init door ("lacks hex-vertical-v1") and every native stream read and write
 ("rw_mpas_stream not found").  The wheel now carries both, pinned by SHA-256
 (src/hexcore/data/engine-bridges.json), and the engines ladder reads the
 wheel's own hexcore/libexec before gpuwm's bridge directories.  rw_mpas_static
-joined them (ARWEN-VS-HEX-TIMING-2026-10-15): 2.9.0's static builder gives a
+joined them (2026-10-15): 2.9.0's static builder gives a
 generated grid a static declaring binary64 coordinates it does not hold, and
 the point door could not build a regional mesh.  These checks need no network,
 compiler or device.
@@ -79,9 +79,11 @@ def test_the_pins_name_both_bridges_their_source_and_where_the_release_fetches_t
     for name, row in pins["bridges"].items():
         assert re.fullmatch(r"[0-9a-f]{64}", row["sha256"]), name
         assert re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"]), name
-        # rw_igra2 is crate rw-obs (its bin file is igra2.rs); every other bridge is an rw-mpas bin.
-        assert row["source"] == ("tools/rustwx/crates/rw-obs/src/bin/igra2.rs" if name == "rw_igra2"
-                                 else f"tools/rustwx/crates/rw-mpas/src/bin/{name}.rs")
+        # rw_igra2 is crate rw-obs (its bin file is igra2.rs); every other bridge is an rw-mpas bin, a file or
+        # (rw_mpas_static since gpuwm 2.9.7) a bin directory whose entry point is main.rs.
+        assert row["source"] in (("tools/rustwx/crates/rw-obs/src/bin/igra2.rs",) if name == "rw_igra2"
+                                 else (f"tools/rustwx/crates/rw-mpas/src/bin/{name}.rs",
+                                       f"tools/rustwx/crates/rw-mpas/src/bin/{name}/main.rs")), name
     assert "hex-vertical-v1" in pins["bridges"]["rw_mpas_geometry"]["protocols"]
     assert "netcdf4" in pins["bridges"]["rw_mpas_stream"]["formats"]
     assert "binary64" in pins["bridges"]["rw_mpas_static"]["holds"]

@@ -152,14 +152,20 @@ def test_observed_whole_run_floor_prevents_repeating_a_false_fit():
               "cells": 216189, "peak_process_vram_mib": 25180, "receipt_sha256": "evidence"}
     fit = card_fit.predict(216189, card=mesh_point.resolve_card("96gb"), levels=55,
                            dt_seconds=90, hours=18, budget_mib=24000, observations=[anchor])
+    margin = 1 + card_fit.WHOLE_RUN_MARGIN
     assert fit["base_predicted_peak_mib"] < 16000
-    assert fit["predicted_peak_mib"] == 25180
+    assert fit["predicted_peak_mib"] == pytest.approx(25180 * margin, abs=.001)
     assert fit["required_free_mib"] > 25180
     assert not fit["fits"]
     assert fit["whole_run_floor"]["observation"]["receipt_sha256"] == "evidence"
     larger = card_fit.predict(432378, card=mesh_point.resolve_card("96gb"), levels=55,
                               dt_seconds=90, hours=18, observations=[anchor])
-    assert larger["predicted_peak_mib"] >= 50360
+    assert larger["predicted_peak_mib"] >= 50360 * margin - .01
+    # Below its one run the floor falls with device_admission's own slope; it is
+    # never held at the run's peak (128,942 cells priced at the 216k run's 25,272).
+    smaller = card_fit.predict(108094, card=mesh_point.resolve_card("96gb"), levels=55,
+                               dt_seconds=90, hours=18, observations=[anchor])
+    assert smaller["predicted_peak_mib"] < 25180
     other = card_fit.predict(216189, card=mesh_point.resolve_card("32gb"), levels=55,
                              dt_seconds=90, hours=18, observations=[anchor])
     assert other["whole_run_floor"] is None
@@ -170,9 +176,34 @@ def test_observed_whole_run_floor_prevents_repeating_a_false_fit():
 
 def test_shipped_whole_run_observation_rejects_the_measured_false_fit():
     fit = card_fit.predict(216189, card=mesh_point.resolve_card("96gb"), levels=55,
-                           dt_seconds=90, hours=18, budget_mib=24000)
-    assert fit["predicted_peak_mib"] >= 25272
+                           dt_seconds=90, hours=18, budget_mib=21000)
+    assert fit["base_predicted_peak_mib"] < 19816
+    assert fit["predicted_peak_mib"] >= 19816
     assert fit["required_free_mib"] > fit["predicted_peak_mib"]
     assert not fit["fits"]
-    assert fit["whole_run_floor"]["observation"]["hours"] == 18
+    assert fit["whole_run_floor"]["observation"]["cells"] == 216187
     assert len(fit["whole_run_floor"]["observation"]["receipt_sha256"]) == 64
+
+
+#: Every whole run of today's build on disk (card, cells, sampled forecast peak MiB).
+MEASURED_WHOLE_RUNS = [
+    ("96gb", 52618, 7472.0),     # 120 -> 30 km, 24 h, RTX PRO 6000
+    ("96gb", 216187, 19816.0),   # 60 -> 15 km, 15 h, RTX PRO 6000
+    ("96gb", 581895, 44450.0),   # 80 -> 5 km, 1,800 km core, 3 h, RTX PRO 6000
+    ("32gb", 128942, 13036.0),   # 80 -> 5 km, 400 km core, 3 h, RTX 5090
+    ("96gb", 128942, 13036.0),   # the same run as the site prices it (96 GB card); was 25,272
+]
+
+
+@pytest.mark.parametrize("card,cells,peak", MEASURED_WHOLE_RUNS)
+def test_shipped_curve_lands_10_to_15_percent_over_every_measured_run(card, cells, peak):
+    fit = card_fit.predict(cells, card=mesh_point.resolve_card(card), levels=55, dt_seconds=30, hours=3)
+    over = fit["predicted_peak_mib"] / peak - 1
+    assert 0.10 - 1e-9 <= over <= 0.15, (card, cells, fit["predicted_peak_mib"], over)
+
+
+def test_shipped_curve_rises_with_cells():
+    card = mesh_point.resolve_card("96gb")
+    peaks = [card_fit.predict(cells, card=card, levels=55, dt_seconds=30, hours=3)["predicted_peak_mib"]
+             for cells in range(20000, 1400001, 20000)]
+    assert peaks == sorted(peaks)

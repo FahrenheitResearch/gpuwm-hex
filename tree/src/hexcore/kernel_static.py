@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import dataclasses
+import functools
 import hashlib
 import json
 import multiprocessing
@@ -140,6 +141,12 @@ def _run(run, device, record):
                             pool = concurrent.futures.ProcessPoolExecutor(
                                 kernel_plan._workers(), mp_context=multiprocessing.get_context("spawn"))
                             record["compiler_executor"] = "process"
+                            # The plan pool's exit drop, for this pool too: a worker left idle at
+                            # exit is terminated instead of joined forever.
+                            register = getattr(threading, "_register_atexit", None)
+                            if register is not None:
+                                register(functools.partial(kernel_plan._drop_at_exit, pool,
+                                                           getattr(pool, "_processes", None)))
                         else:
                             pool = concurrent.futures.ThreadPoolExecutor(
                                 kernel_plan._workers(), thread_name_prefix="kernel-plan-static-compile")

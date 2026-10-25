@@ -669,7 +669,7 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
     with scoped_physics_resources() as physics_scope:
         construct_started = time.perf_counter()
         stacks, areas, physics_remaps = [], [], []
-        mapped_physics_cache = {}
+        mapped_physics_cache = {"target_landmask": host["constructor_values"]["landmask"]}
         for tables in plan.classes:
             class_cache = Path(cache_root) / f"class{tables.index}-of-{len(plan.classes)}"
             class_cache.mkdir(parents=True, exist_ok=True)
@@ -785,6 +785,18 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             moving_receipt["new_rates"] = rate_info
             Path(output_root, "moving-remap.json").write_text(json.dumps(moving_receipt,indent=2)+"\n")
 
+        # F000's surface-layer diagnostics come from each class's first physics
+        # call (hexcore.f000_first_call): every class's first step starts from
+        # the start state, so its seam then holds the scheme's diagnosis of its
+        # own start columns.  The frame is assembled before the first macro and
+        # published after it.  A resumed or moving-resumed start captures no f000.
+        from hexcore import f000_first_call
+        first_call = (f000_first_call.FirstCallHandoff()
+                      if (0 in captures and start_step == 0 and moving_resume is None and steps > 0)
+                      else None)
+        first_reads: dict[int, Any] = {}
+        held_f000: list[Any] = []
+
         def stepper(klass) -> None:
             index = klass.index
             stack = stacks[index]
@@ -821,6 +833,9 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 raise
             previous[index] = committed.surface_updates
             forcing[index] = next_dynamics
+            if first_call is not None and not first_call.done and index not in first_reads:
+                with physics_scope.rank(index, int(cp.cuda.Device().id)):
+                    first_reads[index] = f000_first_call.read_arwen_first_call(stack["backend"], cp)
             cadence = dict(stack["backend"].step_receipt()).get("cadence") or {}
             calls = class_calls[index]
             calls["steps"] += 1
@@ -917,30 +932,67 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             if step == 0 and moving_resume is None:
                 proof.overlay_f000_initialized_surface_diagnostics(
                     snapshot["arrays"], host["f000_surface_diagnostics"]["arrays"])
-                forecast.complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"])
-            physical_gates[str(step)] = proof.physical_snapshot_gate(
-                snapshot, allow_initial_negative_qv=(step == 0), scalar_names=host["scalar_names"],
-                surface_accumulators=host["surface_accumulators"])
-            frame_hashes[str(step)] = {name: proof.array_sha256(array)
-                                       for name, array in snapshot["arrays"].items()}
+                snapshot["receipt"]["f000_completed_surface_diagnostics"] = (
+                    forecast.complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"]))
             capture_seconds += time.perf_counter() - began
-            began = time.perf_counter()
-            path = Path(output_root) / f"cuda-history.{schedule['labels'][step]}.nc"
-            if history_writer is None and process_history is None:
-                # Synchronous (every run without the moving controller): the original order.
-                frame_records[str(step)] = proof.write_snapshot_netcdf(path, snapshot, static)
-                write_seconds += time.perf_counter() - began
+            if step == 0 and first_call is not None and not first_call.done:
+                # The boundary's live-state work runs now; the frame is published
+                # after the first macro, with the first call's diagnostics.
+                boundary_work(step, snapshot, defer_background=True)
+                held_f000.append(snapshot)
+                return
+            publish(step, snapshot)
+
+        held_background: list[Any] = []
+
+        def boundary_work(step: int, snapshot, defer_background: bool = False) -> None:
             restart_identity(step)
             if cycling is not None and step in cycling.get("checkpoint_steps", ()):
                 write_checkpoint(step)
             if cycling is not None and cycling.get("jedi_background"):
                 if "fields" not in init_fallback_cache:
                     init_fallback_cache["fields"] = forecast._init_fallback_fields(Path(cycling["init_path"]))
-                jedi_files[str(step)] = lts_restart.write_class_background(
+                writer = lts_restart.class_background_writer(
                     forecast, active=active, stacks=stacks, host=host, snapshot=snapshot,
                     label=schedule["labels"][step], valid_time=schedule["valid_times"][step],
                     soil_levels=int(cycling["soil_levels"]), init_fallback=init_fallback_cache["fields"],
-                    output_root=Path(output_root))
+                    output_root=Path(output_root), init_path=Path(cycling["init_path"]))
+                if defer_background:
+                    held_background.append((step, writer))  # f000: written from the completed frame
+                else:
+                    jedi_files[str(step)] = writer()
+
+        def hand_f000_first_call() -> None:
+            names = (sorted(set.intersection(*(set(first_reads[i]) for i in range(len(stacks)))))
+                     if len(first_reads) == len(stacks) else [])
+            first_call.put(assemble_owned_arrays(
+                layouts, [{n: first_reads[i][n] for n in names} for i in range(len(stacks))],
+                kinds={n: "cell" for n in names}, native_pads=()) if names else None)
+            first_reads.clear()
+            if held_f000:
+                publish(0, held_f000.pop(), boundary_done=True)
+
+        def publish(step: int, snapshot, boundary_done: bool = False) -> None:
+            nonlocal write_seconds
+            if step == 0 and first_call is not None:
+                snapshot["receipt"]["f000_first_call_diagnostics"] = (
+                    forecast.complete_f000_from_first_call(snapshot, first_call.take()))
+            physical_gates[str(step)] = proof.physical_snapshot_gate(
+                snapshot, allow_initial_negative_qv=(step == 0), scalar_names=host["scalar_names"],
+                surface_accumulators=host["surface_accumulators"])
+            frame_hashes[str(step)] = {name: proof.array_sha256(array)
+                                       for name, array in snapshot["arrays"].items()}
+            began = time.perf_counter()
+            path = Path(output_root) / f"cuda-history.{schedule['labels'][step]}.nc"
+            if history_writer is None and process_history is None:
+                # Synchronous (every run without the moving controller): the original order.
+                frame_records[str(step)] = proof.write_snapshot_netcdf(path, snapshot, static)
+            write_seconds += time.perf_counter() - began
+            if not boundary_done:
+                boundary_work(step, snapshot)
+            while held_background:
+                held_step, writer = held_background.pop()
+                jedi_files[str(held_step)] = writer()
             if history_writer is None and process_history is None:
                 with (Path(output_root) / "history-ready.jsonl").open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps({"step": int(step), "path": str(path)}) + "\n")
@@ -1103,6 +1155,9 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                     break
                 elapsed = time.perf_counter() - mark
                 done += top
+                if first_call is not None and not first_call.done:
+                    with time_ledger.stage("forecast.output.f000_first_call"):
+                        hand_f000_first_call()
                 macro_rows.append({"step": done, "base_steps": top, "seconds": elapsed})
                 if balance is not None:
                     balance.sample(active, done * base_dt, cp)
@@ -1125,7 +1180,12 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                             model_seconds=clock_offset + done * base_dt, final=done >= steps, seal=recovery_seal,
                             wait_written=lambda step=done: drain_writes(until_step=step)):
                         break
+            if first_call is not None and held_f000:
+                first_call.put(None)  # the first macro was refused: publish f000 as captured
+                publish(0, held_f000.pop(), boundary_done=True)
         finally:
+            if first_call is not None:
+                first_call.put(None)
             loop_seconds = time.perf_counter() - started
             try:
                 drain_writes()
@@ -1383,7 +1443,7 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
         # owner columns (moving_physics.mapped_owner_field), built once and shared: the blocks
         # of different cards construct on their own threads, so its use is serialised.
         physics_lock = threading.Lock()
-        mapped_physics_cache: dict[str, Any] = {}
+        mapped_physics_cache: dict[str, Any] = {"target_landmask": host["constructor_values"]["landmask"]}
         physics_remaps: list[Any] = [None] * len(bplan.blocks)
 
         def construct(rank: int) -> None:
@@ -1467,6 +1527,15 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                         "radiation_times_seconds": []} for _ in stacks]
         raw_exchange = os.environ.get("GPUWM_HEX_FULLSTEP_LTS_RAW_EXCHANGE", "0") == "1"
 
+        # F000's surface-layer diagnostics come from each block's first physics
+        # call (hexcore.f000_first_call), read in the block's own rank thread;
+        # the frame is published after the first macro.
+        from hexcore import f000_first_call
+        first_call = (f000_first_call.FirstCallHandoff()
+                      if (0 in captures and moving_resume is None and steps > 0) else None)
+        first_reads: dict[int, Any] = {}
+        held_f000: list[Any] = []
+
         def stepper(block) -> None:
             gid = block.gid
             stack = stacks[gid]
@@ -1487,6 +1556,9 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                     after_phase_one=block.exchanger.round_phase_one if raw_exchange else None)
             previous[gid] = committed.surface_updates
             forcing[gid] = next_dynamics
+            if first_call is not None and not first_call.done and gid not in first_reads:
+                with physics_scope.rank(gid, block.device):
+                    first_reads[gid] = f000_first_call.read_arwen_first_call(stack["backend"], cp)
             cadence = dict(stack["backend"].step_receipt()).get("cadence") or {}
             calls = class_calls[gid]
             calls["steps"] += 1
@@ -1498,6 +1570,8 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
             calls["cumulus"] += int(bool(cadence.get("cumulus_ran")))
 
         active.stepper = stepper
+        # the block's held cumulus forcing crosses to its same-class peers at round A
+        active.forcing_of = lambda block: forcing[block.gid]
         # the drag scheme's run-wide step constant: every block of a stepping class shares its length
         active.around_class_step = lambda index, seconds: _class_step_length(seconds)
 
@@ -1604,17 +1678,40 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
             if step == 0 and moving_resume is None:
                 proof.overlay_f000_initialized_surface_diagnostics(
                     snapshot["arrays"], host["f000_surface_diagnostics"]["arrays"])
-                forecast.complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"])
+                snapshot["receipt"]["f000_completed_surface_diagnostics"] = (
+                    forecast.complete_f000_surface_diagnostics(snapshot, host["f000_start_humidity"]))
+            capture_seconds += time.perf_counter() - began
+            if step == 0 and first_call is not None and not first_call.done:
+                restart_identity(step)  # the boundary's live state, read now
+                held_f000.append(snapshot)
+                return
+            publish(step, snapshot)
+
+        def hand_f000_first_call() -> None:
+            names = (sorted(set.intersection(*(set(first_reads[i]) for i in range(len(stacks)))))
+                     if len(first_reads) == len(stacks) else [])
+            first_call.put(assemble_owned_arrays(
+                layouts, [{n: first_reads[i][n] for n in names} for i in range(len(stacks))],
+                kinds={n: "cell" for n in names}, native_pads=()) if names else None)
+            first_reads.clear()
+            if held_f000:
+                publish(0, held_f000.pop(), boundary_done=True)
+
+        def publish(step: int, snapshot, boundary_done: bool = False) -> None:
+            nonlocal write_seconds
+            if step == 0 and first_call is not None:
+                snapshot["receipt"]["f000_first_call_diagnostics"] = (
+                    forecast.complete_f000_from_first_call(snapshot, first_call.take()))
             physical_gates[str(step)] = proof.physical_snapshot_gate(
                 snapshot, allow_initial_negative_qv=(step == 0), scalar_names=host["scalar_names"],
                 surface_accumulators=host["surface_accumulators"])
             frame_hashes[str(step)] = {name: proof.array_sha256(array) for name, array in snapshot["arrays"].items()}
-            capture_seconds += time.perf_counter() - began
             began = time.perf_counter()
             path = Path(output_root) / f"cuda-history.{schedule['labels'][step]}.nc"
             frame_records[str(step)] = proof.write_snapshot_netcdf(path, snapshot, static)
             write_seconds += time.perf_counter() - began
-            restart_identity(step)
+            if not boundary_done:
+                restart_identity(step)
             with (Path(output_root) / "history-ready.jsonl").open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps({"step": int(step), "path": str(path)}) + "\n")
             if moving_control is not None:
@@ -1670,6 +1767,9 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                         break
                     elapsed = time.perf_counter() - mark
                     done += top
+                    if first_call is not None and not first_call.done:
+                        with time_ledger.stage("forecast.output.f000_first_call"):
+                            hand_f000_first_call()
                     macro_rows.append({"step": done, "base_steps": top, "seconds": elapsed})
                     began = time.perf_counter()
                     rows = health_rows(done)
@@ -1693,7 +1793,12 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                             if not (done % totals_every == 0 or done == steps):
                                 totals(done)
                             break
+                if first_call is not None and held_f000:
+                    first_call.put(None)  # the first macro was refused: publish f000 as captured
+                    publish(0, held_f000.pop(), boundary_done=True)
             finally:
+                if first_call is not None:
+                    first_call.put(None)
                 loop_seconds = time.perf_counter() - started
             if refusal is None and not active.registers_empty():
                 raise RuntimeError("an interface register is not empty at the end of the run")

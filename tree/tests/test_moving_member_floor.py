@@ -160,7 +160,7 @@ def test_due_move_stops_on_safe_ready_member_without_new_preparation(tmp_path):
                    frames=[], segments=[{}], pending_move=None)
     c.interior_km = 81
     c.observe = lambda *args: (fix, 0.01)
-    c.ready_members = lambda: {'anticipated': [13.05, 127.85]}
+    c.ready_members = lambda: {'anticipated': [13.05, 128.10]}
     c.session.decide = lambda *args, **kwargs: decision
     c.save = lambda: None
     c.log = lambda *args: None
@@ -179,7 +179,7 @@ def test_ready_member_admission_uses_current_fix_and_core_margin():
     fix = c.st.Fix(seconds=5700, ok=True, lat=12.95, lon=128.30)
     decision = c.st.Decision(5700, True, [13.10, 127.85], 6000, 0, 'move')
     current = {'center_deg': [13.3, 128.3]}
-    ready = {'anticipated': [13.05, 127.85], 'nearer': [13.0, 128.0], 'unsafe': [14, 128]}
+    ready = {'anticipated': [13.05, 128.10], 'nearer': [13.0, 128.15], 'unsafe': [14, 128]}
     assert c.pick_target(decision, current, 5700, ready, fix) == 'nearer'
     assert c.pick_target(decision, current, 5700, {'anticipated': ready['anticipated']}, fix) == 'anticipated'
     # Even an exact match to the decision must satisfy current-fix containment.
@@ -239,7 +239,84 @@ def test_due_move_holds_until_preparation_ready_or_stops(tmp_path, monkeypatch, 
         assert c.on_frame(7200, tmp_path / 'history.nc', control)['stop'] is True
         assert c.state['pending_move']['target'] == 'next'
     else:
-        with pytest.raises(RuntimeError, match='continuing would let the storm leave'):
+        with pytest.raises(RuntimeError, match='from the safe edge of the current region'):
             c.on_frame(7200, tmp_path / 'history.nc', control)
         assert not (control / 'verdict-00007200.json').exists()
     assert waits == [2.0]
+
+
+def test_followup_move_defers_while_storm_has_room_instead_of_refusing(tmp_path, monkeypatch):
+    """A Champi storm-following run (hex 0.4.4): a continuous-follow re-centre was decided 19 s after its
+    member started preparing, the storm well inside the region; the controller refused after 0 s."""
+    c = _tracking_controller()
+    st = c.st
+    c.session.fixes = [st.Fix(seconds=6900, ok=True, lat=0, lon=0), st.Fix(seconds=7200, ok=True, lat=0, lon=0.01)]
+    fix = c.session.fixes[-1]
+    decision = st.Decision(7200, True, [0, 0.5], 7500, 30, 'continuous follow: move 55 km toward the storm')
+    c.session.decisions.append(decision)
+    c.state.update(members={'start': dict(status='ready', center_deg=[0, 0]),
+                            'next': dict(status='preparing', center_deg=[0, 0.5])},
+                   frames=[], segments=[{}], pending_move=None)
+    c.a.hold_for_member_seconds = 1800
+    c.a.reuse_km = 40
+    c.interior_km = 81
+    c.observe = lambda *args: (fix, 0.01)
+    c.ready_members = lambda: {}
+    c.session.decide = lambda *args, **kwargs: decision
+    c.anticipate_chain = lambda *args: []
+    c.save = lambda: None
+    c.log = lambda *args: None
+    events = []
+    c.event = lambda kind, **data: events.append((kind, data))
+    c.request_member = lambda *args, **kwargs: 'next'
+    c.poll_background = lambda: None
+    c.member_centres = lambda statuses: {'next': [0, 0.5]}
+    monkeypatch.setattr(moving_run.time, 'sleep', lambda s: pytest.fail('a storm with room must not hold'))
+    control = tmp_path / 'control'; control.mkdir()
+    (control / 'await-verdict.json').write_text('{}')
+    verdict = c.on_frame(7200, tmp_path / 'history.nc', control)
+    assert verdict == {'stop': False}
+    assert c.state['pending_move'] is None
+    assert [kind for kind, _ in events] == ['move-deferred']
+    assert events[0][1]['storm_room_minutes'] >= 5 and events[0][1]['storm_to_edge_km'] > 50
+    frame = c.state['frames'][-1]['decision']
+    assert frame['move'] is False and 'deferred' in frame['reason']
+    assert c.session.decisions[-1].move is False
+    assert json.loads((control / 'verdict-00007200.json').read_text()) == {'stop': False}
+
+
+def test_every_check_rendezvous_when_holding_even_after_a_long_dwell(tmp_path):
+    """The previous decision predicted a long dwell; the next fix can still demand a move, so the
+    forecast must wait at every check for the verdict (hex 0.4.4 dropped the request: 0 s wait)."""
+    control = tmp_path / 'control'; control.mkdir()
+    (control / 'progress.jsonl').write_text('{"model_seconds":3600,"history":"h.nc"}' + chr(10))
+    observed = []
+    def on_frame(*args):
+        observed.append((control / 'await-verdict.json').exists())
+    long_dwell = {'move': False, 'dwell_minutes': 180}
+    for hold, expected in ((1800, [True]), (0, [False])):
+        observed.clear()
+        (control / 'await-verdict.json').unlink(missing_ok=True)
+        fake = SimpleNamespace(poll_background=lambda: None, ready_members=lambda: {},
+            a=SimpleNamespace(hold_for_member_seconds=hold, verdict_timeout=1, await_within_minutes=120,
+                              segment_timeout=60),
+            state={'frames': [{'decision': long_dwell}], 'members': {}, 'current': 'start'}, on_frame=on_frame)
+        proc = SimpleNamespace(poll=lambda: 0, returncode=0)
+        assert moving_run.Controller.monitor(fake, proc, tmp_path, control) == 0
+        assert observed == expected
+
+
+def test_ready_member_refuses_uncertainty_and_next_check_escape():
+    c = _tracking_controller()
+    c.session.policy.c.check_minutes = 30
+    fix = c.st.Fix(seconds=1800, ok=True, lat=0, lon=0)
+    decision = c.st.Decision(1800, True, [0, 0], 3600, 0, 'move')
+    current = {'center_deg': [0, -0.5]}
+    c.session.motion.velocity = lambda fixes: (c.st.np.array([0., 0.]), {})
+    # 40 km fits inside safe_km=56, but not with the 25 km fix uncertainty.
+    assert c.pick_target(decision, current, 1800, {'unsafe': [0, -0.36]}, fix) is None
+    c.session.motion.velocity = lambda fixes: (c.st.np.array([40., 0.]), {})
+    # The trailing member is safe now but loses the core before the next check.
+    assert c.session.policy.dwell([0, -0.15], (0, 0), [40, 0], 0, 30) == 0
+    ready = {'trailing': [0, -0.15], 'ahead': [0, 0.2]}
+    assert c.pick_target(decision, current, 1800, ready, fix) == 'ahead'

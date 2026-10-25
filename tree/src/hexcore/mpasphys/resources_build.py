@@ -944,7 +944,8 @@ def build(cache: Path | None = None, *, mpas_source: Path | None = None, thompso
           landuse: str = DEFAULT_LANDUSE, offline: bool = False, native: bool = True,
           native_library: Path | None = None, mpich: Path | None = None, jobs: int | None = None,
           licence_opt_in: dict[str, str] | None = None, log: Callable[[str], None] = _log,
-          pin_sets: tuple[str, ...] = ("v8.4.2",), rrfs_source: Path | None = None) -> dict[str, Any]:
+          pin_sets: tuple[str, ...] = ("v8.4.2",), rrfs_source: Path | None = None,
+          native_pin_sets: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Build (or reuse) every resource, write the packet and the installed record; return the receipt.
 
     ``pin_sets`` names the native pin sets to build: ``v8.4.2`` (the hex-cuda packet, the MPAS-Model v8.4.2
@@ -952,7 +953,8 @@ def build(cache: Path | None = None, *, mpas_source: Path | None = None, thompso
 
     ``native`` delegates to the source checkout's proof builder under
     tools/native_dry_reference; installed forecasts use prebuilt resources.
-    ``native_library`` adopts an existing build instead.  ``licence_opt_in`` maps each licence term the
+    ``native_library`` adopts an existing build instead.  ``native_pin_sets`` (None: every built pin set)
+    limits which pin sets ``native`` compiles a library for.  ``licence_opt_in`` maps each licence term the
     caller opts in to (hexcore.licence_gate) to what named it; without ``ucar-noahmp``, the native library
     compiles the licence stub for Noah-MP v5.0 (the default), so it contains none of it.  Terms that name
     no code the library compiles are not the library's concern and are dropped here.
@@ -966,6 +968,7 @@ def build(cache: Path | None = None, *, mpas_source: Path | None = None, thompso
     if unknown or not pin_sets:
         raise PhysicsResourceError(f"unknown pin set {', '.join(unknown) or '(none)'}; the pin sets are "
                                    + ", ".join(PIN_SETS))
+    native_sets = set(pin_sets if native_pin_sets is None else native_pin_sets) if native else set()
     rows = {}
     if "v8.4.2" in pin_sets:
         receipt = build_packet(cache, mpas_source=mpas_source, thompson_tables=thompson_tables, landuse=landuse,
@@ -981,7 +984,7 @@ def build(cache: Path | None = None, *, mpas_source: Path | None = None, thompso
     from . import native_library_build as nlb
     if "rrfs" in pin_sets:
         rows["mpas-source-rrfs"] = assemble_rrfs_source(cache, rrfs_source=rrfs_source, offline=offline, log=log)
-        if native:
+        if "rrfs" in native_sets:
             try:
                 rows["native-library-rrfs"] = nlb.build_native_library(
                     cache, fetch=fetch_url, fetch_file=fetch, mpas_source=rrfs_source, mpich=mpich, jobs=jobs,
@@ -1004,7 +1007,7 @@ def build(cache: Path | None = None, *, mpas_source: Path | None = None, thompso
             rows["native-library"] = nlb.stage_library(cache, Path(native_library))
         except nlb.NativeLibraryError as error:
             raise PhysicsResourceError(str(error)) from error
-    elif native:
+    elif "v8.4.2" in native_sets:
         try:
             rows["native-library"] = nlb.build_native_library(
                 cache, fetch=fetch_url, fetch_file=fetch, mpas_source=mpas_source, mpich=mpich, jobs=jobs,
@@ -1245,11 +1248,27 @@ def _build_command(arguments: argparse.Namespace) -> int:
     # GPUWM_HEX_LICENCE_OPT_IN) is not refused here; it changes nothing in the library, and build() drops it.
     pin_sets = tuple(dict.fromkeys(part.strip() for value in (arguments.pin_set or list(PIN_SETS))
                                    for part in value.split(",") if part.strip()))
-    receipt = build(arguments.cache, mpas_source=arguments.mpas_source, thompson_tables=arguments.thompson_tables,
+    thompson_tables = arguments.thompson_tables
+    if thompson_tables is None:
+        # THE BREAKAGE THIS PREVENTS: on a pip install (no source checkout) `build` regenerated the strict
+        # Thompson tables through the source-checkout referee and refused, although `fetch` had already
+        # installed the same pinned bytes. build_thompson_strict re-verifies every table's SHA-256.
+        try:
+            thompson_tables = resolve_resource("thompson-tables", arguments.cache)
+        except PhysicsResourceError:
+            thompson_tables = None
+    receipt = build(arguments.cache, mpas_source=arguments.mpas_source, thompson_tables=thompson_tables,
                     landuse=arguments.landuse, offline=arguments.offline,
                     native=not arguments.no_native_library, native_library=arguments.native_library,
                     mpich=arguments.mpich, jobs=arguments.jobs, licence_opt_in=named, pin_sets=pin_sets,
-                    rrfs_source=arguments.rrfs_source)
+                    rrfs_source=arguments.rrfs_source,
+                    # RRFS-MPAS has no native-free framework yet, so its library builds by default; the v8.4.2
+                    # library is a referee only, built when --build-native-library asks for it.
+                    native_pin_sets=tuple(p for p in pin_sets
+                                          if p == "rrfs" or (p == "v8.4.2" and (
+                                              arguments.build_native_library
+                                              # a licence opt-in changes only the native library it names
+                                              or set(named or ()) & set(_native_licence_terms())))))
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0
 
@@ -1284,7 +1303,8 @@ def add_physics_resources_parser(commands: Any) -> None:
     verbs = parser.add_subparsers(dest="physics_resources_verb", required=True)
     from .resources_fetch import add_parser
     add_parser(verbs)
-    build_parser = verbs.add_parser("build", help="explicit source build for native referee tools; requires C and Fortran compilers")
+    build_parser = verbs.add_parser("build", help="rebuild the packet and the MPAS-Model tree from pinned sources; "
+                                    "--build-native-library also compiles the native referee (C and Fortran compilers)")
     build_parser.add_argument("--cache", type=Path, default=None,
                               help="cache directory (default $GPUWM_HEX_CACHE_ROOT/physics-resources, "
                                    "else ~/.cache/gpuwm-hex/physics-resources)")
@@ -1300,8 +1320,15 @@ def add_physics_resources_parser(commands: Any) -> None:
     build_parser.add_argument("--native-library", type=Path, default=None,
                               help="adopt an existing libmpasphys_native.so (with its abi.json and "
                                    "build-receipt.json beside it) instead of compiling one here")
+    # The v8.4.2 GPU route, the headline proof deck included, runs the ported framework and loads no native
+    # library (runtime_v842.framework_only), so `build` compiles none unless asked: a pip install needs no C or
+    # Fortran compiler and no Fortran runtime for any hex-cuda run or proof.
+    build_parser.add_argument("--build-native-library", action="store_true",
+                              help="also compile the native referee library (libmpasphys_native.so) from source with "
+                                   "C and Fortran compilers; only native-cpu referee runs and RRFS-MPAS use it")
     build_parser.add_argument("--no-native-library", action="store_true",
-                              help="skip the native referee library; the MPAS-A framework route needs none")
+                              help="build no native library for any pin set (the v8.4.2 one is never built "
+                                   "unless --build-native-library names it; RRFS-MPAS's is built by default)")
     build_parser.add_argument("--mpich", type=Path, default=None,
                               help="an existing MPICH install prefix (bin/mpif90, bin/mpicc) instead of building "
                                    "the pinned MPICH 4.3.2")

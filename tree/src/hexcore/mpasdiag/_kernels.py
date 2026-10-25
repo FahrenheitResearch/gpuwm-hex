@@ -46,6 +46,48 @@ extern "C" __global__ void fixed_pressure(
     }
 }
 
+// The same routine across the whole grid (fixed_pressure is one block, kept as
+// the referee). Per output level k, with start[k] = min over columns of the
+// carried kupper: count[k*ni+kk] counts bracket hits at kk; a one-thread scan
+// finds the first kk whose running count equals ncol exactly (native kount);
+// apply re-finds each column's last hit through that kk, interpolates and
+// folds its kupper into start[k+1]. Same words as the one-block kernel.
+extern "C" __global__ void fixed_pressure_count(
+    int nc,int ni,int no,int k,const float* p,const float* po,const int* upper,
+    const int* start,int* count) {
+    int c=blockIdx.x*blockDim.x+threadIdx.x;if(c>=nc)return;
+    float q=po[c*no+k];
+    for(int kk=start[k];kk<ni-1;kk++)
+        if(q>p[c*ni+kk] && q<=p[c*ni+kk+1]) atomicAdd(&count[k*ni+kk],1);
+}
+extern "C" __global__ void fixed_pressure_scan(
+    int nc,int ni,int k,const int* start,const int* count,int* stop) {
+    if(blockIdx.x||threadIdx.x)return;
+    int total=0,last=ni-2,all=0;
+    for(int kk=start[k];kk<ni-1;kk++) {
+        total+=count[k*ni+kk];
+        if(total==nc) {last=kk;all=1;break;}
+    }
+    stop[2*k]=last;stop[2*k+1]=all;
+}
+extern "C" __global__ void fixed_pressure_apply(
+    int nc,int ni,int no,int k,const float* p,const float* f,const float* po,
+    float* out,int* upper,int* start,const int* stop) {
+    int c=blockIdx.x*blockDim.x+threadIdx.x;if(c>=nc)return;
+    float q=po[c*no+k];int u=upper[c];
+    int last=stop[2*k],all=stop[2*k+1];
+    for(int kk=start[k];kk<=last;kk++)
+        if(q>p[c*ni+kk] && q<=p[c*ni+kk+1]) u=kk;
+    upper[c]=u;
+    if(!all && q<p[c*ni]) out[c*no+k]=D(M(f[c*ni],q),p[c*ni]);
+    else if(!all && q>p[c*ni+ni-1]) out[c*no+k]=f[c*ni+ni-1];
+    else {
+        float dpu=S(q,p[c*ni+u]),dpl=S(p[c*ni+u+1],q);
+        out[c*no+k]=D(A(M(f[c*ni+u],dpl),M(f[c*ni+u+1],dpu)),A(dpl,dpu));
+    }
+    atomicMin(&start[k+1],u);
+}
+
 // mpas_isobaric_diagnostics.F:1245-1351.
 extern "C" __global__ void layer_mean(
     int nc,int nl,float p1,float p2,const float* f,const float* p,float* out) {

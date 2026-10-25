@@ -19,6 +19,7 @@ notices below travelling with the copy; this file is that.
   [R]  rw_s2s: the subseasonal reducer (crate rw-s2s, this tree's tools/rustwx)
   [H]  rw_hex_chem_sources: the chemistry source preparer (rust/chem-sources)
   [E]  rw_s2s_energy: the S2S energy tables' reducer (crate rw-s2s-energy, this tree's tools/rustwx)
+  [U]  rw_hex_ugwp_oro: the GSL orographic drag statistics builder (rust/ugwp-oro)
 
 The remaining Rust helpers link the Rust standard library only.
 NOTICE section 12 also names the C libraries the helpers link.
@@ -27,17 +28,21 @@ WHAT IT COVERS
 --------------
   gpuwm commit             aaec6b4be30ddc8f416f44cbc0fecf9244459f5e
   tools/rustwx/Cargo.lock  sha256 124aeed826f08c404df231e049442d5a15656dde6451ea98c63ea9852f9f2c78
-  engine-bridges.json      sha256 f190e72abb063caf3308e86e80c6e56015fe74f728e120e58f70fafc6032f1c8
+  engine-bridges.json      sha256 de4cfaca9e8bc0661d836e4474de467b54cb45e27eb3bbe7d6633fe35f78862b
   source notice            licenses/THIRD-PARTY-LICENSES-bridge-binaries.txt at that commit,
                            sha256 efd582033a1db42135d0a837384ef9c332a785ffcdd781e9109ea59822d33063
 
 The source identity above is the resolved build workspace. The hashed bridge
 manifest retains each binary's own source identity and lock override;
 its top-level identity is the fallback for entries without an override.
-  scorer resolved against  gpuwm commit 71e29c7aa413f669d6bbb793a0a1786fe1248624,
-                           Cargo.lock sha256 ec799989ffc49347ebc06c30e751f991fef00c2f91b439cd6d9f879bd3ef8bb1
-  [W][C] resolved against   gpuwm commit 40406ef515e6799fd39f1c2069c0f7279df42eaf,
-                           Cargo.lock sha256 aac9d914d40ea1868351ad13121cbaea264fa7c97707ccded25faf6523bd3c77
+  scorer resolved against  gpuwm commit 4726b689c6db142577eca3968a1f74256e3c057f,
+                           Cargo.lock sha256 7b7a554c55d0cefa8c76a8106af9e3768cf9ae3ee67104d9b02b524e2d846637
+  [B] also resolved against gpuwm commit 3c41c9c551414530659230038806ebfc79ab76d5,
+                           Cargo.lock sha256 f09c0387f5e65ba4f90b066803428a348b6e6678af2fb99c4be1991be187025a
+  [B] also resolved against gpuwm commit 4726b689c6db142577eca3968a1f74256e3c057f,
+                           Cargo.lock sha256 7b7a554c55d0cefa8c76a8106af9e3768cf9ae3ee67104d9b02b524e2d846637
+  [W][C] resolved against   gpuwm commit 4726b689c6db142577eca3968a1f74256e3c057f,
+                           Cargo.lock sha256 7b7a554c55d0cefa8c76a8106af9e3768cf9ae3ee67104d9b02b524e2d846637
 
 The crate lists use cargo tree -e normal,no-proc-macro, with all targets
 for the engine workspace and x86_64-unknown-linux-gnu for the separate
@@ -58,10 +63,11 @@ hexcore/data/licenses/rustwx-LICENSE-MIT.
 
 rw-sfc-series is project code with MPAS-derived portions under Apache-2.0
 AND BSD-3-Clause. The Registry pool reader is MIT. rw-s2s, rw-s2s-energy and
-rust/chem-sources (hex-chem-sources) are this project's own code (Apache-2.0).
+rust/chem-sources (hex-chem-sources) and rust/ugwp-oro (hex-ugwp-oro) are this project's own code (Apache-2.0).
 
   hex-chem-sources 0.1.0
   hex-physics-pool 0.1.0
+  hex-ugwp-oro 0.1.0
   netcdf-writer 0.1.0
   obs-regrid 0.1.0
   obs-score 0.1.0
@@ -503,7 +509,7 @@ permissive one is taken; no copyleft branch is taken.
   chacha20 0.9.1                      Apache-2.0 OR MIT                                    O,S,W [7,34]
   chacha20poly1305 0.10.1             Apache-2.0 OR MIT                                    O,S,W [7,9]
   chrono 0.4.44                       MIT OR Apache-2.0                                    R     [SOURCE-2200505ceae34bd9]
-  chrono 0.4.45                       MIT OR Apache-2.0                                    C,E,F,H,O,S,W[35]
+  chrono 0.4.45                       MIT OR Apache-2.0                                    B,C,E,F,H,O,S,W[35]
   cipher 0.4.4                        MIT OR Apache-2.0                                    O,S,W [7,36]
   color_quant 1.1.0                   MIT                                                  O,S,W [37]
   const-oid 0.9.6                     Apache-2.0 OR MIT                                    O,S,W [7,38]
@@ -512,11 +518,11 @@ permissive one is taken; no copyleft branch is taken.
   crc32fast 1.5.0                     MIT OR Apache-2.0                                    B,C,O,S,W[15,41]
   crc32fast 1.5.2                     MIT OR Apache-2.0                                    E,F   [SOURCE-b40930bbcf80744c,SOURCE-61d383b05b87d78f]
   crossbeam-deque 0.8.7               MIT OR Apache-2.0                                    B,C,O,S,W[18,42]
-  crossbeam-deque 0.8.8               MIT OR Apache-2.0                                    E,F,H,R[SOURCE-a60eea8175145316,SOURCE-5734ed989dfca1f6]
+  crossbeam-deque 0.8.8               MIT OR Apache-2.0                                    E,F,H,R,U[SOURCE-a60eea8175145316,SOURCE-5734ed989dfca1f6]
   crossbeam-epoch 0.9.20              MIT OR Apache-2.0                                    B,C,O,S,W[18,42]
-  crossbeam-epoch 0.9.21              MIT OR Apache-2.0                                    E,F,H,R[SOURCE-a60eea8175145316,SOURCE-5734ed989dfca1f6]
+  crossbeam-epoch 0.9.21              MIT OR Apache-2.0                                    E,F,H,R,U[SOURCE-a60eea8175145316,SOURCE-5734ed989dfca1f6]
   crossbeam-utils 0.8.22              MIT OR Apache-2.0                                    B,C,O,S,W[18,42]
-  crossbeam-utils 0.8.23              MIT OR Apache-2.0                                    E,F,H,R[SOURCE-a60eea8175145316,SOURCE-5734ed989dfca1f6]
+  crossbeam-utils 0.8.23              MIT OR Apache-2.0                                    E,F,H,R,U[SOURCE-a60eea8175145316,SOURCE-5734ed989dfca1f6]
   crypto-bigint 0.5.5                 Apache-2.0 OR MIT                                    O,S,W [7,43]
   crypto-common 0.1.7                 MIT OR Apache-2.0                                    B,C,E,F,O,P,S,W[7,44]
   ctr 0.9.2                           MIT OR Apache-2.0                                    O,S,W [7,45]
@@ -531,7 +537,7 @@ permissive one is taken; no copyleft branch is taken.
   ed25519 2.2.3                       Apache-2.0 OR MIT                                    O,S,W [54,56]
   ed25519-dalek 2.2.0                 BSD-3-Clause                                         O,S,W [57]
   either 1.17.0                       MIT OR Apache-2.0                                    B,C,O,S,W[18,58]
-  either 1.19.0                       MIT OR Apache-2.0                                    E,F,H,R[SOURCE-a60eea8175145316,SOURCE-7576269ea71f767b]
+  either 1.19.0                       MIT OR Apache-2.0                                    E,F,H,R,U[SOURCE-a60eea8175145316,SOURCE-7576269ea71f767b]
   elliptic-curve 0.13.8               Apache-2.0 OR MIT                                    O,S,W [7,59]
   equivalent 1.0.2                    Apache-2.0 OR MIT                                    B,C,O,S,W[18,60]
   equivalent 1.0.3                    Apache-2.0 OR MIT                                    E,F   [SOURCE-a60eea8175145316,SOURCE-7365cc8878a1d7ce]
@@ -585,7 +591,7 @@ permissive one is taken; no copyleft branch is taken.
   image 0.25.10                       MIT OR Apache-2.0                                    O,S,W [62,63]
   inout 0.1.4                         MIT OR Apache-2.0                                    O,S,W [7,90]
   ipnet 2.12.2                        MIT OR Apache-2.0                                    F     [RADAR-DEPS-025,RADAR-DEPS-026]
-  itoa 1.0.18                         MIT OR Apache-2.0                                    B,C,E,F,H,O,P,R,S,W[2,16]
+  itoa 1.0.18                         MIT OR Apache-2.0                                    B,C,E,F,H,O,P,R,S,U,W[2,16]
   js-sys 0.3.103                      MIT OR Apache-2.0                                    O,S,W [18,33]
   lazy_static 1.5.0                   MIT OR Apache-2.0                                    O,S,W [18,91]
   libc 0.2.189                        MIT OR Apache-2.0                                    B,C,O,S,W[16,92]
@@ -600,7 +606,7 @@ permissive one is taken; no copyleft branch is taken.
   lru 0.16.4                          MIT                                                  B,C,E,F,O,S,W[96]
   lz4_flex 0.11.6                     MIT                                                  B,C,E,F,O,S,W[97]
   matrixmultiply 0.3.11               MIT/Apache-2.0                                       B,C,E,F,O,S,W[18,98]
-  memchr 2.8.3                        Unlicense OR MIT                                     B,C,E,F,H,O,P,R,S,W[29,30]
+  memchr 2.8.3                        Unlicense OR MIT                                     B,C,E,F,H,O,P,R,S,U,W[29,30]
   memmap2 0.9.11                      MIT OR Apache-2.0                                    B,C,E,F,O,S,W[99,100]
   metrust 0.3.11                      MIT                                                  O,S,W
   metrust 0.3.9                       MIT                                                  O,S,W
@@ -650,8 +656,8 @@ permissive one is taken; no copyleft branch is taken.
   rand_core 0.6.4                     MIT OR Apache-2.0                                    O,S,W [124,126]
   rawpointer 0.2.1                    MIT/Apache-2.0                                       B,C,E,F,O,S,W[18,58]
   rayon 1.10.0                        MIT OR Apache-2.0                                    R     [SOURCE-a60eea8175145316,SOURCE-0621878e61f0d0fd]
-  rayon 1.12.0                        MIT OR Apache-2.0                                    B,C,E,F,H,O,S,W[18,91]
-  rayon-core 1.13.0                   MIT OR Apache-2.0                                    B,C,E,F,H,O,R,S,W[18,91]
+  rayon 1.12.0                        MIT OR Apache-2.0                                    B,C,E,F,H,O,S,U,W[18,91]
+  rayon-core 1.13.0                   MIT OR Apache-2.0                                    B,C,E,F,H,O,R,S,U,W[18,91]
   redox_syscall 0.5.18                MIT                                                  B,C,O,S,W[127]
   regex 1.13.1                        MIT OR Apache-2.0                                    F     [SOURCE-a60eea8175145316,SOURCE-6485b8ed310d3f03]
   regex-automata 0.4.18               MIT OR Apache-2.0                                    F     [SOURCE-a60eea8175145316,SOURCE-6485b8ed310d3f03]
@@ -675,10 +681,10 @@ permissive one is taken; no copyleft branch is taken.
   sec1 0.7.3                          Apache-2.0 OR MIT                                    O,S,W [7,141]
   serde 1.0.218                       MIT OR Apache-2.0                                    R     [SOURCE-62c7a1e35f564068,SOURCE-23f18e03dc49df91]
   serde 1.0.229                       MIT OR Apache-2.0                                    B,C,E,F,H,O,P,S,W[2,16]
-  serde_core 1.0.229                  MIT OR Apache-2.0                                    B,C,E,F,H,O,P,S,W[2,16]
+  serde_core 1.0.229                  MIT OR Apache-2.0                                    B,C,E,F,H,O,P,S,U,W[2,16]
   serde_json 1.0.140                  MIT OR Apache-2.0                                    R     [SOURCE-62c7a1e35f564068,SOURCE-23f18e03dc49df91]
   serde_json 1.0.151                  MIT OR Apache-2.0                                    B,C,F,O,P,S,W[2,16]
-  serde_json 1.0.154                  MIT OR Apache-2.0                                    E,H   [SOURCE-62c7a1e35f564068,SOURCE-23f18e03dc49df91]
+  serde_json 1.0.154                  MIT OR Apache-2.0                                    E,H,U [SOURCE-62c7a1e35f564068,SOURCE-23f18e03dc49df91]
   serde_urlencoded 0.7.1              MIT/Apache-2.0                                       F     [RADAR-DEPS-011,RADAR-DEPS-048]
   sha2 0.10.9                         MIT OR Apache-2.0                                    B,C,E,F,O,P,S,W[7,142]
   shapefile 0.7.0                     MIT                                                  O,S,W [47]
@@ -747,7 +753,7 @@ permissive one is taken; no copyleft branch is taken.
   zeroize 1.9.1                       Apache-2.0 OR MIT                                    F     [SOURCE-cfc7749b96f63bd3,SOURCE-8c7516d4b27b1e49]
   zerotrie 0.2.5                      Unicode-3.0                                          F     [RADAR-DEPS-021]
   zerovec 0.11.8                      Unicode-3.0                                          F     [RADAR-DEPS-021]
-  zmij 1.0.23                         MIT                                                  B,C,E,F,H,O,P,S,W[2]
+  zmij 1.0.23                         MIT                                                  B,C,E,F,H,O,P,S,U,W[2]
   zstd 0.13.3                         MIT                                                  B,C,E,F,O,S,W[177]
   zstd-safe 7.2.4                     MIT OR Apache-2.0                                    B,C,E,O,S,W[62,177,178]
   zstd-safe 7.3.0                     BSD-3-Clause                                         F     [SOURCE-ce4868c8e4ebe47a]

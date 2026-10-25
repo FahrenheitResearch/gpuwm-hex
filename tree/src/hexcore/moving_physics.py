@@ -10,7 +10,13 @@ import numpy as np
 CATEGORIES = {'fields/xland', 'fields/xice', 'fields/landmask', 'fields/lakemask'}
 STATIC = {'fields/xland', 'fields/xice', 'fields/landmask', 'fields/lakemask',
           'fields/isltyp', 'fields/ivgtyp', 'fields/shdmax', 'fields/shdmin',
-          'fields/tmn', 'fields/vegfra', 'fields/albbck', 'fields/embck'}
+          'fields/tmn', 'fields/vegfra', 'fields/albbck', 'fields/embck',
+          # The surface albedo and emissivity are blended over the sea-ice fraction, and xice above is the new
+          # member's own: carrying them from the old mesh pairs one cell's blended albedo with another's ice fraction,
+          # and RUC's de-blend then returns an ice albedo above 1. THE BREAKAGE THIS PREVENTS (HRRR-shape setup run,
+          # a check of run_2bfb0e1e82195f53, 2026-10-25): the first move stopped with "RUC CUDA snow preparation
+          # alb must be below 1". The previous-step ice fraction follows xice for the same reason.
+          'fields/albedo', 'fields/emiss', 'fields/xicem'}
 # Noah-MP's stores and layer geometry form one column state. Independently
 # averaging them while selecting integer snow layers from a donor breaks
 # the solver's water accounting. Carry this group from one compatible donor.
@@ -39,6 +45,14 @@ def atmospheric_intensive(values, weights):
 
 
 def field_intensive(values, weights, key):
+    if key.startswith(ATMOSPHERIC_PREFIXES) and key not in ATMOSPHERIC_FIELDS and hasattr(weights, 'source_dzw') and \
+            values.shape[0] not in (len(weights.source_dzw), len(weights.source_dzw) + 1):
+        # A column seam (the RUC/MYNN suites) carries its surface and soil state under seam/ too: a leading axis that
+        # is neither the mass levels nor their interfaces (1 for a surface field, 9 RUC soil levels) is not
+        # atmospheric, and maps across the cells only. THE BREAKAGE THIS PREVENTS (owner run run_2bfb0e1e82195f53,
+        # HRRR-shape setup-following 3 km, 2026-10-25): the first move stopped with "height map layer field has
+        # invalid source dimensions".
+        return weights.intensive(values)
     if key in ATMOSPHERIC_FIELDS or key.startswith(ATMOSPHERIC_PREFIXES):
         # Known column rates use the mass grid. Fail on an unknown vertical
         # layout rather than silently treating it as computational levels.
@@ -114,10 +128,38 @@ def gather_owner_columns(arrays, layouts, n_cells):
 
 
 def largest_donors(weights):
+    """Each target cell's largest-overlap donor (the first one on ties), as ``np.argmax`` per CSR row.
+
+    Vectorized over rows: the row maximum by ``np.maximum.reduceat`` and the first stored position
+    holding it by ``np.minimum.reduceat`` give the same donor ``np.argmax`` picks. THE COST THIS
+    REMOVES: the Python loop over ~98,000 rows ran on one core at every move, once per field that
+    needs it on the MPAS route. A map with an empty or non-finite row keeps the loop.
+    """
     matrix=weights.overlap
-    return np.array([matrix.indices[matrix.indptr[i]+np.argmax(
-        matrix.data[matrix.indptr[i]:matrix.indptr[i+1]])]
-        for i in range(matrix.shape[0])], dtype=np.int64)
+    cached=getattr(weights,'_largest_donors',None)
+    if cached is not None and cached[0] is matrix:
+        return cached[1].copy()  # callers may refine their copy (coherent surface donors)
+    source=matrix
+    if getattr(matrix,'format',None)!='csr':
+        matrix=matrix.tocsr()
+    indptr=np.asarray(matrix.indptr,dtype=np.int64)
+    data=np.asarray(matrix.data)
+    if matrix.shape[0]==0 or np.any(np.diff(indptr)<=0) or not np.all(np.isfinite(data)):
+        result=np.array([matrix.indices[matrix.indptr[i]+np.argmax(
+            matrix.data[matrix.indptr[i]:matrix.indptr[i+1]])]
+            for i in range(matrix.shape[0])], dtype=np.int64)
+    else:
+        starts=indptr[:-1]
+        best=np.maximum.reduceat(data,starts)
+        rows=np.repeat(np.arange(matrix.shape[0]),np.diff(indptr))
+        positions=np.where(data==best[rows],np.arange(len(data)),len(data))
+        first=np.minimum.reduceat(positions,starts)
+        result=np.asarray(matrix.indices,dtype=np.int64)[first]
+    try:
+        weights._largest_donors=(source,result.copy())
+    except AttributeError:
+        pass
+    return result
 
 
 def carry_field(values, weights, *, categorical=False, donors=None):
@@ -157,6 +199,53 @@ def mapped_owner_field(payload, weights, key, cache=None, *, target_mesh=None):
     return fields[key]
 
 
+def prefetch_owner_fields(payload, weights, keys, cache, *, target_mesh=None):
+    """Map every not-yet-cached owner field on all cores; the class loop then only slices.
+
+    Each field is the same ``mapped_owner_field`` work on its own inputs, written into the shared
+    cache only by this thread, so every mapped word is the one the sequential loop produced.
+    THE COST THIS REMOVES: the first class's loop mapped ~100 persistent physics fields one after
+    another on one core, 6.2 s of a resumed ArWen storm-following segment (box-aws2x 2026-10-24).
+    """
+    from .host_parallel import run_tasks
+    if cache is None:
+        return
+    identity=(id(payload),id(weights),id(target_mesh))
+    if cache.setdefault('identity',identity)!=identity:
+        raise ValueError('physics field cache belongs to another remap')
+    fields=cache.setdefault('fields',{})
+    pending,seen=[],set()
+    for key in keys:
+        pair=next((pair for pair in VECTOR_PAIRS if key in pair),None)
+        group=pair if pair is not None else (key,)
+        if key in fields or group in seen:
+            continue
+        seen.add(group)
+        pending.append(key)
+    if not pending:
+        return
+    categorical_needed=any(
+        key in CATEGORIES or np.issubdtype(payload['backends'][0]['seam']['arrays'][key].dtype,np.integer)
+        for key in pending if not any(key in pair for pair in VECTOR_PAIRS))
+    if categorical_needed and 'donors' not in cache:
+        cache['donors']=largest_donors(weights)
+    # One atmospheric field first: it builds the map's lazily cached device geometry once.
+    first=next((key for key in pending if key in ATMOSPHERIC_FIELDS or key.startswith(ATMOSPHERIC_PREFIXES)),None)
+    if first is not None:
+        mapped_owner_field(payload,weights,first,cache,target_mesh=target_mesh)
+        pending.remove(first)
+
+    def compute(key):
+        local={'identity':identity,'fields':{},'donors':cache.get('donors')}
+        if local['donors'] is None:
+            local.pop('donors')
+        mapped_owner_field(payload,weights,key,local,target_mesh=target_mesh)
+        return local['fields']
+    for result in run_tasks([lambda key=key: compute(key) for key in pending]):
+        for key,value in result.items():
+            fields.setdefault(key,value)
+
+
 def sea_ice_threshold(identity):
     """The seam's own sea-ice classification threshold.
 
@@ -167,8 +256,18 @@ def sea_ice_threshold(identity):
     seam) moving member died at its first move with KeyError xice_threshold
     (ensemble-07, 2026-10-21).
     """
-    if 'xice_threshold' in identity:
+    if identity.get('xice_threshold') is not None:
         return float(identity['xice_threshold'])
+    if 'xice_threshold' in identity:
+        # The column seams of the RUC suites (HRRR shape) seal the key with no value: they run fractional sea ice
+        # (config_frac_seaice), whose MPAS threshold is 0.02, the value the hex driver passes every column seam.
+        # Breakage it fixes: the HRRR-shape setup run run_f3e336fa8500473d died at its first move with
+        # "float() argument must be ... not 'NoneType'".
+        fractional = identity.get('fractional_seaice')
+        if fractional in (0, 1):
+            return 0.02 if int(fractional) else 0.5
+        from hexcore.drivers.run_cuda_v841_full_physics_x4 import ARWEN_XICE_THRESHOLD
+        return float(ARWEN_XICE_THRESHOLD)
     if 'xice_threshold' in identity.get('surface',()):
         # The column-physics seam (mpas-column-physics-v1) seals the NAMES of
         # its initialize_physics surface inputs, not their values; the hex
@@ -202,6 +301,19 @@ def land_state_donors(payload,weights,layout,fresh,target_mesh,cache):
     categories[:,1]=categories[:,1]>=threshold;targets[:,1]=targets[:,1]>=threshold
     categories=np.column_stack((categories,categories[:,3]==_ISICE_TABLE))
     targets=np.column_stack((targets,targets[:,3]==_ISICE_TABLE))
+    if 'ocean_ice_fields' in cache:
+        # Native ocean ice has its own conservative volume/snow owner below.
+        # Land donors must retain glacier roles; ocean donors need not match
+        # the cold geography's obsolete ice/vegetation classification.
+        if 'fields/landmask' not in sources:
+            sources['fields/landmask']=gather_owner_columns(
+                [b['seam']['arrays']['fields/landmask'] for b in payload['backends']],
+                payload['layouts'],len(weights.source_area))[0]
+        ocean=sources['fields/landmask'].reshape(-1)<.5
+        target_ocean=fresh['fields/landmask'].reshape(-1)[:count]<.5
+        categories[:,0]=ocean;targets[:,0]=target_ocean
+        categories[ocean,1]=0;targets[target_ocean,1]=0
+        categories[ocean,4]=0;targets[target_ocean,4]=0
     if 'donors' not in cache:cache['donors']=largest_donors(weights)
     defaults=cache['donors']
     ids=defaults[layout.cell_l2g].copy()
@@ -250,6 +362,12 @@ def land_state_donors(payload,weights,layout,fresh,target_mesh,cache):
 
 
 def restore_remapped_backend(backend, payload, weights, layout, *, base_dt, rate, mapped_cache=None,target_mesh=None):
+    from .moving_seaice import complete_source_ice, remap_ocean_ice, SEAICE_FIELDS
+    if mapped_cache is None:
+        mapped_cache = {}
+    if 'ice_complete_payload' not in mapped_cache:
+        mapped_cache['ice_complete_payload'] = complete_source_ice(payload)
+    payload = mapped_cache['ice_complete_payload']
     fresh=backend.restart_state()
     sources=payload['backends']
     # Only the sealed column census changes. Never bypass an engine/physics
@@ -266,18 +384,56 @@ def restore_remapped_backend(backend, payload, weights, layout, *, base_dt, rate
                         for key in old_selection.keys()|new_selection.keys()
                         if old_selection.get(key)!=new_selection.get(key)}
             raise ValueError(f'remapped physics selection changed: {difference}')
-    keys=set(sources[0]['seam']['arrays'])
-    if any(set(source['seam']['arrays'])!=keys for source in sources):
-        raise ValueError('source physics classes have different persistent fields')
+    keys=set().union(*(set(source['seam']['arrays']) for source in sources))
+    # A local-time-step class with no ocean column carries no sea-ice state (fields/ice_*): those fields exist only in
+    # the classes that hold water cells. Such a class's columns are land, which holds no ice, so its share of an ice
+    # field is zero. THE BREAKAGE THIS PREVENTS (owner run run_1227117932ed36db, HRRR-shape setup-following 3 km, GFS
+    # 2026-10-23 18Z f354, 2026-10-24): the first move stopped with 'source physics classes have different persistent
+    # fields' (4 classes; 16 fields/ice_* present in 2). Any other missing field is still refused.
+    for source in sources:
+        arrays=source['seam']['arrays']
+        missing=keys-set(arrays)
+        if any(not key.startswith('fields/ice_') for key in missing):
+            raise ValueError('source physics classes have different persistent fields: '
+                             + ', '.join(sorted(k for k in missing if not k.startswith('fields/ice_'))))
+        columns=int(source['seam']['identity'].get('n_columns') or 0)
+        for key in missing:
+            like=next(s['seam']['arrays'][key] for s in sources if key in s['seam']['arrays'])
+            arrays[key]=np.zeros((*tuple(like.shape)[:-1],columns),dtype=like.dtype)
     if set(fresh['seam']['arrays'])-keys:
         raise ValueError('target physics needs fields absent from the boundary')
     receipt=[]
     result=dict(fresh['seam']['arrays'])
     local=len(layout.cell_l2g)
     if mapped_cache is None:mapped_cache={}
+    ice_fields = None
+    if SEAICE_FIELDS <= keys:
+        if 'ocean_ice_fields' not in mapped_cache:
+            target_landmask = mapped_cache.get('target_landmask')
+            if target_landmask is None:
+                if not np.array_equal(layout.cell_l2g, np.arange(len(weights.target_area))):
+                    raise ValueError('partitioned ice remap needs global target landmask')
+                target_landmask = fresh['seam']['arrays']['fields/landmask']
+            ice_fields, ice_receipt = remap_ocean_ice(payload, weights, target_mesh, target_landmask)
+            mapped_cache['ocean_ice_fields'] = ice_fields
+            mapped_cache['ocean_ice_receipt'] = ice_receipt
+        ice_fields = mapped_cache['ocean_ice_fields']
+        fresh_arrays = fresh['seam']['arrays']
+        fresh_arrays['fields/xice'] = ice_fields['fields/xice'][..., layout.cell_l2g]
+        wet = ice_fields['fields/ice_ocean_mask'][..., layout.cell_l2g] > 0
+        if np.any(wet & (fresh_arrays['fields/lakemask'] >= .5)):
+            raise ValueError('target ocean geography unexpectedly includes lake columns')
+        fresh_arrays['fields/xland'] = np.where(wet & (fresh_arrays['fields/xice'] <
+            sea_ice_threshold(sources[0]['seam']['identity'])), 2, 1).astype(np.float32)
     land_donors,land_receipt=land_state_donors(payload,weights,layout,fresh['seam']['arrays'],target_mesh,mapped_cache)
+    prefetch_owner_fields(payload,weights,[key for key in sorted(keys)
+                                           if not (ice_fields is not None and key in ice_fields)
+                                           and key not in LAND_STATE],
+                          mapped_cache,target_mesh=target_mesh)
     for key in sorted(keys):
-        if key in LAND_STATE:
+        if ice_fields is not None and key in ice_fields:
+            selected=ice_fields[key][..., layout.cell_l2g];padding=[];categorical=False
+        elif key in LAND_STATE:
             land_fields=mapped_cache['land_sources']
             if key not in land_fields:
                 land_fields[key],padding=gather_owner_columns([b['seam']['arrays'][key] for b in payload['backends']],
@@ -298,7 +454,7 @@ def restore_remapped_backend(backend, payload, weights, layout, *, base_dt, rate
                 selected=np.concatenate((selected,alias),axis=-1)
         else:
             # Existing lazily born ozone/cumulus caches are restart-authorized.
-            if key not in ('radiation/o33d_grid','cumulus/w0avg'):
+            if key not in ('radiation/o33d_grid','cumulus/w0avg') and key not in SEAICE_FIELDS:
                 raise ValueError(f'unknown lazy physics carrier: {key}')
         method='largest-overlap donor' if categorical else 'conservative area overlap'
         if key in LAND_STATE:method='local coherent Noah-MP column donor preserving land/ice/glacier role; prefer overlapping soil and vegetation matches'
@@ -308,9 +464,21 @@ def restore_remapped_backend(backend, payload, weights, layout, *, base_dt, rate
         if key in STATIC:
             selected=fresh['seam']['arrays'][key]
             method='new geography constructor, persistent dynamical fields carried separately'
+        if ice_fields is not None and key in ice_fields:
+            method='ocean-only inventory transfer; binary geography mask; consistent ice area and thickness'
         result[key]=selected
         receipt.append(dict(field=key,method=method,source_padding_abs_max=padding,
                             shape=list(selected.shape)))
+    if ice_fields is not None:
+        # Keep the LSM-facing tile snow consistent with its prognostic owner.
+        a=ice_fields['fields/xice'][...,layout.cell_l2g]
+        wet=ice_fields['fields/ice_ocean_mask'][...,layout.cell_l2g]>0
+        snow=np.divide(ice_fields['fields/ice_snow_mass'][...,layout.cell_l2g],a,
+                       out=np.zeros_like(a),where=a>0)
+        for key,value in (('fields/snow',snow),('fields/snowh',snow/330)):
+            if key in result:
+                result[key]=np.where(wet,value,result[key]).astype(result[key].dtype)
+                next(item for item in receipt if item['field']==key)['method'] += '; ocean tile snow from carried ice inventory'
     # The driver's held x-face rates depend on local column order. Rebuild
     # them from the carried physical raw PBL rates, using native interpolation.
     if 'pbl/du' in result and 'pbl/dv' in result:
@@ -323,7 +491,8 @@ def restore_remapped_backend(backend, payload, weights, layout, *, base_dt, rate
     scalars=deepcopy(sources[0]['seam']['scalars'])
     for source in sources:
         for key in ('elapsed_seconds','carriers','kf_history_time'):
-            if source['seam']['scalars'][key]!=scalars[key]:
+            # A column seam keeps no Kain-Fritsch clock: compare what the seam holds (absent on all is equal).
+            if source['seam']['scalars'].get(key)!=scalars.get(key):
                 raise ValueError(f'physics caches have incompatible boundary clocks: {key}')
     step=float(payload['time_seconds'])/(base_dt*rate)
     if step!=int(step):
@@ -332,7 +501,7 @@ def restore_remapped_backend(backend, payload, weights, layout, *, base_dt, rate
     fresh['seam']=dict(identity=fresh['seam']['identity'],arrays=result,scalars=scalars)
     fresh['adapter']=deepcopy(sources[0]['adapter'])
     backend.restore_restart_state(fresh)
-    return dict(fields=receipt,land_state=land_receipt,step_index=int(step),time_seconds=payload['time_seconds'],
+    return dict(fields=receipt,land_state=land_receipt,sea_ice=mapped_cache.get('ocean_ice_receipt'),step_index=int(step),time_seconds=payload['time_seconds'],
                 metadata_note='backend call counters retained from coarsest owner class; cadence index rebuilt')
 
 
