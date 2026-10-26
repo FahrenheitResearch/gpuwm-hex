@@ -657,6 +657,33 @@ def test_nvrtc_13_2_unknown_build_id_is_pinned_by_its_library():
     assert not build_id_accepted("") and not build_id_accepted("unavailable") and not build_id_accepted(None)
 
 
+def _worker_gone(process, timeout=10.0):
+    """True once ``process`` has exited, judged so that another reaper cannot fool it.
+
+    The pool's own manager thread also joins its workers once one is terminated (the pool turns broken).
+    When it reaps first, this thread's waitpid gets ECHILD, multiprocessing reads that as "still running"
+    and is_alive() stays True until the manager thread sets the return code -- the repr in the assertion
+    still said "started".  Breakage this ends (public battery 3.11, 4 of 6 runs on 2026-10-26, both exit
+    tests at once): join(10) returns at once on a ready sentinel, so nothing ever yielded to that thread.
+    Sleeping yields; a reaped or zombie pid is also an exit.
+    """
+    import os
+    import time
+    process.join(timeout)
+    deadline = time.monotonic() + timeout
+    while process.exitcode is None and time.monotonic() < deadline:
+        try:
+            state = open(f"/proc/{process.pid}/stat", "rb").read().rsplit(b")", 1)[1].split()[0]
+        except FileNotFoundError:
+            return True        # reaped by the pool's own thread
+        except OSError:
+            state = None       # no /proc (not Linux): wait for the exit code
+        if state in (b"Z", b"X"):
+            return True        # exited, waiting to be reaped
+        time.sleep(0.05)
+    return process.exitcode is not None
+
+
 def test_unrequested_pool_compiles_do_not_hold_the_exit():
     """A finished forecast waited 70-90 s for one worker compiling a module nobody asked for."""
     import concurrent.futures
@@ -673,8 +700,7 @@ def test_unrequested_pool_compiles_do_not_hold_the_exit():
     started = time.monotonic()
     kernel_plan._drop_at_exit(pool, processes)
     for process in list(processes.values()):
-        process.join(10)
-        assert not process.is_alive()
+        assert _worker_gone(process)
     assert time.monotonic() - started < 10
 
 
@@ -695,6 +721,5 @@ def test_a_failing_shutdown_still_terminates_an_idle_worker():
 
     kernel_plan._drop_at_exit(Raising(), processes)
     for process in list(processes.values()):
-        process.join(10)
-        assert not process.is_alive()
+        assert _worker_gone(process)
     pool.shutdown(wait=True, cancel_futures=True)

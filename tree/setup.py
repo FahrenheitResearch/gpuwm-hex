@@ -207,10 +207,16 @@ class BuildPy(build_py):
         # rust/netcdf-copy", which no pip user can do.  The copier links
         # libnetcdf; a build host without its development files still installs
         # everything else, and the door says what it costs (vertical_spec).
-        # Chemistry source preparation is required by the chemistry public door.
+        # Chemistry source preparation is required by the chemistry public door.  It links libnetcdf
+        # (src/nc.rs), so it builds against the same pinned static netCDF as the other netCDF helpers.
+        # THE BREAKAGE THIS PREVENTS (public battery `packaging`, every push since 0.4.6): without that
+        # environment a build host with no system libnetcdf (the hosted runner, any pip sdist build) failed
+        # "rust-lld: unable to find library -lnetcdf"; publish.yml passed only because its job-wide
+        # LIBRARY_PATH names /opt/netcdf-classic.
         subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
                         str(root / "rust/chem-sources/Cargo.toml"), "--target-dir",
-                        str(root / "rust/chem-sources/target")], check=True)
+                        str(root / "rust/chem-sources/target")], check=True,
+                       env=BuildPy.netcdf_environment(root))
         shutil.copy2(root / "rust/chem-sources/target/release" / ("rw_hex_chem_sources" + _EXE),
                      destination.parent / ("rw_hex_chem_sources" + _EXE))
         # THE BREAKAGE THIS PREVENTS (2026-10-24): the RRFS-shape suite's GSL drag reads
