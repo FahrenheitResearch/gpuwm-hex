@@ -1078,7 +1078,7 @@ def check_physics_resources() -> list[Finding]:
     for key, subject in subjects.items():
         if key not in installed:
             findings.append(Finding(subject=subject, status=INFO,
-                                    detail='not staged; the MPAS route fetches resources on first use',
+                                    detail='not staged; the MPAS-physics route (the hex default) fetches it on first use',
                                     remedy=remedy,
                                     evidence={'installed_record': str(resources.installed_record_path())}))
             continue

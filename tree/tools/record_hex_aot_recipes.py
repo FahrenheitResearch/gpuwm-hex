@@ -35,11 +35,17 @@ from hexcore.cuda_backend.aot import (DIRECT_ROUTE, direct_metadata, portable_op
                                       request_metadata)
 
 _CUPY_INCLUDE = re.compile(r"^-I(.+)/cupy/_core/include$")
+#: The engine's direct-NVRTC units include their own kernel folder
+#: (``-I<site-packages>/gpuwm/core/kernels``) and carry no CuPy include, so the
+#: CuPy rule alone left the recording venv's absolute path in the catalog: a row
+#: no other install can match, and one the pack builder cannot compile on
+#: another host ("cannot open source file glibc_flt32.cuh", 2026-10-26).
+_ENGINE_INCLUDE = re.compile(r"^-I(.+/site-packages)/gpuwm/")
 
 
 def portable_entry(arguments):
     roots = {match.group(1) for option in arguments.get("options") or ()
-             if (match := _CUPY_INCLUDE.match(str(option)))}
+             if (match := _CUPY_INCLUDE.match(str(option)) or _ENGINE_INCLUDE.match(str(option)))}
     options = portable_options(arguments.get("options") or (), roots=tuple(roots))
     if arguments.get("route") == DIRECT_ROUTE:
         entry = {"source": arguments["source"], "options": options,

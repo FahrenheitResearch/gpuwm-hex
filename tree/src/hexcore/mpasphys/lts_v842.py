@@ -1,8 +1,8 @@
-"""Full-step local time stepping on the MPAS-physics route, pure hex, one card.
+"""Full-step local time stepping on the MPAS-physics route, pure hex, one card or several cards of one host.
 
 The ArWen route's active LTS (``hexcore.drivers.fullstep_lts_forecast_v841``) steps every rate class of a
 variable mesh at its own whole step: one resident dycore per class on the class's local mesh (its own cells,
-the scratch zone it carries and three halo rings), coordinated fine-first by
+the scratch zone it carries and four halo rings), coordinated fine-first by
 :class:`hexcore.cuda_fullstep_lts_active.FullStepLtsActive` (accepted-state mailboxes, matched interface flux
 and reflux).  Its class physics is a column backend.  This module gives the MPAS-physics route the same
 coordinator with the MPAS suite as each class's physics: every class runs the ordinary ported route
@@ -25,8 +25,15 @@ coordinator with the MPAS suite as each class's physics: every class runs the or
   frame (``samehost_v842.assemble_snapshot``) and writes it, so the history and diag files are the global files
   a one-card fixed-step run writes.
 
+Several cards (``--samehost-devices``): every rate class is cut into BLOCKS, one per card it uses
+(``hexcore.fullstep_lts_blocks``, the ArWen route's multi-card plan), and the ArWen route's multi-card
+coordinator (:class:`hexcore.cuda_fullstep_lts_multi.FullStepLtsMulti`: same-class peer exchange at every round,
+mailbox and register copies between cards) drives one MPAS-suite block per thread on its own card.  The blocks of
+a class integrate concurrently, one per card; the classes still step one after another, fine first.  Each block's
+physics runs on every local column, as a class's does on one card, so the frames are the same global files.
+
 Not identical to the fixed step, by design (a different time scheme); the dycore of each class is the pinned
-MPAS numerics at its own step.  Refused by name, each with its breakage (``admission_refusal``): several cards,
+MPAS numerics at its own step.  Refused by name, each with its breakage (``admission_refusal``):
 restart / DA cycling / IAU / stochastic forcing / chemistry, the balance series and nest triggers, timed
 surface updating, a limited-area mesh and a non-v8.4.2 dycore row.  A moving segment runs on the classes
 (``ClassMoving``: the move hooks at macro boundaries, as on the ArWen route's class executor).
@@ -127,6 +134,7 @@ class LtsClassExecution:
         self.streams_type = self._streams_type()
         self.cycling = None
         self.current_step = 0                 # the class step in flight (0: the initial state)
+        self.multi_card = False               # a block of a class cut across cards (FullStepLtsMulti)
 
     # -- construction --------------------------------------------------------------------------------
     def receipt_path(self, out):
@@ -147,6 +155,7 @@ class LtsClassExecution:
         self.dycore = dycore
 
     def bind_coupling(self, coupling):
+        self.coupling = coupling
         finish = coupling.post_transport
 
         def post_transport(**values):
@@ -157,6 +166,20 @@ class LtsClassExecution:
             return finish(**values)
 
         coupling.post_transport = post_transport
+
+    def dynamics_forcing(self):
+        """The resolved-advection forcing GF / New Tiedtke read (tend_physics rthdynten, rqvdynten), or None.
+
+        A block of a class cut across cards runs its physics on every local column, so these words cross to the
+        peers at round A (``cuda_fullstep_lts_multi._BlockExchanger.round_step_boundary``), as on the ArWen route.
+        """
+        session = getattr(getattr(self, 'coupling', None), 'session', None)
+        if session is None:
+            return None
+        fields = getattr(session.native, '_fields', ())
+        values = {name: session.field('tend_physics', name) for name in ('rthdynten', 'rqvdynten')
+                  if ('tend_physics', name) in fields}
+        return SimpleNamespace(**values) if values else None
 
     def initialized(self, dycore):
         board = self.board
@@ -210,7 +233,9 @@ class LtsClassExecution:
                     steps=len(self.step_times),
                     step_wall_seconds_total=float(sum(self.step_times)),
                     rendezvous_wait_seconds_total=float(sum(self.wait_times)),
-                    parallelism='one class thread; one GPU shared by every class, one class integrating at a time')
+                    parallelism=('one block thread on its own card; the blocks of a class integrate concurrently'
+                                 if self.multi_card else
+                                 'one class thread; one GPU shared by every class, one class integrating at a time'))
 
     def close(self):
         return None
@@ -231,6 +256,16 @@ class LtsClassExecution:
                 for entity, (_, owned_name) in _ENTITY_MAPS.items():
                     owned.dimensions[entity] = int(getattr(execution.partition, owned_name))
                 self.layout = owned
+                convective = getattr(self.diagnostics, 'convective', None)
+                if convective is not None:
+                    # Updraft helicity sums each cell's vertex terms in native's global vertex order, as a same-host
+                    # rank does (samehost_v842.RankHalo.vertex_order).  THE BREAKAGE THIS PREVENTS: in local order a
+                    # cell on the seam between two blocks of a class (vertices owned by the other block come later)
+                    # added its terms in another order than the one-card class, and updraft_helicity_max differed in
+                    # the last place at every seam cell (240/60 km globe, finest class cut across 2 ranks, 2026-10-25).
+                    import cupy as cp
+                    convective.driver.vertex_order = cp.asarray(
+                        np.argsort(np.asarray(execution.partition.vertex_l2g), kind='stable').astype(np.int64))
 
             def _snapshot(self, selected):
                 local = super()._snapshot(selected)
@@ -569,11 +604,8 @@ def attach_shadow(arguments, dycore, out):
 
 def admission_refusal(arguments, layout, config, moving=None) -> str | None:
     """What this executor cannot carry yet, each named with its breakage; None when it runs."""
-    if getattr(arguments, 'samehost_devices', None):
-        return ("active local time stepping on the MPAS suite route runs on one card: its classes rendezvous on one "
-                "device; several cards need the ArWen route's class blocks across cards, which carry no MPAS "
-                "physics pools yet.  Drop --samehost-devices (one card), or run the classes' route on several cards "
-                "without LTS")
+    # Retired 2026-10-25 (hex 0.4.6, MPAS physics the hex default): several cards run the classes cut into blocks
+    # (run_lts_classes with --samehost-devices; hexcore.cuda_fullstep_lts_multi drives one MPAS block per card).
     if getattr(config, 'table_key', 'mpasphys_v842') != 'mpasphys_v842':
         return ('active local time stepping on the MPAS suite route covers the MPAS-A v8.4.2 dycore row: a forked '
                 'dycore (RRFS) steps a different driver whose halo seams the class coordinator has not been checked on')
@@ -628,7 +660,12 @@ def _event_seconds(layout, streams, steps, dt):
 
 
 def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt, steps, out, *, moving=None):
-    """The MPAS-physics route with active full-step local time stepping on one card.  Returns 0.
+    """The MPAS-physics route with active full-step local time stepping, one card or several.  Returns 0.
+
+    With ``--samehost-devices`` naming two or more cards, every rate class is cut into blocks across them
+    (``fullstep_lts_blocks.build_block_plan``) and ``FullStepLtsMulti`` coordinates one MPAS-suite block per
+    thread, each on its own card; otherwise one ``FullStepLtsActive`` coordinates one thread per class on the
+    current card.
 
     ``moving`` (a plain ``moving_v842.MovingRoute``, ``moving_admitted``) runs a moving segment on the classes:
     the carrier is remapped and its physics restored once on the global mesh before the class projection, and
@@ -648,6 +685,15 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
     refusal = admission_refusal(arguments, layout, config, moving)
     if refusal is not None:
         raise ValueError(refusal)
+    devices = None
+    if getattr(arguments, 'samehost_devices', None):
+        from ..drivers.samehost_forecast_v841 import device_list
+        devices = tuple(device_list(arguments.samehost_devices))
+        if len(devices) < 2:
+            devices = None
+    if devices is not None and moving is not None:
+        # features_v842.run_native_dynamics keeps a moving region on several cards on the same-host ranks' fixed step.
+        raise ValueError('a moving region on several cards runs the same-host ranks; it does not ride the LTS blocks')
     out = Path(out).resolve()
     payload = Path(payload).resolve()
     row = load_table()[getattr(config, 'table_key', 'mpasphys_v842')]
@@ -683,9 +729,14 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
         acoustic_substeps=int(layout.configs['config_number_of_sub_steps']),
         target_transport=0.90 if transports else None, boundary_rate=_boundary_rate(max_rate))
     if int(rates.max()) == 1:
-        # One class: the ordinary route, unchanged (a uniform mesh "on" is "off", as on the ArWen route).
-        print(json.dumps({'fullstep_lts': {'route': 'mpas-suite', 'dispatch': 'native single-class step',
-                                           'rate_assignment': rate_info}}, default=str), flush=True)
+        # One class: the ordinary route, unchanged (a uniform mesh "on" is "off", as on the ArWen route); on several
+        # cards that is the same-host ranks' fixed step.
+        print(json.dumps({'fullstep_lts': {'route': 'mpas-suite', 'dispatch': (
+            'same-host ranks (one class)' if devices else 'native single-class step'),
+            'rate_assignment': rate_info}}, default=str), flush=True)
+        if devices:
+            from .samehost_v842 import run_samehost_ranks
+            return run_samehost_ranks(arguments, config, layout, payload, streams, start, stop, dt, steps, out)
         return runtime.run_native_dynamics(arguments, config, layout, payload, streams, None,
                                            start, stop, dt, steps, out)
     top = int(rates.max())
@@ -701,9 +752,39 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
         area_cell=np.asarray(mesh.area_cell, dtype=np.float64),
         dc_edge_m=metric_lengths(mesh)[0], base_dt=base_dt,
         edges_on_edge=mesh.arrays.get('edgesOnEdge'), n_edges_on_edge=mesh.arrays.get('nEdgesOnEdge'))
-    partitions = [tables.layout for tables in plan.classes]
+    bplan = None
+    units = list(plan.classes)          # one unit per class on one card; one per block on several
+    if devices is not None:
+        from ..fullstep_lts_blocks import DEFAULT_MIN_BLOCK_CELLS, blocks_per_class, build_block_plan
+        block_cells = int(os.environ.get('GPUWM_HEX_FULLSTEP_LTS_BLOCK_CELLS', str(DEFAULT_MIN_BLOCK_CELLS)))
+        counts = blocks_per_class(plan, len(devices), min_block_cells=block_cells)
+        explicit = os.environ.get('GPUWM_HEX_FULLSTEP_LTS_BLOCKS')
+        if explicit:
+            # The ArWen route's experiment knob: blocks per class, coarsest first.
+            counts = tuple(int(value) for value in explicit.split(','))
+            if len(counts) != len(plan.classes):
+                raise ValueError(f'GPUWM_HEX_FULLSTEP_LTS_BLOCKS names {len(counts)} classes; the plan has '
+                                 f'{len(plan.classes)}, so blocks would be assigned to the wrong classes')
+        lat = np.asarray(mesh.arrays['latCell'], np.float64)
+        lon = np.asarray(mesh.arrays['lonCell'], np.float64)
+        xyz = np.stack((np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)), axis=1)
+        bplan = build_block_plan(
+            plan, devices=devices, n_blocks=counts, cells_on_cell=np.asarray(mesh.arrays['cellsOnCell']),
+            n_edges_on_cell=np.asarray(mesh.arrays['nEdgesOnCell']),
+            cells_on_edge=np.asarray(mesh.arrays['cellsOnEdge']),
+            cells_on_vertex=np.asarray(mesh.arrays['cellsOnVertex']), cell_xyz=xyz,
+            area_cell=np.asarray(mesh.area_cell, dtype=np.float64),
+            edges_on_edge=mesh.arrays.get('edgesOnEdge'), n_edges_on_edge=mesh.arrays.get('nEdgesOnEdge'))
+        if [int(tables.gid) for tables in bplan.blocks] != list(range(len(bplan.blocks))):
+            raise RuntimeError('block plan is not in block order; blocks and their threads would be paired wrongly')
+        units = list(bplan.blocks)
+    partitions = [tables.layout for tables in units]
+    unit_devices = ([int(tables.device) for tables in units] if bplan is not None
+                    else [int(cp.cuda.Device().id)] * len(units))
     print(json.dumps({'fullstep_lts': {'route': 'mpas-suite', 'rate_assignment': rate_info,
-                                       'plan': plan.receipt(), 'clock': clock}}, default=str), flush=True)
+                                       'plan': plan.receipt(), 'clock': clock,
+                                       **({'blocks': bplan.receipt()} if bplan is not None else {})}},
+                     default=str), flush=True)
     job = out / 'lts-classes'
     job.mkdir(parents=True, exist_ok=False)
     from concurrent.futures import ThreadPoolExecutor
@@ -727,20 +808,22 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
         prepared = list(pool.map(prepare, range(len(partitions))))
     preparation_seconds = time.perf_counter() - began
     board = _Board(len(partitions))
-    executions = [LtsClassExecution(board, index, plan.classes[index].rate, top, partitions, prepared[index][2],
+    executions = [LtsClassExecution(board, index, units[index].rate, top, partitions, prepared[index][2],
                                     layout) for index in range(len(partitions))]
+    for execution in executions:
+        execution.multi_card = bplan is not None
     results: list = [None] * len(partitions)
     comms = None
     if moving_state is not None:
         from .samehost_v842 import ThreadComm
         comms = ThreadComm.world(len(partitions))
-    device = cp.cuda.Device()
     before = Path.cwd()
     os.chdir(out)   # native_working_directory is shared by the class threads
 
     def class_thread(index):
         local_layout, local_payload, _ = prepared[index]
-        rate = plan.classes[index].rate
+        rate = units[index].rate
+        device = cp.cuda.Device(unit_devices[index])
         try:
             class_moving = None if comms is None else ClassMoving(
                 comms[index], moving_state, partitions, executions[index], board=board, rate=rate, top=top,
@@ -771,26 +854,51 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
                    preparation_parallelism=f'{len(partitions)} host projection threads; before class CUDA work',
                    owned_cells=[int(p.n_owned_cells) for p in partitions],
                    local_cells=[int(len(p.cell_l2g)) for p in partitions],
-                   parallelism=f'{len(partitions)} class threads on one GPU; one class integrates at a time')
+                   devices=sorted(set(unit_devices)),
+                   blocks=None if bplan is None else len(bplan.blocks),
+                   parallelism=(f'{len(partitions)} block threads on {len(set(unit_devices))} GPUs; the blocks of a '
+                                'class integrate concurrently, one per card' if bplan is not None else
+                                f'{len(partitions)} class threads on one GPU; one class integrates at a time'))
     macro_rows = []
     failure = None
     try:
         for thread in threads:
             thread.start()
         board.wait(lambda: len(board.built) == len(partitions), 'every class dycore')
-        capability = require_cuda(min_compute=(7, 5))
-        shared_cache = KernelCache(capability=capability)
         area = np.asarray(mesh.area_cell, dtype=np.float64)
         areas = [area[p.cell_l2g.astype(np.int64)] for p in partitions]
         dzw = np.asarray(grid.vertical_grid.dzw, dtype=np.float64)
         drivers = [board.built[index] for index in range(len(partitions))]
-        active = FullStepLtsActive(plan, drivers, base_dt=base_dt, kernel_cache=shared_cache,
-                                   area_cell=areas, dzw=dzw)
+        cards = sorted(set(unit_devices))
+        if bplan is None:
+            capability = require_cuda(min_compute=(7, 5))
+            shared_cache = KernelCache(capability=capability)
+            active = FullStepLtsActive(plan, drivers, base_dt=base_dt, kernel_cache=shared_cache,
+                                       area_cell=areas, dzw=dzw)
+            members = active.classes
+        else:
+            from ..cuda_fullstep_lts_multi import FullStepLtsMulti
+            lane_caches = {}
+            for card in cards:
+                with cp.cuda.Device(card):
+                    lane_caches[card] = KernelCache(capability=require_cuda(device_id=card, min_compute=(7, 5)))
+            active = FullStepLtsMulti(bplan, drivers, base_dt=base_dt, kernel_caches=lane_caches,
+                                      area_cell=areas, dzw=dzw)
+            # THE BREAKAGE THIS PREVENTS: the outer peer-halo rows of rthdynten / rqvdynten are formed from incomplete
+            # stencils, GF ran on them, and the blocks' sources parted from the one-card class at a block seam (240/60
+            # km globe, every class cut across 2 ranks: 0 differing words to 2 h, 2.4 % at 3 h, u off by 0.05 m/s).
+            active.forcing_of = lambda block: executions[block.gid].dynamics_forcing()
+            members = active.blocks
 
-        def stepper(klass):
-            index = klass.index
-            # The class reads the halo the coordinator just filled (round A) on its own thread.
-            _device_synchronize()
+        def synchronize_cards():
+            for card in cards:
+                cp.cuda.Device(card).synchronize()
+
+        def stepper(member):
+            # A class (one card) or a block (several: called from its card's rank thread, the blocks of a class
+            # at once).  The thread reads the halo the coordinator just filled (round A) on its own stream.
+            index = member.index if bplan is None else member.gid
+            cp.cuda.Device(unit_devices[index]).synchronize()
             with board.lock:
                 target = board.done[index] + 1
                 board.go[index] = target
@@ -798,9 +906,9 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
             board.wait(lambda: board.done[index] >= target, f'class {index} to finish step {target}')
 
         active.stepper = stepper
-        _device_synchronize()
+        synchronize_cards()
         with board.lock:
-            board.klass = active.classes
+            board.klass = members
             board.ready = True
             board.macro_seconds = 0.0
             board.lock.notify_all()
@@ -812,7 +920,7 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
                 break
             mark = time.perf_counter()
             active.advance_macro(top)
-            _device_synchronize()
+            synchronize_cards()
             macro_rows.append(dict(macro=macro + 1, base_steps=top, seconds=time.perf_counter() - mark))
             with board.lock:
                 board.macro_seconds = float((macro + 1) * top) * base_dt

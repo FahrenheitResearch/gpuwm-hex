@@ -28,9 +28,14 @@ def test_what_is_not_carried_is_refused_by_name() -> None:
     assert message is not None and message.startswith("--local-timestep is the acoustic rate ladder")
     message = mpas_suite_lts_refusal(_args(fullstep_lts_mode="active"), environ={})
     assert message is not None and "LTS-only knobs need --fullstep-local-timestep" in message
-    message = mpas_suite_lts_refusal(_args(fullstep_local_timestep=True, fullstep_lts_mode="active",
-                                           samehost_devices="0,1"), environ={})
-    assert message is not None and "runs on one card" in message
+    # Active LTS on several cards runs the classes cut into blocks (hex 0.4.6); the shadow stays on one device.
+    assert mpas_suite_lts_refusal(_args(fullstep_local_timestep=True, fullstep_lts_mode="active",
+                                        samehost_devices="0,1"), environ={}) is None
+    assert admission_refusal(_args(fullstep_local_timestep=True, fullstep_lts_mode="active", samehost_devices="0,1"),
+                             SimpleNamespace(dimensions=dict(nCells=10, nCellsSolve=10), configs={}),
+                             SimpleNamespace(table_key="mpasphys_v842")) is None
+    message = mpas_suite_lts_refusal(_args(fullstep_local_timestep=True, samehost_devices="0,1"), environ={})
+    assert message is not None and "shadow runs on one device" in message
     # A moving segment carries the controller's own LTS flags; the moving-route admission judges it.
     assert mpas_suite_lts_refusal(_args(fullstep_local_timestep=True, local_timestep=True),
                                   environ={"GPUWM_HEX_MOVING_CONTROL": "/x/control.json"}) is None

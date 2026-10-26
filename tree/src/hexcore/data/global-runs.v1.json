@@ -55,8 +55,14 @@
     }
   },
   "physics": {
+    "mpas": {
+      "about": "MPAS-A v8.4.2's own physics on the MPAS route, the hex default (owner ruling 2026-10-25): the suite the hex default table picks for the mesh (data/profiles/physics-default.v1.json; convection_permitting), passed to the forecast door as --physics-suite, in the default physics mode (correct). Its step is the forecast door's own for that suite's selectors (MYNN: no long-step cap).",
+      "route": "mpas",
+      "overrides": {}
+    },
     "arwen": {
-      "about": "ArWen physics, the hex default suite, in the default physics mode. No override: the forecast door's own default.",
+      "about": "ArWen physics (the arwen_mpas_column suite: WSM6, hex's convection rule by spacing, YSU over revised MM5, Noah-MP, legacy RRTMG), passed to the forecast door as --physics-suite arwen_mpas_column, which runs exactly what a bare run ran before MPAS physics became the hex default.",
+      "route": "arwen",
       "overrides": {},
       "max_dt_seconds": 300,
       "max_dt_why": "YSU over the surface layer makes single-layer hot spots at the boundary-layer top when the step is long: on the 120 km globe (GFS 2026-10-11 12Z, 24 h) a layer more than 5 K hotter than both neighbours in 3.2 cells per frame at 600 s (worst +24 K), 0.5 at 360 s (worst +23 K), 0.2 at 300 s (worst +5 K); native MPAS-A v8.4.2 mesoscale_reference shows 0.1 to 0.2 (worst +6 to +8 K). With Morrison and Grell-Freitas one runs away (381 K at 6.5 h, refused by RRTMGP). MYNN at 600 s shows none. The 300 s step scores the same as 600 s against sondes and the GFS analysis (z500 10.0 m, T850 1.11 K at f24) and draws the same weather. Cause: two explicit tendencies applied over the whole step overshoot their donor layers. YSU's boundary-layer-top heat and vapour entrainment reaches across several layers, the receiving layer gets more vapour than its donors hold, and microphysics condenses it and heats that layer (MPAS's own YSU carries the same term). New Tiedtke can also ask a thin layer for more water than it holds (x1.40962 cell 398, Tibet, +18 h: -4.44 g/kg from a layer holding 2.18 g/kg, +3.8 g/kg and +2.6 K into the layer above, +7.9 K hot layer). The engine bounds both: YSU's entrainment by its donor Courant number, New Tiedtke's rates per column so no layer loses more water than it holds. With both, the 120 km globe at its own 600 s step over 24 h shows no hot layer below level 30 (13 without either, 1 with the YSU bound alone), and the maps show the same weather. So this cap binds only on an engine that lacks either bound (gpuwm 2.9.0 lacks both); max_dt_retired_by_engine names the engine identities that carry them, and the row runs the mesh's own step when all are present. Delete the cap when hex requires such an engine.",
@@ -82,13 +88,13 @@
     }
   },
   "rows": [
-    {"id": "global-120km", "mesh": "x1.40962", "physics": "arwen", "hours": 24, "history_every_minutes": 60,
+    {"id": "global-120km", "mesh": "x1.40962", "physics": "mpas", "hours": 24, "history_every_minutes": 60,
      "about": "120 km quasi-uniform globe: the quick row, and the one that fits a 16 GB consumer card"},
-    {"id": "global-60km", "mesh": "x1.163842", "physics": "arwen", "hours": 24, "history_every_minutes": 60,
+    {"id": "global-60km", "mesh": "x1.163842", "physics": "mpas", "hours": 24, "history_every_minutes": 60,
      "about": "60 km quasi-uniform globe"},
-    {"id": "global-30km", "mesh": "x1.655362", "physics": "arwen", "hours": 24, "history_every_minutes": 60,
+    {"id": "global-30km", "mesh": "x1.655362", "physics": "mpas", "hours": 24, "history_every_minutes": 60,
      "about": "30 km quasi-uniform globe"},
-    {"id": "global-15km", "mesh": "x1.2621442", "physics": "arwen", "hours": 24, "history_every_minutes": 180,
+    {"id": "global-15km", "mesh": "x1.2621442", "physics": "mpas", "hours": 24, "history_every_minutes": 180,
      "about": "15 km quasi-uniform globe; on cards under about 64 GB the door spreads it over every visible card"},
     {"id": "global-120km-morrison", "mesh": "x1.40962", "physics": "morrison", "hours": 24, "history_every_minutes": 60,
      "about": "120 km globe on the gpuwm-global suite (Morrison)"},

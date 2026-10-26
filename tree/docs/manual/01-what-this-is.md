@@ -34,10 +34,9 @@ global case.
   deterministic: two runs of the same case produce
   byte-for-byte identical output.
 - **The physics** (radiation, clouds, rain, turbulence, land surface) comes in
-  two kinds. By default it is the ArWen engine's suite, reached through a
-  pinned seam, so gpuwm-hex and the `gpuwm` distribution share one physics
-  implementation. Or it is one of MPAS-A v8.4.2's own suites
-  (`mesoscale_reference`, `convection_permitting`), ported scheme by scheme
+  two kinds. By default (since 0.4.6) it is one of MPAS-A v8.4.2's own suites,
+  picked by mesh (`convection_permitting`; `mesoscale_reference` by name once
+  it runs on the GPU), ported scheme by scheme
   and checked bit for bit against native MPAS; a 24-hour forecast with every
   scheme of `convection_permitting` on the GPU matches native MPAS in every
   field hex writes. On the MPAS suites hex runs **correct mode** by default,
@@ -79,8 +78,10 @@ Measured, not promised (the README states each measurement):
   physics off on the listed meshes; the all-GPU MPAS physics match is one
   24-hour forecast on the 480 km mesh, one process; every other MPAS scheme is
   bitwise on captured inputs. Correct mode differs from native wherever a fix
-  acts, by design.
-- **ArWen's physics is not MPAS's.** On the default route a full-physics
+  acts, by design. Or it is the ArWen engine's suite (`--physics-suite
+  arwen_mpas_column`), reached through a pinned seam, so gpuwm-hex and the
+  `gpuwm` distribution share one physics implementation.
+- **ArWen's physics is not MPAS's.** On the ArWen route a full-physics
   forecast is not identical to native MPAS, and the dycore check does not
   qualify one. Beyond the expected chaos-shaped divergence there are **three
   measured, one-signed differences**, the declared divergences of chapter 3.

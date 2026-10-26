@@ -66,9 +66,23 @@ def _sha256(path: Path) -> str:
 
 
 def _stamp(folder: Path, name: str, text: str) -> None:
+    """One prep stage's line, in logs/prep-stages.txt and on stdout.
+
+    On stdout too, so the prepare log a WOOF box uploads carries the stage profile (mesh, static, init, each
+    with its wall time and parallelism). THE BREAKAGE THIS PREVENTS: a new box spent 940 s in "Preparing the
+    start member" (production run_312c8803de02ae46, 2026-10-25) and the uploaded log said nothing about which
+    stage took it; prep-stages.txt stayed on the box."""
+    line = f"{_now()} {name} {text}"
     (folder / "logs").mkdir(parents=True, exist_ok=True)
     with (folder / "logs" / "prep-stages.txt").open("a") as stream:
-        stream.write(f"{_now()} {name} {text}\n")
+        stream.write(line + "\n")
+    print(f"prepare-stage: {line}", flush=True)
+
+
+def _cores(env: dict[str, str] | None) -> str:
+    """The parallelism a Rust prep tool was given, for its stage line."""
+    env = os.environ if env is None else env
+    return f"CPU, {env.get('RAYON_NUM_THREADS', 'all')} threads"
 
 
 def _run_logged(argv: list[str], log: Path, *, env: dict[str, str] | None = None) -> float:
@@ -412,6 +426,8 @@ def prepare_member(case_path: Path, folder: Path, name: str, lat: float, lon: fl
                                        n_cells=source_receipt["emitted"]["n_cells"]),
                            rotation=rotation, stages=timings)
             mesh_receipt.write_text(json.dumps(receipt, indent=2) + "\n")
+            _stamp(folder, name, f"rotate-mesh from {rotate_from} {rotation['wall_seconds']:.1f}s "
+                                 "(CPU, 1 thread, vectorised array rotation)")
         if not mesh_ready() and stitched:
             # Stitched member: the corridor frame's far field + the template's fine region moved
             # rigidly.  A refused stitch never falls through to a whole-globe generator mesh.
@@ -424,7 +440,7 @@ def prepare_member(case_path: Path, folder: Path, name: str, lat: float, lon: fl
             _stamp(folder, name, f"zone-mesh {time.time() - began:.0f}s")
         if not mesh_ready():
             seconds = generate_mesh(spec_path, folder / f"{name}.grid.nc", mesh_receipt, logs / f"{name}-mesh.log", env)
-            _stamp(folder, name, f"mesh {seconds:.0f}s")
+            _stamp(folder, name, f"mesh {seconds:.0f}s ({_cores(env)})")
         static_receipt = folder / f"{name}-static.json"
         static_rebuilt = mesh_rebuilt or not static_receipt.is_file() or not (folder / f"{name}.static.nc").is_file()
         if static_rebuilt:
@@ -440,7 +456,7 @@ def prepare_member(case_path: Path, folder: Path, name: str, lat: float, lon: fl
             if supersample > 1:
                 argv += ["--supersample-30s", str(supersample)]
             seconds = _run_logged(argv, logs / f"{name}-static.log", env=env)
-            _stamp(folder, name, f"static {seconds:.0f}s")
+            _stamp(folder, name, f"static {seconds:.0f}s ({_cores(env)})")
         init_receipt = folder / f"{name}-init.json"
         init = folder / f"{name}.init.nc"
         if static_rebuilt or not init_receipt.is_file() or not init.is_file():
@@ -454,7 +470,7 @@ def prepare_member(case_path: Path, folder: Path, name: str, lat: float, lon: fl
             seconds = _run_logged([sys.executable, "-m", "hexcore.cli", *argv], logs / f"{name}-init.log", env=env)
             init_receipt.write_text(json.dumps(dict(argv=argv, seconds=round(seconds, 1), source=stage["source"],
                                                     met=stage["met"], init_sha256=_sha256(init)), indent=2) + "\n")
-            _stamp(folder, name, f"init {seconds:.0f}s")
+            _stamp(folder, name, f"init {seconds:.0f}s ({_cores(env)})")
         member = register_member(case, name, float(lat), float(lon), folder)
         _stamp(folder, name, "rows-done")
     log(json.dumps(member))
@@ -481,9 +497,72 @@ def prepare_case(case_path: Path, casedir: Path, *, geog: Path | None = None, th
                 seconds = generate_mesh(spec_path, casedir / f"{name}.grid.nc", casedir / f"{name}-mesh.json",
                                         casedir / "logs" / f"{name}-mesh.log", env)
                 _stamp(casedir, name, f"mesh {seconds:.0f}s")
+    rotate_from = None
+    if not corridor and not _near_antipode((lat, lon), TEMPLATE_CENTER):
+        log("prepare: the premade rotation template")
+        rotation_template(case, casedir, env=_tool_env(threads, tile_workers), log=log)
+        rotate_from = TEMPLATE_NAME
     log("prepare: start member")
-    return prepare_member(case_path, casedir, "start", lat, lon, casedir=casedir, stitched=corridor, geog=geog,
-                          threads=threads, tile_workers=tile_workers, log=log)
+    return prepare_member(case_path, casedir, "start", lat, lon, casedir=casedir, stitched=corridor,
+                          rotate_from=rotate_from, geog=geog, threads=threads, tile_workers=tile_workers, log=log)
+
+
+#: The premade family mesh the start member is rotated from: the case's own concentric cap family centred here.
+#: THE BREAKAGE THIS PREVENTS (owner ruling 2026-10-23: premade meshes, no lengthy mesh creation on the start path;
+#: and the moving start-member stage of 940 s on new boxes, 2026-10-25): every storm- and setup-following run
+#: generated its start mesh on the box before the first step. The template is keyed in hex's prep store by its
+#: generator spec alone (no storm, no date), so a WOOF image carries it (the bake runs `gpuwm-hex moving template`)
+#: and a box rotates it to the storm in about a second, as the anticipated members already rotate the start mesh.
+TEMPLATE_NAME = "rotation-template"
+TEMPLATE_CENTER = (0.0, 0.0)
+
+
+def _near_antipode(point, centre, degrees: float = 2.0) -> bool:
+    """Whether ``point`` lies within ``degrees`` of ``centre``'s antipode, where the minimal rotation is ill posed
+    (:func:`hexcore.moving_mesh.rotation_between` refuses the antipode itself); such a start generates its mesh."""
+    import math
+
+    from .moving_case import EARTH_RADIUS_KM, great_circle_km
+
+    return math.pi * EARTH_RADIUS_KM - great_circle_km(point, centre) < math.radians(degrees) * EARTH_RADIUS_KM
+
+
+def template_spec(case: dict[str, Any]) -> dict[str, Any]:
+    """The rotation template's generator spec: the case's member spec about TEMPLATE_CENTER."""
+    return member_spec(case, TEMPLATE_NAME, *TEMPLATE_CENTER)
+
+
+def rotation_template(case: dict[str, Any], folder: Path, *, env: dict[str, str] | None = None,
+                      log: Callable[[str], None] = print) -> Path:
+    """The family template's grid in FOLDER: fetched from hex's prep store when an image carries it, else
+    generated once here (and staged into the store's outbox when one is set, as the bake does).
+
+    Its spec file in FOLDER is what :func:`prepare_member` checks before it rotates (``rotate_from``)."""
+    from . import prep_store
+
+    folder = Path(folder).expanduser().absolute()
+    folder.mkdir(parents=True, exist_ok=True)
+    spec_path = folder / f"{TEMPLATE_NAME}.spec.json"
+    grid = folder / f"{TEMPLATE_NAME}.grid.nc"
+    receipt = folder / f"{TEMPLATE_NAME}-mesh.json"
+    with locked(folder / f"{TEMPLATE_NAME}.prep.lock"):
+        body = template_spec(case)
+        if not spec_path.is_file() or json.loads(spec_path.read_text()) != body:
+            grid.unlink(missing_ok=True)
+            receipt.unlink(missing_ok=True)
+            spec_path.write_text(json.dumps(body, indent=2) + "\n")
+        if grid.is_file() and receipt.is_file():
+            return grid
+        began = time.time()
+        logs = folder / "logs"
+        got = prep_store.run_or_fetch(
+            [_tool("MESH"), "--spec", spec_path, "--out", grid, "--receipt", receipt],
+            kind="mesh", runner=lambda argv: _run_logged(argv, logs / f"{TEMPLATE_NAME}-mesh.log", env=env))
+        how = ("fetched from the prep store" if got.get("source") == "store"
+               else f"generated here ({_cores(env)}); no prep store carries it")
+        _stamp(folder, TEMPLATE_NAME, f"template {time.time() - began:.1f}s, {how}")
+        log(f"rotation template: {how}")
+    return grid
 
 
 # ---------------------------------------------------------------------------

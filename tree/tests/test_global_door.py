@@ -64,9 +64,11 @@ def test_the_shipped_table_has_the_four_resolutions_and_the_morrison_arm():
     rows = {row["id"]: row for row in table["rows"]}
     for km, mesh in ((120, "x1.40962"), (60, "x1.163842"), (30, "x1.655362"), (15, "x1.2621442")):
         assert rows[f"global-{km}km"]["mesh"] == mesh
-        assert rows[f"global-{km}km"]["physics"] == "arwen"
+        # MPAS physics is the hex default (owner ruling 2026-10-25): the four default rows take the mpas arm.
+        assert rows[f"global-{km}km"]["physics"] == "mpas"
         assert rows[f"global-{km}km-morrison"]["physics"] == "morrison"
-    assert table["physics"]["arwen"]["overrides"] == {}
+    assert table["physics"]["mpas"] == {**table["physics"]["mpas"], "route": "mpas", "overrides": {}}
+    assert table["physics"]["arwen"]["overrides"] == {} and table["physics"]["arwen"]["route"] == "arwen"
     assert table["physics"]["morrison"]["overrides"]["mp_physics"] == "10"
     for mesh_id, mesh in table["meshes"].items():
         assert mesh["url"].endswith(f"/{mesh_id}.tar.gz")
@@ -427,6 +429,11 @@ def _plan_for(tmp_path, row, *extra):
          "--cache-dir", str(tmp_path / "cache"), "--stage", "plan", *extra]))
 
 
+def _arwen(row):
+    """The ArWen arm of a default row: MPAS physics is the hex default since 0.4.6, so the YSU cap tests name it."""
+    return [] if row.endswith("-morrison") else ["--physics-row", "arwen"]
+
+
 def _dt_args(forecast):
     return [forecast[i + 1] for i, token in enumerate(forecast) if token == "--dt"]
 
@@ -448,12 +455,12 @@ def test_the_ysu_arms_cap_the_step_where_long_steps_make_hot_layers(tmp_path, mo
     for arm in ("arwen", "morrison"):
         assert table["physics"][arm]["max_dt_seconds"] == 300 and "hot" in table["physics"][arm]["max_dt_why"]
     for row, mesh_dt in (("global-120km", 600.0), ("global-60km", 360.0), ("global-60km-morrison", 360.0)):
-        value = _plan_for(tmp_path, row)
+        value = _plan_for(tmp_path, row, *_arwen(row))
         assert value["step"] == {**value["step"], "dt_seconds": 300.0, "capped": True, "mesh_dt_seconds": mesh_dt}
         assert _dt_args(value["commands"]["forecast"]) == ["300"]
         assert build_parser().parse_args(value["commands"]["forecast"]).dt == "300"
     for row, mesh_dt in (("global-30km", 180.0), ("global-15km", 90.0)):
-        value = _plan_for(tmp_path, row)
+        value = _plan_for(tmp_path, row, *_arwen(row))
         assert value["step"]["capped"] is False and value["step"]["dt_seconds"] == mesh_dt
         assert _dt_args(value["commands"]["forecast"]) == []  # the forecast door's own default
 
@@ -461,7 +468,7 @@ def test_the_ysu_arms_cap_the_step_where_long_steps_make_hot_layers(tmp_path, mo
 def test_a_callers_own_step_still_wins_over_the_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(global_door, "_visible_cards", lambda: [])
     monkeypatch.setattr(global_door, "engine_identities", lambda: ENGINE_290)
-    forecast = _plan_for(tmp_path, "global-120km", "--forecast-arg=--dt=600")["commands"]["forecast"]
+    forecast = _plan_for(tmp_path, "global-120km", *_arwen("global-120km"), "--forecast-arg=--dt=600")["commands"]["forecast"]
     assert _dt_args(forecast) == ["300"] and forecast[-1] == "--dt=600"
     assert build_parser().parse_args(forecast).dt == "600"
 
@@ -476,7 +483,7 @@ def test_an_engine_with_both_donor_bounds_retires_the_cap(tmp_path, monkeypatch)
     table = global_door.load_table()
     assert table["physics"]["arwen"]["max_dt_retired_by_engine"] == [BOUNDED_YSU, BOUNDED_NT]
     for row, mesh_dt in (("global-120km", 600.0), ("global-60km", 360.0)):
-        value = _plan_for(tmp_path, row)
+        value = _plan_for(tmp_path, row, *_arwen(row))
         assert value["step"]["capped"] is False and value["step"]["dt_seconds"] == mesh_dt
         assert value["step"]["cap_retired"]["cap_seconds"] == 300.0
         assert set(value["step"]["cap_retired"]["engine_identities"]) <= ENGINE_BOUNDED
@@ -487,7 +494,7 @@ def test_one_bound_alone_keeps_the_cap(tmp_path, monkeypatch):
     # With the YSU bound alone the same run kept one +7.9 K hot layer (New Tiedtke, Tibet, +18 h).
     monkeypatch.setattr(global_door, "_visible_cards", lambda: [])
     monkeypatch.setattr(global_door, "engine_identities", lambda: frozenset({BOUNDED_YSU, UNBOUNDED_NT}))
-    value = _plan_for(tmp_path, "global-120km")
+    value = _plan_for(tmp_path, "global-120km", *_arwen("global-120km"))
     assert value["step"]["capped"] is True and value["step"]["dt_seconds"] == 300.0
     assert value["step"]["engine_lacks"] == [BOUNDED_NT]
 

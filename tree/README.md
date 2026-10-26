@@ -25,7 +25,7 @@ yet do.
 
 ## 0.4.1 in short
 
-[Physics routes and measured comparison scopes](docs/physics-routes-0.4.1.md) describe the default ArWen route, named MPAS suites and public licence exclusions.
+[Physics routes and measured comparison scopes](docs/physics-routes-0.4.1.md) describe the MPAS physics route (the default since 0.4.6), the ArWen route and public licence exclusions.
 
 0.3.3 (2026-09-29) was the MPAS-A dynamical core on the GPU, running ArWen's
 physics. 0.4.1 is the whole of MPAS-A v8.4.2 on the GPU, each piece proven
@@ -38,7 +38,9 @@ against the real thing before it landed:
 2. **All of MPAS-A was ported.** Both physics suites and their scheme options
    (the few not in this release are listed under *Not in this release*),
    initialization, static fields, IAU, limited-area boundaries, streams,
-   restart and diagnostics. ArWen's physics stays, and stays the default.
+   restart and diagnostics. Since 0.4.6 MPAS's own physics is the default on
+   every door; ArWen's physics stays, one flag away (`--physics-suite
+   arwen_mpas_column`).
 3. **Each piece proved itself before it landed:** bit for bit against native
    MPAS on real inputs captured from a native run, then a forecast with it on,
    compared with native map by map.
@@ -256,9 +258,9 @@ a 3 km region about 450 km in radius.
 NOAA's MPAS configuration, built on the GSL v8.3.1 fork of MPAS-Model
 (RRFSx/MPAS-Model 1d6e370e), is a separate core for sites with a locally
 built RRFS library. Public RRFS selections without that library refuse by
-name. The v8.4.2 default uses ArWen physics. The named MPAS physics suites
-remain selectable
-within their documented CUDA-port scope. The public wheel does not contain a
+name. The v8.4.2 default is MPAS-A's own physics (convection_permitting). The
+named MPAS physics suites remain selectable within their documented CUDA-port
+scope. The public wheel does not contain a
 native Fortran runtime or the held UGWP and UCAR Noah-MP v5.0 ports. Historical
 fork-native replays below are references, not a bundled runtime path.
 
@@ -398,8 +400,8 @@ Also proven:
 - **Correct mode is not native MPAS.** By design it differs from native
   wherever a fix acts. Each fix is checked against its own referee build;
   there is no combined referee.
-- **ArWen physics is not MPAS physics.** A forecast on the default ArWen
-  route is not identical to native MPAS, and the dycore check does not
+- **ArWen physics is not MPAS physics.** A forecast on the ArWen
+  route (`--physics-suite arwen_mpas_column`) is not identical to native MPAS, and the dycore check does not
   qualify one. Its measured differences from native MPAS are registered, with
   mechanism, magnitude and observational referee, in
   [Declared divergences](docs/declared-divergences.md). Its referee is skill
@@ -496,7 +498,8 @@ required item is missing, so it works as a gate in a script.
 
 ### Kernel packs
 
-Kernel packs are pinned assets of the `kernel-packs-v0.4.2` release.
+Kernel packs are pinned assets of the `kernel-packs-v0.4.6` release, for CUDA 12.9, 13.0 and 13.4
+NVRTC, and hold the ArWen and MPAS physics kernels.
 `gpuwm-hex fetch-assets --list` lists them. Run
 `gpuwm-hex fetch-assets` to stage them in the cache, or
 `gpuwm-hex fetch-assets --from DIR` to verify and stage an offline copy.
@@ -1078,9 +1081,25 @@ The same measurement is in `docs/hex-point-hrrr.md`.
 
 ### Running an MPAS physics suite
 
-An MPAS suite runs through the same `forecast` door, on the MPAS route
-(`--physics-backend mpasphys`), from a native `namelist.atmosphere` and
-`streams.atmosphere`:
+**MPAS physics is the default (0.4.6).** Every door (`forecast`, `global`,
+`mesh-plan --run`, `regional`, `country`, `moving`, ensembles, `cycle`, Hex
+with Regional parents, CUDA JEDI backgrounds) runs MPAS-A's own physics on the
+MPAS route when the run names no physics. The suite follows MPAS-A practice by
+mesh (`src/hexcore/data/profiles/physics-default.v1.json`):
+
+| Mesh | Suite | Why |
+|---|---|---|
+| finest cells under 10 km (regions, zoom globes, storm-following, any variable-resolution mesh) | `convection_permitting` | MPAS-A's recommended suite where convection-permitting cells are used, including variable-resolution meshes |
+| quasi-uniform, 10 km and coarser | `convection_permitting` | MPAS-A tested it from several hundred km down to 3 km (scale-aware Grell-Freitas); `mesoscale_reference`, MPAS's Registry default there, does not run on the GPU yet (refused by name) |
+
+ArWen physics stays one flag away: `--physics-suite arwen_mpas_column` runs
+exactly what a bare run ran before 0.4.6 (on `global`, `--physics-row arwen`).
+A `--physics KEY=VALUE` override, an explicit `--convection` scheme or a
+`--physics-backend` row with no suite also selects the ArWen route.
+`gpuwm-hex physics list` marks the default.
+
+An MPAS suite can also be named, or read from a native `namelist.atmosphere`
+and `streams.atmosphere` on the MPAS route (`--physics-backend mpasphys`):
 
 ```sh
 gpuwm-hex physics-resources fetch      # optional; a forecast fetches missing resources
@@ -1151,7 +1170,7 @@ Read these before trusting a number.
 
 ### On the ArWen route, Grell-Freitas is a different generation from native
 
-**This is about the default ArWen physics.** The MPAS suites run MPAS's own
+**This is about ArWen physics** (`--physics-suite arwen_mpas_column`). The MPAS suites, the default, run MPAS's own
 Grell-Freitas, ported bit for bit (see *What is proven*).
 
 **Declared, measured, and not a defect in the seam.** The seam-level non-parity
@@ -1207,7 +1226,7 @@ from the microphysics alone.
 ### Three bias-shaped differences between the ArWen route and native MPAS (declared divergences)
 
 Not blockers, and not evidence of a broken dycore. They are the measured price
-of running ArWen's physics instead of MPAS's on the default route, stated so a
+of running ArWen's physics instead of MPAS's on the ArWen route, stated so a
 user knows what they are getting; the MPAS suites do not carry them. The
 obs-skill comparison, which is the verification of record for ArWen's physics,
 ran on 2026-08-25 and reaches two of the three; the register of

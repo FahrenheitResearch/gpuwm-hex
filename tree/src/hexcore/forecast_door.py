@@ -1467,6 +1467,11 @@ def resolve_door_physics(
     if (suite is None and not raw and namelist is None
             and explicit_convection in (None, "auto", *_CONVECTION_SPELLING)):
         return None, None, {}
+    from .physics_default import is_arwen_default
+    if is_arwen_default(suite, overrides=raw, namelist=namelist, convection=explicit_convection):
+        # --physics-suite arwen_mpas_column alone: the ArWen route exactly as a bare run took it before MPAS
+        # physics became the hex default (0.4.6), so the ArWen arm of every door stays byte-identical.
+        return None, None, {}
     # The engine tree whose registry says which options exist: the one the
     # run names when it carries a registry (a tree that is no engine at all
     # is refused by name further down, at the pin check), else the
@@ -3435,13 +3440,20 @@ def mpas_suite_lts_refusal(arguments: argparse.Namespace, environ=None) -> str |
         if knobs["fullstep_lts_mode"] != "active":
             return ("the full-step shadow runs on one device: the partitioned shadow has no owner-only donor "
                     "reduction (halo duplicates would corrupt the rate census)")
-        return ("active local time stepping on the MPAS suite route runs on one card: its classes rendezvous on one "
-                "device; several cards need the ArWen route's class blocks across cards, which carry no MPAS "
-                "physics pools yet.  Drop --samehost-devices (one card)")
+        # Retired 2026-10-25 (hex 0.4.6): active LTS on several cards cuts every rate class into blocks, one per
+        # card (hexcore.mpasphys.lts_v842.run_lts_classes on hexcore.cuda_fullstep_lts_multi).
     return None
 
 
 def run_forecast(arguments: argparse.Namespace) -> int:
+    # The hex default physics (owner ruling 2026-10-25): a run that names no physics takes MPAS-A's own suite on
+    # the MPAS route, chosen by mesh (hexcore.physics_default).  Applied before the roster split, so every member
+    # and every segment process decides the same route.  --physics-suite arwen_mpas_column is the ArWen route.
+    from . import physics_default
+    defaulted = physics_default.apply(arguments)
+    if defaulted is not None:
+        print(f"gpuwm-hex: physics {defaulted['suite']} on the MPAS route (the hex default; "
+              f"--physics-suite {physics_default.arwen_suite()} runs ArWen physics)", file=sys.stderr, flush=True)
     if getattr(arguments, "members", None) is not None:
         from .multi_member import run_members
         return run_members(arguments, sys.modules[__name__])
@@ -3664,6 +3676,18 @@ def _run_forecast(arguments: argparse.Namespace) -> int:
                 rc = run_native_physics(arguments, native_config, native_text)
                 if rc == 0:
                     native_default_products(arguments)
+                    receipt = getattr(arguments, "receipt", None)
+                    if receipt is not None:
+                        # THE BREAKAGE THIS PREVENTS (2026-10-25, MPAS physics the hex default): this route returns
+                        # before resolve_request, the only reader of --receipt, so the flag was accepted and no file
+                        # was written (a cycle slot's forecast-receipt.json never appeared).  The route's receipt is
+                        # native-physics-receipt.json beside its frames; --receipt gets that receipt.
+                        import shutil
+                        source = Path(arguments.out) / "native-physics-receipt.json"
+                        if not source.is_file():
+                            raise RuntimeError(f"--receipt {receipt}: the MPAS suite route finished without "
+                                               f"{source.name} in {arguments.out}")
+                        shutil.copyfile(source, Path(receipt).expanduser())
                 return rc
             finally:
                 write_kernel_plan_receipt(getattr(arguments, "out", None))
@@ -4013,20 +4037,23 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
         "--physics-backend", default=DEFAULT_BACKEND, metavar="ROW",
         help="mpasphys selects the MPAS suite route (its Registry default is "
              "mesoscale_reference; --physics-suite or a namelist may select another). "
-             "Otherwise, the column-physics backend row this run selects "
-             "(hexcore.physics_backend_admission). The default is the "
-             "frozen lane. A provider's row runs its own pinned column "
+             "Otherwise, the ArWen-route column-physics backend row this run selects "
+             "(hexcore.physics_backend_admission); naming a row selects the ArWen "
+             "route. Its default is the frozen lane. A provider's row runs its own pinned column "
              "batch and may declare extra prognostic scalars and a point "
              "source; an unregistered name is refused naming the rows "
              "this installation carries")
     parser.add_argument(
         "--physics-suite", default=None, metavar="NAME",
-        help="named physics suite (hexcore.physics_suites; `gpuwm-hex physics "
-             "list`). With no suite flag the run is arwen_mpas_column, the "
-             "proven suite. rrfs_v2_dev is shaped after RRFS v2 (hrrrv5) and "
-             "lists every difference from it; MPAS's own suite names "
-             "(mesoscale_reference, convection_permitting, hrrrv5) resolve as "
-             "MPAS resolves them, and an option hex cannot run is refused by name")
+        help="named physics suite (`gpuwm-hex physics list`). With no physics "
+             "named (no suite, namelist, --physics override, --convection scheme or "
+             "backend row) the run takes the hex default: MPAS-A's own physics on "
+             "the MPAS route, the suite picked for the mesh (convection_permitting; "
+             "data/profiles/physics-default.v1.json). arwen_mpas_column runs ArWen "
+             "physics exactly as a bare run did before 0.4.6; arwen_thompson_column "
+             "and rrfs_v2_dev are the other ArWen-route suites. MPAS's own suite names "
+             "(mesoscale_reference, convection_permitting, hrrrv5) run the MPAS route, "
+             "and an option hex cannot run is refused by name")
     parser.add_argument(
         "--physics", action="append", default=None, metavar="KEY=VALUE",
         help="override one physics option, repeatable: an MPAS selector "
@@ -4036,7 +4063,8 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "a WOOF generation selector (thompson_version, thompson_fork_snow_fall, "
              "bl_mynn_version, bl_mynn_mixlength, mynn_sfclay_variant, "
              "rrtmg_cloud_optics_form) or config_frac_seaice. Recorded as an "
-             "override in the receipt")
+             "override in the receipt. With no --physics-suite it overrides the ArWen "
+             "suite (arwen_mpas_column); name an MPAS suite to override on the MPAS route")
     parser.add_argument(
         "--physics-namelist", type=Path, default=None, metavar="FILE",
         help="an MPAS namelist.atmosphere whose physics the run takes "
@@ -4208,7 +4236,8 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "cannot integrate on convective cases (default: 2d_smagorinsky)")
     parser.add_argument(
         "--convection", default="auto", metavar="SCHEME",
-        help="cumulus selection: auto, off, gf, ntiedtke, or any cumulus "
+        help="ArWen-route cumulus selection (a scheme other than auto selects the "
+             "ArWen route when no suite is named): auto, off, gf, ntiedtke, or any cumulus "
              "option of WOOF's physics registry by MPAS name, registry option "
              "id or cu_physics number (kain-fritsch, cu_tiedtke, 6). "
              "The default 'auto' switches the cumulus "

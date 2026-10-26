@@ -496,14 +496,17 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
             # A named suite (--forecast-arg=--physics-suite=NAME) takes the forecast door's own step for it,
             # as the global door does; the caller's flags come last and win.
             from .global_door import forecast_arg_physics
-            extra = [str(item) for item in getattr(arguments, "forecast_arg", None) or ()]
+            from .physics_default import ensure
+            # No physics named: the hex default MPAS suite by mesh (hexcore.physics_default).
+            extra = ensure([str(item) for item in getattr(arguments, "forecast_arg", None) or ()])
             named = forecast_arg_physics(extra)
             # The receipt names the physics the forecast ran, as the global door's does (the zoom-globe receipt
             # named none: both-routes gate, rg1).
-            receipt["physics"] = {"suite": named.get("suite") or "arwen (the forecast door default)",
+            receipt["physics"] = {"suite": named.get("suite") or "arwen",
                                   "mode": named.get("mode") or "exact",
                                   **({"namelist": named["namelist"]} if named.get("namelist") else {})}
-            step = [] if (named.get("suite") or named.get("namelist")) else ["--dt", dt]
+            from .physics_default import suite_takes_door_step
+            step = [] if suite_takes_door_step(named) else ["--dt", dt]
             measured = stage("forecast", [*prefix, "forecast", "--mesh", row.name,
                 "--grid", grid, "--static", static, "--init", root / "init" / "init.nc",
                 "--init-source", f"{arguments.source} {issued_label}; spec {receipt['spec_sha256']}",

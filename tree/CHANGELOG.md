@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.6
+
+Requires gpuwm>=2.9.7,<2.10.
+
+New:
+- MPAS physics is the default on every door: a run that names no physics runs MPAS-A's own `convection_permitting` suite on the GPU (the suite follows MPAS-A practice by mesh, `data/profiles/physics-default.v1.json`). ArWen physics stays one flag away: `--physics-suite arwen_mpas_column` (`--physics-row arwen` on `global`).
+- The cycle door takes an MPAS physics forecast as its coarse and parent stream.
+- Kernel packs (`kernel-packs-v0.4.6`, CUDA 12.9, 13.0 and 13.4) carry the MPAS physics kernels, so a new box starts MPAS physics runs without compiling them.
+- Storm- and setup-following runs start from a premade mesh rotated to the storm (`moving template` builds one), and the static builder maps geography to global meshes about twice as fast, with identical output.
+
+Fixed:
+- MPAS physics runs with local time stepping no longer fail at the first step on a new box (Noah kernel cache).
+- `forecast --receipt` writes its receipt on the MPAS physics route.
+- Storm-following and other MPAS physics runs no longer stop with a non-finite state after a few hours (Grell-Freitas shallow convection read an unset cloud-top value).
+- Local time stepping on two or more cards gives the same results as one card, on both physics routes; MPAS physics runs it on several cards.
+
 ## 0.4.5
 
 Requires gpuwm>=2.9.7,<2.10.

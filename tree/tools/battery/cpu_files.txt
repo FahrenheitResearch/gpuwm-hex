@@ -897,6 +897,7 @@ tests/test_deformation_rust_gnu.py
 tests/test_gf_compile_cache.py
 tests/test_moving_member_floor.py
 tests/test_moving_member_recovery.py
+tests/test_moving_start_template.py
 tests/test_moving_run_lifecycle.py
 tests/test_native_publication_clock.py
 tests/test_native_short_duration.py
@@ -1085,3 +1086,5 @@ tests/test_mpas_lts_moving_and_assembly.py
 tests/test_mpas_frame_async_capture.py
 # MPAS-route moving tracker frame carries qv, refl10cm and the 2 m fields for setup targets (H-MPAS-SETUP).
 tests/test_mpas_tracker_frame_setup.py
+# MPAS physics is the hex default on every door; ArWen stays --physics-suite arwen_mpas_column (0.4.6).
+tests/test_physics_default.py

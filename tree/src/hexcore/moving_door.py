@@ -118,6 +118,16 @@ def _prepare(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _template(arguments: argparse.Namespace) -> int:
+    from .moving_author import mesh_block
+    from .moving_members import rotation_template, template_spec, _tool_env
+
+    case = {"mesh": mesh_block(arguments.fine_km, arguments.background_km, arguments.fine_radius_km)}
+    grid = rotation_template(case, arguments.out_dir, env=_tool_env(arguments.threads, None), log=_print)
+    _print(json.dumps(dict(grid=str(grid), spec=template_spec(case)), indent=2))
+    return 0
+
+
 def _prepare_member(arguments: argparse.Namespace) -> int:
     from .moving_members import prepare_member
 
@@ -389,6 +399,20 @@ def add_moving_parser(commands) -> None:
     _case_arguments(prepare)
     _prep_arguments(prepare)
     prepare.set_defaults(handler=_prepare)
+
+    template = sub.add_parser(
+        "template", help="the premade rotation template of a cap family (the start member is rotated from it)",
+        description="Build, or fetch from hex's prep store, the concentric cap family that `moving case` authors "
+                    "from these three numbers, centred at 0N 0E. With GPUWM_HEX_PREP_STORE_OUTBOX set the "
+                    "result is staged there, so an image carries it and `moving prepare` rotates it to the "
+                    "storm instead of generating a mesh.")
+    template.add_argument("--fine-km", type=float, default=3.0)
+    template.add_argument("--background-km", type=float, default=None,
+                          help="background spacing (default: as `moving case` picks it)")
+    template.add_argument("--fine-radius-km", type=float, default=200.0)
+    template.add_argument("--out-dir", type=Path, required=True, help="folder for the template grid")
+    template.add_argument("--threads", type=int, default=_prep_cores(), help="Rust tool threads")
+    template.set_defaults(handler=_template)
 
     member = sub.add_parser("prepare-member", help="one member at a centre (run starts these itself)")
     _case_arguments(member)

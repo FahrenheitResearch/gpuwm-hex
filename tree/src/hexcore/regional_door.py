@@ -283,7 +283,9 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
         "card": args.card,
         "cycle": args.cycle if parent is None else parent["start"],
         "parent": parent,
-        "forecast_args": [str(item) for item in (getattr(args, "forecast_arg", None) or ())],
+        # The hex default physics (MPAS suite by mesh, hexcore.physics_default) is written into the region's
+        # forecast flags here, so the init, step and species rules below see the suite the forecast runs.
+        "forecast_args": _physics_default_flags(args),
         "hours": hours,
         "history_every_minutes": int(args.history_every_minutes
                                      if args.history_every_minutes is not None
@@ -543,6 +545,13 @@ def _stage_init(args, value, status) -> dict[str, Any]:
             "--oned-underflow", switches["oned_underflow"]]
     argv += _init_suite_argv(value)
     return {"returncode": _cli(argv, status)}
+
+
+def _physics_default_flags(args) -> list[str]:
+    """The caller's --forecast-arg flags, plus the hex default MPAS suite when they name no physics."""
+    from .physics_default import ensure
+
+    return ensure([str(item) for item in (getattr(args, "forecast_arg", None) or ())])
 
 
 def _init_suite_argv(value: Mapping[str, Any]) -> list[str]:

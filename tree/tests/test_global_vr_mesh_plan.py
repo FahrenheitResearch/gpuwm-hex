@@ -102,11 +102,14 @@ def test_stage_records_failure_and_preserves_log(tmp_path, monkeypatch):
     assert Path(result["samples"]).is_file()
 
 
-def test_whole_binding_keeps_generated_row_and_source_arguments(tmp_path, monkeypatch):
+@pytest.mark.parametrize("route", ["mpas", "arwen"])
+def test_whole_binding_keeps_generated_row_and_source_arguments(tmp_path, monkeypatch, route):
     from types import SimpleNamespace
     from hexcore import init_sources
     from hexcore.swath import sizing
-    request = args(tmp_path, "--generate", "--run", "--source", "gfs", "--cycle", "2023-03-31T12")
+    # MPAS physics is the hex default (0.4.6); the ArWen route is named.
+    named = [] if route == "mpas" else ["--forecast-arg=--physics-suite=arwen_mpas_column"]
+    request = args(tmp_path, "--generate", "--run", "--source", "gfs", "--cycle", "2023-03-31T12", *named)
     binary = tmp_path / "engine"
     binary.write_bytes(b"binary")
     monkeypatch.setattr("hexcore.engines.resolve", lambda *a: binary)
@@ -138,9 +141,14 @@ def test_whole_binding_keeps_generated_row_and_source_arguments(tmp_path, monkey
     assert [call[0] for call in calls] == ["mesh", "static", "init-source", "forecast", "products"]
     forecast = calls[3]
     assert forecast[1][forecast[1].index("--mesh") + 1] == "generated-row"
-    assert forecast[1][forecast[1].index("--dt") + 1] == "90"
+    if route == "arwen":
+        assert forecast[1][forecast[1].index("--dt") + 1] == "90"
+        assert "--physics-suite=arwen_mpas_column" in forecast[1]
+    else:  # the forecast door's own step for the suite, as on the global door
+        assert "--dt" not in forecast[1] and "--physics-suite=convection_permitting" in forecast[1]
     assert str(tmp_path / "mesh-rows.json") in forecast[2]["GPUWM_HEX_MESH_ROWS"]
     receipt = json.loads((tmp_path / "global-vr-receipt.json").read_text())
+    assert receipt["physics"]["suite"] == ("convection_permitting" if route == "mpas" else "arwen_mpas_column")
     assert receipt["status"] == "complete"
     assert receipt["prediction_on_generated_mesh"]["cells"] == 215000
     assert receipt["source_binding"]["source"] == "gfs"

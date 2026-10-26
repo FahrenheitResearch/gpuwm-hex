@@ -95,7 +95,8 @@ def _config(arguments: argparse.Namespace) -> CascadeConfig:
         state=None if arguments.state is None else Path(arguments.state),
         metrics=None if arguments.metrics is None else Path(arguments.metrics),
         policy=None if arguments.policy is None else Path(arguments.policy),
-        forecast_args=tuple(str(item) for item in getattr(arguments, "forecast_arg", None) or ()),
+        # No physics named: the hex default MPAS suite by mesh (hexcore.physics_default).
+        forecast_args=tuple(_ensure_physics(str(item) for item in getattr(arguments, "forecast_arg", None) or ())),
     )
 
 
@@ -328,3 +329,9 @@ def _dispatch(arguments: argparse.Namespace) -> int:
 
 
 __all__ = ["add_cycle_parser", "run_cycle_plan", "run_cycle_run"]
+
+
+def _ensure_physics(flags):
+    from ..physics_default import ensure
+
+    return ensure(list(flags))

@@ -313,9 +313,13 @@ def plan(args):
     # suite, as the global door does (global_door.forecast_physics_arm): the mesh's own --dt is the
     # ArWen column's and is not passed beside it.
     from .global_door import forecast_arg_physics
-    extra = [str(item) for item in getattr(args, "forecast_arg", None) or ()]
+    from .physics_default import ensure
+    # No physics named: the hex default MPAS suite by mesh (hexcore.physics_default), written here so the
+    # step rule below and the region's init completion see the suite the forecast runs.
+    extra = ensure([str(item) for item in getattr(args, "forecast_arg", None) or ()], mesh.get("fine_dx_m"))
     named = forecast_arg_physics(extra)
-    step = [] if (named.get("suite") or named.get("namelist")) else ["--dt", str(mesh["dt_seconds"])]
+    from .physics_default import suite_takes_door_step
+    step = [] if suite_takes_door_step(named) else ["--dt", str(mesh["dt_seconds"])]
     forecast = ["forecast", "--mesh", mesh["id"], *common, "--init", str(init),
                 "--start-time", start, "--init-source", f"{row['init_source']} {issued_label}; country row {args.row}",
                 "--hours", str(args.hours), *step,

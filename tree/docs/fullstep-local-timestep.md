@@ -103,10 +103,12 @@ kernel or pinned numerical source is edited. The classes step FINE FIRST:
 * Toward coarser neighbours a class carries a scratch zone of coarser cells and
   advances them itself, at its own shorter step, which is always stable for a
   coarser cell. A zone cell is reset to its owner's accepted state at the
-  owner's step boundaries. The three rings beyond the zone are frozen at the
+  owner's step boundaries. The four rings beyond the zone are frozen at the
   owner's accepted state. The zone is deeper than a 400 m/s signal travels
   between two resets (times 1.5), so the frozen ring cannot reach an owned cell.
-* Toward finer neighbours a class carries the plain three-ring halo. The finer
+* Toward finer neighbours a class carries the plain four-ring halo (with three,
+  the outer ring's clamped stencils reached the computed cells within a step, so
+  a forecast depended on how a layout numbered its cells). The finer
   class has already covered the interval. With RK2, three dynamics splits and
   N acoustic sub-steps, every stage and acoustic time of a class is a
   multiple of 1/(3N) of its step: a plane. The clock counts ticks of

@@ -69,7 +69,8 @@ def test_exact_global_cases_decide_before_driver_loading(tmp_path, monkeypatch, 
     monkeypatch.setitem(sys.modules, "cupy", cp)
     for variable in ("GPUWM_NO_LOCAL_GPU", "GPUWM_HEX_NO_LOCAL_GPU"):
         monkeypatch.delenv(variable, raising=False)
-    args = _namespace(tmp_path, samehost_devices="0" if resident else None)
+    # The ArWen route's admission (MPAS physics is the hex default since 0.4.6, so the ArWen suite is named).
+    args = _namespace(tmp_path, samehost_devices="0" if resident else None, physics_suite="arwen_mpas_column")
     request = replace(door.resolve_request(args, registry=_registry()), cells=cells)
     monkeypatch.setattr(door, "resolve_request", lambda arguments: request)
     monkeypatch.setattr(door, "load_registry", lambda repo: _registry())

@@ -68,7 +68,10 @@ def test_the_mpas_route_is_named_at_every_door():
     assert mpas["forecast"] == ["--physics-suite=convection_permitting"]
     assert mpas["door"] == ["--forecast-arg=--physics-suite=convection_permitting"]
     assert mpas["moving"] == ["--physics-arg=--physics-suite=convection_permitting"]
-    assert SPEC["routes"]["arwen"] == {"door": [], "forecast": [], "moving": []}
+    # MPAS physics is the hex default (0.4.6), so the ArWen route is named too, at every door.
+    assert SPEC["routes"]["arwen"] == {"door": ["--forecast-arg=--physics-suite=arwen_mpas_column"],
+                                       "forecast": ["--physics-suite=arwen_mpas_column"],
+                                       "moving": ["--physics-arg=--physics-suite=arwen_mpas_column"]}
 
 
 @pytest.mark.parametrize("route", ["arwen", "mpas"])
@@ -80,7 +83,7 @@ def test_every_command_parses_with_the_real_parser(route, leg_id, tmp_path):
     ctx = _FakeContext(gate, route, tmp_path)
     leg = next(leg for leg in SPEC["legs"] if leg["id"] == leg_id)
     work = ctx.leg_dir(leg_id)
-    named = False
+    named = arwen_named = False
     for step in leg["steps"]:
         if "builtin" in step:
             assert step["builtin"] in gate.BUILTINS
@@ -91,11 +94,14 @@ def test_every_command_parses_with_the_real_parser(route, leg_id, tmp_path):
         assert not [t for t in expanded if t.startswith("{") and not t.startswith("{\"")], expanded
         build_parser().parse_args(expanded)  # SystemExit (a red) on any flag the doors no longer take
         named = named or any("convection_permitting" in t for t in expanded)
+        # MPAS physics is the hex default (0.4.6): the ArWen leg names its suite, or it would run MPAS.
+        arwen_named = arwen_named or any("arwen_mpas_column" in t for t in expanded)
         if route == "arwen":
             assert not any("convection_permitting" in t for t in expanded if t.startswith("--physics-suite")
                            or t.startswith("--forecast-arg=--physics-suite")), (leg_id, step["name"])
     if leg_id != "keep-as-init":  # exports the global leg's frames; the route was named when they were made
         assert named == (route == "mpas"), leg_id
+        assert arwen_named == (route == "arwen"), leg_id
 
 
 def test_the_base_forecast_drops_only_what_each_leg_sets(tmp_path):

@@ -97,6 +97,8 @@ def _list(arguments: argparse.Namespace) -> int:
     names += tuple(dict.fromkeys(alias for _, row in _route_providers(table) for alias in row["suite_routes"]
                                  if alias not in names))
     suites = []
+    from .physics_default import default_suite
+    door_default = default_suite(_mesh_spacing(arguments.mesh))
     for name in names:
         route = None
         try:
@@ -120,7 +122,10 @@ def _list(arguments: argparse.Namespace) -> int:
         suites.append({
             "name": name,
             "kind": "hex" if row is not None else "MPAS",
-            "default": bool(row is not None and row.get("default")),
+            # The hex default (hexcore.physics_default: MPAS-A's suite for this mesh); arwen_route_default marks
+            # the suite the ArWen route takes when only an override names it.
+            "default": name == door_default,
+            "arwen_route_default": bool(row is not None and row.get("default")),
             "describes": None if row is None else row["describes"],
             "selectors": dict(row["selectors"]) if row is not None
             else dict(mpas_row) if mpas_row is not None
@@ -168,7 +173,11 @@ def _resolve(arguments: argparse.Namespace) -> int:
     from .physics_suites import parse_override, resolve_physics
 
     from .physics_suites import load_table
+    from .physics_default import default_suite
 
+    if arguments.physics_suite is None and not arguments.physics:
+        # Nothing named: what the forecast door runs, the hex default MPAS suite for the mesh.
+        arguments.physics_suite = default_suite(_mesh_spacing(arguments.mesh))
     try:
         route = _mpas_route(load_table(), arguments.physics_suite, arguments.physics, arguments.physics_mode)
     except ValueError as error:

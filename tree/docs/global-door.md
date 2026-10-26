@@ -26,11 +26,16 @@ cached grid and static.
 
 | row | mesh | cells | physics |
 |---|---|---|---|
-| `global-120km` | x1.40962 | 40,962 | ArWen (default) |
-| `global-60km` | x1.163842 | 163,842 | ArWen |
-| `global-30km` | x1.655362 | 655,362 | ArWen |
-| `global-15km` | x1.2621442 | 2,621,442 | ArWen |
+| `global-120km` | x1.40962 | 40,962 | MPAS (default): convection_permitting |
+| `global-60km` | x1.163842 | 163,842 | MPAS: convection_permitting |
+| `global-30km` | x1.655362 | 655,362 | MPAS: convection_permitting |
+| `global-15km` | x1.2621442 | 2,621,442 | MPAS: convection_permitting |
 | `global-*-morrison` | as above | | the gpuwm-global suite: Morrison, Grell-Freitas, YSU, revised MM5, Noah, RRTMGP |
+
+The `mpas` arm is the hex default (0.4.6): MPAS-A's own suite for the mesh, from
+`src/hexcore/data/profiles/physics-default.v1.json`, at the forecast door's own
+step for that suite. `--physics-row arwen` runs ArWen physics (the arm every
+row ran before 0.4.6, with its long-step cap).
 
 `--physics-row` swaps the physics arm of any row. A new resolution, mesh or
 physics arm is a row in the table, not a code path.

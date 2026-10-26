@@ -64,6 +64,11 @@ def load_case(path: str | Path) -> dict[str, Any]:
     for key in ("background_km", "fine_km", "fine_radius_km", "fine_transition_km", "rings"):
         if key not in case["mesh"]:
             raise MovingCaseError(f"case file {path}: mesh.{key} is required")
+    # The hex default physics (owner ruling 2026-10-25): a case whose physics_args name no physics runs MPAS-A's
+    # own suite for its fine spacing (hexcore.physics_default).  Written here, the one reader of case files, so the
+    # roster, the move hooks and every segment's forecast door decide the same route.
+    from .physics_default import ensure
+    case["physics_args"] = ensure(case.get("physics_args") or [], 1000.0 * float(case["mesh"]["fine_km"]))
     case["_path"] = str(path)
     return case
 

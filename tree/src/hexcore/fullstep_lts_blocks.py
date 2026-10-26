@@ -53,7 +53,8 @@ from .partition_assets_v841 import (
     assert_exact_cover,
 )
 
-HALO_RINGS = 3
+# Must equal fullstep_lts_classes.HALO_RINGS (see the reason there): a block's halo is the class halo at its rim.
+from .fullstep_lts_classes import HALO_RINGS  # noqa: E402
 
 
 def rcb_parts(points: np.ndarray, n_parts: int) -> np.ndarray:

@@ -391,5 +391,8 @@ def admit_arguments(args):
     if getattr(args, "chemistry_config", None) is None:
         return
     backend = getattr(args, "physics_backend", None)
-    if (backend not in (None, "wsm6_column") and not str(backend).startswith("chemistry_")) or getattr(args, "physics_suite", None) or getattr(args, "physics", None):
+    from .physics_default import arwen_suite
+    # --physics-suite arwen_mpas_column alone is the ArWen default column (the road a bare run took before 0.4.6).
+    suite = getattr(args, "physics_suite", None)
+    if (backend not in (None, "wsm6_column") and not str(backend).startswith("chemistry_")) or (suite and suite != arwen_suite()) or getattr(args, "physics", None):
         raise ValueError("chemistry currently couples to the active default WSM6/YSU column backend; another physics selection needs its own coefficient and scalar-update contract and cannot be silently replaced")

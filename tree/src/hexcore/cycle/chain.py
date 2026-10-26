@@ -88,6 +88,9 @@ class ParentStream:
     grid: Path
     static: Path
     frames: tuple[tuple[datetime, Path, str], ...]
+    #: The rw_mpas_lbc driving-source row that reads these frames: this program's ArWen-route history spells the
+    #: edge-normal wind normal_u; the MPAS-physics route writes MPAS-A's own streams (u, xtime).
+    lbc_source: str = "unstructured-port-stream"
 
     @property
     def start(self) -> datetime:
@@ -114,6 +117,50 @@ class ParentStream:
                 f"{_stamp(first)} and {_stamp(last)}"
             )
         return chosen
+
+
+def _mpas_suite_stream(receipt: Path) -> ParentStream | None:
+    """The frames of an MPAS-physics forecast (``native-physics-receipt.json``), or None for another receipt.
+
+    THE BREAKAGE THIS PREVENTS (2026-10-25, MPAS physics the hex default): that route writes MPAS's own streams,
+    a ``history-ready.jsonl`` row per published frame and ``forecast-start.json`` (grid, static, start), and no
+    door receipt with ``snapshot_files``, so ``cycle --coarse-history`` / ``--parent-history`` refused every
+    default forecast as "names no history frames".  The frames are named by valid time
+    (``history.<FRAME_LABEL_FORMAT>.nc``), so the label is read off the published file name.
+    """
+
+    folder = receipt.parent
+    ready = folder / "history-ready.jsonl"
+    start = folder / "forecast-start.json"
+    if not (ready.is_file() and start.is_file()):
+        return None
+    try:
+        begun = json.loads(start.read_text(encoding="utf-8"))
+        rows_in = [json.loads(line) for line in ready.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, ValueError) as error:
+        raise CycleRefusal(f"{folder} holds an unreadable MPAS-physics frame record ({error})") from error
+    rows: list[tuple[datetime, Path, str]] = []
+    for row in rows_in:
+        path = Path(str(row.get("path", "")))
+        if not path.is_file():
+            path = folder / path.name
+        name = path.name
+        if not (name.startswith("history.") and name.endswith(".nc")):
+            continue
+        try:
+            moment = _parse_label(name[len("history."):-len(".nc")])
+        except ValueError as error:
+            raise CycleRefusal(
+                f"{path} is an MPAS-physics frame whose name carries no valid time; a frame index is not a time "
+                f"and using one as a time would place every swath from the wrong hour") from error
+        rows.append((moment, path, ""))
+    if not rows:
+        raise CycleRefusal(f"{receipt} names no history frames, so the forecast it describes wrote nothing a cycle "
+                           f"could detect in or cull from")
+    rows.sort(key=lambda item: item[0])
+    return ParentStream(receipt=receipt, grid=Path(str(begun.get("grid", ""))),
+                        static=Path(str(begun.get("static", ""))), frames=tuple(rows),
+                        lbc_source="unstructured-native-stream")
 
 
 def read_parent_stream(receipt: Path) -> ParentStream:
@@ -148,6 +195,10 @@ def read_parent_stream(receipt: Path) -> ParentStream:
     # number near zero against its floor and rejects everything with no error.
     # Measured on g96.grid.nc.
     static = authority_files.get("static") or {}
+    if not files and not labels:
+        mpas = _mpas_suite_stream(receipt)
+        if mpas is not None:
+            return mpas
     if not files or not labels:
         raise CycleRefusal(
             f"{receipt} names no history frames, so the forecast it describes "
@@ -375,7 +426,7 @@ def build_boundaries(
     engine = resolve_lbc_engine(config.lbc_exe)
     out_dir.mkdir(parents=True, exist_ok=True)
     argv: list[Any] = [
-        engine, "--source", "unstructured-port-stream",
+        engine, "--source", stream.lbc_source,
         "--grid", child_init,
         "--parent-grid", config.coarse_parent_grid,
         "--out-dir", out_dir,
@@ -802,7 +853,11 @@ def run_slot(
         "returncode": forecast["returncode"]}).as_dict())
 
     rendered: dict[str, Any] | None = None
-    frames = sorted((slot_dir / "forecast").glob("*.nc")) if forecast["returncode"] == 0 else []
+    # The state frames only.  The MPAS-physics route also writes MPAS's diag stream (diag.<time>.nc, no vertical
+    # levels) beside its history frames; handed to the render door with them it stopped rw_mpas_convert on the
+    # first file ("history has no nVertLevels dimension") and the slot rendered no picture (2026-10-25).
+    frames = (sorted(path for path in (slot_dir / "forecast").glob("*.nc") if not path.name.startswith("diag."))
+              if forecast["returncode"] == 0 else [])
     if config.render and frames:
         rendered = render_cycle(
             config, history=frames, mesh=grid, out=slot_dir / "render",

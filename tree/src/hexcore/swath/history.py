@@ -61,6 +61,20 @@ DIMENSIONAL_SPHERE_RADIUS_M = 1000.0
 #: not a filename character on every platform the wheel installs on.
 _STAMP_FORMATS = ("%Y-%m-%d_%H:%M:%S", "%Y-%m-%d_%H.%M.%S")
 
+#: The publication-manifest fields under MPAS-A's own stream names, for frames the MPAS-physics route writes
+#: (``history.<time>.nc`` with its ``diag.<time>.nc``): field -> (MPAS-A name, stream, form).  "column" marks a
+#: field the MPAS-A diag stream already reduces to its column maximum.  ``snownc``: MPAS-A's default streams
+#: carry no grid-scale snowfall accumulation; ``acsnow`` (the land model's accumulated snowfall, liquid water
+#: equivalent, kg m-2 = mm) is the published snowfall accumulation, so its time rate is a snowfall rate.  It
+#: counts convective snow too and is accumulated over land.
+MPAS_STREAM_ALIASES: Mapping[str, tuple[str, str, str]] = {
+    "t2": ("t2m", "history", "field"),
+    "u_zonal": ("uReconstructZonal", "history", "field"),
+    "v_meridional": ("uReconstructMeridional", "history", "field"),
+    "refl10cm": ("refl10cm_max", "diag", "column"),
+    "snownc": ("acsnow", "history", "field"),
+}
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -597,6 +611,44 @@ class HistoryReader:
             "implementation must move together"
         )
 
+    def _mpas_stream_alias(self, name: str, frame_index: int) -> np.ndarray | None:
+        """The field from an MPAS-A stream frame (``history.<time>.nc`` and its ``diag.<time>.nc``), or None.
+
+        THE BREAKAGE THIS PREVENTS (2026-10-25, MPAS physics the hex default): the MPAS-physics route writes
+        MPAS's own streams, so a default coarse forecast published ``t2m``, ``uReconstructZonal`` and the diag
+        stream's ``refl10cm_max`` where the armed rows read ``t2``, ``u_zonal`` and ``refl10cm``, and the cycle
+        door refused every such forecast ("does not publish 't2'").  Each alias is the same quantity under
+        MPAS-A's name (MPAS_STREAM_ALIASES); a field with no alias still refuses by name.
+        """
+        alias = MPAS_STREAM_ALIASES.get(name)
+        if alias is None or self.kind != "forecast_run_receipt":
+            return None
+        source, stream, form = alias
+        dataset, record = self._records[frame_index]
+        if stream == "diag":
+            frame = self._frame_paths[frame_index]
+            if not frame.name.startswith("history."):
+                return None
+            sibling = frame.with_name("diag." + frame.name[len("history."):])
+            if not sibling.is_file():
+                return None
+            opened = getattr(self, "_diag_frames", None)
+            if opened is None:
+                opened = self._diag_frames = {}
+            if sibling not in opened:
+                opened[sibling] = self._track(self._Dataset(str(sibling), "r"))
+            dataset, record = opened[sibling], 0
+        if source not in dataset.variables:
+            return None
+        variable = dataset.variables[source]
+        values = (np.asarray(variable[record], dtype=np.float64)
+                  if variable.dimensions and variable.dimensions[0] == "Time"
+                  else np.asarray(variable[:], dtype=np.float64))
+        if form == "column":
+            # Already a column extremum: one level, so the row's vertical extremum returns it unchanged.
+            values = values.reshape(1, -1)
+        return values
+
     def _read(self, name: str, frame_index: int) -> np.ndarray:
         dataset, record = self._records[frame_index]
         if name not in dataset.variables:
@@ -605,6 +657,8 @@ class HistoryReader:
             # streams keep terrain there rather than on every frame.
             if name in self._mesh.variables:
                 dataset, record = self._mesh, 0
+            elif (aliased := self._mpas_stream_alias(name, frame_index)) is not None:
+                return aliased
             else:
                 raise SwathRefusal(
                     f"the coarse forecast at {self.path.name} does not publish "

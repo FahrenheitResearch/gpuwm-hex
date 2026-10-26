@@ -469,6 +469,28 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
     hours = float(args.hours if args.hours is not None else row.get("hours", 24))
     named = forecast_arg_physics(args.forecast_arg)
     suite_arm = forecast_physics_arm(table, named, args.physics_row)
+    # The hex default (owner ruling 2026-10-25): a row on the "mpas" arm with no suite named runs MPAS-A's own
+    # suite for its mesh (hexcore.physics_default), passed to the forecast door below as --physics-suite.  An
+    # "arwen" arm with no overrides passes --physics-suite arwen_mpas_column (the ArWen route as it always ran).
+    route_suite = None
+    from .physics_default import names_physics
+    if suite_arm is None and physics.get("route") == "mpas" and names_physics(args.forecast_arg):
+        # --forecast-arg names an ArWen-route option (--physics KEY=VALUE, --convection, a backend row) with no
+        # suite: the forecast door runs it on the ArWen suite, so the plan says so and takes that arm's step.
+        row["physics"], physics = "arwen", dict(table["physics"]["arwen"])
+    if suite_arm is None and physics.get("route") == "mpas":
+        from .physics_default import default_suite, record as default_record
+
+        route_suite = default_suite(float(mesh["nominal_dx_m"]))
+        suite_arm = forecast_physics_arm(table, {"suite": route_suite}, None)
+        suite_arm[1]["about"] = (f"MPAS-A's own {route_suite} suite on the MPAS route, the hex default for this mesh "
+                                 "(data/profiles/physics-default.v1.json): " + suite_arm[1]["about"].split(": ", 1)[-1])
+        suite_arm[1]["default"] = default_record(float(mesh["nominal_dx_m"]))
+    elif (suite_arm is None and physics.get("route") == "arwen" and not physics.get("overrides")
+          and not names_physics(args.forecast_arg)):
+        from .physics_default import arwen_suite
+
+        route_suite = arwen_suite()
     if suite_arm is None:
         step = row_step(mesh, physics, engine=engine_identities())
     else:
@@ -553,6 +575,8 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
         forecast_argv += ["--chemistry-config", str(args.chemistry_config)]
     for key, value in physics["overrides"].items():
         forecast_argv += ["--physics", f"{key}={value}"]
+    if route_suite is not None:
+        forecast_argv += ["--physics-suite", route_suite]
     forecast_argv += spec.forecast_arguments()
     if step["capped"] and suite_arm is None:
         # Only a binding cap is passed: an uncapped row keeps the forecast door's own default.
@@ -1040,7 +1064,7 @@ def _ran_physics(path: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     block = (forecast.get("configuration") or {}).get("physics_mode") or {}
-    return {"suite": (forecast.get("physics") or {}).get("suite") or "arwen (the forecast door default)",
+    return {"suite": (forecast.get("physics") or {}).get("suite") or "arwen",
             "mode": block.get("physics.mode", "exact")}
 
 
@@ -1077,7 +1101,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--accept-licence", action="append", default=[], metavar="LICENCE",
                         help="research-only model opt-in naming each exact code/weight licence")
     parser.add_argument("--member", type=int, default=None, help="one member of an ensemble source (e.g. gefs)")
-    parser.add_argument("--physics-row", default=None, help="override the row's physics arm (arwen, morrison)")
+    parser.add_argument("--physics-row", default=None, help="override the row's physics arm: mpas (the hex default, MPAS-A's suite by mesh), arwen, morrison")
     parser.add_argument("--vertical-spec", type=Path, default=None,
                         help="versioned vertical grid and runtime settings (default: the row's specification)")
     parser.add_argument("--hours", type=float, default=None, help="forecast length (default: the row's)")

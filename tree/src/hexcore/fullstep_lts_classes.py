@@ -58,7 +58,15 @@ from .partition_assets_v841 import (
     assert_exact_cover,
 )
 
-HALO_RINGS = 3
+# Four halo rings past a class's computed cells (its own and its scratch zone).  A row of the outermost ring has
+# an incomplete stencil and reads clamped references (partition_local_mesh_v841: an absent neighbour is local index
+# 0), and between two fills that garbage travelled three rings inward, into the computed cells.  With three rings
+# the result depended on which cell a layout numbers 0: a class cut into blocks across cards (fullstep_lts_blocks)
+# parted from the one-card class at the class interface (MPAS route, 240/60 km globe: 0 differing words at the
+# first fine steps, 90 w words at 30 min, u off by 1.3 m/s at 3 h), and one card's own forecast moved with the halo
+# depth on both physics routes (3 against 4 rings: 3 % of the words at 30 min).  Four rings and five give the same
+# bytes on both routes, and the blocks reproduce the one-card class (2026-10-25).
+HALO_RINGS = 4
 SCRATCH_FLAG = 64   # carried coarser entity: advanced here, reset at its owner's step boundaries
 CLASS_MASK = 31
 DYADIC = (1, 2, 4, 8, 16, 32)

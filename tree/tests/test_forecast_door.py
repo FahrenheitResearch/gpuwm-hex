@@ -948,7 +948,8 @@ def test_the_door_leaves_destination_creation_to_the_driver(
     monkeypatch.setattr(
         door, "measure_device_memory", lambda: (15 * GIB, 16 * GIB)
     )
-    arguments = _namespace(tmp_path)
+    # The ArWen driver's plumbing: name the ArWen suite (MPAS physics is the hex default since 0.4.6).
+    arguments = _namespace(tmp_path, physics_suite="arwen_mpas_column")
     rc = door.run_forecast(arguments)
     assert seen.get("created_by_driver") is True
     # rc 1 is the door's own "driver exited 0 but wrote no history frame"
@@ -1028,7 +1029,9 @@ def test_samehost_two_device_run_finishes_the_door_receipt(tmp_path, monkeypatch
     monkeypatch.setattr(samehost, "installed", installed)
     monkeypatch.setattr(door, "admit_architecture", lambda: pytest.fail("same-host already admits every card"))
     receipt_path = tmp_path / "complete-door.json"
-    arguments = _namespace(tmp_path, samehost_devices="0,1", receipt=str(receipt_path))
+    # The ArWen driver's plumbing: name the ArWen suite (MPAS physics is the hex default since 0.4.6).
+    arguments = _namespace(tmp_path, samehost_devices="0,1", receipt=str(receipt_path),
+                           physics_suite="arwen_mpas_column")
     assert door.run_forecast(arguments) == 0
     receipt = json.loads(receipt_path.read_text())
     assert receipt["status"] == "passed"

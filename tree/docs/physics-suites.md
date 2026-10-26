@@ -5,8 +5,21 @@ A hex forecast runs one of two kinds of physics. **MPAS-A v8.4.2's own suites**
 physics driver on the MPAS route (`--physics-backend mpasphys`), scheme by
 scheme either as native MPAS Fortran or as hex's CUDA port, and are matched
 against native MPAS bit for bit: see [the MPAS physics seam](manual/mpas-physics-seam.md)
-and the README's *Running an MPAS physics suite*. **ArWen's physics**, the
-default, is described on this page: a **named suite** plus optional
+and the README's *Running an MPAS physics suite*.
+
+**The default is MPAS physics (0.4.6).** A run on any door that names no
+physics runs the MPAS route with the suite
+`src/hexcore/data/profiles/physics-default.v1.json` picks for the mesh's finest
+spacing: `convection_permitting` under 10 km (MPAS-A's recommendation for
+convection-permitting and variable-resolution meshes) and, in this release, on
+coarser quasi-uniform meshes too (MPAS-A tested it from several hundred km
+down; `mesoscale_reference`, MPAS's Registry default there, is refused on the
+GPU route until its interface glue is ported). `gpuwm-hex physics list` marks
+it as `default`.
+
+**ArWen's physics**, selected with `--physics-suite arwen_mpas_column` (or any
+suite below, or a `--physics KEY=VALUE` override, an explicit `--convection`
+scheme or a `--physics-backend` row with no suite), is described on this page: a **named suite** plus optional
 **overrides**, read from one table,
 `src/hexcore/data/profiles/mpas-physics-suites.v1.json`. The dycore never reads
 it. ArWen's physics is graded against observations (MRMS, ASOS), not against
@@ -16,7 +29,7 @@ MPAS's physics code.
 
 | suite | what runs | seam |
 |---|---|---|
-| `arwen_mpas_column` (default) | WSM6; hex's convection rule by mesh spacing; YSU over the revised MM5 surface layer; Noah-MP (4 layers); hex's YSU gravity-wave drag; legacy RRTMG with the Xu-Randall cloud fraction | frozen column batch, row `wsm6_column` |
+| `arwen_mpas_column` (the ArWen route's default) | WSM6; hex's convection rule by mesh spacing; YSU over the revised MM5 surface layer; Noah-MP (4 layers); hex's YSU gravity-wave drag; legacy RRTMG with the Xu-Randall cloud fraction | frozen column batch, row `wsm6_column` |
 | `arwen_thompson_column` | the default with aerosol-aware Thompson (WRF mp=28) | frozen column batch, row `thompson_aero_column` |
 | `rrfs_v2_dev` | shaped after RRFS v2 (`hrrrv5`): aerosol-aware Thompson; no cumulus (New Tiedtke on the 12 km meshes); MYNN-EDMF over the MYNN surface layer; RUC on 9 soil levels; the GSL orographic drag; legacy RRTMG with MYNN's subgrid cloud | column-suite seam, row `mynn_ruc_gsl_column` |
 
@@ -27,9 +40,10 @@ route cannot run in them is refused by name. For MPAS's own schemes, use the
 MPAS route above. `rrfs_v2_dev` lists every known difference from
 RRFS v2 in its table row, and the run's receipt carries the list.
 
-With no suite flag at all, a run is the run a bare door made before named
-suites: same backend row, same convection request, same driver arguments, same
-configuration (bitwise on the card: `evidence/physics-suites-20261007/`).
+`--physics-suite arwen_mpas_column` and nothing else is the run a bare door made
+before MPAS physics became the default (and before named suites): same backend
+row, same convection request, same driver arguments, same configuration
+(bitwise on the card: `evidence/physics-suites-20261007/`).
 
 ## Front doors
 

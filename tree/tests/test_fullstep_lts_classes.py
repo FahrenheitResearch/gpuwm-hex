@@ -6,6 +6,7 @@ import pytest
 
 from hexcore.fullstep_lts_classes import (
     CLASS_MASK,
+    HALO_RINGS,
     SCRATCH_FLAG,
     build_class_layouts,
     build_class_plan,
@@ -74,7 +75,7 @@ def test_class_layouts_obey_the_partition_builders_cell_laws(tmp_path):
     graph.write_text("\n".join([f"{n} {n}"] + [" ".join(str(v + 1) for v in sorted(row)) for row in coc]) + "\n")
     part = tmp_path / "ring.graph.info.part.3"
     part.write_text("\n".join(str(v) for v in cls) + "\n")
-    reference = build_partition_layouts(graph, part, halo_rings=3, cells_on_edge=coe, cells_on_vertex=cov)
+    reference = build_partition_layouts(graph, part, halo_rings=HALO_RINGS, cells_on_edge=coe, cells_on_vertex=cov)
     mine = build_class_layouts(cells_on_cell=coc, n_edges_on_cell=counts, cells_on_edge=coe,
                                cells_on_vertex=cov, cell_class=cls)
     for a, b in zip(reference, mine):
@@ -131,12 +132,12 @@ def test_a_class_carries_only_coarser_cells_and_the_coarsest_carries_none():
     coarse, fine = plan.classes
     assert not np.any(coarse.halo_cell_class & SCRATCH_FLAG)
     coarse_halo = coarse.layout.cell_l2g[coarse.layout.n_owned_cells:]
-    assert sorted(coarse_halo.tolist()) == [0, 1, 2, 17, 18, 19]          # three plain rings of finer cells
+    assert sorted(coarse_halo.tolist()) == [0, 1, 2, 3, 16, 17, 18, 19]   # four plain rings of finer cells
     fine_halo = fine.layout.cell_l2g[fine.layout.n_owned_cells:]
     carried = fine_halo[(fine.halo_cell_class & SCRATCH_FLAG) != 0]
     assert sorted(carried.tolist()) == [20, 21, 22, 57, 58, 59]
     frozen = fine_halo[(fine.halo_cell_class & SCRATCH_FLAG) == 0]
-    assert sorted(frozen.tolist()) == [23, 24, 25, 54, 55, 56]            # three frozen rings beyond the zone
+    assert sorted(frozen.tolist()) == [23, 24, 25, 26, 53, 54, 55, 56]    # four frozen rings beyond the zone
     assert fine.layout.cell_row_complete[fine.layout.cell_g2l()[carried]].all()
     # carried edges: those of the coarser class that touch a zone cell
     fine_edges = fine.layout.edge_l2g[fine.layout.n_owned_edges:]

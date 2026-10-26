@@ -2,7 +2,11 @@
   "schema": "gpuwm-hex.both-routes-gate/v1",
   "about": "One short real run per capability family on each physics route (ArWen and MPAS). Breakage it prevents: a capability that works on one route and is refused, silently dropped or broken on the other (every hex capability works on every physics route). Read by tools/both_routes_gate.py; tests/test_both_routes_gate.py parses every argv below with the real gpuwm-hex parser on the CPU tier.",
   "routes": {
-    "arwen": {"door": [], "forecast": [], "moving": []},
+    "arwen": {
+      "door": ["--forecast-arg=--physics-suite=arwen_mpas_column"],
+      "forecast": ["--physics-suite=arwen_mpas_column"],
+      "moving": ["--physics-arg=--physics-suite=arwen_mpas_column"]
+    },
     "mpas": {
       "door": ["--forecast-arg=--physics-suite=convection_permitting"],
       "forecast": ["--physics-suite=convection_permitting"],

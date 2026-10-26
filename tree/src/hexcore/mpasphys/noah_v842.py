@@ -3155,7 +3155,12 @@ def _compile_module(source, reserve_stack=True):
     if not path.exists():
         from ..cuda_backend.aot import direct_image
         binary = direct_image(source, _hex_numerics.options(CUDA_OPTIONS, keep_ftz=True), arch)
-        temporary = path.with_suffix(f'.{os.getpid()}.tmp')
+        # Process AND thread in the name.  THE BREAKAGE A PID ALONE CAUSED (2026-10-25, MPAS-suite LTS, 3 rate
+        # classes on a cold cache): the class threads of one process compiled this module at once, wrote the same
+        # .<pid>.tmp, one renamed it away and the next rename failed (FileNotFoundError), and another thread loaded
+        # a half-written cubin (CUDA_ERROR_INVALID_IMAGE).  Each writer now owns its temporary; os.replace is atomic.
+        import threading
+        temporary = path.with_suffix(f'.{os.getpid()}.{threading.get_ident()}.tmp')
         temporary.write_bytes(binary)
         temporary.replace(path)
     return cp.RawModule(path=str(path))

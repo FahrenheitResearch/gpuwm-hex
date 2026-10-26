@@ -1,7 +1,7 @@
 {
   "assets": {
     "kernel-pack-cuda12.json": {
-      "bytes": 51866335,
+      "bytes": 47233425,
       "compiler": {
         "cache_key": "87417f5ddafec4c853dab1863f8bb308dafc152c",
         "cupy": "14.2.0",
@@ -20,10 +20,10 @@
       "select": {
         "nvrtc_major": 12
       },
-      "sha256": "d2c04d821a397c188261e41361a6a3240f59c2725d2922d17f4588690c4a7bff"
+      "sha256": "cd3c87ae26e49305431dbba407710e51114053b0937468acbbdb0c90e4ca9672"
     },
     "kernel-pack-cuda13.0.json": {
-      "bytes": 37942672,
+      "bytes": 46637998,
       "compiler": {
         "cache_key": "87417f5ddafec4c853dab1863f8bb308dafc152c",
         "cupy": "14.2.0",
@@ -34,19 +34,18 @@
           0
         ],
         "nvrtc_library_sha256": "a49e67e8e74590f1e98de55c39c6287efd3f59e3c3797464d7bbe0fe01349b11",
-        "nvrtc_package": "nvidia-cuda-nvrtc==13.4.92",
+        "nvrtc_package": "nvidia-cuda-nvrtc==13.0.88",
         "use_pch": false,
         "use_ptx": false
       },
       "kind": "kernel-pack",
-      "release_tag": "kernel-packs-v0.4.5",
       "select": {
         "nvrtc_major": 13
       },
-      "sha256": "36d5753a23376dffb633981a6538bdb922436c1a348b79b253b3e6d09920b6da"
+      "sha256": "db3078d9934eefaf5aa9fac5055a8403776fca3d23970dadcfd645835df2c80e"
     },
     "kernel-pack-cuda13.json": {
-      "bytes": 48381036,
+      "bytes": 47160510,
       "compiler": {
         "cache_key": "87417f5ddafec4c853dab1863f8bb308dafc152c",
         "cupy": "14.2.0",
@@ -65,13 +64,13 @@
       "select": {
         "nvrtc_major": 13
       },
-      "sha256": "ee1d4e46485bf843c78a081cddf9b7356bb7a21c8463bfa51617313e6227360d"
+      "sha256": "ccb3ac20e4db21287b3a3259787bbee62ab1f6990806ec5851b0aecb18668c43"
     }
   },
   "breakage": "The 169 MB gpuwm-hex 0.4.1 wheel exceeds the PyPI 100,000,000 B per-file cap.",
   "release_assets": {
     "repository": "FahrenheitResearch/gpuwm-hex",
-    "tag": "kernel-packs-v0.4.2"
+    "tag": "kernel-packs-v0.4.6"
   },
   "schema": "gpuwm-hex.on-demand-assets/v1"
 }

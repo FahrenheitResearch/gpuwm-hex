@@ -37,9 +37,9 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.4.5", (
-        "0.4.5 is the release beside gpuwm 2.9.7 (2026-10-24, pre-approved with it): every fix and the "
-        "MPAS-physics route at parity; moving it is a release decision, not an edit"
+    assert declared == "0.4.6", (
+        "0.4.6 is the release on gpuwm 2.9.7 (2026-10-25, pre-approved): MPAS physics by default, the "
+        "moving-shape fixes and LTS on several cards; moving it is a release decision, not an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")

@@ -2061,6 +2061,13 @@ __device__ void cup_gf_sh (GFWorkspace &workspace, GFReal * xmb_out, GFReal * zo
       D_6740 = (void *) workspace.allocate (gf_max((unsigned long) (size_308 * 4), 1));
       qco = (GFReal *) D_6740;
       offset_307 = -(lbound_302) - lbound_304 * stride_306;
+      // module_cu_gf.mpas.F:4784: at k=ktop the shallow dellaq loop reads qco(i,ktop+1)
+      // (times detup=0), a word native never defines (qco is set only up to ktop,
+      // F:4565-4637). Workspace slots are reused, so that word was whatever the slot
+      // last held; a NaN there made rthcuten/rqvcuten NaN at ktop and the step was
+      // refused (storm-following Vance, 2026-10-25). Zero it: native's finite
+      // garbage times zero gives the same words.
+      for (long long e_qco = 0; e_qco < size_308; ++e_qco) qco[e_qco] = 0.0f;
       lbound_309 = (long long) *its;
       ubound_310 = (long long) *ite;
       stride_313 = (1 - lbound_309) + ubound_310;

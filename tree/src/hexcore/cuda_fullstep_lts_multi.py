@@ -563,7 +563,9 @@ class _BlockExchanger:
             owner._fill_scalars(block, state.scalars, *self._scalar_spec("A", START))
         fields = self._state_fields(state, saved, scalars=True)
         if dynamics_tendencies is not None:
-            fields += [(name, getattr(dynamics_tendencies, name), "cell") for name in ("rthdynten", "rqvdynten")]
+            # rqvdynten is formed only for GF and New Tiedtke on the MPAS-physics route (runtime_v842.prepare_transport)
+            fields += [(name, getattr(dynamics_tendencies, name), "cell") for name in ("rthdynten", "rqvdynten")
+                       if getattr(dynamics_tendencies, name, None) is not None]
         self.peer("A", fields)
 
     def round_stage_entry(self, state: Any, saved: Any) -> None:
@@ -1561,6 +1563,14 @@ class FullStepLtsMulti:
             del rebuilt
         if int(block.reflux_edge.size):
             self._edge_velocity(block, block.reflux_edge, block.reflux_edge_cells)
+        if has_finer:
+            # The velocities just recovered next to refluxed cells (owned edges) and the rebuilt w (owned reflux
+            # columns) reach the peers' halo too.  THE BREAKAGE THIS PREVENTS: the peers kept the pre-reflux words
+            # there until the next step's round A, so the output diagnostics a frame computes from the halo
+            # (divergence, the reconstructed winds at a seam cell) differed in the last place from the one-card
+            # class whenever a class with a finer interface was cut (240/60 km globe, 2 ranks, 2026-10-25).
+            block.exchanger.peer("R", [("normal_velocity", saved.normal_velocity, "edge"),
+                                       ("vertical_velocity", saved.vertical_velocity, "cell")])
         self._publish(block, atmosphere, self.truth_plane)
         if self.ntr:
             if packets:
