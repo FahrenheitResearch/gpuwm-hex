@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.7
+
+Requires gpuwm>=2.9.7,<2.10.
+
+Fixed:
+- Storm-following runs no longer refuse a move with "FP32 moving integral cannot meet its conservation tolerance".
+- A cycle that is not posted yet is refused naming every address it tried (NOAA first) and when it posts; archives that lag a cycle are skipped for younger cycles.
+- A start file without a 2 m analysis (IFS starts carry q2 as NaN and t2m as 0 K) takes its 2 m fields from the first physics call, so ensemble products no longer fail with "history q2 is not finite".
+- A run's exit no longer waits on an idle kernel-compile worker that ignored the stop signal.
+
 ## 0.4.6
 
 Requires gpuwm>=2.9.7,<2.10.

@@ -169,7 +169,14 @@
         }
       },
       "archive": {
-        "mirrors": "url lists are tried in order: the AWS layout with atmos/ (2021-03-22 12Z on), the AWS layout without it (2021-01-01 to 2021-03-22 06Z), then NCAR GDEX d084001 (2015-01-15 on, no .idx: read whole). The same three holdings as gpuwm's rw-wps-archive-layouts.v1.json gfs rows."
+        "mirrors": "url lists are tried in order: the AWS layout with atmos/ (2021-03-22 12Z on), the AWS layout without it (2021-01-01 to 2021-03-22 06Z), then NCAR GDEX d084001 (2015-01-15 on, no .idx: read whole). The same three holdings as gpuwm's rw-wps-archive-layouts.v1.json gfs rows.",
+        "delayed": [
+          {
+            "prefix": "https://data.gdex.ucar.edu/d084001/",
+            "delay_hours": 48,
+            "basis": "GDEX takes a cycle about two days after it runs: on 2026-10-26 at 07:45Z it held 2026-10-24 12Z and not 18Z (37.75 to 43.75 h behind), rounded up. A younger cycle is not asked of it, so a cycle that has not posted is refused naming NOAA's answer, not GDEX's."
+          }
+        ]
       }
     },
     {

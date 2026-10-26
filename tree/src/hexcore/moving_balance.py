@@ -359,6 +359,59 @@ def _sparse_bracket_rounding(out, exact, measure, mask, target):
     return candidate
 
 
+def _ordered_bracket_rounding(exact, measure, mask, target, bound):
+    """Close a budget the index-order prefix missed, largest admissible quantum first.
+
+    Each eligible value stays at its nearest float or moves once to the other
+    float bracketing it, as in the prefix path. The prefix walks candidates in
+    index order, so one heavy quantum (a coarse background cell carrying a
+    sparse hydrometeor) can be the step that overshoots, leaving a residual no
+    later candidate in that direction can reduce. Taking the largest quantum
+    that still reduces the residual first, then reversing direction when the
+    residual changes sign, closes such budgets with the small quanta. The cast
+    error is never larger than the quanta in its own direction, so a solution
+    within one float per value exists whenever the quanta are fine enough.
+    Breakage it prevents: storm-following run_0bd003fbf0fc2910 (2026-10-26,
+    hex 0.4.6, MPAS physics) refused its first move with a residual of twice
+    the tolerance and 1061 eligible cells.
+    """
+    nearest = exact.astype(np.float32)
+    out = nearest.copy()
+    flat, ex, m = out.ravel(), exact.ravel(), measure.ravel()
+    ids = np.flatnonzero(mask)
+    if not len(ids) or np.any(m[ids] < 0):
+        return out
+    near = nearest.ravel()[ids]
+    other = np.where(near.astype(float) > ex[ids], np.nextafter(near, np.float32(-np.inf)),
+                     np.nextafter(near, np.float32(np.inf)))
+    delta = (other.astype(float) - near.astype(float)) * m[ids]
+    error = float(target - np.sum(out.astype(float) * measure))
+    moved = np.zeros(len(ids), dtype=bool)
+    for _ in range(64):
+        if abs(error) <= bound:
+            break
+        cand = np.flatnonzero(~moved & (np.sign(delta) == np.sign(error)) & (delta != 0))
+        if not len(cand):
+            break
+        size = abs(delta[cand])
+        order = cand[np.lexsort((ids[cand], -size))]
+        size = abs(delta[order])
+        sign, j, took = np.sign(error), 0, False
+        while j < len(order) and abs(error) > bound and np.sign(error) == sign:
+            # quanta at least twice the residual cannot reduce it; skip to the first that can
+            j = max(j, int(np.searchsorted(-size, -2.0 * abs(error), side="right")))
+            if j >= len(order):
+                break
+            k = order[j]
+            flat[ids[k]] = other[k]
+            error -= float(delta[k])
+            moved[k] = took = True
+            j += 1
+        if not took:
+            break
+    return out
+
+
 def conservative_float32(exact, measure, target, *, eligible=None, rtol=5e-10):
     """Round within one ULP while closing the integrated product budget.
 
@@ -406,6 +459,11 @@ def conservative_float32(exact, measure, target, *, eligible=None, rtol=5e-10):
     if abs(actual - target) > max(tolerance, 128 * np.finfo(float).eps * abs(target)):
         out = _sparse_bracket_rounding(out, exact, measure, mask, target)
         actual = float(np.sum(out.astype(float) * measure))
+    if abs(actual - target) > max(tolerance, 128 * np.finfo(float).eps * abs(target)):
+        ordered = _ordered_bracket_rounding(exact, measure, mask, target, tolerance)
+        ordered_actual = float(np.sum(ordered.astype(float) * measure))
+        if abs(ordered_actual - target) < abs(actual - target):
+            out, actual = ordered, ordered_actual
     if abs(actual - target) > max(tolerance, 128 * np.finfo(float).eps * abs(target)):
         raise ValueError("FP32 moving integral cannot meet its conservation tolerance; "
                          f"target={target:.17g}, actual={actual:.17g}, tolerance={tolerance:.17g}, "

@@ -105,6 +105,31 @@ def test_mpas_names_and_all_zero_humidity():
     np.testing.assert_array_equal(frame["ust"], np.float32(0.3))
 
 
+def test_mpas_non_finite_humidity_takes_the_first_call_cell_by_cell():
+    # An IFS start carries q2 as NaN in every cell (run_2de68ba40c93de79): the f000 frame must
+    # not publish it; a partly carried q2 keeps its own finite cells.
+    call = {"q2": np.full(4, 0.006, np.float32)}
+    frame = {"q2": np.full(4, np.nan, np.float32)}
+    record = first.complete_start_frame(frame, call, analysis=first.MPAS_ANALYSIS,
+                                        placeholders=first.MPAS_PLACEHOLDERS, humidity=first.MPAS_HUMIDITY)
+    np.testing.assert_array_equal(frame["q2"], np.float32(0.006))
+    assert record["fields"]["q2"]["cells_without_value_after"] == 0
+    frame = {"q2": np.array([0.004, np.nan, MISSING, 0.005], np.float32)}
+    first.complete_start_frame(frame, call, analysis=first.MPAS_ANALYSIS,
+                               placeholders=first.MPAS_PLACEHOLDERS, humidity=first.MPAS_HUMIDITY)
+    np.testing.assert_array_equal(frame["q2"], np.array([0.004, 0.006, 0.006, 0.005], np.float32))
+
+
+def test_an_all_zero_analysis_field_is_a_placeholder():
+    # The same IFS start writes t2m = 0 K in every cell: f000 takes the first call's 2 m temperature.
+    frame = {"t2m": np.zeros(4, np.float32), "u10": np.array([0.0, 1.0, 0.0, 2.0], np.float32)}
+    call = {"t2m": np.full(4, 288.0, np.float32), "u10": np.full(4, 9.0, np.float32)}
+    first.complete_start_frame(frame, call, analysis=first.MPAS_ANALYSIS,
+                               placeholders=first.MPAS_PLACEHOLDERS, humidity=first.MPAS_HUMIDITY)
+    np.testing.assert_array_equal(frame["t2m"], 288.0)
+    np.testing.assert_array_equal(frame["u10"], np.array([0.0, 1.0, 0.0, 2.0], np.float32))
+
+
 def test_shape_mismatch_refuses():
     frame, call = _frame(), _call(5)
     with pytest.raises(ValueError, match="u10"):

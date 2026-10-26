@@ -497,6 +497,27 @@ class ProductPlan:
     streams: int | None = None
     fetch_args: list[str] | None = None
     request: dict[str, Any] | None = None
+    #: Per address (url, then url_mirrors): the UTC time from which that address can hold the object, for an archive
+    #: that takes a cycle some hours after it runs (the row's archive.delayed), else None.
+    url_ready: tuple[str | None, ...] = ()
+    #: When the source usually posts this cycle's first hour (the row's posting block), UTC ISO, or None.
+    due_utc: str | None = None
+    #: The row's posting lag, minutes (the same block), for the refusal's words.
+    lag_minutes: float | None = None
+    #: "<source> <cycle> f<lead>", what a refusal names.
+    label: str | None = None
+
+
+def _url_ready(row: dict[str, Any], cycle: Cycle, urls: list[str]) -> tuple[str | None, ...]:
+    """When each address can hold the cycle: an archive the row's archive.delayed lists ({prefix, delay_hours}) takes a
+    cycle delay_hours after it runs; any other address, from the start."""
+
+    delayed = (row.get("archive") or {}).get("delayed") or [] if isinstance(row.get("archive"), dict) else []
+    out = []
+    for url in urls:
+        rule = next((d for d in delayed if url.startswith(d["prefix"])), None)
+        out.append((cycle.when + timedelta(hours=float(rule["delay_hours"]))).isoformat() if rule else None)
+    return tuple(out)
 
 
 def plan_products(row: dict[str, Any], cycle: Cycle, member: int | None, lead_hours: int = 0) -> list[ProductPlan]:
@@ -534,6 +555,11 @@ def plan_products(row: dict[str, Any], cycle: Cycle, member: int | None, lead_ho
                    if product.get("remap") else None),
             index_format=index["format"] if index else None,
             streams=product.get("streams"),
+            url_ready=_url_ready(row, cycle, urls),
+            due_utc=((cycle.when + timedelta(minutes=float(row["posting"]["lag_minutes"]))).isoformat()
+                     if (row.get("posting") or {}).get("lag_minutes") is not None else None),
+            lag_minutes=(row.get("posting") or {}).get("lag_minutes"),
+            label=f"{row['id']} {cycle.when:%Y-%m-%dT%H} f{lead_hours:03d}",
         ))
     names = [plan.filename for plan in plans]
     if len(names) != len(set(names)):
@@ -642,6 +668,42 @@ def coalesce_spans(spans: list[tuple[int, int | None]],
     return pieces
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _host(url: str) -> str:
+    return (re.match(r"https?://([^/]+)", url) or [None, url])[1]
+
+
+def _ladder(plan: ProductPlan, pairs: list[tuple[str, str | None]], fetch, now: datetime | None = None) -> dict[str, Any]:
+    """Try each address in order (the row's primary first); an archive that cannot hold the cycle yet (url_ready) is
+    skipped. When none has it, the refusal names every address and its answer, the primary first, and when the cycle
+    usually posts. THE BREAKAGE THIS PREVENTS (WOOF production run_6452d3110cf0705f, 2026-10-26 07:29Z): GFS 06Z asked
+    for before it posted (about 09:30Z) was refused as "https://data.gdex.ucar.edu/... answered HTTP 404", the last
+    address tried, an archive that takes a cycle about two days after it runs, while NOAA's own bucket, the address
+    that matters, was never named."""
+
+    now = now or _utcnow()
+    said: list[str] = []
+    for position, (data_url, index_url) in enumerate(pairs):
+        ready = plan.url_ready[position] if position < len(plan.url_ready) else None
+        if ready is not None and datetime.fromisoformat(ready) > now:
+            said.append(f"{_host(data_url)}: skipped, an archive that holds this cycle from {ready[:16]}Z")
+            continue
+        try:
+            return fetch(data_url, index_url)
+        except InitSourceRefusal as refusal:
+            text = str(refusal)
+            code = re.search(r"answered HTTP (\d+)", text)
+            said.append(f"{_host(data_url)}: {'HTTP ' + code.group(1) if code else text}")
+    due = datetime.fromisoformat(plan.due_utc) if plan.due_utc else None
+    when = (f" It is not posted yet: this cycle usually posts around {due:%H:%M}Z (posting lag {plan.lag_minutes:g} min), "
+            f"and it is {now:%H:%M}Z." if due and due > now else "")
+    _refuse(f"{plan.label or plan.filename}: no address has it ({'; '.join(said)}).{when}")
+    raise AssertionError("unreachable")
+
+
 def _fetch_selected(plan: ProductPlan, target: Path, jobs: int) -> dict[str, Any]:
     # A mirror past the last index template is an archive that publishes the object with no index (GDEX's GFS
     # holdings): that address is read whole.  Breakage it prevents: a 2015-2020 GFS cycle is on GDEX only, and
@@ -649,19 +711,17 @@ def _fetch_selected(plan: ProductPlan, target: Path, jobs: int) -> dict[str, Any
     urls = [plan.url, *plan.url_mirrors]
     indexes = [plan.index_url, *plan.index_mirrors]
     pairs = [(url, indexes[k] if k < len(indexes) else None) for k, url in enumerate(urls)]
-    for position, (data_url, index_url) in enumerate(pairs):
-        try:
-            if index_url is None:
-                if jobs > 1 and plan.codec is None:
-                    parallel = _fetch_whole_parallel(target, data_url, jobs)
-                    if parallel is not None:
-                        return {"url": data_url, "index_url": None, **parallel}
-                return {"url": data_url, "index_url": None, **_fetch_whole_from(plan, target, data_url)}
-            return _fetch_selected_from(plan, target, jobs, data_url, index_url)
-        except InitSourceRefusal:
-            if position == len(pairs) - 1:
-                raise
-    raise AssertionError("unreachable")
+
+    def fetch(data_url: str, index_url: str | None) -> dict[str, Any]:
+        if index_url is None:
+            if jobs > 1 and plan.codec is None:
+                parallel = _fetch_whole_parallel(target, data_url, jobs)
+                if parallel is not None:
+                    return {"url": data_url, "index_url": None, **parallel}
+            return {"url": data_url, "index_url": None, **_fetch_whole_from(plan, target, data_url)}
+        return _fetch_selected_from(plan, target, jobs, data_url, index_url)
+
+    return _ladder(plan, pairs, fetch)
 
 
 def _fetch_selected_from(plan: ProductPlan, target: Path, jobs: int, data_url: str,
@@ -697,18 +757,14 @@ def _fetch_selected_from(plan: ProductPlan, target: Path, jobs: int, data_url: s
 
 
 def _fetch_whole(plan: ProductPlan, target: Path, jobs: int = 1) -> dict[str, Any]:
-    urls = [plan.url, *plan.url_mirrors]
-    for position, url in enumerate(urls):
-        try:
-            if plan.codec is None and jobs > 1:
-                parallel = _fetch_whole_parallel(target, url, jobs)
-                if parallel is not None:
-                    return {"url": url, **parallel}
-            return {"url": url, **_fetch_whole_from(plan, target, url)}
-        except InitSourceRefusal:
-            if position == len(urls) - 1:
-                raise
-    raise AssertionError("unreachable")
+    def fetch(url: str, _index: str | None) -> dict[str, Any]:
+        if plan.codec is None and jobs > 1:
+            parallel = _fetch_whole_parallel(target, url, jobs)
+            if parallel is not None:
+                return {"url": url, **parallel}
+        return {"url": url, **_fetch_whole_from(plan, target, url)}
+
+    return _ladder(plan, [(url, None) for url in [plan.url, *plan.url_mirrors]], fetch)
 
 
 def _object_size(url: str) -> int | None:

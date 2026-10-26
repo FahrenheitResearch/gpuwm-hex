@@ -901,6 +901,19 @@ def _drop_at_exit(cpu_pool, processes=None) -> None:
                 process.terminate()
     except Exception:
         pass
+    # A worker whose SIGTERM is blocked or ignored (a signal mask or disposition inherited from the
+    # process that spawned it) outlives terminate() and still holds the exit. Breakage this ends
+    # (hex 0.4.7 pass 1, HXCI battery 3.11, 2 of 3 runs): test_a_failing_shutdown_still_terminates_an_idle_worker
+    # found the idle spawn worker alive 10 s after terminate(). The worker writes nothing itself, so
+    # SIGKILL loses nothing.
+    try:
+        for process in list((processes or {}).values()):
+            process.join(2)
+            if process.is_alive():
+                process.kill()
+                process.join(5)
+    except Exception:
+        pass
 
 
 def submit(job, *args: Any) -> concurrent.futures.Future | None:

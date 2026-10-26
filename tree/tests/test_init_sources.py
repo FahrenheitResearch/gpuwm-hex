@@ -450,3 +450,55 @@ def test_arco_surface_series_declares_only_native_surface_fields():
         "sea_surface_temperature", "sea_ice_cover", "land_sea_mask"}
     assert all(not f["pressure"] for f in request["fields"])
     assert {f["output"] for f in request["fields"]} == {f["name"] for f in surface["decode"]["fields"]}
+
+
+# WOOF production run_6452d3110cf0705f (2026-10-26 07:29Z): GFS 06Z asked for before it posted (about 09:30Z) was refused
+# as "https://data.gdex.ucar.edu/... answered HTTP 404", the last address tried (an archive about two days behind).
+def _all_404(monkeypatch, asked):
+    def refuse(url, *a, **k):
+        asked.append(url)
+        src._refuse(f"{url} answered HTTP 404; the product is not published at that address")
+    monkeypatch.setattr(src, "_http_get", lambda url, **k: refuse(url))
+    monkeypatch.setattr(src, "_fetch_whole_from", lambda plan, target, url: refuse(url))
+    monkeypatch.setattr(src, "_object_size", lambda url: None)
+
+
+def test_a_cycle_not_posted_yet_names_every_address_noaa_first_and_when_it_posts(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    row = src.resolve_source(src.load_table(), "gfs")
+    plan = src.plan_products(row, src.Cycle.parse("2026-10-26T06"), None, 0)[0]
+    asked: list[str] = []
+    _all_404(monkeypatch, asked)
+    monkeypatch.setattr(src, "_utcnow", lambda: datetime(2026, 10, 26, 7, 29, tzinfo=timezone.utc))
+    with pytest.raises(src.InitSourceRefusal) as refusal:
+        src.acquire([plan], tmp_path, src.Cycle.parse("2026-10-26T06"), jobs=1)
+    text = str(refusal.value)
+    assert text.startswith("gfs 2026-10-26T06 f000: no address has it (noaa-gfs-bdp-pds.s3.amazonaws.com: HTTP 404; "
+                           "noaa-gfs-bdp-pds.s3.amazonaws.com: HTTP 404; data.gdex.ucar.edu: skipped"), text
+    assert "usually posts around 09:31Z (posting lag 211 min), and it is 07:29Z" in text
+    assert not any("gdex" in url for url in asked)
+
+
+def test_an_old_cycle_still_reaches_the_archive(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    row = src.resolve_source(src.load_table(), "gfs")
+    cycle = src.Cycle.parse("2018-06-01T00")
+    plan = src.plan_products(row, cycle, None, 0)[0]
+    asked: list[str] = []
+
+    def get(url, **k):
+        asked.append(url)
+        src._refuse(f"{url} answered HTTP 404; the product is not published at that address")
+
+    def whole(plan, target, url):
+        asked.append(url)
+        target.write_bytes(b"GRIB")
+        return {"attempts": 1}
+
+    monkeypatch.setattr(src, "_http_get", get)
+    monkeypatch.setattr(src, "_fetch_whole_from", whole)
+    monkeypatch.setattr(src, "_object_size", lambda url: None)
+    monkeypatch.setattr(src, "_utcnow", lambda: datetime(2026, 10, 26, 7, 29, tzinfo=timezone.utc))
+    got = src.acquire([plan], tmp_path, cycle, jobs=1)
+    assert got[0]["url"].startswith("https://data.gdex.ucar.edu/d084001/2018/20180601/")
+    assert [("gdex" in u) for u in asked] == [False, False, True]

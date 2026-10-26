@@ -209,3 +209,19 @@ def test_sparse_budget_chooses_nonprefix_adjacent_floats_without_relaxing_tolera
     assert np.all(abs(result.astype(float)-exact)<ulp)
     with pytest.raises(ValueError,match='conservation tolerance'):
         conservative_float32(exact,measure,target+0.5)
+
+
+def test_heavy_quantum_overshoot_closes_within_one_float_per_value():
+    # run_0bd003fbf0fc2910 (2026-10-26): a sparse hydrometeor over fine cells and a few coarse
+    # background cells; the index-order prefix stopped on a heavy quantum and overshot by twice
+    # the tolerance. Seed 2 of this shape refused on hex 0.4.6.
+    rng = np.random.default_rng(2)
+    n = 2046
+    q = rng.uniform(0, 6e-4, n) * rng.uniform(0, 1, n) ** 2
+    mass = np.where(rng.uniform(size=n) < 0.1, 10 ** rng.uniform(11, 12.3, n),
+                    10 ** rng.uniform(9, 10.5, n))
+    target = float(np.sum(q * mass))
+    out = conservative_float32(q, mass, target)
+    assert abs(float(np.sum(out.astype(float) * mass)) - target) <= 5e-10 * target
+    nearest = q.astype(np.float32)
+    assert np.all(abs(out.astype(float) - q) <= abs(np.spacing(nearest).astype(float)))

@@ -107,6 +107,11 @@ def complete_start_frame(
     for name in analysis:
         if name not in arrays or name not in first_call:
             continue
+        if _exact_zero(arrays[name]):
+            # Exact zero in every cell is the init's placeholder, not an analysis (an IFS start
+            # writes t2m = 0 K everywhere; run_2de68ba40c93de79's f000 2 m temperature was 0 K).
+            take(name, "the start file carries only the exact-zero placeholder", None)
+            continue
         mask = missing_cells(arrays[name])
         if mask.any():
             take(name, "the start file carries no value in these cells", mask)
@@ -116,6 +121,15 @@ def complete_start_frame(
             carried = not _exact_zero(arrays[humidity])
         if not carried:
             take(humidity, "the start file carries no 2 m humidity", None)
+        else:
+            # A start file can carry q2 as non-finite or the missing value in some or all cells
+            # (an IFS start writes q2 as NaN in every cell). Those cells take the first call's
+            # diagnosis, as the analysis fields do. Breakage it prevents: hex global ensemble
+            # run_2de68ba40c93de79 (IFS 2026-10-26 00Z, MPAS physics) published an all-NaN f000
+            # q2, so the products pass refused the member ("history q2 is not finite").
+            mask = missing_cells(arrays[humidity])
+            if mask.any():
+                take(humidity, "the start file carries no 2 m humidity in these cells", mask)
     for name in placeholders:
         if name in arrays and name in first_call and _exact_zero(arrays[name]):
             take(name, "pre-first-call placeholder (exact zero)", None)
