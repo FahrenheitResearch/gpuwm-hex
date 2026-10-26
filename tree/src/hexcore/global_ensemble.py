@@ -69,6 +69,113 @@ class EnsembleDoorError(MpasPortError):
     """The ensemble path refuses, and says why."""
 
 
+# -- graceful recovery (WOOF 2026-10-26, run_2de68ba40c93de79: one member's products refused at f15 and the door threw
+# away the nine good members). Each per-member stage is retried once; a member that still fails is recorded in
+# ensemble.json "missing" with its own reason and the ensemble goes on with the others. The door refuses only when
+# no member is left. GPUWM_FAULT_PLAN (test-only; the WOOF worker passes it for injected runs) fails named units.
+FAULT_ENV = "GPUWM_FAULT_PLAN"
+MEMBER_RETRIES = 1
+_FAULT_PLAN = None
+_FAULT_TEXT = {
+    "exit": "FAULT INJECTION: exited 1",
+    "transient": "FAULT INJECTION: Connection reset by peer",
+    "nonfinite": "FAULT INJECTION: history q2 is not finite at f{hour:03d}",
+    "hang": "FAULT INJECTION: no progress (stall)",
+    "http500": "FAULT INJECTION: HTTP 500",
+    "gpu": "FAULT INJECTION: CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered (Xid 13)",
+}
+
+
+def member_number(run_id) -> int | None:
+    digits = "".join(ch for ch in str(run_id)[-4:] if ch.isdigit())
+    return int(digits) if digits else None
+
+
+def fault_point(unit: str, run_id, hour=None) -> str | None:
+    """The injected failure for this unit, or None. Each plan item fails its unit ``times`` times."""
+    global _FAULT_PLAN
+    if _FAULT_PLAN is None:
+        try:
+            plan = json.loads(os.environ.get(FAULT_ENV) or "[]")
+        except ValueError:
+            plan = []
+        _FAULT_PLAN = [item for item in (plan if isinstance(plan, list) else []) if isinstance(item, dict)]
+    number = member_number(run_id)
+    for item in _FAULT_PLAN:
+        want = item.get("member")
+        if item.get("unit") != unit or int(item.get("times") or 0) <= 0:
+            continue
+        if want not in (None, "*") and str(want) != str(number):
+            continue
+        item["times"] = int(item["times"]) - 1
+        at = item.get("hour") if isinstance(item.get("hour"), int) else (hour or 0)
+        return _FAULT_TEXT.get(str(item.get("kind") or "exit"), _FAULT_TEXT["exit"]).format(hour=at)
+    return None
+
+
+def failure_reason(text: str) -> str:
+    """A stage's own reason: its last line that refuses, errs or fails, else its last line."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in reversed(lines):
+        low = line.lower()
+        if any(word in low for word in ("refused", "error", "not finite", "failed", "fault injection", "exited")):
+            return line[:400]
+    return lines[-1][:400] if lines else ""
+
+
+def _log_reason(path) -> str:
+    try:
+        return failure_reason(Path(path).read_text(encoding="utf-8", errors="replace")[-20000:])
+    except (OSError, TypeError):
+        return ""
+
+
+def _captured_door(argv, env, log: Path) -> int:
+    """_run_door with the stage's output (its subprocesses' too) captured at the file-descriptor level into ``log``,
+    then echoed to the door's own output, so a failed member stage has its own reason."""
+    from .global_door import _run_door
+
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_bytes(b"")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved = os.dup(1), os.dup(2)
+    py = sys.stdout, sys.stderr
+    try:
+        # Both the descriptors (subprocesses, native code) and Python's own streams append to the one log.
+        with open(log, "ab") as stream, open(log, "a", encoding="utf-8", buffering=1) as text:
+            os.dup2(stream.fileno(), 1)
+            os.dup2(stream.fileno(), 2)
+            sys.stdout = sys.stderr = text
+            try:
+                return _run_door(argv, env)
+            except Exception as error:  # a stage that raises is a failed stage with that reason
+                print(f"{argv[0]} failed: {type(error).__name__}: {error}", flush=True)
+                return 1
+            finally:
+                text.flush()
+                sys.stdout, sys.stderr = py
+    finally:
+        sys.stdout, sys.stderr = py
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        os.close(saved[0])
+        os.close(saved[1])
+        try:
+            sys.stdout.write(log.read_text(encoding="utf-8", errors="replace")[-200000:])
+            sys.stdout.flush()
+        except OSError:
+            pass
+
+
+def history_hours(folder) -> int:
+    """History frames a member's forecast folder holds (its hours made, the start included)."""
+    try:
+        return sum(1 for _ in Path(folder).rglob("*history*.nc"))
+    except (OSError, TypeError):
+        return 0
+
+
 def forecast_devices(requested: str | None, environment=None, error=EnsembleDoorError) -> list[str]:
     """Resolve logical device selections inside the inherited CUDA allocation.
 
@@ -416,12 +523,32 @@ def run_inits(value: Mapping[str, Any], members: list[dict[str, Any]], args, sta
             status.step(done, note=f"{member['run_id']} init exited {member['init_returncode']}")
             if member["init_returncode"] != 0:
                 failed.append(member["run_id"])
-    if failed:
+    retried = []
+    for run_id in sorted(failed):
+        member = next(m for m in todo if m["run_id"] == run_id)
+        log = Path(member["init_dir"]).parent / "init.log"
+        first = _log_reason(log)
+        for attempt in range(2, 2 + MEMBER_RETRIES):
+            status.note(f"{run_id} init retry {attempt - 1} of {MEMBER_RETRIES} after: {first}")
+            began = time.monotonic()
+            rc = _cli(member["init_argv"], log, env)
+            retried.append({"run_id": run_id, "stage": "init", "attempt": attempt, "of": 1 + MEMBER_RETRIES, "rc": rc,
+                            "reason": first, "seconds": round(time.monotonic() - began, 1), "recovered": rc == 0})
+            for bound in members:
+                if bound["init"] == member["init"]:
+                    bound["init_returncode"] = rc
+            if rc == 0:
+                break
+    lost = sorted({m["run_id"] for m in members if m.get("init_returncode", 0) != 0})
+    for member in members:
+        if member.get("init_returncode", 0) != 0:
+            member["missing"] = {"stage": "init", "reason": _log_reason(Path(member["init_dir"]).parent / "init.log")
+                                 or f"init exited {member['init_returncode']}", "attempts": 1 + MEMBER_RETRIES}
+    if lost and len(lost) == len(members):
         raise EnsembleDoorError(
-            f"the init of {', '.join(sorted(failed))} failed (logs: members/<run_id>/init.log); an ensemble "
-            f"with members missing is not run as if it were complete")
+            f"the init of every member failed ({', '.join(lost)}; logs: members/<run_id>/init.log)")
     return {"built": len(todo), "skipped": len(unique) - len(todo), "jobs": jobs,
-            "source_inputs": len(unique), "bound_members": len(members)}
+            "source_inputs": len(unique), "bound_members": len(members), "retried": retried, "missing": lost}
 
 
 def member_case(value: Mapping[str, Any], member: Mapping[str, Any]) -> str:
@@ -483,11 +610,16 @@ def forecast_argv(value: Mapping[str, Any], roster: Path, out: Path, scratch: Pa
 
 
 def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args, status, env,
-                  live: bool = False) -> dict[str, Any]:
-    """``live``: the products stage follows, so each member's maps are drawn while its group integrates."""
+                  live: bool = False, ensemble: list[dict[str, Any]] | None = None, group_size: int | None = None,
+                  prefix: str = "") -> dict[str, Any]:
+    """``live``: the products stage follows, so each member's maps are drawn while its group integrates.
+    ``ensemble``: the whole ensemble when ``members`` is a retry of some of them (each member's stochastic identity is
+    sized by the whole ensemble, so a retried member is the same member); ``group_size`` and ``prefix`` (its group
+    folders) for a retry, which runs each member alone so one bad member cannot fail the others again."""
     work = Path(value["paths"]["work"])
+    whole = ensemble or members
     gate = live_draw_gate(len(members)) if live else None
-    limit = group_limit(value, args)
+    limit = group_size or group_limit(value, args)
     cards = forecast_devices(args.devices)
     pending: "queue.Queue[list[dict[str, Any]]]" = queue.Queue()
     for start in range(0, len(members), limit):
@@ -517,7 +649,7 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
     def _run_group(card: str, group: list[dict[str, Any]], started: threading.Event) -> None:
         with lock:
             counter[0] += 1
-            name = f"g{counter[0]:02d}"
+            name = f"{prefix}g{counter[0]:02d}"
         warm_page_cache([m["init"] for m in group])
         out, scratch = work / "ensemble" / name, work / "scratch" / name
         roster = work / "ensemble" / f"{name}.roster.json"
@@ -532,7 +664,7 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
         for m in group:
             identity = m["member"] if m["member"] is not None and not m["provenance"]["lag_hours"] else member_number(m["run_id"])
             m["stochastic"] = member_options(identity, seed=stochastic_seed,
-                source_members=len({item["member"] for item in members}), ensemble_size=len(members), **overrides)
+                source_members=len({item["member"] for item in whole}), ensemble_size=len(whole), **overrides)
         roster.write_text(json.dumps([
             {"run_id": m["run_id"], "init": m["init"], "stochastic": m["stochastic"],
              **{key: m[key] for key in ("start_time", "hours", "history_from_minutes")},
@@ -547,8 +679,13 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
         threading.Thread(target=_signal_on_ticket, args=(ticket, started, done), daemon=True).start()
         looks = member_looks(value, group, out, len(members), args, gate) if gate is not None else {}
         try:
-            rc = _cli(argv, log, {**env, "CUDA_VISIBLE_DEVICES": card, GATE_ENV: str(gate_path(card)),
-                                  TICKET_ENV: str(ticket)})
+            injected = next((text for m in group for text in [fault_point("forecast", m["run_id"])] if text), None)
+            if injected:
+                log.write_text(injected + "\n", encoding="utf-8")
+                rc = 1
+            else:
+                rc = _cli(argv, log, {**env, "CUDA_VISIBLE_DEVICES": card, GATE_ENV: str(gate_path(card)),
+                                      TICKET_ENV: str(ticket)})
         finally:
             done.set()
             # The forecast has ended: each look lets a draw in progress land; what it rendered, its member's full
@@ -576,7 +713,8 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
                 status.note(f"{name}: card {card} refused {len(group)} resident members; split in two")
         else:
             for member in group:
-                member.update(group=name, card=card, forecast=str(out / member["run_id"]), forecast_returncode=rc)
+                member.update(group=name, card=card, forecast=str(out / member["run_id"]), forecast_returncode=rc,
+                              forecast_log=str(log))
             with lock:
                 finished[0] += len(group)
                 status.step(finished[0], note=f"{name} on card {card}: {', '.join(row['members'])} exited {rc} "
@@ -651,7 +789,12 @@ def run_ensemble(value: dict[str, Any], args: argparse.Namespace, stages: list[s
     if "forecast" not in stages and any(name in stages for name in ("products", "export", "score")):
         restore_forecasts(value, members)
     record: dict[str, Any] = {"schema": SCHEMA, "row": value["row"]["id"], "source": value["source"],
-                              "cycle": value["cycle"], "members": members, "stages": {}}
+                              "cycle": value["cycle"], "members": members, "stages": {}, "missing": [],
+                              "recovery": []}
+
+    def lose(member, stage, reason, **extra):
+        member.setdefault("missing", {"stage": stage, "reason": reason, **extra})
+        record["missing"].append({"run_id": member["run_id"], "stage": stage, "reason": reason, **extra})
 
     def save() -> None:
         (work / "ensemble.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -661,15 +804,51 @@ def run_ensemble(value: dict[str, Any], args: argparse.Namespace, stages: list[s
             started = time.monotonic()
             if name == "init":
                 record["stages"]["init"] = run_inits(value, members, args, status, env)
+                record["recovery"] += record["stages"]["init"].get("retried", [])
+                for member in members:
+                    if member.get("missing"):
+                        record["missing"].append({"run_id": member["run_id"], **member["missing"]})
             elif name == "forecast":
-                result = run_forecasts(value, members, args, status, env, live="products" in stages)
+                ready = [m for m in members if not m.get("missing")]
+                result = run_forecasts(value, ready, args, status, env, live="products" in stages, ensemble=members)
                 record["stages"]["forecast"] = result
-                if result["failed"]:
+                for attempt in range(2, 2 + MEMBER_RETRIES):
+                    failed = [m for m in ready if m.get("forecast_returncode") != 0]
+                    if not failed:
+                        break
+                    reasons = {m["run_id"]: _log_reason(m.get("forecast_log")) or m.get("forecast_error")
+                               or f"forecast exited {m.get('forecast_returncode')}" for m in failed}
+                    for m in failed:
+                        for key in ("forecast_returncode", "forecast_error", "group", "card", "forecast"):
+                            m.pop(key, None)
+                    status.note(f"forecast retry {attempt - 1} of {MEMBER_RETRIES}, each member alone: "
+                                + ", ".join(m["run_id"] for m in failed))
+                    began = time.monotonic()
+                    again = run_forecasts(value, failed, args, status, env, live="products" in stages, ensemble=members,
+                                          group_size=1, prefix=f"r{attempt - 1}")
+                    seconds = round(time.monotonic() - began, 1)
+                    record["stages"].setdefault("forecast_retries", []).append(again)
+                    for m in failed:
+                        record["recovery"].append({"run_id": m["run_id"], "stage": "forecast", "attempt": attempt,
+                                                   "of": 1 + MEMBER_RETRIES, "rc": m.get("forecast_returncode"),
+                                                   "reason": reasons[m["run_id"]], "seconds": seconds,
+                                                   "recovered": m.get("forecast_returncode") == 0})
+                for m in ready:
+                    if m.get("forecast_returncode") != 0:
+                        lose(m, "forecast", _log_reason(m.get("forecast_log")) or m.get("forecast_error")
+                             or f"forecast exited {m.get('forecast_returncode')}",
+                             attempts=1 + MEMBER_RETRIES, hours=history_hours(m.get("forecast")))
+                result["failed"] = [m["run_id"] for m in members if m.get("missing")]
+                if all(m.get("missing") for m in members):
                     raise EnsembleDoorError(
-                        f"the forecast of {', '.join(result['failed'])} failed (logs: ensemble/gNN.log)")
+                        f"the forecast of every member failed (logs: ensemble/gNN.log): "
+                        + "; ".join(f"{x['run_id']}: {x['reason']}" for x in record["missing"][:4]))
             elif name in ("products", "export", "score"):
                 status.stage(name, step_count=len(members))
                 for index, member in enumerate(members, 1):
+                    if member.get("missing") and member["missing"].get("stage") in ("init", "forecast"):
+                        status.step(index, note=f"{member['run_id']} {name} skipped: its {member['missing']['stage']} is missing")
+                        continue
                     forecast = member["forecast"]
                     out = work / "members" / member["run_id"]
                     if name == "products":
@@ -687,20 +866,47 @@ def run_ensemble(value: dict[str, Any], args: argparse.Namespace, stages: list[s
                         config.write_text(json.dumps({**value["score_config"], "init": member["init"]}, indent=2)
                                           + "\n", encoding="utf-8")
                         argv = ["score", forecast, "--config", str(config)]
-                    rc = _run_door(argv, env)
-                    if name == "score" and rc == 3:
-                        from .observation_scorecard import completed_scorecard
-                        completed = completed_scorecard(forecast, config)
-                        if completed is not None:
-                            member["scorer_returncode"] = rc
-                            member["score_status"] = completed["status"]
-                            member["measured_metrics"] = completed["measured_metrics"]
-                            status.note(completed["note"])
-                            rc = 0
+                    stage_log = out / f"{name}.log"
+                    first = None
+                    for attempt in range(1, 2 + MEMBER_RETRIES):
+                        began = time.monotonic()
+                        injected = fault_point(name, member["run_id"])
+                        if injected:
+                            stage_log.parent.mkdir(parents=True, exist_ok=True)
+                            stage_log.write_text(injected + "\n", encoding="utf-8")
+                            print(f"{member['run_id']} {name}: {injected}", flush=True)
+                            rc = 1
+                        else:
+                            rc = _captured_door(argv, env, stage_log)
+                        if name == "score" and rc == 3:
+                            from .observation_scorecard import completed_scorecard
+                            completed = completed_scorecard(forecast, config)
+                            if completed is not None:
+                                member["scorer_returncode"] = rc
+                                member["score_status"] = completed["status"]
+                                member["measured_metrics"] = completed["measured_metrics"]
+                                status.note(completed["note"])
+                                rc = 0
+                        reason = _log_reason(stage_log) if rc != 0 else ""
+                        if attempt > 1:
+                            record["recovery"].append({"run_id": member["run_id"], "stage": name, "attempt": attempt,
+                                                       "of": 1 + MEMBER_RETRIES, "rc": rc, "reason": first,
+                                                       "seconds": round(time.monotonic() - began, 1),
+                                                       "recovered": rc == 0})
+                        if rc == 0:
+                            break
+                        first = first or reason or f"{name} exited {rc}"
+                        status.note(f"{member['run_id']} {name} exited {rc}: {reason}"
+                                    + (f"; retry {attempt} of {MEMBER_RETRIES}" if attempt <= MEMBER_RETRIES else ""))
                     member[f"{name}_returncode"] = rc
                     status.step(index, note=f"{member['run_id']} {name} exited {rc}")
                     if rc != 0:
-                        raise EnsembleDoorError(f"{name} of {member['run_id']} exited {rc}")
+                        # The member's other outputs stay: its forecast (and, for products, its export) is still
+                        # in the ensemble's products unless its own reason says its data is bad from some hour.
+                        lose(member, name, reason or f"{name} exited {rc}", attempts=1 + MEMBER_RETRIES)
+                if name != "score" and all(m.get(f"{name}_returncode", 1) != 0 for m in members):
+                    raise EnsembleDoorError(f"{name} failed for every member: "
+                                            + "; ".join(f"{x['run_id']}: {x['reason']}" for x in record["missing"][:4]))
             else:
                 continue  # mesh and static are the one-state stages, run by the caller
             record["stages"].setdefault(name, {})["seconds"] = round(time.monotonic() - started, 1)

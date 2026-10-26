@@ -869,6 +869,10 @@ tests/test_mesh_compaction.py
 # off Linux or without cargo); host-only. Breakage it prevents: test_tier_membership refuses an untiered file.
 tests/test_global_cycle.py
 tests/test_global_ensemble.py
+# 0.4.8 (2026-10-26): a global ensemble retries a member stage once and records a member that still fails as
+# missing (GPUWM_FAULT_PLAN injects the faults; host-only). Breakage it prevents: one member's products throwing
+# away nine good members (WOOF run_2de68ba40c93de79).
+tests/test_global_ensemble_recovery.py
 tests/test_history_deflate.py
 tests/test_numerics.py
 
@@ -1053,6 +1057,10 @@ tests/test_ugwp_oro.py
 # against the contiguous transcription on real zoom columns, and the fused pack/scatter kernels; g++ only,
 # no card. Breakage it prevents: test_tier_membership refuses an untiered file.
 tests/test_gf_grid_stride.py
+# 0.4.8 (2026-10-26): GF's host lane entry with every binary32 workspace array poisoned with NaN must give the
+# shipped outputs (host g++, as test_gf_grid_stride; skips without it). Breakage it prevents: a GF output reading
+# a stale workspace word (the 7.5 km VR stops at +6 h 36 min and +8 h 41 min on 0.4.5).
+tests/test_gf_scratch_nan.py
 tests/test_gf_pack_inputs.py
 
 # G1 output path: deferred maxima (CPU) and the gather/multi-block diagnostic kernels (GPU, MPAS_CONVECTIVE_GPU=1).

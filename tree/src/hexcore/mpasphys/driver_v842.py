@@ -579,6 +579,14 @@ def resolve_namelist(text: str, *, backends: Mapping[str, str] | None = None,
     services = spec.get("services", {})
     chosen_services = {name: Backend(row["default_backend"])
                        for name, row in services.items()}
+    # A GPU route that updates SST, sea ice, greenness and deep soil from a surface series takes the
+    # surface-update service on the GPU too. Left on its native-cpu table default, config_sst_update
+    # made framework_only false, so the route asked for the native MPAS library and Fortran referee
+    # resources a user install does not carry (hex-hybrid-longrange 10-day run, 2026-10-26).
+    # An explicit config_surface_update_backend still wins; module replays (library) keep native-cpu.
+    if (not library and options.get("config_sst_update") and "surface_update" in services
+            and str(default_backend) in services["surface_update"]["backends"]):
+        chosen_services["surface_update"] = Backend(str(default_backend))
     service_names = {row["backend_selector"]: name for name, row in services.items()}
     supplied_backends = groups.get(spec["backend_namelist_group"], {})
     for key, value in supplied_backends.items():

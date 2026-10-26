@@ -306,15 +306,20 @@ def test_member_scores_only_complete_on_verified_measurements(tmp_path, monkeypa
     monkeypatch.setattr(global_door, '_run_door', lambda argv, env: scorer_rc)
     monkeypatch.setattr(observation_scorecard, 'completed_scorecard', completed)
     if expected_rc:
-        with pytest.raises(EnsembleDoorError, match=f'score of mem001 exited {expected_rc}'):
-            global_ensemble.run_ensemble(value, args, ['score'], _Status(), {})
+        # A score that does not complete is that member's missing score (graceful recovery): retried once, recorded
+        # with its reason, and the ensemble goes on.
+        record = global_ensemble.run_ensemble(value, args, ['score'], _Status(), {})
+        assert all(m['score_returncode'] == expected_rc for m in record['members'])
+        assert [(x['run_id'], x['stage']) for x in record['missing']] == [('mem001', 'score'), ('mem002', 'score')]
     else:
         record = global_ensemble.run_ensemble(value, args, ['score'], _Status(), {})
         assert all(m['score_returncode'] == 0 and m['scorer_returncode'] == 3 for m in record['members'])
         assert all(m['measured_metrics'] == 7 for m in record['members'])
-    assert len(checked) == (2 if expected_rc == 0 else 1 if scorer_rc == 3 else 0)
-    for (forecast, config), member in zip(checked, saved):
-        assert forecast == member['forecast'] and config['init'] == member['init']
+    # an unverified score is checked on each of its two tries
+    assert len(checked) == (2 if expected_rc == 0 else 4 if scorer_rc == 3 else 0)
+    by_forecast = {m['forecast']: m for m in saved}
+    for forecast, config in checked:
+        assert config['init'] == by_forecast[forecast]['init']
 
 
 def test_planner_prices_members_like_the_roster_admission(monkeypatch):

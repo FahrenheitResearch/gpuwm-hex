@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.8
+
+Requires gpuwm>=2.9.7,<2.10.
+
+Fixed:
+- A global ensemble retries a member stage that fails once, and a member that still fails is recorded as missing while the other members finish.
+- MPAS-physics runs that update SST, sea ice, greenness and deep soil from a surface series keep that update on the GPU instead of asking for the native MPAS library.
+- A test now guards the Grell-Freitas scratch fix from 0.4.6: no GF output may read a workspace word before writing it.
+
 ## 0.4.7
 
 Requires gpuwm>=2.9.7,<2.10.

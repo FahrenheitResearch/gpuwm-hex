@@ -37,9 +37,9 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.4.7", (
-        "0.4.7 is the fix release on gpuwm 2.9.7 (2026-10-26, continuous fix-release train): moving FP32 "
-        "rounding, unposted cycles and a start file's missing 2 m analysis; moving it is a release decision, not an edit"
+    assert declared == "0.4.8", (
+        "0.4.8 is the fix release on gpuwm 2.9.7 (2026-10-26, continuous fix-release train): global ensembles "
+        "go on past a failed member, surface updating stays on the GPU, GF scratch guard; moving it is a release decision, not an edit"
     )
 
     source = (PACKAGE / "__init__.py").read_text(encoding="utf-8")

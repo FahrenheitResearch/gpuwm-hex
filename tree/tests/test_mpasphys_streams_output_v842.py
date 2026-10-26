@@ -329,6 +329,25 @@ def test_gpu_route_selects_ported_framework_and_native_reference_remains_explici
     assert framework_only(inactive)
 
 
+def test_gpu_route_with_sst_update_keeps_the_ported_framework():
+    # hex-hybrid-longrange (2026-10-26): config_sst_update on the GPU route left the surface-update
+    # service on native-cpu, so the route asked for the native MPAS library a user install lacks.
+    from hexcore.mpasphys.driver_v842 import resolve_namelist
+    from hexcore.mpasphys.runtime_v842 import framework_only
+    text = "&physics config_physics_suite='convection_permitting' config_sst_update=.true. /"
+    gpu = resolve_namelist(text, default_backend='hex-cuda')
+    assert str(gpu.service_backends['surface_update']) == 'hex-cuda'
+    assert framework_only(gpu)
+    pinned = resolve_namelist(text + chr(10) + "&hex_mpasphys config_surface_update_backend='native-cpu' /",
+                              default_backend='hex-cuda')
+    assert str(pinned.service_backends['surface_update']) == 'native-cpu'
+    assert not framework_only(pinned)
+    assert not framework_only(resolve_namelist(text, default_backend='native-cpu'))
+    # Without a surface series the receipt keeps no service row, as before.
+    plain = resolve_namelist("&physics config_physics_suite='convection_permitting' /", default_backend='hex-cuda')
+    assert 'service_backends' not in plain.receipt()
+
+
 def test_stream_time_comes_from_committed_framework_clock(tmp_path):
     from hexcore.mpasphys.framework_calendar_v842 import PhysicsClock
     state, _, _, start = session(resident=False)
