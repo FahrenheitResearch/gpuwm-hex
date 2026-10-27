@@ -2,6 +2,8 @@
 
 The S2S door selects `--ocean-mode prognostic` by default. It initializes SST and ice fraction once from each member's initialization and evolves them at the ArWen surface cadence. No future SST or ice record is read. `--ocean-mode prescribed` retains the dated surface-series route. A conflicting `--surface-series` in prognostic mode refuses before launch.
 
+On the MPAS physics route (the hex default), prognostic mode runs MPAS-A's own 1-D ocean mixed layer (`config_oml1d`, on the GPU) at the door's `depth_m` and `stratification_k_m`. It evolves open-water SST; sea ice keeps its initial state. `--ocean-mode prescribed` on that route turns on MPAS's surface update (`config_sst_update`, on the GPU) and reads the series through the surface stream at the series' own record interval.
+
 For a global forecast outside the S2S door, set `GPUWM_HEX_OCEAN_MODE=prognostic`. The surface service requires Noah-MP and its routed surface-layer hook. Other land schemes refuse this configuration. Existing hydro and stochastic selections remain in force.
 
 `--ocean-options '{"depth_m":25}'` overrides declared entries in `src/hexcore/data/ocean-mixed-layer.v1.json`. The complete parameter table is recorded in the member signature and surface checkpoint. Direct forecasts use the same JSON in `GPUWM_HEX_OCEAN_OPTIONS`. Changed parameters or a changed ocean mode refuse a checkpoint restore.

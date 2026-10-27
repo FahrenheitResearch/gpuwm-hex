@@ -408,3 +408,45 @@ def test_each_member_draws_its_own_hours_while_its_group_integrates(tmp_path, mo
     for argv, m in zip(calls, members):
         assert argv[argv.index("--live-frames") + 1] == m["live_frames"]   # the full pass keeps the hours drawn live
         assert argv[argv.index("--case") + 1] == global_ensemble.member_case(value, m)
+
+
+_PRO_6000 = {"name": "NVIDIA RTX PRO 6000 Blackwell Server Edition", "free": 97_300 * 1024**2,
+             "total": 97_887 * 1024**2, "sms": 188, "threads": 1536}
+
+
+@pytest.mark.parametrize("physics, expected", [((), 1), (("--physics-suite=convection_permitting",), 1),
+                                                (("--physics-suite=arwen_mpas_column",), 2)])
+def test_auto_members_per_card_prices_the_mpas_route_30km(monkeypatch, physics, expected):
+    """U-H4 (global synradar cycle, 2026-10-27): ``global --row global-30km --source gefs --members-per-card auto`` on
+    RTX PRO 6000 cards planned 2 MPAS-physics members per card at the ArWen-route floor (43,080 MiB each); one member
+    alone peaks 75,069 MiB, so all four ran out of memory ~3 min in.  A run that names no physics (the hex default)
+    or names an MPAS suite is priced on the MPAS route and planned 1 per card; the ArWen route keeps its price."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(global_door, "_visible_cards", lambda: [_PRO_6000["total"]])
+    monkeypatch.setattr(global_ensemble, "_probe_cards", lambda devices: [dict(_PRO_6000)])
+    value = {"mesh": {"cells": 655_362}, "members": [{"stochastic": None}, {"stochastic": None}],
+             "commands": {"forecast": ["forecast", "--mesh", "x1.655362", *physics]}}
+    assert global_ensemble.group_limit(value, SimpleNamespace(members_per_card="auto", devices=None)) == expected
+
+
+def test_mpas_suite_roster_refuses_a_group_the_card_cannot_hold(tmp_path, monkeypatch):
+    """U-H4, the runtime half: the MPAS-suite roster started every member at once with no memory decision.  Two 30 km
+    members on one RTX PRO 6000 are now refused before any member starts, with the "co-tenancy refuses" text the
+    ensemble door splits on; one member is left to the one-member door."""
+    from types import SimpleNamespace
+    from hexcore import mesh_rows, multi_member
+
+    monkeypatch.setattr(global_ensemble, "_probe_cards", lambda devices: [dict(_PRO_6000)])
+    monkeypatch.setattr(mesh_rows, "_dimensions", lambda path: {"nCells": 655_362})
+    member = SimpleNamespace(grid=tmp_path / "x1.655362.grid.nc", init=None, stochastic=None, headroom_mib=None,
+                             lbc_dir=None, stop_on_refusal=False)
+    assert multi_member.admit_suite_group([("mem001", member)], None) is None
+    with pytest.raises(MemoryError, match=global_ensemble.REFUSED_GROUP + " 2 members"):
+        multi_member.admit_suite_group([("mem001", member), ("mem002", member)], None)
+    admitted = device_admission.route_required_free_bytes(
+        655_362, device_admission.model_for_card(device_admission.card_profile_from_attributes(
+            _PRO_6000["name"], {"MultiProcessorCount": 188, "MaxThreadsPerMultiProcessor": 1536}), "global"),
+        route="mpas")
+    # Never below the measured single-member peak, plus the curve's 10 %; and one member still fits the card.
+    assert 75_069 * 1024**2 * 1.10 < admitted < _PRO_6000["free"]

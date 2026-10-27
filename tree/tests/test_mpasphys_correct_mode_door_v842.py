@@ -81,8 +81,8 @@ def test_a_bare_mpas_suite_door_run_resolves_correct_and_lists_the_gaps(tmp_path
     physics = run_door(door_arguments(tmp_path, "--physics-suite", "convection_permitting"))
     assert physics["physics_mode"] == "correct"
     block = physics["correct_mode"]
-    # Every slot runs its GPU port by default, so the GPU MYNN (RP1) and Thompson (WB3) apply their fixes.
-    assert block["mode"] == "correct" and block["applied"] == ["RP1", "WB3"]
+    # Every slot runs its GPU port by default, so the GPU MYNN (RP1, RP7) and Thompson (WB3) apply their fixes.
+    assert block["mode"] == "correct" and block["applied"] == ["RP1", "RP7", "WB3"]
     gaps = {(g["finding"], g["slot"]): g for g in block["gaps"]}
     # RP3 lives in the surface layer and sea ice; the GPU sea ice does not carry it, so RP3 is not applied.
     assert set(gaps) == {("RP3", "seaice")}

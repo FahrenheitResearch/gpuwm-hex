@@ -54,6 +54,15 @@ CORRECTIONS_V842: Mapping[str, Mapping[str, Any]] = MappingProxyType({
                        "surface_layer": {"sf_mynn": "p10-sf-mynn", "sf_monin_obukhov": "p9-sfclay-mm5",
                                          "sf_monin_obukhov_rev": "p9-sfclay-mm5"}},
             "breakage": "fractional sea-ice cells lose their ice temperature between calls (up to 29 K)"},
+    # RP7: mynn_tendencies (bl_mynn_subroutines.F90:3102) takes the lowest layer's pressure thickness as the full
+    # surface pressure minus the hydrostatic interface pressure; a near-surface non-hydrostatic deficit makes it
+    # zero or negative and moisture_check (F90:4149-4150) divides by it (bl_mynn_v842.MYNN_TEXT_CORRECTIONS).
+    "RP7": {"slots": {"pbl": ("bl_mynn",)},
+            "owners": {"pbl": "p12-bl-mynn"},
+            "breakage": "MYNN's lowest-layer pressure thickness can be zero, and 0/0 in its moisture check made the "
+                        "vapour tendency NaN in one column; the dycore then refused the step with ~4,100 whole "
+                        "columns non-finite (x1.40962 120 km plain hex, 2021-07-01 start at day 19.2 and 2020-01-01 "
+                        "start at day 77.2)"},
     # RP4: refused at resolution, see resolve_namelist (native correct mode refuses it too).
     "RP4": {"slots": {}, "owners": {},
             "breakage": "config_mynn_tkeadvect resets TKE to the never-advected qke_adv every call"},
@@ -416,6 +425,7 @@ def _active_corrections(selectors: Mapping[str, str], options: Mapping[str, Any]
     active = set()
     if on("pbl") and selectors["pbl"] == "bl_mynn":
         active.add("RP1")
+        active.add("RP7")
     if on("seaice") and on("land_surface") and options.get("config_frac_seaice", False):
         active.add("RP3")
     if on("pbl") and selectors["pbl"] == "bl_mynn" and options.get("config_mynn_tkeadvect", False):

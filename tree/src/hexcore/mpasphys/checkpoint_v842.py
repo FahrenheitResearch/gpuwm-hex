@@ -57,6 +57,8 @@ class CheckpointRoute(MovingRoute):
     checkpoints: list = field(default_factory=list)
     checkpoint_preparation: dict | None = None
     frame_from_cli: bool = False
+    restart_dt_change: dict | None = None
+    restart_corrections_change: dict | None = None
 
     def carried_rows(self, layout):
         selected = super().carried_rows(layout)
@@ -100,8 +102,17 @@ class CheckpointRoute(MovingRoute):
         offset = Fraction(str(self.offset_seconds))
         if dt <= 0 or offset % dt:
             raise ValueError('native checkpoint must lie on an outer-step boundary')
+        # A resume may change the timestep (e.g. to run past an instability). The carrier holds
+        # model state at one instant: prognostic and diagnostic fields, physics rates per second
+        # and the physics alarms' phase in model seconds, none of it a per-step quantity, so it is
+        # read the same under any step that lands on the checkpoint's instant. Native MPAS-A
+        # restarts under a changed config_dt the same way. Only the instant must be a whole number
+        # of new steps from the start, which the offset check above enforces.
         if self.restart_metadata is not None and Fraction(self.restart_metadata['dt']) != dt:
-            raise ValueError('native checkpoint timestep differs from this request')
+            self.restart_dt_change = dict(checkpoint_dt=str(Fraction(self.restart_metadata['dt'])),
+                                          resumed_dt=str(dt))
+            print(f"gpuwm-hex: resuming checkpoint written at dt {Fraction(self.restart_metadata['dt'])} s "
+                  f"under dt {dt} s", flush=True)
         self.checkpoint_dt = str(dt)
         if self.cli_restart:
             duration -= offset
@@ -120,7 +131,23 @@ class CheckpointRoute(MovingRoute):
         physics = dict(config=config.receipt(), numerics=numerics.mode())
         physics = json.loads(json.dumps(physics))
         if self.restart_metadata is not None and physics != self.restart_metadata.get('physics'):
-            raise ValueError('native checkpoint physics configuration or numerics differ')
+            # The applied correct-mode findings may differ (a release that adds a correction, e.g. RP7):
+            # a correction changes scheme arithmetic from the resume on, never the carried state's
+            # fields or layout. Suite, schemes, options, backends, mode and numerics must still match.
+            def _scheme_identity(value):
+                value = json.loads(json.dumps(value))
+                config = value.get('config') if isinstance(value, dict) else None
+                if isinstance(config, dict):
+                    for key in ('corrections', 'correct_skip', 'correct_mode'):
+                        config.pop(key, None)
+                return value
+            carried = self.restart_metadata.get('physics')
+            if _scheme_identity(physics) != _scheme_identity(carried):
+                raise ValueError('native checkpoint physics configuration or numerics differ')
+            before = (carried or {}).get('config', {}).get('corrections', [])
+            after = physics['config'].get('corrections', [])
+            self.restart_corrections_change = dict(checkpoint=list(before), resumed=list(after))
+            print(f"gpuwm-hex: resuming checkpoint written with corrections {before} under {after}", flush=True)
         identity = _identity(inputs)
         if self.restart_metadata is not None and identity != self.restart_metadata['identity']:
             raise ValueError('native checkpoint mesh, vertical grid, base state or species differ')
@@ -164,8 +191,13 @@ class CheckpointRoute(MovingRoute):
         return receipt
 
     def receipt(self):
-        return {**super().receipt(), 'native_checkpoints': self.checkpoints,
-                'checkpoint_preparation': self.checkpoint_preparation}
+        result = {**super().receipt(), 'native_checkpoints': self.checkpoints,
+                  'checkpoint_preparation': self.checkpoint_preparation}
+        if self.restart_dt_change is not None:
+            result['restart_dt_change'] = self.restart_dt_change
+        if self.restart_corrections_change is not None:
+            result['restart_corrections_change'] = self.restart_corrections_change
+        return result
 
 
 def resolve_route(arguments, text):

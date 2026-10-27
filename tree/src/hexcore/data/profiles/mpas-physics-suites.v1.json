@@ -1294,7 +1294,8 @@
             "module": "bl_mynn_v842",
             "call": "run_slot",
             "corrections": [
-              "RP1"
+              "RP1",
+              "RP7"
             ],
             "bind": "bind_native_pools",
             "resources": {

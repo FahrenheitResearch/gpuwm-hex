@@ -407,8 +407,12 @@ class NativePoolHydration:
                     raise RuntimeError(f"pool read-ahead order differs at {key} vs {(pool, row['name'])}")
                 buffer = future.result()
                 in_flight -= size
-                for level in range(1, row["nlevels"] + 1):
-                    n.put_field(pool, name, buffer, level=level, nlevels=row["nlevels"])
+                if record.get("fill") is not None and callable(getattr(n, "put_zero_field", None)):
+                    # A Registry-initial zero field: the same words, allocated untouched (put_zero_field).
+                    n.put_zero_field(pool, name, buffer.shape, buffer.dtype, nlevels=row["nlevels"])
+                else:
+                    for level in range(1, row["nlevels"] + 1):
+                        n.put_field(pool, name, buffer, level=level, nlevels=row["nlevels"])
                 del buffer, future
         if ('mesh', 'nominalMinDc') in self.records:
             nominal = self.horizontal_length()
@@ -449,9 +453,32 @@ class NativePoolHydration:
                 n.exchange_group(group, active_fields)
 
 
+#: Workers of the Rust pool transport; the reader takes at most this many (rw_mpas_physics_pool MAX_WORKERS).
+POOL_TRANSPORT_MAX_THREADS = 16
+
+
+def pool_transport_threads() -> int:
+    """Workers rw_mpas_physics_pool runs: the CPUs this process may use, held to the CPU quota, at most 16.
+
+    THE BREAKAGE THIS REMOVES (U-H3, hex 0.4.8, 30 km globe on 4x RTX PRO 6000, 2026-10-27): every
+    MPAS-physics member start ran the transport on one thread for about 30 s while its card waited.
+    ``RAYON_NUM_THREADS`` (hexcore sets it to the container quota) lowers the count; so does
+    ``GPUWM_HEX_HOST_COPY_THREADS``.  The count is handed to the reader explicitly, so the stage row
+    and the process agree.
+    """
+    import os
+    count = min(POOL_TRANSPORT_MAX_THREADS, host_copy_threads())
+    text = os.environ.get("RAYON_NUM_THREADS", "").strip()
+    if text.isdigit() and int(text) > 0:
+        count = min(count, int(text))
+    return max(1, count)
+
+
 def decode_registry_pools(reader: Path, source: Path, config: DriverConfig,
-                          namelist: str, sources: list[Path], output: Path) -> RegistryLayout:
+                          namelist: str, sources: list[Path], output: Path,
+                          threads: int | None = None) -> RegistryLayout:
     """Rust I/O followed by native allocation; mpas_io_streams.F:925-1023."""
+    import os
     abi = subprocess.check_output([str(reader), "--abi"], text=True).strip()
     if abi != "gpuwm-rw-mpas-physics-pool-v1":
         raise ValueError("unexpected Rust physics-pool transport ABI")
@@ -476,7 +503,10 @@ def decode_registry_pools(reader: Path, source: Path, config: DriverConfig,
     request = output / "request.json"
     request.write_text(json.dumps({**full, "fields": [f for f in full["fields"]
                                                       if (f["pool"], f["name"]) not in filled]}, indent=2) + "\n")
-    subprocess.run([str(reader), str(request), str(output)], check=True)
+    # Fields are transported on ``threads`` workers (U-H3); each payload is the same bytes at any count.
+    workers = pool_transport_threads() if threads is None else max(1, int(threads))
+    subprocess.run([str(reader), str(request), str(output)], check=True,
+                   env={**os.environ, "RAYON_NUM_THREADS": str(workers)})
     if fills:
         manifest_path = output / "manifest.json"
         manifest = json.loads(manifest_path.read_text())

@@ -1007,6 +1007,9 @@ def queue_retry(run, config):
     plan = root / "automatic-retry.json"
     atomic_json(plan, config)
     log = open(root / "automatic-retry.log", "ab")
+    # CUDA_VISIBLE_DEVICES set and EMPTY is the contract the card-lease runners read (the GPU pool runner,
+    # release_for_cpu_only_tail): once the forecast command exits and only this waiter is left, they give the
+    # card back instead of holding the lease for CPU/network-only scoring (U-H7). Never unset it here.
     env = dict(os.environ, CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="2", RAYON_NUM_THREADS="2")
     kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
     try:

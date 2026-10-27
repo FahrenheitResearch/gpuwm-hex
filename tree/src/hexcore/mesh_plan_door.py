@@ -218,6 +218,10 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
     add_label_arguments(global_group)
     global_group.add_argument("--global-mesh", action="store_true",
                               help="price/build the whole global mesh, without a limited-area cull")
+    global_group.add_argument("--template-only", action="store_true",
+                              help="with --global-mesh --generate: build (or fetch) only the point's cap-family "
+                                   "rotation template, staged into GPUWM_HEX_PREP_STORE_OUTBOX for an image bake; "
+                                   "no static, no run")
     global_group.add_argument("--run", action="store_true",
                               help="with --global-mesh --generate: init-source, forecast and Rust products")
     global_group.add_argument("--source", default=None, help="an init-source table row")
@@ -243,6 +247,41 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
 
 
 __all__ = ["add_mesh_plan_parser", "run_mesh_plan"]
+
+
+#: THE BREAKAGE THIS PREVENTS (U-H6, production run_fde6921eaf18b793, 2026-10-26; owner ruling 2026-10-23: "zoom
+#: globes use premade circular VR meshes rotated to the user's point, never fresh mesh generation on the start
+#: path"): a zoom globe (120 -> 15 km, 2,000 km core at 40N 97W) on a new box generated its mesh with rw_mpas_mesh
+#: (16.6 s) because the library holds exact points only. A concentric cap family is the same mesh wherever its
+#: centre is, so the door rotates the family's template (centred at the moving door's TEMPLATE_CENTER and keyed in
+#: the prep store by its spec alone, so the bake's library runs stage it) to the point, as storm-following start
+#: members already do. An exact-point library entry still wins; any other spec (several centres, a non-cap shape,
+#: a uniform globe) and a point near the template's antipode generate as before.
+ROTATION_TEMPLATE_NAME = "zoom-globe rotation template"
+
+
+def concentric_cap_center(spec: Mapping[str, Any]) -> tuple[float, float] | None:
+    """The one centre every refinement region of SPEC is a cap about, else None (rotation would not preserve it)."""
+    regions = spec.get("regions") or []
+    centres = set()
+    for region in regions:
+        shape = region.get("shape") or {}
+        if shape.get("kind") != "cap" or set(shape) - {"kind", "center_deg", "radius_km"}:
+            return None
+        lat, lon = (float(value) for value in shape["center_deg"])
+        centres.add((lat, lon))
+    return next(iter(centres)) if len(centres) == 1 else None
+
+
+def rotation_template_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
+    """SPEC's cap family about the template centre, named for the family alone (no point): the prep-store key."""
+    from .moving_members import TEMPLATE_CENTER
+
+    template = json.loads(json.dumps(spec))
+    template["name"] = ROTATION_TEMPLATE_NAME
+    for region in template["regions"]:
+        region["shape"]["center_deg"] = [float(TEMPLATE_CENTER[0]), float(TEMPLATE_CENTER[1])]
+    return template
 
 
 def run_global_mesh(arguments: argparse.Namespace) -> int:
@@ -289,6 +328,12 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
     levels = VerticalSpec.from_file(vertical).n_vert_levels
     from .mpas_defaults import default_dt_seconds
     dt = float(default_dt_seconds(finest)["dt_seconds"])
+    if getattr(arguments, "template_only", False):
+        if arguments.run or not arguments.generate or arguments.out_dir is None:
+            raise MpasPortError("--template-only takes --generate --out-dir and no --run")
+        if concentric_cap_center(spec) is None:
+            raise MpasPortError("--template-only needs a spec whose regions are caps about one centre (a --point "
+                                "ladder): no other spec is rotated, so its template would never be used")
     if arguments.run:
         if not arguments.generate or arguments.out_dir is None:
             raise MpasPortError("--run requires --generate --out-dir")
@@ -410,6 +455,8 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
             raise MpasPortError(f"{name} exited {result['returncode']}; log {result['log']}")
         return result
 
+    prefix = [sys.executable, "-m", "hexcore.cli"]
+    prefetch = None
     try:
         static_engine = resolve(STATIC, arguments.static_exe)
         geog = mesh_point.resolve_geog(arguments.geog)
@@ -432,7 +479,82 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                 save()
                 print(f"STAGE {name} from the library ({got.get('key', '')[:12]})", flush=True)
 
-        stored_stage("mesh", [engine, "--spec", spec_path, "--out", grid, "--receipt", generator_receipt])
+        if arguments.run:
+            init_common = ["init-source", "--source", arguments.source, "--cycle", arguments.cycle,
+                           *(["--lead-hours", lead] if lead else []), "--out-dir", root / "init",
+                           "--jobs", arguments.jobs]
+            for path in arguments.staged:
+                init_common += ["--staged", path]
+            if arguments.source_table:
+                init_common += ["--table", arguments.source_table]
+            if arguments.member is not None:
+                init_common += ["--member", arguments.member]
+            # The source fetch and decode need no mesh: they run beside the mesh and static (U-H6: 13.4 s that
+            # started only after a 57.9 s static on the production zoom globe), and init-source --from-decoded
+            # builds the init from them once the static exists.
+            prefetch = card_fit.start_stage([*prefix, *init_common, "--stop-after", "decode"],
+                                            name="init-source-decode", directory=root / "logs", env=env)
+            receipt.setdefault("started_stages", {})["init-source-decode"] = {
+                "argv": prefetch.argv, "started_utc": prefetch.started_utc, "beside": ["mesh", "static"]}
+            save()
+        mesh_argv = [engine, "--spec", spec_path, "--out", grid, "--receipt", generator_receipt]
+        from .moving_members import TEMPLATE_CENTER, _near_antipode
+
+        centre = concentric_cap_center(spec)
+        template_only = bool(getattr(arguments, "template_only", False))
+        exact = None if centre is None or template_only else prep_store.fetch_only(mesh_argv)
+        if exact is not None:
+            receipt["stages"].append({"name": "mesh", "source": "store", "key": exact.get("key"),
+                                      **{k: v for k, v in exact.items()
+                                         if k in ("bytes", "seconds", "transfer_seconds", "store")}})
+            save()
+            print(f"STAGE mesh from the library ({exact.get('key', '')[:12]})", flush=True)
+        elif centre is None or (not template_only and _near_antipode(centre, TEMPLATE_CENTER)):
+            stored_stage("mesh", mesh_argv)
+        else:
+            import hashlib
+
+            from .moving_mesh import rotate_grid
+
+            began = time.monotonic()
+            folder = root / "template"
+            folder.mkdir()
+            template = rotation_template_spec(spec)
+            template_spec = folder / "rotation-template.spec.json"
+            template_spec.write_text(json.dumps(template, indent=2, sort_keys=True) + "\n")
+            template_grid = folder / "rotation-template.grid.nc"
+            template_receipt = folder / "rotation-template-mesh.json"
+            stored_stage("mesh-template", [engine, "--spec", template_spec, "--out", template_grid,
+                                           "--receipt", template_receipt])
+            template_sha = mesh_rows.sha256_file(template_grid)
+            if template_only:
+                receipt["template"] = {"spec": template, "grid": str(template_grid), "sha256": template_sha}
+                receipt["status"] = "template"
+                receipt.pop("active_stage", None)
+                save()
+                print(f"RECEIPT {receipt_path}", flush=True)
+                return 0
+            # The same template and point give the same bytes, so the static's prep-store key repeats.
+            file_id = hashlib.sha256(f"{template_sha} {centre[0]!r} {centre[1]!r}".encode()).hexdigest()[:32]
+            rotation = rotate_grid(template_grid, grid, start=TEMPLATE_CENTER, end=centre, file_id=file_id)
+            rotation["source_sha256"] = template_sha
+            generator_receipt.write_text(json.dumps({
+                "schema": "gpuwm-hex.zoom-globe-rotation/v1",
+                "emitted": {"path": str(grid), "sha256": rotation["sha256"]},
+                "rotation": rotation,
+                "template": {"spec": template, "spec_sha256": mesh_rows.sha256_file(template_spec),
+                             "generator_receipt": (json.loads(template_receipt.read_text())
+                                                   if template_receipt.is_file() else None)},
+            }, indent=2, sort_keys=True, default=str) + "\n")
+            template_grid.unlink()
+            receipt["stages"].append({"name": "mesh", "source": "rotated-template",
+                                      "wall_seconds": round(time.monotonic() - began, 3),
+                                      "rotation_seconds": round(rotation["wall_seconds"], 3),
+                                      "template_sha256": template_sha, "end_deg": list(centre),
+                                      "parallelism": {"device": "CPU", "threads": 1,
+                                                      "scope": "vectorised array rotation"}})
+            save()
+            print(f"STAGE mesh rotated from the cap-family template in {rotation['wall_seconds']:.1f} s", flush=True)
         stored_stage("static", [static_engine, "--grid", grid, "--out", static, "--geog", geog,
                                 "--nominal-dx-m", finest, "--native-init", "--native-gwd-static",
                                 "--receipt", static_receipt])
@@ -467,18 +589,13 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                 raise MpasPortError(f"history cadence does not divide the measured mesh timestep {dt} s")
             env[mesh_rows.MESH_ROWS_ENVIRONMENT] = os.pathsep.join(
                 [str(rows_file), *[str(p) for p in mesh_rows.row_files()]])
-            prefix = [sys.executable, "-m", "hexcore.cli"]
-            init_argv = [*prefix, "init-source", "--source", arguments.source,
-                         "--cycle", arguments.cycle, *(["--lead-hours", lead] if lead else []), "--out-dir", root / "init",
-                         "--grid", grid, "--static", static, "--vertical-spec", vertical,
-                         "--jobs", arguments.jobs]
-            for path in arguments.staged:
-                init_argv += ["--staged", path]
-            if arguments.source_table:
-                init_argv += ["--table", arguments.source_table]
-            if arguments.member is not None:
-                init_argv += ["--member", arguments.member]
-            stage("init-source", init_argv)
+            decoded = prefetch.finish()
+            receipt["stages"].append(decoded)
+            save()
+            if decoded["returncode"]:
+                raise MpasPortError(f"init-source-decode exited {decoded['returncode']}; log {decoded['log']}")
+            stage("init-source", [*prefix, *init_common, "--from-decoded",
+                                  "--grid", grid, "--static", static, "--vertical-spec", vertical])
             init_receipt = root / "init" / "init-source-receipt.json"
             receipt["source_binding"] = json.loads(init_receipt.read_text())
             run = root / "forecast"
@@ -506,7 +623,10 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                                   "mode": named.get("mode") or "exact",
                                   **({"namelist": named["namelist"]} if named.get("namelist") else {})}
             from .physics_default import suite_takes_door_step
-            step = [] if suite_takes_door_step(named) else ["--dt", dt]
+            # Full-step LTS: the forecast door picks the step, so its default moves onto the class clock
+            # (mpas_defaults.lts_class_clock_dt); an explicit --dt here would be refused by that clock instead.
+            lts = any(str(item).split("=", 1)[0] == "--fullstep-local-timestep" for item in extra)
+            step = [] if (suite_takes_door_step(named) or lts) else ["--dt", dt]
             measured = stage("forecast", [*prefix, "forecast", "--mesh", row.name,
                 "--grid", grid, "--static", static, "--init", root / "init" / "init.nc",
                 "--init-source", f"{arguments.source} {issued_label}; spec {receipt['spec_sha256']}",
@@ -526,7 +646,11 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
         receipt["status"] = "complete" if arguments.run else "generated"
         receipt.pop("active_stage", None)
         save()
-    except Exception as error:
+    except BaseException as error:
+        if prefetch is not None:
+            prefetch.cancel()  # the door failed before the init needed it
+        if not isinstance(error, Exception):
+            raise
         receipt["status"] = "failed"
         receipt["error"] = str(error)
         save()

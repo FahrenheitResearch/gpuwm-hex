@@ -200,3 +200,26 @@ def test_changed_sedimentation_transcription_is_refused():
     changed = base.replace(before, before.replace('tc_mul(vtgk', 'tc_mul(1.01f*vtgk'), 1)
     with pytest.raises(ValueError, match='sedimentation transcription changed'):
         split_source(changed, port._body_end)
+
+
+def test_auto_tile_is_capped_by_the_workspace_budget(monkeypatch):
+    """A 164k-column rank asked for a 5.4 GB tile and ran a 32 GB card out of memory (2026-10-27)."""
+    allocations, starts = [], []
+    def allocate(size, *, dtype):
+        allocations.append(size)
+        return object()
+    monkeypatch.setitem(sys.modules, 'cupy', SimpleNamespace(empty=allocate, uint8='uint8'))
+    monkeypatch.setattr(numerics, 'mode', lambda: 'fast')
+    monkeypatch.setattr(port, 'workspace_tile_columns', lambda: None)
+    monkeypatch.setattr(port, 'resident_columns', lambda kernel, block_threads=32: 1 << 20)
+    monkeypatch.setenv('GPUWM_HEX_THOMPSON_WORKSPACE_MIB', '256')
+    def kernel(name):
+        def launch(grid, block, args):
+            if name == KERNELS[0]:
+                starts.append(int(args[-2]))
+        return launch
+    columns = 164_000
+    port._launch_columns('mpas_thompson_step', SimpleNamespace(get_function=kernel), ('state',), 55, columns, True)
+    assert len(allocations) == 1 and allocations[0] <= 256 << 20
+    stride = port.budget_tile_columns('mpas_thompson_step', 55)
+    assert stride % 128 == 0 and starts == list(range(0, columns, stride))

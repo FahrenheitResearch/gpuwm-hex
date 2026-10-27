@@ -913,6 +913,15 @@ template<int N> __device__ double mynn_ipow(double x) {
     return mynn_dmul(xx,x);
 }
 '''
+#: Worker scratch of the MYNN kernel, one per (device, stream, per-worker stride): (workspace, workers).
+#: THE COST THIS REMOVES (MPAS-route LTS memory, 2026-10-27): every rate class's MYNN module sized its own scratch
+#: from the card's free memory (up to one eighth of it, 99 KB per worker), so four classes on one card held 5.6 GB
+#: of it on a 99,898-cell mesh although only one class integrates at a time.  The kernel's words do not depend on
+#: the worker count (each column is independent, in its worker's private arena), so a shared block changes none.
+_SHARED_WORKSPACE: dict = {}
+_SHARED_LOCK = __import__("threading").Lock()
+
+
 def _column_batch(ncol, stride, processors, free_bytes):
     """Resident workers: four blocks per SM, at most one eighth of free memory.
 
@@ -972,11 +981,16 @@ class MynnCudaModule:
     This class is not yet registered as a proven forecast backend.
     """
 
-    def __init__(self, *, shared_math_source: str):
-        """bl_mynn.F90:24-107,129-1242; whole numerical module compilation."""
+    def __init__(self, *, shared_math_source: str, corrections=frozenset()):
+        """bl_mynn.F90:24-107,129-1242; whole numerical module compilation.
+
+        ``corrections`` are the correct-mode findings whose kernel text this module carries
+        (MYNN_TEXT_CORRECTIONS); none compiles the exact text byte for byte."""
         import cupy as cp
+        from .driver_v842 import correct_source
         self.cp = cp
-        numerical = MYNN_MODULE_CUDA
+        numerical = correct_source(MYNN_MODULE_CUDA, MYNN_TEXT_CORRECTIONS, corrections,
+                                   "bl_mynn hex-cuda")
         # Fast numerics balances columns across warps (G4, MPAS-ROUTE-SPEED-2026-10-24).
         # Strict numerics keeps the proven image byte for byte.
         self._dynamic = not _hex_numerics.is_strict()
@@ -1000,15 +1014,33 @@ class MynnCudaModule:
         device = cp.cuda.runtime.getDevice()
         # Error flags stay per call: callers may read a step's flags later.
         errors = cp.empty(ncol, dtype=cp.int32)
+        # The scratch is shared by every MYNN module on this device and stream (_SHARED_WORKSPACE): kernels on one
+        # stream run in order, so they can never use it at once.
+        key = (device, int(cp.cuda.get_current_stream().ptr), int(stride))
         held = self._resident
-        if held is not None and held[0] == (device, ncol, stride):
-            return held[1], errors, held[2]
-        properties = cp.cuda.runtime.getDeviceProperties(device)
+        if held is not None and held[0] == (device, ncol, stride, key[1]):
+            shared = _SHARED_WORKSPACE.get(key)
+            if shared is not None and shared[0] is held[1]:
+                return held[1], errors, held[2]
         self._resident = None
-        free_bytes, _ = cp.cuda.runtime.memGetInfo()
-        batch = _column_batch(ncol, stride, properties['multiProcessorCount'], free_bytes)
-        workspace = cp.empty(batch*stride, dtype=cp.uint8)
-        self._resident = ((device, ncol, stride), workspace, batch)
+        with _SHARED_LOCK:
+            shared = _SHARED_WORKSPACE.get(key)
+            properties = cp.cuda.runtime.getDeviceProperties(device)
+            processors = properties['multiProcessorCount']
+            wanted = min(((ncol + 63) // 64) * 64, max(64, 256 * processors))
+            if shared is None or shared[1] < wanted:
+                free_bytes, _ = cp.cuda.runtime.memGetInfo()
+                if shared is not None:
+                    free_bytes += shared[0].nbytes     # the block this replaces is given back first
+                batch = _column_batch(ncol, stride, processors, free_bytes)
+                if shared is None or shared[1] < batch:
+                    shared = None
+                    _SHARED_WORKSPACE.pop(key, None)
+                    shared = (cp.empty(batch * stride, dtype=cp.uint8), batch)
+                    _SHARED_WORKSPACE[key] = shared
+            workspace, capacity = shared
+        batch = min(wanted, capacity)
+        self._resident = ((device, ncol, stride, key[1]), workspace, batch)
         return workspace, errors, batch
 
     @property
@@ -1099,7 +1131,22 @@ class MynnBlDriver:
     def __init__(self, *, shared_math_source: str):
         """module_bl_mynn.F:18-58; original driver argument boundary."""
         self.adapter = MynnDriverAdapter()
+        self._shared_math_source = shared_math_source
         self.numerical = MynnCudaModule(shared_math_source=shared_math_source)
+        self._corrected = {}
+
+    def numerical_for(self, corrections):
+        """The numerical module for this run's correct-mode findings (exact text when it applies none)."""
+        applied = frozenset(corrections) & frozenset(MYNN_TEXT_CORRECTIONS)
+        if not applied:
+            return self.numerical
+        if not hasattr(self, "_corrected"):
+            self._corrected = {}
+        module = self._corrected.get(applied)
+        if module is None:
+            module = self._corrected[applied] = MynnCudaModule(
+                shared_math_source=self._shared_math_source, corrections=applied)
+        return module
 
     def run(self, arguments: Mapping, constants, *, options: MynnOptions,
             corrections=frozenset()):
@@ -1214,7 +1261,7 @@ class MynnBlDriver:
                     values[name] = private
         self.adapter.copy_many(copies)
         self.adapter.pre(mixing, specific, flags, exact_inverse=exact_inverse)
-        errors = self.numerical.run(values, constants)
+        errors = self.numerical_for(corrections).run(values, constants)
         post = {name: values[source] for name, source in
                 (("dqv", "rqvblten"), ("dqc", "rqcblten"),
                  ("dqi", "rqiblten"), ("dqs", "rqsblten"))}
@@ -9744,6 +9791,25 @@ error_flags[batch_first+thread]=errflg;
 }
 }
 '''
+
+#: Correct-mode kernel text of MYNN (driver_v842.correct_source rows: exact text, corrected text, count).
+#: RP7: mynn_tendencies (bl_mynn_subroutines.F90:3102) sets the lowest layer's pressure thickness to
+#: psfc minus the hydrostatic pressure interpolated to the top of layer 1, i.e. MPAS's full (non-
+#: hydrostatic) surface pressure psfc_p against its hydrostatic pres_hyd_p.  A near-surface
+#: non-hydrostatic deficit larger than half the layer makes it zero or negative, and moisture_check
+#: (F90:4149-4150) divides by it: 0/0 at delp(kts) = 0 made rqvblten (and, through the moisture
+#: post-conversion, rqc/rqi/rqs) NaN at level 1 of one column, and the dycore then refused the step
+#: with ~4,100-4,600 whole columns non-finite (MYNN-NAN-1: x1.40962 plainsst 2021-07-01 at t=1658400 s
+#: and 2020-01-01 at t=6672600 s, delp(kts) = 0.0 in both).  The corrected thickness is the layer's
+#: own hydrostatic weight rho*g*dz, the formula the NOAA-GSL MYNN-EDMF uses for every level
+#: (module_bl_mynnedmf.F90:4270), so it is positive with the hydrostatic interior thicknesses.
+MYNN_TEXT_CORRECTIONS = {
+    "RP7": (
+        ("delp(kts) = mpas_sub(psfc, mpas_div(mpas_add(mpas_mul(p(((kts) + (1))), dz(kts)), "
+         "mpas_mul(p(kts), dz(((kts) + (1))))), mpas_add(dz(kts), dz(((kts) + (1))))));",
+         "delp(kts) = mpas_mul(mpas_mul(rho(kts), grav), dz(kts));", 1),
+    ),
+}
 
 MYNN_ARGUMENTS = {'initflag': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'restart': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'cycling': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'delt': {'kind': 'float', 'dimensions': [], 'intent': 'in', 'optional': False}, 'dz': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'dx': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'znt': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'u': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'v': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'w': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'th': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'sqv': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'sqc': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'sqi': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'sqs': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'qnc': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'qni': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'qnwfa': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'qnifa': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'qnbca': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'qozone': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'p': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'exner': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'rho': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'tt': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'xland': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'ts': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'qsfc': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'ps': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'ust': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'ch': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'hfx': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'qfx': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'rmol': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'wspd': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'uoce': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'voce': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'in', 'optional': False}, 'qke': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'qke_adv': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'tsq': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'qsq': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'cov': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rublten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rvblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rthblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqvblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqcblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqiblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqsblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqncblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqniblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqnwfablten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqnifablten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqnbcablten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'rqozblten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'exch_h': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'out', 'optional': False}, 'exch_m': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'out', 'optional': False}, 'pblh': {'kind': 'float', 'dimensions': ['its:'], 'intent': 'inout', 'optional': False}, 'kpbl': {'kind': 'int', 'dimensions': ['its:'], 'intent': 'inout', 'optional': False}, 'el_pbl': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'dqke': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'out', 'optional': True}, 'qwt': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'out', 'optional': True}, 'qshear': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'out', 'optional': True}, 'qbuoy': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'out', 'optional': True}, 'qdiss': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'out', 'optional': True}, 'sh': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'sm': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'qc_bl': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'qi_bl': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'cldfra_bl': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'icloud_bl': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_tkeadvect': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_tkebudget': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_cloudpdf': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_mixlength': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_closure': {'kind': 'float', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_stfunc': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_topdown': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_edmf': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_edmf_dd': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_edmf_mom': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_edmf_tke': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_mixscalars': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_output': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_cloudmix': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_mixqt': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_scaleaware': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'bl_mynn_dheatopt': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'edmf_a': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'edmf_w': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'edmf_qt': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'edmf_thl': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'edmf_ent': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'edmf_qc': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'sub_thl': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'sub_sqv': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'det_thl': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'det_sqv': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': False}, 'edmf_a_dd': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': True}, 'edmf_w_dd': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': True}, 'edmf_qt_dd': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': True}, 'edmf_thl_dd': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': True}, 'edmf_ent_dd': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': True}, 'edmf_qc_dd': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'inout', 'optional': True}, 'maxwidth': {'kind': 'float', 'dimensions': [':'], 'intent': 'out', 'optional': False}, 'maxmf': {'kind': 'float', 'dimensions': [':'], 'intent': 'out', 'optional': False}, 'ztop_plume': {'kind': 'float', 'dimensions': [':'], 'intent': 'out', 'optional': False}, 'ktop_plume': {'kind': 'int', 'dimensions': ['its:'], 'intent': 'inout', 'optional': False}, 'spp_pbl': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'pattern_spp_pbl': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'rthraten': {'kind': 'float', 'dimensions': ['its:', ':'], 'intent': 'in', 'optional': False}, 'flag_qc': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'flag_qi': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'flag_qs': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'flag_qnc': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'flag_qni': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'flag_qnwfa': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'flag_qnifa': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'flag_qnbca': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'flag_qoz': {'kind': 'bool', 'dimensions': [], 'intent': 'in', 'optional': False}, 'its': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'ite': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'kts': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'kte': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'kme': {'kind': 'int', 'dimensions': [], 'intent': 'in', 'optional': False}, 'errmsg': {'kind': 'char', 'dimensions': [], 'intent': 'out', 'optional': False}, 'errflg': {'kind': 'int', 'dimensions': [], 'intent': 'out', 'optional': False}}
 MYNN_WORKSPACE_LEVEL_BYTES = 1752

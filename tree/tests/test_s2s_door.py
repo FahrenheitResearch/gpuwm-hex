@@ -449,3 +449,57 @@ def test_prepared_init_survives_producer_cleanup(tmp_path):
     assert owned.read_bytes() == b"prepared-source-forecast"
     assert s2s_door._inits(value, args, {}, status)["reused"] == 1
     assert s2s_door.plan(args)["signature"] == value["signature"]
+
+
+def test_mpas_route_members_get_the_door_ocean(tmp_path):
+    # U-H1 (best-180 smoke j1, 2026-10-27): on the MPAS physics route (the hex default) the door's ocean reached the
+    # forecast only as environment the ArWen route reads, so config_sst_update stayed false and SST and sea ice were
+    # bit-identical from day 0 to day 7 with --ocean-mode prescribed --surface-series and with the prognostic default.
+    from hexcore.mpasphys.forecast_v842 import native_route
+    series = tmp_path / "series.nc"
+    series.write_bytes(b"dated native surface records")
+    def resolved(*extra):
+        value = s2s_door.plan(arguments(tmp_path / "work", "--members", "1", "--days", "7", *extra))
+        forecast = build_parser().parse_args(value["commands"]["forecast"])
+        config, _ = native_route(forecast, default_mode="correct")
+        return value, forecast, config
+    value, forecast, config = resolved("--ocean-mode", "prescribed", "--surface-series", str(series))
+    assert config.options["config_sst_update"] and not config.options["config_oml1d"]
+    assert str(config.service_backends["surface_update"]) == "hex-cuda"
+    assert forecast.stream_input == [f"surface={series.absolute()}"]
+    assert value["surface"]["forecast_route"] == "mpas"
+    value, forecast, config = resolved()
+    assert config.options["config_oml1d"] and not config.options["config_sst_update"]
+    assert config.options["config_oml_hml0"] == value["surface"]["ocean_options"]["depth_m"]
+    assert config.options["config_oml_gamma"] == value["surface"]["ocean_options"]["stratification_k_m"]
+    assert "ice" in value["surface"]["sea_ice"]
+    with pytest.raises(s2s_door.S2SError, match="never read"):
+        resolved("--ocean-options", '{"ice_albedo": 0.6}')
+    # A surface stream the caller already bound to the same series is kept once; another file is refused.
+    value, forecast, _ = resolved("--ocean-mode", "prescribed", "--surface-series", str(series),
+                                  f"--forecast-arg=--stream-input=surface={series}")
+    assert forecast.stream_input == [f"surface={series}"]
+    with pytest.raises(s2s_door.S2SError, match="give the series once"):
+        resolved("--ocean-mode", "prescribed", "--surface-series", str(series),
+                 f"--forecast-arg=--stream-input=surface={tmp_path / 'other.nc'}")
+    # The ArWen route keeps reading the series through its own environment, unchanged.
+    value = s2s_door.plan(arguments(tmp_path / "arwen", "--members", "1", "--days", "7", "--physics-row", "arwen",
+                                    "--ocean-mode", "prescribed", "--surface-series", str(series)))
+    assert "--stream-input" not in value["commands"]["forecast"] and "forecast_route" not in value["surface"]
+
+
+def test_default_streams_read_a_bound_surface_series_at_its_interval(tmp_path):
+    # U-H1: MPAS's Registry surface stream has input_interval="none"; the default streams take the series' spacing.
+    from hexcore.mpasphys import resolve_namelist
+    from hexcore.mpasphys.forecast_v842 import read_streams, write_default_streams
+    from hexcore.mpasphys.framework_backend_v842 import registry_source
+    from hexcore.mpasphys.pool_v842 import RegistryLayout
+    text = '&physics\nconfig_physics_suite="convection_permitting"\nconfig_sst_update=.true.\n/'
+    layout = RegistryLayout(registry_source(), resolve_namelist(text), text,
+        dict(nCells=2, nEdges=3, nVertices=2, maxEdges=6, maxEdges2=12, vertexDegree=3, nVertLevels=55))
+    plain = {s.name: s for s in read_streams(write_default_streams(layout, tmp_path / "a" / "streams.atmosphere"), layout)}
+    timed = {s.name: s for s in read_streams(write_default_streams(layout, tmp_path / "b" / "streams.atmosphere",
+                                                                   surface_interval="1_00:00:00"), layout)}
+    assert plain["surface"].input_interval == "none"
+    assert timed["surface"].input_interval == "1_00:00:00"
+    assert timed["surface"].fields == plain["surface"].fields and "sst" in timed["surface"].fields

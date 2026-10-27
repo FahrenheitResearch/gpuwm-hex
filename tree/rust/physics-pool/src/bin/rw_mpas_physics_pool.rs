@@ -8,6 +8,10 @@ use std::{
     io::Write,
     os::raw::{c_char, c_int},
     path::Path,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 #[link(name = "netcdf")]
 unsafe extern "C" {
@@ -119,11 +123,37 @@ struct Record {
     text: Option<String>,
     origins: Vec<String>,
 }
-fn read(
-    files: &[File],
-    name: &str,
-    kind: &str,
-) -> Result<Option<(Vec<u8>, Vec<String>, Vec<usize>, String)>, String> {
+// One netCDF read in the library's own words.  The little-endian encoding is
+// done by the caller after the netCDF lock is released (netCDF-C is not
+// thread-safe, so only the library call itself is serialised).
+enum Words {
+    Real(Vec<f32>),
+    Integer(Vec<i32>),
+    Text(Vec<u8>),
+}
+impl Words {
+    fn into_le_bytes(self) -> Vec<u8> {
+        match self {
+            Words::Real(b) => {
+                let mut bytes = Vec::with_capacity(b.len() * 4);
+                for x in b {
+                    bytes.extend_from_slice(&x.to_bits().to_le_bytes());
+                }
+                bytes
+            }
+            Words::Integer(b) => {
+                let mut bytes = Vec::with_capacity(b.len() * 4);
+                for x in b {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                bytes
+            }
+            Words::Text(b) => b,
+        }
+    }
+}
+type Found = Option<(Words, Vec<String>, Vec<usize>, String)>;
+fn read(files: &[File], name: &str, kind: &str) -> Result<Found, String> {
     for f in files.iter().rev() {
         let mut v = 0;
         let n = CString::new(name).map_err(|e| e.to_string())?;
@@ -168,8 +198,7 @@ fn read(
             counts[0] = 1;
         }
         let len: usize = counts.iter().product();
-        let mut bytes = Vec::new();
-        match kind {
+        let words = match kind {
             "real" => {
                 if k != 5 && k != 6 {
                     return Err(format!("{name}: expected NC_FLOAT/DOUBLE, got {k}"));
@@ -178,9 +207,7 @@ fn read(
                 check(unsafe {
                     nc_get_vara_float(f.id, v, starts.as_ptr(), counts.as_ptr(), b.as_mut_ptr())
                 })?;
-                for x in b {
-                    bytes.extend(x.to_bits().to_le_bytes());
-                }
+                Words::Real(b)
             }
             "integer" => {
                 if k != 4 {
@@ -190,34 +217,46 @@ fn read(
                 check(unsafe {
                     nc_get_vara_int(f.id, v, starts.as_ptr(), counts.as_ptr(), b.as_mut_ptr())
                 })?;
-                for x in b {
-                    bytes.extend(x.to_le_bytes());
-                }
+                Words::Integer(b)
             }
             "character" => {
                 if k != 2 {
                     return Err(format!("{name}: expected NC_CHAR, got {k}"));
                 }
-                bytes.resize(len, 0);
+                let mut b = vec![0u8; len];
                 check(unsafe {
                     nc_get_vara_text(
                         f.id,
                         v,
                         starts.as_ptr(),
                         counts.as_ptr(),
-                        bytes.as_mut_ptr().cast(),
+                        b.as_mut_ptr().cast(),
                     )
                 })?;
+                Words::Text(b)
             }
             _ => return Err(format!("unsupported kind {kind}")),
-        }
+        };
         if dims.first().map(String::as_str) == Some("Time") {
             dims.remove(0);
             counts.remove(0);
         }
-        return Ok(Some((bytes, dims, counts, format!("{}:{name}", f.path))));
+        return Ok(Some((words, dims, counts, format!("{}:{name}", f.path))));
     }
     Ok(None)
+}
+// read() under the process-wide netCDF lock, encoded to bytes after the lock is released.
+fn read_locked(
+    files: &[File],
+    lock: &Mutex<()>,
+    name: &str,
+    kind: &str,
+) -> Result<Option<(Vec<u8>, Vec<String>, Vec<usize>, String)>, String> {
+    let found = {
+        let _held = lock.lock().map_err(|_| "netCDF lock poisoned".to_string())?;
+        read(files, name, kind)?
+    };
+    Ok(found.map(|(w, d, s, src)| (w.into_le_bytes(), d, s, src)))
 }
 // Permute named axes and insert the native trailing dummy entity, byte for byte.
 fn pack(
@@ -271,6 +310,24 @@ fn pack(
     for a in 1..strides.len() {
         strides[a] = strides[a - 1] * field.shape[a - 1];
     }
+    // A source row whose fastest axis is the destination's stride-1 axis is one
+    // contiguous run in both; copy it whole (same words, same places).
+    let rank = counts.len();
+    let inner = if rank == 0 { 1 } else { counts[rank - 1] };
+    if rank > 0 && inner > 0 && strides[axes[rank - 1]] == 1 {
+        for row in 0..len / inner {
+            let mut r = row;
+            let mut dst = component.unwrap_or(0);
+            for a in (0..rank - 1).rev() {
+                let c = r % counts[a];
+                r /= counts[a];
+                dst += c * strides[axes[a]];
+            }
+            out[dst * 4..(dst + inner) * 4]
+                .copy_from_slice(&input[row * inner * 4..(row + 1) * inner * 4]);
+        }
+        return Ok(());
+    }
     for i in 0..len {
         let mut r = i;
         let mut dst = component.unwrap_or(0);
@@ -283,7 +340,133 @@ fn pack(
     }
     Ok(())
 }
-fn run(request: &Path, out: &Path) -> Result<(), String> {
+// THE BREAKAGE THIS REMOVES (U-H3, hex 0.4.8, 30 km globe x1.655362 on 4x RTX PRO 6000,
+// 2026-10-27): every MPAS-physics member start ran this transport on ONE thread for
+// about 30 s (100 % of one core, NLWP 1) while its card waited.  Fields are now taken
+// by a pool of workers: only the netCDF-C call is serialised (the library is not
+// thread-safe); the byte encoding, the axis permutation, the payload write and its
+// SHA-256 run beside it.  Each field is the same bytes at any worker count, and the
+// manifest keeps request order.  The count is RAYON_NUM_THREADS when set (hexcore
+// sets it to the container CPU quota), else the CPUs this process may use, at most 16.
+const MAX_WORKERS: usize = 16;
+fn workers() -> usize {
+    std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+        .clamp(1, MAX_WORKERS)
+}
+fn transport(
+    index: usize,
+    f: &Field,
+    files: &[File],
+    lock: &Mutex<()>,
+    out: &Path,
+) -> Result<Record, String> {
+    // MPAS-Model-rrfs/src/framework/mpas_field_routines.F:261-299:
+    // zero-sized Registry dimensions allocate associated empty arrays.
+    if f.shape.len() != f.dimensions.len() {
+        return Err(format!("{}: invalid destination shape", f.name));
+    }
+    let mut origins = Vec::new();
+    let mut text = None;
+    let mut payload = None;
+    let mut hash = None;
+    if f.kind == "character" {
+        let b = if f.read_input {
+            read_locked(files, lock, &f.name, &f.kind)?
+        } else {
+            None
+        };
+        text = Some(if let Some((b, _, _, src)) = b {
+            origins.push(src);
+            String::from_utf8(b)
+                .map_err(|e| e.to_string())?
+                .trim_end_matches(['\0', ' '])
+                .to_string()
+        } else {
+            if f.required {
+                return Err(format!("required input {} absent", f.name));
+            }
+            origins.push("registry-initial-value".into());
+            f.initial.clone()
+        });
+    } else {
+        let word = if f.kind == "integer" {
+            if f.initial.is_empty() {
+                0
+            } else {
+                f.initial
+                    .parse::<i32>()
+                    .map_err(|e| format!("{}: invalid integer initial value: {e}", f.name))?
+            }
+            .to_le_bytes()
+        } else {
+            if f.initial.is_empty() {
+                0.
+            } else {
+                f.initial
+                    .replace(['d', 'D'], "e")
+                    .parse::<f32>()
+                    .map_err(|e| format!("{}: invalid real initial value: {e}", f.name))?
+            }
+            .to_bits()
+            .to_le_bytes()
+        };
+        let len: usize = f.shape.iter().product();
+        let mut bytes = word.repeat(len);
+        let names = if f.components.is_empty() {
+            vec![f.name.clone()]
+        } else {
+            f.components.clone()
+        };
+        for (c, n) in names.iter().enumerate() {
+            if let Some((b, d, s, src)) = if f.read_input {
+                read_locked(files, lock, n, &f.kind)?
+            } else {
+                None
+            } {
+                pack(
+                    &b,
+                    &d,
+                    &s,
+                    f,
+                    if f.components.is_empty() {
+                        None
+                    } else {
+                        Some(c)
+                    },
+                    &mut bytes,
+                )?;
+                origins.push(src);
+            } else {
+                if f.required {
+                    return Err(format!("required input {n} absent"));
+                }
+                origins.push(format!("registry-initial-value:{n}"));
+            }
+        }
+        // Retain the allocation default in unread dummy storage.
+        let name = format!("field-{index:04}.bin");
+        let mut target = fs::File::create(out.join(&name)).map_err(|e| e.to_string())?;
+        target.write_all(&bytes).map_err(|e| e.to_string())?;
+        hash = Some(format!("{:x}", Sha256::digest(&bytes)));
+        payload = Some(name);
+    }
+    Ok(Record {
+        pool: f.pool.clone(),
+        name: f.name.clone(),
+        kind: f.kind.clone(),
+        dimensions: f.dimensions.clone(),
+        shape: f.shape.clone(),
+        payload,
+        sha256: hash,
+        text,
+        origins,
+    })
+}
+fn run_with(request: &Path, out: &Path, workers: usize) -> Result<(), String> {
     let r: Request = serde_json::from_slice(&fs::read(request).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     if r.schema != "mpas-native-pool-request-v1" {
@@ -295,109 +478,39 @@ fn run(request: &Path, out: &Path) -> Result<(), String> {
         .map(|p| File::open(p))
         .collect::<Result<_, _>>()?;
     fs::create_dir_all(out).map_err(|e| e.to_string())?;
-    let mut records = Vec::new();
-    for (index, f) in r.fields.into_iter().enumerate() {
-        // MPAS-Model-rrfs/src/framework/mpas_field_routines.F:261-299:
-        // zero-sized Registry dimensions allocate associated empty arrays.
-        if f.shape.len() != f.dimensions.len() {
-            return Err(format!("{}: invalid destination shape", f.name));
-        }
-        let mut origins = Vec::new();
-        let mut text = None;
-        let mut payload = None;
-        let mut hash = None;
-        if f.kind == "character" {
-            let b = if f.read_input {
-                read(&files, &f.name, &f.kind)?
-            } else {
-                None
-            };
-            text = Some(if let Some((b, _, _, src)) = b {
-                origins.push(src);
-                String::from_utf8(b)
-                    .map_err(|e| e.to_string())?
-                    .trim_end_matches(['\0', ' '])
-                    .to_string()
-            } else {
-                if f.required {
-                    return Err(format!("required input {} absent", f.name));
-                }
-                origins.push("registry-initial-value".into());
-                f.initial.clone()
-            });
-        } else {
-            let word = if f.kind == "integer" {
-                if f.initial.is_empty() {
-                    0
-                } else {
-                    f.initial
-                        .parse::<i32>()
-                        .map_err(|e| format!("{}: invalid integer initial value: {e}", f.name))?
-                }
-                .to_le_bytes()
-            } else {
-                if f.initial.is_empty() {
-                    0.
-                } else {
-                    f.initial
-                        .replace(['d', 'D'], "e")
-                        .parse::<f32>()
-                        .map_err(|e| format!("{}: invalid real initial value: {e}", f.name))?
-                }
-                .to_bits()
-                .to_le_bytes()
-            };
-            let len: usize = f.shape.iter().product();
-            let mut bytes = word.repeat(len);
-            let names = if f.components.is_empty() {
-                vec![f.name.clone()]
-            } else {
-                f.components.clone()
-            };
-            for (c, n) in names.iter().enumerate() {
-                if let Some((b, d, s, src)) = if f.read_input {
-                    read(&files, n, &f.kind)?
-                } else {
-                    None
-                } {
-                    pack(
-                        &b,
-                        &d,
-                        &s,
-                        &f,
-                        if f.components.is_empty() {
-                            None
-                        } else {
-                            Some(c)
-                        },
-                        &mut bytes,
-                    )?;
-                    origins.push(src);
-                } else {
-                    if f.required {
-                        return Err(format!("required input {n} absent"));
+    let fields = r.fields;
+    let lock = Mutex::new(());
+    let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let slots: Vec<Mutex<Option<Result<Record, String>>>> =
+        fields.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers.clamp(1, fields.len().max(1)) {
+            scope.spawn(|| {
+                // Indices are claimed in order and every claimed field finishes, so the
+                // claimed set is a prefix and the first error in request order is the one
+                // a serial pass would have raised.
+                while !failed.load(Ordering::Acquire) {
+                    let i = next.fetch_add(1, Ordering::AcqRel);
+                    if i >= fields.len() {
+                        break;
                     }
-                    origins.push(format!("registry-initial-value:{n}"));
+                    let result = transport(i, &fields[i], &files, &lock, out);
+                    if result.is_err() {
+                        failed.store(true, Ordering::Release);
+                    }
+                    *slots[i].lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
                 }
-            }
-            // Retain the allocation default in unread dummy storage.
-            let name = format!("field-{index:04}.bin");
-            let mut target = fs::File::create(out.join(&name)).map_err(|e| e.to_string())?;
-            target.write_all(&bytes).map_err(|e| e.to_string())?;
-            hash = Some(format!("{:x}", Sha256::digest(&bytes)));
-            payload = Some(name);
+            });
         }
-        records.push(Record {
-            pool: f.pool,
-            name: f.name,
-            kind: f.kind,
-            dimensions: f.dimensions,
-            shape: f.shape,
-            payload,
-            sha256: hash,
-            text,
-            origins,
-        });
+    });
+    let mut records = Vec::with_capacity(fields.len());
+    for slot in slots {
+        match slot.into_inner().unwrap_or_else(|p| p.into_inner()) {
+            Some(Ok(record)) => records.push(record),
+            Some(Err(e)) => return Err(e),
+            None => return Err("physics pool: a field was never transported".into()),
+        }
     }
     let receipt = Receipt {
         schema: "mpas-native-pool-payload-v1",
@@ -409,6 +522,9 @@ fn run(request: &Path, out: &Path) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+fn run(request: &Path, out: &Path) -> Result<(), String> {
+    run_with(request, out, workers())
 }
 // File metadata only; Registry allocation remains in the orchestration layer.
 fn inspect(path: &str) -> Result<(), String> {
@@ -553,5 +669,115 @@ mod rrfs_empty_pool_tests {
             assert_eq!(record["sha256"],format!("{:x}",Sha256::digest(&bytes)));
         }
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod parallel_transport_tests {
+    use super::*;
+    // The per-word reference loop pack() had before the contiguous-run path (U-H3).
+    fn reference(input: &[u8], counts: &[usize], axes: &[usize], shape: &[usize],
+                 component: Option<usize>, out: &mut [u8]) {
+        let mut strides = vec![1; shape.len()];
+        for a in 1..strides.len() {
+            strides[a] = strides[a - 1] * shape[a - 1];
+        }
+        let len: usize = counts.iter().product();
+        for i in 0..len {
+            let mut r = i;
+            let mut dst = component.unwrap_or(0);
+            for a in (0..counts.len()).rev() {
+                let c = r % counts[a];
+                r /= counts[a];
+                dst += c * strides[axes[a]];
+            }
+            out[dst * 4..dst * 4 + 4].copy_from_slice(&input[i * 4..i * 4 + 4]);
+        }
+    }
+    #[test]
+    fn contiguous_runs_place_every_word_where_the_word_loop_does() {
+        // (Time,) nCells, nVertLevels -> Fortran (nVertLevels, nCells+1): the run path.
+        let field = Field {
+            pool: "state".into(), name: "theta".into(), kind: "real".into(),
+            dimensions: vec!["nVertLevels".into(), "nCells".into()], shape: vec![3, 6],
+            components: vec![], initial: String::new(), required: true, read_input: true,
+        };
+        let input: Vec<u8> = (0u32..15).flat_map(|w| (0x40000000 + w).to_le_bytes()).collect();
+        let dims = ["nCells".to_string(), "nVertLevels".to_string()];
+        let mut fast = vec![0xAB; 72];
+        let mut slow = vec![0xAB; 72];
+        pack(&input, &dims, &[5, 3], &field, None, &mut fast).unwrap();
+        reference(&input, &[5, 3], &[1, 0], &field.shape, None, &mut slow);
+        assert_eq!(fast, slow);
+        // The other order goes through the word loop and still matches.
+        let dims = ["nVertLevels".to_string(), "nCells".to_string()];
+        let mut fast = vec![0xCD; 72];
+        let mut slow = vec![0xCD; 72];
+        pack(&input, &dims, &[3, 5], &field, None, &mut fast).unwrap();
+        reference(&input, &[3, 5], &[0, 1], &field.shape, None, &mut slow);
+        assert_eq!(fast, slow);
+    }
+    fn write_request(root: &Path, fields: serde_json::Value) -> std::path::PathBuf {
+        fs::create_dir_all(root).unwrap();
+        let request = root.join("request.json");
+        let r = serde_json::json!({"schema":"mpas-native-pool-request-v1","sources":[],"fields":fields});
+        fs::write(&request, serde_json::to_vec(&r).unwrap()).unwrap();
+        request
+    }
+    fn root(tag: &str) -> std::path::PathBuf {
+        let base = std::env::var("RRFS_POOL_TEST_ROOT")
+            .unwrap_or_else(|_| format!("{}/target", env!("CARGO_MANIFEST_DIR")));
+        Path::new(&base).join(format!("{tag}-{}", std::process::id()))
+    }
+    #[test]
+    fn one_worker_and_many_write_the_same_bytes_and_manifest() {
+        let root = root("parallel-transport");
+        let fields: Vec<serde_json::Value> = (0..40)
+            .map(|i| serde_json::json!({"pool":"diag","name":format!("f{i}"),
+                "kind": if i % 3 == 0 {"integer"} else {"real"},
+                "dimensions":["nVertLevels","nCells"],"shape":[1 + i % 5, 7 + i],
+                "initial": if i % 3 == 0 {format!("{}", i as i32 - 20)} else {format!("{}.5d0", i)}}))
+            .collect();
+        let request = write_request(&root, serde_json::Value::Array(fields));
+        run_with(&request, &root.join("serial"), 1).unwrap();
+        run_with(&request, &root.join("parallel"), 8).unwrap();
+        let serial = fs::read(root.join("serial/manifest.json")).unwrap();
+        assert_eq!(serial, fs::read(root.join("parallel/manifest.json")).unwrap());
+        let manifest: serde_json::Value = serde_json::from_slice(&serial).unwrap();
+        for (i, record) in manifest["fields"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(record["name"], format!("f{i}"));
+            let name = record["payload"].as_str().unwrap();
+            assert_eq!(fs::read(root.join("serial").join(name)).unwrap(),
+                       fs::read(root.join("parallel").join(name)).unwrap());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn the_first_error_in_request_order_is_the_one_reported() {
+        let root = root("parallel-transport-error");
+        let mut fields: Vec<serde_json::Value> = (0..30)
+            .map(|i| serde_json::json!({"pool":"diag","name":format!("ok{i}"),"kind":"real",
+                "dimensions":["nCells"],"shape":[64],"initial":"0"}))
+            .collect();
+        fields[11] = serde_json::json!({"pool":"diag","name":"first","kind":"real",
+            "dimensions":["nCells"],"shape":[4],"initial":"not-a-number"});
+        fields[23] = serde_json::json!({"pool":"diag","name":"second","kind":"real",
+            "dimensions":["nCells"],"shape":[4, 2],"initial":"0"});
+        let request = write_request(&root, serde_json::Value::Array(fields));
+        for workers in [1, 4, 16] {
+            let e = run_with(&request, &root.join(format!("w{workers}")), workers).unwrap_err();
+            assert!(e.starts_with("first: invalid real initial value"), "{workers}: {e}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn the_worker_count_follows_the_quota_variable() {
+        // Single test touching the variable, so no other test races it.
+        unsafe { std::env::set_var("RAYON_NUM_THREADS", "3") };
+        assert_eq!(workers(), 3);
+        unsafe { std::env::set_var("RAYON_NUM_THREADS", "999") };
+        assert_eq!(workers(), MAX_WORKERS);
+        unsafe { std::env::remove_var("RAYON_NUM_THREADS") };
+        assert!((1..=MAX_WORKERS).contains(&workers()));
     }
 }

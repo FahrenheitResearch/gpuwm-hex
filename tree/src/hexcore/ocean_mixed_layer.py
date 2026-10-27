@@ -63,6 +63,13 @@ class MixedLayerOcean:
         f = service.backend._seam._driver.fields
         if service.noahmp is None:
             raise ValueError("prognostic ocean requires the ArWen Noah-MP sea-ice energy hook")
+        driver_class = type(service.backend._seam._driver)
+        if hasattr(driver_class, "_run_noahmp") and not getattr(driver_class, "hex_seaice_hook", False):
+            # The hook is the only caller of step(): without it the ocean is
+            # attached, never stepped, and still republished at every move
+            # (suite route, Milton hex storm-following, box M 2026-10-27).
+            raise ValueError("prognostic ocean requires the hex Noah-MP sea-ice hook on this physics route; "
+                             "without it the ocean would never be stepped")
         p = self.options
         tf = 273.15 - .054*p["salinity_psu"]
         ocean = service.owned["landmask"] == 0

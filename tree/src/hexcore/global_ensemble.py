@@ -320,20 +320,26 @@ def _forecast_flag(argv: Sequence[str], flag: str) -> str | None:
 def memory_group_limit(value: Mapping[str, Any], args: argparse.Namespace) -> int | None:
     """Members per group the smallest visible card holds, priced exactly as the roster admission prices them.
 
-    Same sum as ``multi_member._run_members``: each member's solo floor
-    (``forecast_door.required_free_bytes`` on this card's footprint row and the run's headroom) plus its
+    Same sum as the roster admissions (``multi_member._run_members``, ``multi_member.admit_suite_group``): each
+    member's solo floor on the route it runs (``device_admission.route_required_free_bytes`` on this card's
+    footprint row and the run's headroom; the MPAS route never below its measured whole runs) plus its
     stochastic arrays (``forecast_door.stochastic_array_bytes`` of the member's own options), against the
     card's free bytes, through ``device_admission.co_tenancy_limits``.  None when no card can be read here
     (the forecast door still admits, and a refused group still splits).
     """
 
     from . import forecast_door as door
-    from .device_admission import card_profile_from_attributes, co_tenancy_limits, model_for_card
+    from .device_admission import (card_profile_from_attributes, co_tenancy_limits, model_for_card,
+                                   route_required_free_bytes)
+    from .multi_member import argv_physics_route
 
     cards = _probe_cards(getattr(args, "devices", None))
     if not cards:
         return None
     argv = list(value["commands"]["forecast"])
+    # Each member is priced on the route it runs: the MPAS route (the hex default) holds far more than the
+    # ArWen-route rows (U-H4: 30 km MPAS members planned 2 per RTX PRO 6000 at the ArWen price and ran out of memory).
+    route = argv_physics_route(argv)
     headroom = _forecast_flag(argv, "--headroom-mib")
     margin = None if headroom is None else int(round(float(headroom) * door.MIB))
     cells = int(value["mesh"]["cells"])
@@ -347,7 +353,8 @@ def memory_group_limit(value: Mapping[str, Any], args: argparse.Namespace) -> in
         model = model_for_card(profile, "global", rollback_armed="--stop-on-refusal" in argv)
         table, memory = co_tenancy_limits(
             mesh_kind="global", cells=cells, levels=levels, card_bytes=int(card["total"]),
-            free_bytes=int(card["free"]), solo_required_bytes=door.required_free_bytes(cells, model, margin),
+            free_bytes=int(card["free"]),
+            solo_required_bytes=route_required_free_bytes(cells, model, margin, route=route),
             member_additional_bytes=additional)
         limits.append(min(table, memory))
     return max(1, min(limits))

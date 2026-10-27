@@ -284,6 +284,57 @@ def sea_ice_threshold(identity):
     raise KeyError('seam identity seals neither xice_threshold nor fractional_seaice')
 
 
+#: The surface role words MPAS's sea-ice conversion writes for a sea point
+#: (mpas_atmphys_update_surface.F:196-313, hexcore.mpasphys.surface_update_v842
+#: sst_update): ice takes the land-ice class, soil 16 and xland 1; open water
+#: takes the water class, soil 14 and xland 2. Vegetation is zero either way.
+OCEAN_ROLE_FIELDS = ('xland', 'ivgtyp', 'isltyp', 'vegfra', 'albbck', 'embck')
+
+
+def surface_land_use(backend):
+    """(isice, iswater) of the backend's vegetation dataset, as its surface service reads them."""
+    noahmp = getattr(getattr(getattr(backend, '_seam', None), '_driver', None), 'noahmp_params', None)
+    if noahmp is not None:
+        return int(noahmp.land_use.isice), int(noahmp.land_use.iswater)
+    from gpuwm.core.noahmp import load_noahmp_parameters
+    from gpuwm.core.noahmp_runtime import DEFAULT_VEGETATION_DATASET
+    _, veg = load_noahmp_parameters().vegetation_groups(DEFAULT_VEGETATION_DATASET)
+    return int(veg.scalar('ISICE')), int(veg.scalar('ISWATER'))
+
+
+def settle_ocean_roles(fields, wet, threshold, isice, iswater, xp=np):
+    """Give every wet column the surface role its CURRENT ice concentration implies.
+
+    A moved member's role words (xland, vegetation and soil class, background
+    albedo) come from its own cold geography, i.e. the initial ice extent on the
+    new mesh, while its ice concentration is carried. Where the two disagree a
+    sea point is left half converted: xice below the threshold with xland 1 and
+    the land-ice class classifies as GLACIER (or ordinary land), so Noah-MP runs
+    a glacier column on ocean state. MPAS's own conversion cannot repair it,
+    because it fires only on a threshold crossing against the carried xicem.
+    Breakage it fixes: Milton hex storm-following, box M 2026-10-27, every move
+    flipped polar columns water/sea ice/glacier, the history census refused, the
+    Noah-MP glacier water budget failed and the next move's sea-ice remap
+    refused. Returns the number of wet columns whose role changed.
+    """
+    # Written in place: the driver's arrays are bound into its restart manifest.
+    ice = wet & (fields['xice'] >= xp.float32(threshold))
+    water = wet & ~ice
+    values = dict(xland=(1, 2), ivgtyp=(isice, iswater), isltyp=(16, 14), vegfra=(0, 0),
+                  albbck=(.80, .08), embck=(.98, .98))
+    changed = xp.zeros(wet.shape, dtype=bool)
+    for name in OCEAN_ROLE_FIELDS:
+        if name not in fields:
+            continue
+        old = fields[name]
+        on_ice, on_water = (xp.asarray(v, dtype=old.dtype) for v in values[name])
+        new = xp.where(ice, on_ice, xp.where(water, on_water, old)).astype(old.dtype)
+        if name in ('xland', 'ivgtyp', 'isltyp'):
+            changed |= new != old
+        old[...] = new
+    return int(xp.count_nonzero(changed))
+
+
 def land_state_donors(payload,weights,layout,fresh,target_mesh,cache):
     """One local coherent donor, preserving land, sea-ice and glacier roles."""
     from scipy.spatial import cKDTree
@@ -423,8 +474,16 @@ def restore_remapped_backend(backend, payload, weights, layout, *, base_dt, rate
         wet = ice_fields['fields/ice_ocean_mask'][..., layout.cell_l2g] > 0
         if np.any(wet & (fresh_arrays['fields/lakemask'] >= .5)):
             raise ValueError('target ocean geography unexpectedly includes lake columns')
-        fresh_arrays['fields/xland'] = np.where(wet & (fresh_arrays['fields/xice'] <
-            sea_ice_threshold(sources[0]['seam']['identity'])), 2, 1).astype(np.float32)
+        threshold = sea_ice_threshold(sources[0]['seam']['identity'])
+        fresh_arrays['fields/xland'] = np.where(wet & (fresh_arrays['fields/xice'] < threshold),
+                                                2, 1).astype(np.float32)
+        roles = {name: np.array(fresh_arrays['fields/'+name]) for name in ('xice',)+OCEAN_ROLE_FIELDS
+                 if 'fields/'+name in fresh_arrays}
+        isice, iswater = surface_land_use(backend)
+        mapped_cache.setdefault('settled_ocean_roles', 0)
+        mapped_cache['settled_ocean_roles'] += settle_ocean_roles(roles, wet, threshold, isice, iswater)
+        for name, value in roles.items():
+            fresh_arrays['fields/'+name] = value
     land_donors,land_receipt=land_state_donors(payload,weights,layout,fresh['seam']['arrays'],target_mesh,mapped_cache)
     prefetch_owner_fields(payload,weights,[key for key in sorted(keys)
                                            if not (ice_fields is not None and key in ice_fields)
@@ -501,7 +560,8 @@ def restore_remapped_backend(backend, payload, weights, layout, *, base_dt, rate
     fresh['seam']=dict(identity=fresh['seam']['identity'],arrays=result,scalars=scalars)
     fresh['adapter']=deepcopy(sources[0]['adapter'])
     backend.restore_restart_state(fresh)
-    return dict(fields=receipt,land_state=land_receipt,sea_ice=mapped_cache.get('ocean_ice_receipt'),step_index=int(step),time_seconds=payload['time_seconds'],
+    return dict(fields=receipt,land_state=land_receipt,sea_ice=mapped_cache.get('ocean_ice_receipt'),
+                ocean_role_columns_settled=mapped_cache.get('settled_ocean_roles', 0),step_index=int(step),time_seconds=payload['time_seconds'],
                 metadata_note='backend call counters retained from coarsest owner class; cadence index rebuilt')
 
 

@@ -694,8 +694,14 @@ class RegionalContract:
 #: cuda_transport_v841.py a comment. No CUDA source string or arithmetic
 #: changed. Re-derived by tools/repin_source_tables.py; not a new regional
 #: forecast mint, archived scope unchanged.
+#: (21) 2026-10-27 (hex 0.4.9 all-fixes batch): runtime.py makes the host
+#: wait on the card with blocking sync instead of CUDA's spin (c151b3e9; the
+#: main thread held one core at 100 %). The only changed member of this set
+#: since (20); no CUDA source string or arithmetic changed. Re-derived by
+#: tools/repin_source_tables.py; not a new regional forecast mint, archived
+#: scope unchanged.
 MINTED_KERNEL_SET_SHA256 = (
-    "c04341575fc01d094e853565130c3be1f43a4a361fa8b4b4275b5e958fec20ad"
+    "f0c98a939d59c22ad122a941fc491a0c9e35e0537f3ce028b3cd71f76ce08dec"
 )
 
 _DRY_MINT_CAVEAT = (

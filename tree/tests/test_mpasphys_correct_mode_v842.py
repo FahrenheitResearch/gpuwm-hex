@@ -139,24 +139,25 @@ def test_RP1_RP3_pristine_native_slots_are_named_gaps_not_refusals():
     # they are left out of the run whole and listed (coordinator 2026-10-14: default correct, never refuse).
     assert config.corrections == frozenset()
     assert {(g.finding, g.slot): g.owner for g in config.gaps} == {
-        ('RP1', 'pbl'): 'p12-bl-mynn', ('RP3', 'seaice'): 'p18-seaice', ('RP3', 'surface_layer'): 'p10-sf-mynn'}
+        ('RP1', 'pbl'): 'p12-bl-mynn', ('RP7', 'pbl'): 'p12-bl-mynn', ('RP3', 'seaice'): 'p18-seaice',
+        ('RP3', 'surface_layer'): 'p10-sf-mynn'}
     assert all(g.reason == 'slot does not implement it' and g.backend == 'native-cpu' for g in config.gaps)
     driver, _, seen = driver_for(config, 360)           # runs: no refusal
     run_steps(driver, 360, 1)
     assert seen and all(call.corrections == frozenset() for call in seen)
     # The published hex-cuda MYNN declares RP1 in its table descriptor (p12, 1f3d5730): the table
     # settlement applies it, so selecting the hex-cuda slot closes the gap.
-    cuda_mynn = resolve_namelist(deck('convection_permitting', mode='correct', skip='RP3,WB3'),
+    cuda_mynn = resolve_namelist(deck('convection_permitting', mode='correct', skip='RP3,WB3,RP7'),
                                  backends={'pbl': 'hex-cuda'})
     assert cuda_mynn.corrections == {'RP1'} and cuda_mynn.gaps == ()
     # Implementations that declare the corrections apply them.
     backends = {'pbl': 'hex-cuda', 'seaice': 'hex-cuda', 'surface_layer': 'hex-cuda'}
-    cuda = resolve_namelist(deck('convection_permitting', mode='correct', skip='WB3'), backends=backends,
+    cuda = resolve_namelist(deck('convection_permitting', mode='correct', skip='WB3,RP7'), backends=backends,
                             declarations=declaring(pbl=('RP1',), seaice=('RP3',), surface_layer=('RP3',)))
     assert cuda.corrections == {'RP1', 'RP3'} and cuda.gaps == ()
     driver_for(cuda, 360, declare={'pbl': ('RP1',), 'seaice': ('RP3',), 'surface_layer': ('RP3',)})
     # A finding is applied whole or not at all: one slot without RP3 makes all of RP3 a gap.
-    partial = resolve_namelist(deck('convection_permitting', mode='correct', skip='WB3'), backends=backends,
+    partial = resolve_namelist(deck('convection_permitting', mode='correct', skip='WB3,RP7'), backends=backends,
                                declarations=declaring(pbl=('RP1',), seaice=('RP3',)))
     assert partial.corrections == {'RP1'}
     assert [(g.finding, g.slot, g.backend) for g in partial.gaps] == [('RP3', 'surface_layer', 'hex-cuda')]
@@ -168,7 +169,7 @@ def test_RP1_RP3_pristine_native_slots_are_named_gaps_not_refusals():
     with pytest.raises(RuntimeError, match='do not declare'):
         driver_for(cuda, 360, declare={'pbl': ('RP1',), 'seaice': ('RP3',)})
     # Skipping the findings is an explicit, receipted choice: no correction and no gap.
-    skipped = resolve_namelist(deck('convection_permitting', mode='correct', skip='RP1,RP3,WB3'))
+    skipped = resolve_namelist(deck('convection_permitting', mode='correct', skip='RP1,RP3,RP7,WB3'))
     assert skipped.corrections == frozenset() and skipped.gaps == ()
     driver_for(skipped, 360)
 
@@ -355,10 +356,10 @@ def test_every_correction_names_its_breakage():
     # the findings that act on the ArWen route and the IAU and boundary doors ("hex_route", read by
     # hexcore.correct_mode).  WB5 is on both: the hex-cuda WSM6 slot and the engine's WSM6.
     assert {k for k, row in CORRECTIONS_V842.items() if row['slots'] or k == 'RP4'} == {
-        'RP1', 'RP3', 'RP4', 'RP6', 'WB3', 'WB5'}
+        'RP1', 'RP3', 'RP4', 'RP6', 'RP7', 'WB3', 'WB5'}
     assert {k for k, row in CORRECTIONS_V842.items() if 'hex_route' in row} == {
         'WB4', 'WB5', 'IN1', 'IN2', 'IN3', 'IN4', 'IN5'}
-    assert set(CORRECTIONS_V842) == {'RP1', 'RP3', 'RP4', 'RP6', 'WB3', 'WB4', 'WB5',
+    assert set(CORRECTIONS_V842) == {'RP1', 'RP3', 'RP4', 'RP6', 'RP7', 'WB3', 'WB4', 'WB5',
                                      'IN1', 'IN2', 'IN3', 'IN4', 'IN5'}
     assert all(row['breakage'] for row in CORRECTIONS_V842.values())
     assert Backend.NATIVE_CPU.value == 'native-cpu'

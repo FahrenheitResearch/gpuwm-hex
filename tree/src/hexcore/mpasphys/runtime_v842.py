@@ -1446,7 +1446,11 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
         stochastic_restart = None if not resumed else moving.carrier.get('stochastic')
         if stochastic_config.enabled:
             partition = getattr(execution, 'stochastic_partition', None)
-            coupling.stochastic = (StochasticPhysics(mesh, grid.vertical_grid, stochastic_config)
+            # An LTS rate class forces through its member's one class-aware process (lts_v842, U-H5), never a
+            # pattern of its own on its truncated local mesh.
+            class_stochastic = getattr(execution, 'stochastic_physics', None)
+            coupling.stochastic = (class_stochastic(stochastic_config) if class_stochastic is not None else
+                StochasticPhysics(mesh, grid.vertical_grid, stochastic_config)
                 if partition is None else
                 StochasticPhysics(mesh, grid.vertical_grid, stochastic_config, partition=partition()))
             dycore.stochastic = coupling.stochastic

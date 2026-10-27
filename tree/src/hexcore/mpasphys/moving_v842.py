@@ -562,8 +562,10 @@ class MovingRoute:
         if carried is None or manager is None or getattr(config, "mode", "exact") == "exact":
             return None
         elapsed = Fraction(self.carrier["physics"]["manager_elapsed"])
-        if set(carried["alarms"]) != set(manager.alarms) or carried.get("dt") != str(manager.dt):
-            raise ValueError("the checkpoint's physics alarms or step differ from this run's suite")
+        # The alarms' phase is in model seconds, so a resume under another timestep keeps it: an
+        # alarm rings at the first step at or past its next ring, as on any step grid.
+        if set(carried["alarms"]) != set(manager.alarms):
+            raise ValueError("the checkpoint's physics alarms differ from this run's suite")
         for name, item in carried["alarms"].items():
             alarm = manager.alarms[name]
             if Fraction(item["period"]) != alarm.period:

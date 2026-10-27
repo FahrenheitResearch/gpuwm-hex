@@ -134,7 +134,53 @@ class FrameworkPhysics:
         if key not in self._fields:
             self._storage[key] = [np.zeros(a.shape, dtype=a.dtype, order='F') for _ in range(nlevels)]
         self._fields[key] = metadata
-        np.copyto(self._storage[key][level-1], a)
+        target = self._storage[key][level-1]
+        if a is not target:
+            # The device views write the live storage in place (field_storage); handing it back is a no-op.
+            np.copyto(target, a)
+
+    def put_zero_field(self, pool, name, shape, dtype, *, nlevels=1):
+        """Every time level of a field whose words are the Registry initial zero, allocated and not written.
+
+        The same words ``put_field`` stores from a zero buffer, without touching a page: the allocation is
+        calloc'd, so a field no slot or stream ever writes costs no host memory.  THE COST THIS REMOVES
+        (MPAS-route host RAM, 2026-10-27): 6.83 of the 8.16 GB of Registry storage on a 99,898-cell mesh are
+        such fields (abstot, ozmixm, the dycore's diag/tend arrays the GPU dycore keeps on the device), and
+        hydration wrote each word, once per rate class on the LTS route.
+        """
+        self.pool(pool)
+        _name(name)
+        dtype = np.dtype(dtype)
+        shape = tuple(int(v) for v in shape)
+        if not ((dtype == np.float32 and len(shape) <= 5) or (dtype == np.int32 and len(shape) <= 3)):
+            raise TypeError('MPAS field requires RKIND rank <= 5 or integer rank <= 3')
+        if nlevels < 1:
+            raise ValueError('invalid MPAS field time level')
+        key, metadata = (pool, name), (dtype, shape, nlevels)
+        if key in self._text_fields:
+            raise TypeError('MPAS field type cannot change')
+        if key in self._fields and self._fields[key] != metadata:
+            raise ValueError('MPAS field dtype, shape and time levels cannot change')
+        if key in self._fields:
+            for level in self._storage[key]:
+                level.fill(0)
+        else:
+            self._storage[key] = [np.zeros(shape, dtype=dtype, order='F') for _ in range(nlevels)]
+        self._fields[key] = metadata
+
+    def field_storage(self, pool, name, *, level=1):
+        """The live storage of one time level (no copy), for the device pool views.
+
+        THE COST THIS REMOVES (MPAS-route host RAM, 2026-10-27): ``get_field`` returns a copy, and the device
+        views kept that copy for the whole run beside the storage it came from (3.2 GB of resident copies plus
+        1.0 GB of transaction copies on a 99,898-cell mesh, once per LTS rate class).  The views now read and
+        publish this array in place.
+        """
+        self._check()
+        dtype, shape, levels = self._fields[pool, name]
+        if not 1 <= level <= levels:
+            raise ValueError('invalid MPAS field time level')
+        return self._storage[pool, name][level-1]
 
     def get_field(self, pool, name, *, level=1, out=None):
         self._check()
@@ -321,6 +367,10 @@ class FrameworkPhysics:
         lower = tuple(lower) if lower is not None else (1,) * a.ndim
         if len(lower) != a.ndim:
             raise ValueError('MPAS variable lower bound rank differs')
+        current = self._variables.get(name)
+        if current is not None and current[0] is a and a.dtype == dtype and tuple(current[1]) == lower:
+            # The device views wrote the live array in place (variable_storage); handing it back is a no-op.
+            return
         self._variables[name] = np.array(a, dtype=dtype, order='F', copy=True), lower
 
     def get_variable(self, name):
@@ -328,6 +378,16 @@ class FrameworkPhysics:
         self.abi['variables'][name]
         value = self._variables.get(name)
         return None if value is None else (value[0].copy(order='F'), value[1])
+
+    def variable_storage(self, name):
+        """The live module array and its lower bounds (no copy), for the device pool views; None if unallocated.
+
+        THE COST THIS REMOVES: as ``field_storage``; the prepared module arrays are allocated untouched
+        (``_allocate``), and the views' copies of them were the touched, run-long host words.
+        """
+        self._check()
+        self.abi['variables'][name]
+        return self._variables.get(name)
 
     def get_table(self, name):
         self._check()

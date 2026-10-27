@@ -4875,8 +4875,15 @@ CORRECT_MODE_SOURCE = {
 #: for a later launch and the step costs no speed; meshes smaller than that run
 #: in one launch. GPUWM_HEX_THOMPSON_TILE_COLUMNS=N caps the tile at N columns,
 #: trading launches for a smaller workspace.
+#: The resident width alone priced the workspace at ~33 KB per column: 5.4 GB for a
+#: 164k-column rank (a 30 km globe over 4 cards, or the whole 60 km globe), which ran a
+#: 32 GB RTX 5090 out of memory at the first microphysics call (hex-global-fit,
+#: 2026-10-27, g01.log). The tile is therefore also capped by a workspace byte budget,
+#: GPUWM_HEX_THOMPSON_WORKSPACE_MIB (default 1536). Columns are independent, so the
+#: tile changes only how many launches a call takes, never a value.
 WORKSPACE_FUNCTIONS = ("mp_thompson", "calc_effectrad", "calc_refl10cm")
 WORKSPACE_TILE_COLUMNS = None
+WORKSPACE_BUDGET_MIB = 1536
 _WS_TYPES = (("double", "dd", 8), ("float", "ff", 4), ("bool", "bb", 1))
 _WS_SUPPORT = r'''
 // Column workspace views (memory lane). The workspace is cut into one block per warp of 32
@@ -5047,6 +5054,22 @@ def workspace_tile_columns():
     return tile
 
 
+def workspace_budget_bytes() -> int:
+    """Upper bound on one call's Thompson workspace tile, from the environment or the default."""
+    import os
+    value = os.environ.get("GPUWM_HEX_THOMPSON_WORKSPACE_MIB", "").strip().lower()
+    mib = WORKSPACE_BUDGET_MIB if value in ("", "auto") else int(value)
+    if mib < 64:
+        raise ValueError("GPUWM_HEX_THOMPSON_WORKSPACE_MIB must be at least 64")
+    return mib << 20
+
+
+def budget_tile_columns(kernel_name: str, nz: int) -> int:
+    """Most columns (whole 128-column blocks) whose workspace tile fits the byte budget."""
+    per_block = workspace_bytes(workspace_layout(), kernel_name, nz, 128)
+    return max(128, (workspace_budget_bytes() // per_block) * 128)
+
+
 _RESIDENT_COLUMNS = {}
 
 
@@ -5205,7 +5228,7 @@ def _launch_columns(kernel_name: str, module, args: tuple, nz: int, columns: int
     # 32 threads per column of the same tile and simply takes more waves.
     resident = (min(resident_columns(phase, 128) for i, phase in enumerate(phases) if i not in WARP_GROUPS)
                 if phases else resident_columns(kernel))
-    stride = min(columns, tile if tile is not None else resident)
+    stride = min(columns, tile if tile is not None else min(resident, budget_tile_columns(kernel_name, nz)))
     nbytes = workspace_bytes(workspace_layout(), kernel_name, nz, stride)
     if (nz + 1) * stride >= 2**31:
         raise ValueError("Thompson workspace tile too wide for 32-bit level offsets")

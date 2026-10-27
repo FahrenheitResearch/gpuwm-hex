@@ -38,6 +38,9 @@ def install_noahmp_seaice(backend, seam):
     class NoahmpSeaiceDriver(base):
         # No extra instance attributes: all carried component fields are in the
         # existing serialized field dictionary; closures contain setup only.
+        # The class marker lets a coupled ocean prove it will be stepped.
+        hex_seaice_hook = True
+
         def _run_sfclay(self, atmosphere, cfg):
             _surface_layer(self, atmosphere, cfg, backend, base._run_sfclay)
 

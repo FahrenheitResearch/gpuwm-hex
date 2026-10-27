@@ -69,6 +69,21 @@ from .errors import DelayedStartRefusal
 
 XTIME_FORMAT = "%Y-%m-%d_%H:%M:%S"
 
+
+def _stamp_slot(variable: Any) -> Any:
+    """The index that addresses a whole clock string in ``variable``.
+
+    MPAS writes ``xtime`` as ``(Time, StrLen)``, so the stamp is row 0; the
+    port's inits (hex >= 0.4.6) write ``initial_time`` as ``(StrLen,)``, so
+    the stamp is the whole variable.  ``[0]`` on the 1-D shape addresses ONE
+    CHARACTER: the transplant wrote only that character and left
+    ``' 025-05-19_06:00:00'``, and every member started from it stopped with
+    "Invalid isoformat string".
+    """
+
+    return 0 if len(variable.dimensions) > 1 else slice(None)
+
+
 #: What a mid-window state is made of: ``(init variable, history variable)``.
 #:
 #: The names differ where the two streams named the same quantity differently
@@ -248,7 +263,8 @@ def frame_valid_time(path: Path) -> datetime | None:
         dataset.set_auto_maskandscale(False)
         if "xtime" not in dataset.variables:
             return None
-        raw = np.asarray(dataset.variables["xtime"][0])
+        variable = dataset.variables["xtime"]
+        raw = np.asarray(variable[_stamp_slot(variable)])
         text = (
             raw.tobytes().decode("utf-8", "replace")
             if raw.dtype.kind in ("S", "U")
@@ -316,7 +332,8 @@ def compose_mid_window_init(
         init.set_auto_maskandscale(False)
         before = "unrecorded"
         if "xtime" in init.variables:
-            raw = np.asarray(init.variables["xtime"][0])
+            variable = init.variables["xtime"]
+            raw = np.asarray(variable[_stamp_slot(variable)])
             before = (
                 raw.tobytes().decode("utf-8", "replace")
                 if raw.dtype.kind in ("S", "U")
@@ -406,8 +423,9 @@ def compose_mid_window_init(
         # replaced is recorded so a reader can see what the file was.
         for name in ("xtime", "initial_time"):
             if name in init.variables:
-                width = int(init.variables[name].shape[-1])
-                init.variables[name][0] = np.array(
+                variable = init.variables[name]
+                width = int(variable.shape[-1])
+                variable[_stamp_slot(variable)] = np.array(
                     list(stamp.ljust(width)[:width]), dtype="S1"
                 )
         attribute_before = None

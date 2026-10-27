@@ -185,6 +185,12 @@ __all__ = [
     "native_device_floor_bytes",
     "radiation_chunk_columns",
     "required_free_bytes",
+    "MPAS_ROUTE_RUN_PEAKS",
+    "PHYSICS_ROUTES",
+    "ROUTE_RUN_MARGIN",
+    "RouteRunPeak",
+    "route_required_free_bytes",
+    "route_run_curve_mib",
     "harmonic_basis_bytes",
     "retired_affine_row_floor_bytes",
     "retired_converged_row_floor_bytes",
@@ -1490,6 +1496,100 @@ def required_free_bytes(
 
     model = FOOTPRINT_MODEL if model is None else model
     return model.required_bytes(int(cells), margin_bytes)
+
+
+#: The physics routes a member can be priced for.  Every footprint row above was measured on the ArWen route
+#: (route A); the MPAS route (``hexcore.mpasphys``, the hex default since 0.4.6) holds more.
+PHYSICS_ROUTES = ("arwen", "mpas")
+
+
+@dataclass(frozen=True)
+class RouteRunPeak:
+    """One forecast's whole-run peak on its card, measured with nothing else of its own on that card."""
+
+    route: str
+    multiprocessors: int
+    levels: int
+    cells: int
+    peak_mib: float
+    receipt: str
+
+
+#: Whole-run peaks of ONE member on the MPAS physics route (fixed step, fast numerics).
+#:
+#: THE BREAKAGE IT PREVENTS (U-H4, global synradar cycle, 2026-10-27 00:28Z): ``gpuwm-hex global --row
+#: global-30km --source gefs --members-per-card auto`` on two RTX PRO 6000 (97,887 MiB) priced each 30 km MPAS
+#: member at the ArWen-route floor (43,080 MiB), planned 2 per card, and all four members ran out of memory about
+#: 3 min in (CuPy: "Out of memory allocating 432,537,600 bytes (allocated so far: 48,761,238,528 bytes)"); the
+#: next 2-member groups met the same end.  One member alone on that card peaked 75,069 MiB.
+MPAS_ROUTE_RUN_PEAKS: tuple[RouteRunPeak, ...] = (
+    RouteRunPeak(
+        route="mpas", multiprocessors=188, levels=55, cells=655_362, peak_mib=75_069.0,
+        receipt=("x1.655362 30 km uniform globe, GEFS 2025-05-19 06Z members, 6 h, hex 0.4.8 MPAS physics "
+                 "convection_permitting, dt 180 s, one member alone on an RTX PRO 6000 (97,887 MiB); the card's "
+                 "nvidia-smi row sampled every 5 s over five member rounds, 2026-10-27")),
+    RouteRunPeak(
+        route="mpas", multiprocessors=170, levels=55, cells=40_962, peak_mib=12_664.0,
+        receipt=("x1.40962 120 km uniform globe, GEFS 2025-05-19 06Z members 1-2, 1 h (6 steps of 600 s, radiation "
+                 "at steps 0 and 3), hex 0.4.8 MPAS physics convection_permitting, fast numerics, one member per "
+                 "group on an RTX 5090; the member processes' nvidia-smi compute-apps rows sampled every 1 s peaked "
+                 "12,664 and 12,400 MiB (an earlier run of member 1 alone peaked 10,940 MiB), 2026-10-27")),
+)
+#: Uniform quasi-uniform globes only (the rows the global ensemble door runs).  Variable-resolution and multi-zoom
+#: globes are priced by their own whole runs in ``card_fit``; a 3-zone multi-zoom globe of 143,420 cells peaked
+#: 26,800 MiB on the MPAS route, above this line, so this curve is not their price.
+
+#: Headroom over the MPAS-route whole-run curve, the same 10 % the card-fit whole-run curve carries
+#: (``card_fit.WHOLE_RUN_MARGIN``): the curve passes through sampled peaks a sampler can miss by a spike.
+ROUTE_RUN_MARGIN = 0.10
+
+
+def route_run_curve_mib(cells: int, route: str = "mpas", levels: int = MODEL_VERTICAL_LEVELS) -> float | None:
+    """Peak MiB of one ``route`` member on ``cells`` columns, from that route's measured whole runs, or None.
+
+    Straight between neighbouring measured runs (peaks made non-decreasing in cells), the end segments' slopes
+    past the smallest and largest; one run alone scales cell-linear.  The runs were measured on different cards;
+    the per-card terms (CUDA local-memory store, radiation chunk) differ between them by a few hundred MiB, far
+    inside :data:`ROUTE_RUN_MARGIN`.  Derived between and past the measured sizes, not measured there."""
+
+    points: dict[int, float] = {}
+    for peak in MPAS_ROUTE_RUN_PEAKS if route == "mpas" else ():
+        if peak.levels == int(levels):
+            points[peak.cells] = max(points.get(peak.cells, 0.0), float(peak.peak_mib))
+    if not points:
+        return None
+    xs = sorted(points)
+    ys: list[float] = []
+    for x in xs:
+        ys.append(max([points[x], *ys[-1:]]))
+    x = float(cells)
+    if len(xs) == 1:
+        return ys[0] * x / xs[0]
+    segment = next((i for i in range(1, len(xs)) if x <= xs[i]), len(xs) - 1)
+    x0, x1, y0, y1 = xs[segment - 1], xs[segment], ys[segment - 1], ys[segment]
+    return max(0.0, y0 + (y1 - y0) * (x - x0) / (x1 - x0))
+
+
+def route_required_free_bytes(cells: int, model: ShapedFootprintModel | None = None,
+                              margin_bytes: int | None = None, *, route: str = "arwen") -> int:
+    """:func:`required_free_bytes` for one member on ``route``.
+
+    The ArWen route is exactly :func:`required_free_bytes`.  The MPAS route is never below it, and never below
+    its own measured whole-run curve (:func:`route_run_curve_mib`) plus :data:`ROUTE_RUN_MARGIN` plus the
+    model's margin.  The co-tenancy price both the ensemble planner and the roster admission charge per member
+    (U-H4, :data:`MPAS_ROUTE_RUN_PEAKS`)."""
+
+    if route not in PHYSICS_ROUTES:
+        raise ValueError(f"physics route {route!r} is not one of {PHYSICS_ROUTES}")
+    model = FOOTPRINT_MODEL if model is None else model
+    base = required_free_bytes(cells, model, margin_bytes)
+    if route == "arwen":
+        return base
+    curve = route_run_curve_mib(int(cells), route, int(model.levels))
+    if curve is None:
+        return base
+    margin = model.margin_bytes() if margin_bytes is None else int(margin_bytes)
+    return max(base, int(round(curve * (1.0 + ROUTE_RUN_MARGIN) * MIB)) + margin)
 
 
 def native_device_floor_bytes() -> int:

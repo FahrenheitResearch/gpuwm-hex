@@ -130,6 +130,8 @@ def test_whole_binding_keeps_generated_row_and_source_arguments(tmp_path, monkey
 
     def run(argv, *, name, directory, env):
         calls.append((name, argv, dict(env)))
+        if name == "mesh-template":
+            Path(argv[argv.index("--out") + 1]).write_bytes(b"template grid")
         if name == "init-source":
             out = tmp_path / "init"
             out.mkdir()
@@ -137,9 +139,12 @@ def test_whole_binding_keeps_generated_row_and_source_arguments(tmp_path, monkey
         return {"returncode": 0, "wall_seconds": 10, "peak_process_vram_mib": 16000}
 
     monkeypatch.setattr(card_fit, "run_stage", run)
+    monkeypatch.setattr(card_fit, "start_stage", fake_background(calls))
+    monkeypatch.setattr("hexcore.moving_mesh.rotate_grid", fake_rotation)
     assert mesh_plan_door.run_global_mesh(request) == 0
-    assert [call[0] for call in calls] == ["mesh", "static", "init-source", "forecast", "products"]
-    forecast = calls[3]
+    assert [call[0] for call in calls] == ["init-source-decode", "mesh-template", "static", "init-source-decode.finish",
+                                           "init-source", "forecast", "products"]
+    forecast = calls[5]
     assert forecast[1][forecast[1].index("--mesh") + 1] == "generated-row"
     if route == "arwen":
         assert forecast[1][forecast[1].index("--dt") + 1] == "90"
@@ -153,6 +158,198 @@ def test_whole_binding_keeps_generated_row_and_source_arguments(tmp_path, monkey
     assert receipt["prediction_on_generated_mesh"]["cells"] == 215000
     assert receipt["source_binding"]["source"] == "gfs"
     assert receipt["predicted_vs_measured"]["measured_peak_process_vram_mib"] == 16000
+
+
+def fake_background(calls, returncode=0):
+    """card_fit.start_stage stand-in: records the start and the join in CALLS."""
+    def start(argv, *, name, directory, env):
+        calls.append((name, [str(a) for a in argv], dict(env)))
+
+        class Handle:
+            started_utc = "2026-10-27T00:00:00+00:00"
+
+            def __init__(self):
+                self.argv = [str(a) for a in argv]
+                self.cancelled = False
+
+            def finish(self):
+                calls.append((f"{name}.finish", self.argv, {}))
+                return {"stage": name, "returncode": returncode, "wall_seconds": 13.4, "log": "decode.log",
+                        "background": True}
+
+            def cancel(self):
+                calls.append((f"{name}.cancel", self.argv, {}))
+        return Handle()
+    return start
+
+
+def fake_rotation(source, output, *, start, end, file_id=None):
+    Path(output).write_bytes(Path(source).read_bytes() + repr((end, file_id)).encode())
+    return {"sha256": "rotated", "wall_seconds": 0.5, "start": list(start), "end": list(end)}
+
+
+def test_zoom_globe_rotates_the_cap_family_template_and_decodes_beside_the_mesh(tmp_path, monkeypatch):
+    """U-H6 (production run_fde6921eaf18b793): a zoom globe generated a fresh mesh for its point (16.6 s) and
+    fetched and decoded its source only after the static. The door now asks for the point's cap family about
+    the template centre (a prep-store key with no point in it), rotates it to the point, and starts the source
+    fetch and decode before the mesh; the init is built --from-decoded."""
+    from types import SimpleNamespace
+    from hexcore import init_sources
+    from hexcore.moving_members import TEMPLATE_CENTER
+    from hexcore.swath import sizing
+    request = args(tmp_path, "--generate", "--run", "--source", "ifs", "--cycle", "2026-10-26T00")
+    binary = tmp_path / "engine"
+    binary.write_bytes(b"binary")
+    monkeypatch.setattr("hexcore.engines.resolve", lambda *a: binary)
+    monkeypatch.setattr(init_sources, "resolve_writer", lambda *a: binary)
+    monkeypatch.setattr(init_sources, "resolve_vtable", lambda *a: binary)
+    monkeypatch.setattr(sizing, "dry_run", lambda *a, **k: {"predicted_cells": 216000})
+    monkeypatch.setattr(mesh_point, "resolve_geog", lambda *a: tmp_path)
+    monkeypatch.setattr(mesh_point, "static_coordinate_errors", lambda *a: [])
+    monkeypatch.setattr(mesh_point, "admit_pair", lambda *a, **k:
+                        {"n_cells": 215000, "timestep_choice": {"dt_seconds": 90}, "regional": False})
+    row = SimpleNamespace(name="generated-row", n_cells=215000, as_dict=lambda: {"name": "generated-row"})
+    monkeypatch.setattr(mesh_rows, "describe_resolution_spec", lambda **k: row)
+    monkeypatch.setattr(mesh_rows, "write_rows", lambda path, rows: path.write_text("runtime rows"))
+    calls, rotations = [], []
+
+    def run(argv, *, name, directory, env):
+        calls.append((name, [str(a) for a in argv], dict(env)))
+        if name == "mesh-template":
+            Path(argv[argv.index("--out") + 1]).write_bytes(b"template grid")
+        if name == "init-source":
+            (tmp_path / "init").mkdir()
+            (tmp_path / "init" / "init-source-receipt.json").write_text(json.dumps({"source": "ifs"}))
+        return {"returncode": 0, "wall_seconds": 10, "peak_process_vram_mib": 9000}
+
+    def rotate(source, output, *, start, end, file_id=None):
+        rotations.append((start, end, file_id))
+        return fake_rotation(source, output, start=start, end=end, file_id=file_id)
+
+    monkeypatch.setattr(card_fit, "run_stage", run)
+    monkeypatch.setattr(card_fit, "start_stage", fake_background(calls))
+    monkeypatch.setattr("hexcore.moving_mesh.rotate_grid", rotate)
+    assert mesh_plan_door.run_global_mesh(request) == 0
+    names = [call[0] for call in calls]
+    # The source fetch and decode start first and are joined only after the static.
+    assert names[:3] == ["init-source-decode", "mesh-template", "static"]
+    assert names.index("init-source-decode.finish") > names.index("static")
+    decode = calls[0][1]
+    assert decode[decode.index("--stop-after") + 1] == "decode" and "--grid" not in decode
+    init = calls[names.index("init-source")][1]
+    assert "--from-decoded" in init and init[init.index("--static") + 1] == str(tmp_path / "mesh.static.nc")
+    assert "rw_mpas_mesh" not in names and "mesh" not in names  # no fresh generation for the point
+    template = json.loads(Path(calls[1][1][calls[1][1].index("--spec") + 1]).read_text())
+    assert template["name"] == mesh_plan_door.ROTATION_TEMPLATE_NAME
+    assert {tuple(r["shape"]["center_deg"]) for r in template["regions"]} == {TEMPLATE_CENTER}
+    spec = json.loads((tmp_path / "resolution-spec.json").read_text())
+    assert [r["radius_km"] for r in (x["shape"] for x in template["regions"])] == \
+        [r["radius_km"] for r in (x["shape"] for x in spec["regions"])]
+    assert rotations[0][0] == TEMPLATE_CENTER and rotations[0][1] == (40.0, -98.0) and rotations[0][2]
+    receipt = json.loads((tmp_path / "global-vr-receipt.json").read_text())
+    mesh = next(stage for stage in receipt["stages"] if stage.get("name") == "mesh")
+    assert mesh["source"] == "rotated-template" and mesh["end_deg"] == [40.0, -98.0]
+    assert receipt["status"] == "complete"
+    rotation = json.loads((tmp_path / "mesh-generator.json").read_text())
+    assert rotation["schema"] == "gpuwm-hex.zoom-globe-rotation/v1"
+    assert not (tmp_path / "template" / "rotation-template.grid.nc").exists()
+
+
+def test_rotation_template_key_is_the_same_for_every_point():
+    """Two zoom globes of one family at different points ask the prep store for the same template."""
+    a = mesh_point.ladder_spec((40.0, -97.0), fine_dx_m=15000, radius_km=2000, background_km=120)
+    b = mesh_point.ladder_spec((-33.9, 151.2), fine_dx_m=15000, radius_km=2000, background_km=120)
+    assert a != b
+    assert mesh_plan_door.rotation_template_spec(a) == mesh_plan_door.rotation_template_spec(b)
+    assert mesh_plan_door.concentric_cap_center(a) == (40.0, -97.0)
+    two = dict(a, regions=[*a["regions"], {"shape": {"kind": "cap", "center_deg": [10.0, 10.0], "radius_km": 500.0},
+                                            "spacing_km": 30.0, "transition_km": 60.0}])
+    assert mesh_plan_door.concentric_cap_center(two) is None          # several centres: generated
+    assert mesh_plan_door.concentric_cap_center({"background_km": 60, "regions": []}) is None  # uniform: generated
+
+
+def test_template_only_builds_the_family_template_for_a_bake(tmp_path, monkeypatch):
+    """The bake stages a zoom family's template (no static, no run) so boxes rotate it instead of generating."""
+    from hexcore.moving_members import TEMPLATE_CENTER
+    from hexcore.swath import sizing
+    binary = tmp_path / "engine"
+    binary.write_bytes(b"binary")
+    monkeypatch.setattr("hexcore.engines.resolve", lambda *a: binary)
+    monkeypatch.setattr(sizing, "dry_run", lambda *a, **k: {"predicted_cells": 216000})
+    monkeypatch.setattr(mesh_point, "resolve_geog", lambda *a: tmp_path)
+    calls = []
+
+    def run(argv, *, name, directory, env):
+        calls.append((name, [str(a) for a in argv]))
+        Path(argv[argv.index("--out") + 1]).write_bytes(b"template grid")
+        return {"returncode": 0, "wall_seconds": 9}
+
+    monkeypatch.setattr(card_fit, "run_stage", run)
+    assert mesh_plan_door.run_global_mesh(args(tmp_path, "--generate", "--template-only")) == 0
+    assert [c[0] for c in calls] == ["mesh-template"]
+    receipt = json.loads((tmp_path / "global-vr-receipt.json").read_text())
+    assert receipt["status"] == "template"
+    assert {tuple(r["shape"]["center_deg"]) for r in receipt["template"]["spec"]["regions"]} == {TEMPLATE_CENTER}
+    with pytest.raises(MpasPortError, match="no --run"):
+        mesh_plan_door.run_global_mesh(args(tmp_path / "b", "--generate", "--template-only", "--run",
+                                            "--source", "ifs", "--cycle", "2026-10-26T00"))
+
+
+def test_a_failed_door_stops_the_decode_beside_it(tmp_path, monkeypatch):
+    from hexcore import init_sources
+    from hexcore.swath import sizing
+    request = args(tmp_path, "--generate", "--run", "--source", "ifs", "--cycle", "2026-10-26T00")
+    binary = tmp_path / "engine"
+    binary.write_bytes(b"binary")
+    monkeypatch.setattr("hexcore.engines.resolve", lambda *a: binary)
+    monkeypatch.setattr(init_sources, "resolve_writer", lambda *a: binary)
+    monkeypatch.setattr(init_sources, "resolve_vtable", lambda *a: binary)
+    monkeypatch.setattr(sizing, "dry_run", lambda *a, **k: {"predicted_cells": 216000})
+    monkeypatch.setattr(mesh_point, "resolve_geog", lambda *a: tmp_path)
+    calls = []
+    monkeypatch.setattr(card_fit, "run_stage", lambda argv, *, name, directory, env:
+                        calls.append((name, argv, env)) or {"returncode": 3 if name == "mesh-template" else 0,
+                                                            "log": "x"})
+    monkeypatch.setattr(card_fit, "start_stage", fake_background(calls))
+    with pytest.raises(MpasPortError, match="mesh-template exited 3"):
+        mesh_plan_door.run_global_mesh(request)
+    assert [c[0] for c in calls] == ["init-source-decode", "mesh-template", "init-source-decode.cancel"]
+
+
+def test_background_stage_reports_its_own_wall_and_cpu(tmp_path):
+    handle = card_fit.start_stage([sys.executable, "-c", "import time; sum(range(10**6)); time.sleep(0.3)"],
+                                  name="beside", directory=tmp_path)
+    import time
+    time.sleep(1.0)  # the door is busy with the foreground stage
+    row = handle.finish()
+    assert row["returncode"] == 0 and row["background"]
+    assert 0.3 <= row["wall_seconds"] < 0.95  # its own exit, not the join
+    assert row["cpu_seconds"] > 0
+    failing = card_fit.start_stage([sys.executable, "-c", "raise SystemExit(5)"], name="bad", directory=tmp_path)
+    assert failing.finish()["returncode"] == 5
+    slow = card_fit.start_stage([sys.executable, "-c", "import time; time.sleep(60)"], name="slow", directory=tmp_path)
+    slow.cancel()
+    assert slow.finish()["returncode"] != 0
+
+
+def test_init_source_from_decoded_refuses_another_requests_decode(tmp_path):
+    from hexcore import init_sources
+    met = tmp_path / "MET:2026-10-26_00"
+    met.write_bytes(b"met")
+    base = {"schema": init_sources.RECEIPT_SCHEMA, "source": "ifs", "member": None,
+            "source_cycle": "2026-10-26_00:00:00", "lead_hours": 0, "valid_time": "2026-10-26_00:00:00",
+            "table": {"sha256": "t"}}
+    prior = dict(base, decode={"met": str(met), "met_sha256": init_sources._sha256_file(met)},
+                 stage_seconds={"acquire": 9.0, "decode": 4.4})
+    (tmp_path / "init-source-receipt.json").write_text(json.dumps(prior))
+    assert init_sources._decoded_receipt(tmp_path, dict(base))["decode"]["met"] == str(met)
+    with pytest.raises(MpasPortError, match="lead_hours"):
+        init_sources._decoded_receipt(tmp_path, dict(base, lead_hours=6))
+    met.write_bytes(b"changed")
+    with pytest.raises(MpasPortError, match="SHA-256"):
+        init_sources._decoded_receipt(tmp_path, dict(base))
+    with pytest.raises(MpasPortError, match="does not exist"):
+        init_sources._decoded_receipt(tmp_path / "elsewhere", dict(base))
 
 
 def test_observed_whole_run_floor_prevents_repeating_a_false_fit():

@@ -180,6 +180,8 @@ def plan(args: argparse.Namespace) -> dict[str, Any]:
         if args.surface_series:
             raise S2SError("--surface-series requires --ocean-mode prescribed")
         surface.update(owner="prognostic-ocean", source="member initialization SST/ice", path=None, forecast_cycle=None)
+    value["commands"]["forecast"] = [*value["commands"]["forecast"],
+                                     *mpas_route_surface(value, surface, json.loads(args.ocean_options))]
     identity = {"row": args.row, "source": args.source, "cycle": args.cycle,
                 "days": args.days, "history_hours": args.history_hours, "members": members,
                 "surface": surface, "energy": energy,
@@ -329,6 +331,49 @@ def _inits(value: dict, args, env: dict, status) -> dict:
             status.step(done, note=f"{run_id} init ready")
     return {"built": len(todo), "reused": len(unique) - len(todo), "processes": jobs,
             "threads_per_process": threads, "log_pattern": str(Path(value["paths"]["work"]) / "inits/*.log")}
+
+
+def mpas_route_surface(value: dict, surface: dict, supplied_ocean: dict) -> list[str]:
+    """The forecast flags that give an MPAS-physics-route member its ocean; none on the ArWen route.
+
+    THE BREAKAGE THIS PREVENTS (U-H1, best-180 smoke j1 and sst-boundary hxc tr28, 2026-10-26/27): the door's
+    ocean reached the forecast only as GPUWM_HEX_SURFACE_SERIES / GPUWM_HEX_OCEAN_MODE, which only the ArWen
+    route reads (hexcore.arwen_surface_update).  On the MPAS route, the hex default, config_sst_update stayed
+    false and SST and sea ice were bit-identical from day 0 to day 7 with --ocean-mode prescribed
+    --surface-series, and with the prognostic default.  So on that route:
+
+    * prescribed: MPAS's own surface update (config_sst_update, on the GPU) reads the series through the
+      surface stream (--stream-input surface=SERIES; the default streams take the series' record interval);
+    * prognostic: MPAS's own 1-D ocean mixed layer (config_oml1d, mpas_atmphys_driver_oml.F, on the GPU) at
+      the door's mixed-layer depth and deep-water lapse rate.  It evolves open-water SST; sea ice keeps its
+      initial state, since that scheme carries no ice model.
+    """
+    from .physics_suites import mpas_suite_names
+    physics = value.get("physics") or {}
+    if physics.get("suite") not in mpas_suite_names() and not physics.get("namelist"):
+        return []
+    argv = value["commands"]["forecast"]
+    if surface["ocean_mode"] == "prescribed":
+        series = str(Path(surface["path"]).absolute())
+        surface.update(forecast_route="mpas", consumer="MPAS surface update (config_sst_update) on the GPU")
+        flags = ["--physics", "config_sst_update=.true."]
+        bound = [item.split("=", 1)[1] for at, item in enumerate(argv) if item.startswith("surface=")
+                 and at and argv[at - 1] == "--stream-input"]
+        bound += [item.split("=", 2)[2] for item in argv if item.startswith("--stream-input=surface=")]
+        if any(Path(path).absolute() != Path(series) for path in bound):
+            raise S2SError(f"--forecast-arg binds the surface stream to {bound[0]}, but the ocean series is {series}; "
+                           "give the series once, as --surface-series")
+        return flags + ([] if bound else ["--stream-input", f"surface={series}"])
+    unread = sorted(set(supplied_ocean) - {"depth_m", "stratification_k_m"})
+    if unread:
+        raise S2SError("--ocean-options " + ", ".join(unread) + " set the ArWen-route ocean's sea ice and radiation; "
+                       "the MPAS physics route's ocean (MPAS OML1D) has no such parameter, so they would be accepted "
+                       "and never read.  Use --physics-row arwen for them")
+    options = surface["ocean_options"]
+    surface.update(forecast_route="mpas", ocean_model="MPAS OML1D (config_oml1d) on the GPU",
+                   sea_ice="held at its initial state (OML1D carries no ice model)")
+    return ["--physics", "config_oml1d=.true.", "--physics", f"config_oml_hml0={float(options['depth_m'])!r}",
+            "--physics", f"config_oml_gamma={float(options['stratification_k_m'])!r}"]
 
 
 def surface_stage(value: dict, args, env: dict) -> dict:

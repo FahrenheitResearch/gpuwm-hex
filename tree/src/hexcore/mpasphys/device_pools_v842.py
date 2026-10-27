@@ -83,7 +83,11 @@ class NativeDevicePoolViews(Mapping):
                                  'owned and full layouts cannot share a packed allocation')
             self.buffers[key]=cached
             return packed
-        host=self.native.get_field(pool,row['pool_name'],level=key[2])
+        # The framework's live storage, not a copy: the views publish into it in place (field_storage).  The
+        # native referee library has no such accessor and keeps its copies.
+        storage=getattr(self.native,'field_storage',None)
+        host=(storage(pool,row['pool_name'],level=key[2]) if storage is not None
+              else self.native.get_field(pool,row['pool_name'],level=key[2]))
         selected=host[selection]
         # ascontiguousarray promotes rank-zero arrays to length one. Registry
         # scalars must keep rank zero through publication and scheme bindings.
@@ -101,7 +105,8 @@ class NativeDevicePoolViews(Mapping):
         if self.resident and key in self.resident_buffers:
             self.buffers[key] = self.resident_buffers[key]
             return self.buffers[key][1]
-        value=self.native.get_variable(name)
+        storage=getattr(self.native,'variable_storage',None)
+        value=storage(name) if storage is not None else self.native.get_variable(name)
         if value is None:raise RuntimeError(f'native prepared array {name} is not allocated before CUDA slot')
         host,lower=value
         if host.ndim not in (2,3,4) or host.shape[2 if host.ndim==4 else -1]!=1 or lower[0]!=1:

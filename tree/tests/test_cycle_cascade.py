@@ -218,6 +218,33 @@ def test_a_mid_window_state_lands_on_the_right_cells(bundle, tmp_path):
     assert "ice" in ice["reason"]
 
 
+def test_a_one_dimensional_initial_time_moves_whole(bundle):
+    """The port's inits (hex >= 0.4.6) write ``initial_time`` as ``(StrLen,)``.
+
+    ``[0]`` on that shape is ONE CHARACTER: the transplant wrote only it and
+    left ``' 025-05-19_06:00:00'``, and every member started from the
+    composed init stopped with "Invalid isoformat string".  The whole stamp
+    moves, on both shapes, and the 2-D ``xtime`` beside it still moves too.
+    """
+
+    with netCDF4.Dataset(str(bundle["init"]), "a") as ds:
+        stamp = ds.createVariable("initial_time", "S1", ("StrLen",))
+        stamp[:] = np.array(list("2026-08-12_06:00:00".ljust(64)), dtype="S1")
+    delayed_start.compose_mid_window_init(
+        child_init=bundle["init"],
+        child_grid=bundle["child_grid"],
+        parent_grid=bundle["parent_grid"],
+        parent_history=bundle["history"],
+        valid_time=datetime(2026, 8, 12, 12, 0, 0),
+    )
+    with netCDF4.Dataset(str(bundle["init"])) as init:
+        init.set_auto_maskandscale(False)
+        for name in ("initial_time", "xtime"):
+            text = np.asarray(init.variables[name][:]).tobytes().decode()
+            assert text.strip() == "2026-08-12_12:00:00", (name, text)
+            datetime.fromisoformat(text.strip().replace("_", "T"))
+
+
 def test_a_cell_the_parent_does_not_have_refuses_by_name(bundle):
     """A miss is a refusal, never a nearest neighbour."""
 

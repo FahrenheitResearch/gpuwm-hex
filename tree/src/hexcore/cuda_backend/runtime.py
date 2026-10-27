@@ -160,6 +160,11 @@ def require_cuda(
     if device_id < 0 or device_id >= count:
         raise CudaRefusal(f"cuda.device_id={device_id} is outside [0,{count})")
     cp.cuda.Device(device_id).use()
+    # Blocking sync, not CUDA's spin wait: a spinning host thread held one core
+    # at 100 % for the whole GPU-bound step loop (cuda_backend/schedule.py).
+    from .schedule import apply as _apply_wait_mode
+
+    _apply_wait_mode(device_id)
     properties = cp.cuda.runtime.getDeviceProperties(device_id)
     compute = (int(properties["major"]), int(properties["minor"]))
     # Architectures at or above the floor keep the original checks unchanged.

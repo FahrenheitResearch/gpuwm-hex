@@ -128,11 +128,37 @@ def test_restart_rejects_changed_physics_before_cuda(tmp_path):
         route.bind_inputs(inputs, changed)
 
 
-def test_restart_rejects_timestep_clock_and_original_end_mismatches(tmp_path):
+def test_restart_accepts_a_changed_correction_set_but_not_changed_schemes(tmp_path):
+    # THE BREAKAGE: a checkpoint written before a release added a correct-mode finding (RP7) was refused
+    # ("physics configuration or numerics differ"), though a correction never changes the carried state.
+    path, inputs, _, _ = write_checkpoint(tmp_path)
+    route, _ = resolve_route(SimpleNamespace(restart_from=path, history_every_minutes=6), TEXT)
+    added = SimpleNamespace(receipt=lambda: dict(suite='convection_permitting', options={}, corrections=['RP7']))
+    route.bind_inputs(inputs, added)
+    assert route.restart_corrections_change == {'checkpoint': [], 'resumed': ['RP7']}
+    route, _ = resolve_route(SimpleNamespace(restart_from=path, history_every_minutes=6), TEXT)
+    changed = SimpleNamespace(receipt=lambda: dict(suite='convection_permitting', options={'pbl': 'x'},
+                                                   corrections=['RP7']))
+    with pytest.raises(ValueError, match='physics configuration or numerics'):
+        route.bind_inputs(inputs, changed)
+
+
+def test_restart_accepts_a_changed_timestep_on_the_checkpoint_instant(tmp_path):
+    # THE BREAKAGE: a 120 km run that went unstable at dt 600 s could not be resumed at a
+    # smaller step from its last checkpoint ("native checkpoint timestep differs").
     path, _, _, _ = write_checkpoint(tmp_path)
     route, _ = resolve_route(SimpleNamespace(restart_from=path, history_every_minutes=6), TEXT)
-    with pytest.raises(ValueError, match='timestep differs'):
-        route.resolve_schedule(720, 30, [])
+    assert route.resolve_schedule(720, 30, []) == 360
+    assert route.restart_dt_change == {'checkpoint_dt': '60', 'resumed_dt': '30'}
+    assert route.receipt()['restart_dt_change'] == route.restart_dt_change
+    route, _ = resolve_route(SimpleNamespace(restart_from=path, history_every_minutes=6), TEXT)
+    with pytest.raises(ValueError, match='outer-step boundary'):
+        route.resolve_schedule(720, 50, [])
+
+
+def test_restart_rejects_clock_and_original_end_mismatches(tmp_path):
+    path, _, _, _ = write_checkpoint(tmp_path)
+    route, _ = resolve_route(SimpleNamespace(restart_from=path, history_every_minutes=6), TEXT)
     with pytest.raises(ValueError, match='original forecast end'):
         route.resolve_schedule(360, 60, [])
 

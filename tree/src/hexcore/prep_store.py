@@ -635,6 +635,26 @@ def run_or_fetch(argv: Sequence[str | Path], *, kind: str | None = None,
     return {"source": "built", "kind": kind, "key": key, "seconds": round(seconds, 2), "completed": completed}
 
 
+def fetch_only(argv: Sequence[str | Path]) -> dict[str, Any] | None:
+    """What :func:`run_or_fetch` would fetch for this command, or None (no store, an unkeyed command, a miss).
+
+    Never builds: the zoom-globe door asks whether a library holds this exact request before it rotates a
+    template instead of generating."""
+    argv = [str(a) for a in argv]
+    stores = configured_stores()
+    if not stores:
+        return None
+    registry = engine_registry(stores)
+    kind, request = request_for(argv, registry, pinned_geog(stores))
+    if request is None:
+        return None
+    key, _material, outputs = request
+    if any(p.exists() for p in outputs.values()):
+        return None
+    hit = fetch_entry(kind, key, outputs, stores)
+    return None if hit is None else {"source": "store", "kind": kind, "key": key, **hit}
+
+
 # ---------------------------------------------------------------------------
 # cell ordering
 # ---------------------------------------------------------------------------

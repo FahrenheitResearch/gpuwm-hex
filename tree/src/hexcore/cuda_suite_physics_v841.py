@@ -1416,6 +1416,20 @@ class PersistentSuiteCudaPhysicsBackendV841(PersistentTwoPhaseCudaPhysicsBackend
         if dict(seam.selection) != self._constructor.selection:
             raise ValueError("the suite seam was built with another selection")
         self._validate_surface_classification(seam)
+        # A coupled hex ocean owns ocean ice through the Noah-MP sea-ice hook,
+        # as on the frozen route. Without it here the ocean was attached but
+        # never stepped, gpuwm's own ice model stayed live, and every
+        # storm-following move republished the frozen ocean ice over the
+        # engine's: polar columns flipped water/sea ice/glacier, the history
+        # census refused, Noah-MP's glacier water budget failed and the next
+        # move refused "carried ice volume has no carried ice area" (Milton
+        # hex storm-following, box M 2026-10-27). Prescribed runs keep the
+        # route's published ice owner. In this release the coupled hex ocean
+        # is the prognostic mixed layer (hexcore.ocean_mixed_layer).
+        from .ocean_mixed_layer import mode as _ocean_mode
+        if _ocean_mode() == "prognostic" and self._constructor.selection.get("land_surface_scheme") == "noahmp":
+            from .arwen_seaice import install_noahmp_seaice
+            install_noahmp_seaice(self, seam)
         return seam
 
     def _validate_noahmp_census(self, *, require: bool) -> Mapping[str, Any] | None:

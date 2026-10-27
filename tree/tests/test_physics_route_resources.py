@@ -11,7 +11,10 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,11 +31,12 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def test_the_pool_reader_is_gpuwm_24b6f08_byte_for_byte():
+def test_the_pool_reader_is_gpuwm_24b6f08_plus_the_field_parallel_transport():
     # gpuwm 24b6f08c carries ecd4936f: zero-sized fork Registry dimensions allocate associated
     # empty arrays (MPAS-Model-rrfs mpas_field_routines.F:261-299); 0ec69a6 refused them.
+    # hex fix/U-H3 then moved the transport onto a worker pool (same bytes per field).
     source = ROOT / "rust/physics-pool/src/bin/rw_mpas_physics_pool.rs"
-    assert _sha(source) == "888155db1042e36ac54c47921c29c7f82aa7a86b26edc0795e6dbec97af58a45"
+    assert _sha(source) == "e885e2a3752947ab1b226c89e9d3f7ed6c109f87f2ab6ad55a88a9a8e9d8633a"
     cargo = (ROOT / "rust/physics-pool/Cargo.toml").read_text()
     assert 'name = "rw_mpas_physics_pool"' in cargo
     lock = (ROOT / "rust/physics-pool/Cargo.lock").read_text()
@@ -303,3 +307,68 @@ def test_the_checker_refuses_a_resource_named_by_path(tmp_path):
     findings = "\n".join(checker.check(tmp_path, with_data=False))
     assert "--native-physics-library names a path, not {resource:native-library}" in findings
     assert "unknown resource key mpas-tree" in findings
+
+
+def _built_pool_reader() -> Path | None:
+    name = rb.POOL_READER + (".exe" if sys.platform == "win32" else "")
+    for path in (Path(rb.__file__).resolve().parents[1] / "libexec" / name,
+                 ROOT / "rust/physics-pool/target/release" / name):
+        if path.is_file():
+            return path
+    return None
+
+
+def test_the_pool_transport_takes_the_cpus_it_may_use(monkeypatch, tmp_path):
+    # THE BREAKAGE (U-H3, hex 0.4.8): every MPAS-physics member start ran rw_mpas_physics_pool on ONE
+    # thread (NLWP 1, 100 % of a core) for ~30 s on the 30 km globe while its card waited.
+    from hexcore.mpasphys import pool_v842 as pool
+    monkeypatch.delenv("RAYON_NUM_THREADS", raising=False)
+    monkeypatch.setattr(pool, "host_copy_threads", lambda: 24)
+    assert pool.pool_transport_threads() == pool.POOL_TRANSPORT_MAX_THREADS == 16
+    monkeypatch.setenv("RAYON_NUM_THREADS", "6")       # hexcore's container-quota budget
+    assert pool.pool_transport_threads() == 6
+    monkeypatch.setattr(pool, "host_copy_threads", lambda: 1)
+    assert pool.pool_transport_threads() == 1
+    source = (ROOT / "rust/physics-pool/src/bin/rw_mpas_physics_pool.rs").read_text()
+    assert f"const MAX_WORKERS: usize = {pool.POOL_TRANSPORT_MAX_THREADS};" in source
+    reader = _built_pool_reader()
+    if reader is None:
+        pytest.skip("no built rw_mpas_physics_pool (the wheel build or cargo makes it)")
+    # One worker and sixteen write the same manifest and the same payload bytes.
+    fields = [{"pool": "diag", "name": f"f{i}", "kind": "integer" if i % 3 == 0 else "real",
+               "dimensions": ["nVertLevels", "nCells"], "shape": [1 + i % 5, 4097 + i],
+               "initial": str(i - 20) if i % 3 == 0 else f"{i}.25d0"} for i in range(48)]
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"schema": "mpas-native-pool-request-v1", "sources": [], "fields": fields}))
+    outputs = {}
+    for workers in (1, 16):
+        out = tmp_path / f"w{workers}"
+        subprocess.run([str(reader), str(request), str(out)], check=True,
+                       env={**os.environ, "RAYON_NUM_THREADS": str(workers)})
+        outputs[workers] = out
+    manifest = (outputs[1] / "manifest.json").read_bytes()
+    assert manifest == (outputs[16] / "manifest.json").read_bytes()
+    records = json.loads(manifest)["fields"]
+    assert [r["name"] for r in records] == [f["name"] for f in fields]
+    for record in records:
+        assert (outputs[1] / record["payload"]).read_bytes() == (outputs[16] / record["payload"]).read_bytes()
+
+
+
+def test_an_upgraded_wheel_replaces_the_reader_the_cache_recorded(tmp_path, monkeypatch):
+    # U-H3: the record kept the reader copied when the cache was filled, so a wheel upgrade left every
+    # forecast on the old one-thread transport.  The route takes the reader this wheel carries.
+    cache = tmp_path / "cache"
+    old = tmp_path / "old-reader"
+    old.write_bytes(b"the one-thread reader an earlier wheel staged")
+    rb.record_installed(cache, {"pool-reader": {"path": str(old), "sha256": _sha(old)}})
+    new = tmp_path / "libexec" / rb.POOL_READER
+    new.parent.mkdir()
+    new.write_bytes(b"this wheel's reader")
+    monkeypatch.setattr(rb, "wheel_pool_reader", lambda: new)
+    monkeypatch.setattr(rb, "stage_pool_reader", lambda root, log: {"path": str(new), "sha256": _sha(new)})
+    assert rb.ensure_route_resources(("pool-reader",), cache=cache)["pool-reader"] == new
+    # A wheel built without a reader (no netCDF-C at build time) keeps the recorded one.
+    monkeypatch.setattr(rb, "wheel_pool_reader", lambda: tmp_path / "absent")
+    rb.record_installed(cache, {"pool-reader": {"path": str(old), "sha256": _sha(old)}})
+    assert rb.ensure_route_resources(("pool-reader",), cache=cache)["pool-reader"] == old

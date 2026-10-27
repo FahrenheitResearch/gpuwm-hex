@@ -82,6 +82,9 @@ def test_feature_entry_preserves_clock_numerics_and_stream_owner(
     assert request['numerics'] == numerics.receipt_block()
     stages = json.loads((arguments.out/'stage-timings.json').read_text())['stages']
     assert [stage['stage'] for stage in stages] == ['native-pool-decode', 'native-forecast-runtime']
+    # U-H3: the decode row names the reader's real worker count, never a fixed one thread.
+    from hexcore.mpasphys.pool_v842 import pool_transport_threads
+    assert stages[0]['parallelism']['threads'] == pool_transport_threads()
     assert stages[1]['parallelism']['cards'] == (2 if scenario == 'distributed' else 1)
 
 

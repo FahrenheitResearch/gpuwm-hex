@@ -194,6 +194,77 @@ def _gpu_memory(pids: set[int]) -> float | None:
         return None
 
 
+class BackgroundStage:
+    """A door stage started beside the foreground ones (the zoom globe's source fetch and decode beside its mesh
+    and static, U-H6).
+
+    No per-second sampling and no signal handlers: those belong to the foreground :func:`run_stage`. The child is
+    reaped only in :meth:`finish`, so a foreground stage's RUSAGE_CHILDREN delta never counts this one's CPU; its own
+    CPU comes from wait4, and its wall ends when it exits (waitid WNOWAIT), not when the door gets round to it."""
+
+    def __init__(self, argv: Sequence[str], *, name: str, directory: Path,
+                 env: Mapping[str, str] | None = None):
+        import datetime
+        import threading
+
+        directory.mkdir(parents=True, exist_ok=True)
+        self.name, self.argv = name, [str(a) for a in argv]
+        self.log = directory / f"{name}.log"
+        self._output = self.log.open("w")
+        self._output.write("argv: " + repr(self.argv) + "\n")
+        self._output.flush()
+        self.started_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self._started = time.monotonic()
+        self._ended: float | None = None
+        self.process = subprocess.Popen(self.argv, stdout=self._output, stderr=subprocess.STDOUT,
+                                        env=None if env is None else dict(env), start_new_session=True)
+        self._watcher = threading.Thread(target=self._watch, name=f"stage-{name}", daemon=True)
+        self._watcher.start()
+        self._result: dict[str, Any] | None = None
+
+    def _watch(self) -> None:
+        try:
+            os.waitid(os.P_PID, self.process.pid, os.WEXITED | os.WNOWAIT)
+        except ChildProcessError:
+            pass
+        self._ended = time.monotonic()
+
+    def finish(self) -> dict[str, Any]:
+        """Wait for the stage, reap it and return its row (the shape :func:`run_stage` returns)."""
+        if self._result is not None:
+            return self._result
+        self._watcher.join()
+        _pid, status, usage = os.wait4(self.process.pid, 0)
+        code = os.waitstatus_to_exitcode(status)
+        self.process.returncode = code
+        self._output.close()
+        wall = (self._ended or time.monotonic()) - self._started
+        cpu = usage.ru_utime + usage.ru_stime
+        self._result = {
+            "stage": self.name, "argv": self.argv, "returncode": code, "started_utc": self.started_utc,
+            "wall_seconds": round(wall, 3), "cpu_seconds": round(cpu, 3),
+            "average_cpu_cores": round(cpu / max(wall, .001), 3), "peak_process_vram_mib": None,
+            "log": str(self.log), "background": True}
+        return self._result
+
+    def cancel(self) -> None:
+        """Stop the stage (the door failed before it needed it) and reap it."""
+        if self._result is not None:
+            return
+        if self._ended is None:
+            try:
+                os.killpg(self.process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        self.finish()
+
+
+def start_stage(argv: Sequence[str], *, name: str, directory: Path,
+                env: Mapping[str, str] | None = None) -> BackgroundStage:
+    """Start a door stage beside the foreground ones; :meth:`BackgroundStage.finish` joins it."""
+    return BackgroundStage(argv, name=name, directory=directory, env=env)
+
+
 def run_stage(argv: Sequence[str], *, name: str, directory: Path,
               env: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Run an existing door with logs; never substitute whole-card usage."""

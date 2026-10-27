@@ -734,10 +734,15 @@ def _pool_reader_crate() -> Path | None:
     return crate if crate.is_file() else None
 
 
+def wheel_pool_reader() -> Path:
+    """Where this install's wheel carries rw_mpas_physics_pool (the file may be absent)."""
+    return Path(__file__).resolve().parents[1] / "libexec" / (POOL_READER + (".exe" if sys.platform == "win32" else ""))
+
+
 def stage_pool_reader(cache: Path, log: Callable[[str], None] = _log) -> dict[str, str]:
     """The wheel's rw_mpas_physics_pool (else built from a checkout's crate), copied under its SHA-256."""
-    name = POOL_READER + (".exe" if sys.platform == "win32" else "")
-    path = Path(__file__).resolve().parents[1] / "libexec" / name
+    path = wheel_pool_reader()
+    name = path.name
     if not path.is_file():
         crate, cargo = _pool_reader_crate(), shutil.which("cargo")
         if crate is None or cargo is None:
@@ -903,6 +908,15 @@ def ensure_route_resources(keys: tuple[str, ...], *, cache: Path | None = None,
                            log: Callable[[str], None] = _log, pin_set: str = "v8.4.2") -> dict[str, Path]:
     """Resolve installed keys, fetching the pinned release if any are missing."""
     out, missing = {}, []
+    if 'pool-reader' in keys and wheel_pool_reader().is_file():
+        # THE BREAKAGE THIS PREVENTS (U-H3): the installed record kept the reader copied when the cache was
+        # first filled (a first run or `physics-resources fetch`), so upgrading the wheel left every forecast on
+        # the old binary; hex 0.4.8's reader ran the whole pool transport on one thread.  The reader is a pure
+        # transport of this wheel's request format, so the route always takes the one this wheel carries.
+        root = Path(cache if cache is not None else default_cache()).resolve()
+        staged = stage_pool_reader(root, log)
+        if read_installed(root)["resources"].get('pool-reader', {}).get('sha256') != staged['sha256']:
+            record_installed(root, {'pool-reader': staged})
     if keys == ('pool-reader',):
         try:
             return {'pool-reader': resolve_resource('pool-reader', cache)}

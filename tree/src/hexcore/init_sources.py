@@ -1317,6 +1317,30 @@ def order_and_case(*, init: Path, order_map: Path, hex_order: Path, case_templat
     return {"ordered_init": str(ordered), "case": str(case_out)}
 
 
+def _decoded_receipt(out_dir: Path, receipt: dict[str, Any]) -> dict[str, Any]:
+    """The ``--stop-after decode`` receipt in OUT_DIR that ``--from-decoded`` builds the init from.
+
+    Refused unless it was decoded for this very request (row, member, cycle, lead and table bytes) and its WPS
+    intermediate still has the SHA-256 it recorded: an init bound to another request's meteorology is the
+    breakage."""
+    path = out_dir / "init-source-receipt.json"
+    if not path.is_file():
+        _refuse(f"--from-decoded: {path} does not exist; run this command with --stop-after decode into the "
+                "same --out-dir first")
+    prior = json.loads(path.read_text(encoding="utf-8"))
+    for key in ("schema", "source", "member", "source_cycle", "lead_hours", "valid_time"):
+        if prior.get(key) != receipt.get(key):
+            _refuse(f"--from-decoded: {path} was decoded for {key}={prior.get(key)!r}, not {receipt.get(key)!r}")
+    if (prior.get("table") or {}).get("sha256") != receipt["table"]["sha256"]:
+        _refuse(f"--from-decoded: {path} was decoded from another init-source table")
+    if prior.get("failed") or "decode" not in prior or "init" in prior:
+        _refuse(f"--from-decoded: {path} is not the receipt of a completed --stop-after decode")
+    met = Path(prior["decode"]["met"])
+    if not met.is_file() or _sha256_file(met) != prior["decode"]["met_sha256"]:
+        _refuse(f"--from-decoded: {met} is missing or differs from the SHA-256 its decode recorded")
+    return prior
+
+
 # ---------------------------------------------------------------------------
 # door
 # ---------------------------------------------------------------------------
@@ -1348,6 +1372,10 @@ def add_init_source_parser(commands: Any) -> None:
                         help="parallel range requests per product (default: the product's declared streams, "
                              f"else {DEFAULT_STREAMS}; open-data hosts throttle bursts with 503 Slow Down)")
     parser.add_argument("--stop-after", choices=("acquire", "decode", "init"), default=None)
+    parser.add_argument("--from-decoded", action="store_true",
+                        help="build the init from the products and WPS intermediate an earlier --stop-after decode "
+                             "of this same request wrote into --out-dir (the zoom-globe door decodes beside its "
+                             "mesh and static)")
     parser.add_argument("--order-map", type=Path, default=None)
     parser.add_argument("--hex-order", type=Path, default=None)
     parser.add_argument("--case-template", type=Path, default=None)
@@ -1411,60 +1439,77 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
         (out_dir / "init-source-receipt.json").write_text(
             json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    t0 = time.time()
-    if generation:
-        if arguments.staged:
-            _refuse("generated initialization owns inference provenance; --staged is for downloaded products")
-        try:
-            receipt["generation"] = generate(row, source_cycle, lead, arguments.member,
-                                             out_dir / "generation", accepted, arguments.jobs)
-        except Exception as error:
-            stages["acquire"] = round(time.time() - t0, 3)
-            receipt["failed"] = f"{type(error).__name__}: {error}"
-            write_receipt()
-            raise
-        receipt["products"] = receipt["generation"]["runner"]["files"]
+    prior = _decoded_receipt(out_dir, receipt) if getattr(arguments, "from_decoded", False) else None
+    if prior is not None:
+        # THE BREAKAGE THIS PREVENTS (U-H6, production run_fde6921eaf18b793, 2026-10-26): the zoom-globe door
+        # fetched and decoded its source (13.4 s) only after the mesh and static, although neither stage needs
+        # the mesh. The door now runs this command with --stop-after decode beside them, then again with
+        # --from-decoded once the static is written: the products and the WPS intermediate are taken from that
+        # first receipt (verified by SHA-256 above), never fetched or decoded twice.
+        for key in ("products", "generation", "remap", "decode", "effective_first_guess"):
+            if key in prior:
+                receipt[key] = prior[key]
+        if "effective_first_guess" in prior:
+            row = {**row, "first_guess": prior["effective_first_guess"]}
+        stages.update({f"{name}_beside_mesh": seconds for name, seconds in (prior.get("stage_seconds") or {}).items()})
+        receipt["decoded_beside_mesh"] = {"created_utc": prior.get("created_utc"),
+                                          "seconds": prior.get("seconds"),
+                                          "stage_seconds": prior.get("stage_seconds")}
     else:
-        receipt["products"] = acquire(plans, out_dir / "products", cycle,
-                                      staged=[p.expanduser().absolute() for p in arguments.staged],
-                                      jobs=arguments.jobs)
-    stages["acquire"] = round(time.time() - t0, 3)
-    if arguments.stop_after == "acquire":
-        write_receipt()
-        return 0
-    inputs = [product["file"] for product in receipt["products"]] if not generation else []
-    if row.get("remap"):
         t0 = time.time()
-        receipt["remap"] = remap(row, receipt["products"], cycle, out_dir, remapper)
-        inputs = receipt["remap"].pop("outputs")
-        stages["remap"] = round(time.time() - t0, 3)
-    t0 = time.time()
-    if generation:
-        workers = arguments.jobs or int(os.environ.get("RAYON_NUM_THREADS", DEFAULT_GENERATION_WORKERS))
-        try:
-            receipt["decode"] = decode_generated(row, receipt["generation"], cycle, out_dir, workers, accepted)
-        except Exception as error:
-            stages["decode"] = round(time.time() - t0, 3)
-            receipt["failed"] = f"{type(error).__name__}: {error}"
+        if generation:
+            if arguments.staged:
+                _refuse("generated initialization owns inference provenance; --staged is for downloaded products")
+            try:
+                receipt["generation"] = generate(row, source_cycle, lead, arguments.member,
+                                                 out_dir / "generation", accepted, arguments.jobs)
+            except Exception as error:
+                stages["acquire"] = round(time.time() - t0, 3)
+                receipt["failed"] = f"{type(error).__name__}: {error}"
+                write_receipt()
+                raise
+            receipt["products"] = receipt["generation"]["runner"]["files"]
+        else:
+            receipt["products"] = acquire(plans, out_dir / "products", cycle,
+                                          staged=[p.expanduser().absolute() for p in arguments.staged],
+                                          jobs=arguments.jobs)
+        stages["acquire"] = round(time.time() - t0, 3)
+        if arguments.stop_after == "acquire":
             write_receipt()
-            raise
-        # These counts come from the actual Rust export, including its surface
-        # slab. A nominal pressure-level count can silently drop the top level.
-        export = receipt["decode"]["export"]
-        row = {**row, "first_guess": {**row["first_guess"],
-                                     "nfglevels": export["nfglevels"],
-                                     "nfgsoillevels": export["nfgsoillevels"]}}
-        receipt["effective_first_guess"] = row["first_guess"]
-    else:
-        receipt["decode"] = decode(row, inputs, cycle, out_dir, writer)
-    if row.get("remap"):
-        # The regular-grid copies are an intermediate step; their digests are
-        # not needed once the WPS intermediate (hashed above) exists.
-        shutil.rmtree(out_dir / "remap" / "out", ignore_errors=True)
-    stages["decode"] = round(time.time() - t0, 3)
-    if arguments.stop_after == "decode":
-        write_receipt()
-        return 0
+            return 0
+        inputs = [product["file"] for product in receipt["products"]] if not generation else []
+        if row.get("remap"):
+            t0 = time.time()
+            receipt["remap"] = remap(row, receipt["products"], cycle, out_dir, remapper)
+            inputs = receipt["remap"].pop("outputs")
+            stages["remap"] = round(time.time() - t0, 3)
+        t0 = time.time()
+        if generation:
+            workers = arguments.jobs or int(os.environ.get("RAYON_NUM_THREADS", DEFAULT_GENERATION_WORKERS))
+            try:
+                receipt["decode"] = decode_generated(row, receipt["generation"], cycle, out_dir, workers, accepted)
+            except Exception as error:
+                stages["decode"] = round(time.time() - t0, 3)
+                receipt["failed"] = f"{type(error).__name__}: {error}"
+                write_receipt()
+                raise
+            # These counts come from the actual Rust export, including its surface
+            # slab. A nominal pressure-level count can silently drop the top level.
+            export = receipt["decode"]["export"]
+            row = {**row, "first_guess": {**row["first_guess"],
+                                         "nfglevels": export["nfglevels"],
+                                         "nfgsoillevels": export["nfgsoillevels"]}}
+            receipt["effective_first_guess"] = row["first_guess"]
+        else:
+            receipt["decode"] = decode(row, inputs, cycle, out_dir, writer)
+        if row.get("remap"):
+            # The regular-grid copies are an intermediate step; their digests are
+            # not needed once the WPS intermediate (hashed above) exists.
+            shutil.rmtree(out_dir / "remap" / "out", ignore_errors=True)
+        stages["decode"] = round(time.time() - t0, 3)
+        if arguments.stop_after == "decode":
+            write_receipt()
+            return 0
     for flag in ("grid", "static", "vertical_spec"):
         if getattr(arguments, flag) is None:
             _refuse(f"--{flag.replace('_', '-')} is required to build the init")

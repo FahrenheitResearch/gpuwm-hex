@@ -48,11 +48,9 @@ def threads() -> int:
             raise ValueError(
                 f"{ENVIRONMENT} must be a positive integer; prevents an ambiguous host copy schedule")
         return value
-    try:
-        available = len(os.sched_getaffinity(0))
-    except (AttributeError, OSError):
-        available = os.cpu_count() or 1
-    return max(1, min(32, available))
+    from .cpu_budget import available_cpus
+
+    return max(1, min(32, available_cpus()))
 
 
 def column_blocks(columns: int, workers: int) -> list[slice]:

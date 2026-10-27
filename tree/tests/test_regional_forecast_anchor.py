@@ -213,7 +213,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_backend/runtime.py": {
         "recorded": "4deab4b3a37467491a531750e8618705c6884c19c0395891bc426fce2ea6ba5a",
-        "current": "f07d27138e7ef6565359356762c95889870e494ea6623cf1a3f21c61edd5bdf6",
+        "current": "3e7d74fab6511355edcf17dd46812eee7b297cbed73e4b8ab59e32e96f900bef",
         "why": (
             "2026-10-15: require_cuda's default runtime floor 13000 -> 12000 "
             "(CUDA 12 support) and one docstring paragraph; host Python "

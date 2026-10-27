@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.9
+
+Requires gpuwm>=2.9.7,<2.10.
+
+Fixed:
+- The s2s door wires its ocean on the MPAS-physics route: a prescribed surface series updates SST and sea ice, and the default prognostic ocean runs MPAS's mixed layer on the GPU.
+- Storm rosters on the MPAS-physics route run SPPT and SKEB with local time stepping.
+- Plain hex on MPAS physics no longer stops with non-finite columns after weeks: MYNN's lowest-layer pressure thickness can no longer be zero (correct mode). A checkpoint resumes under a changed timestep or a changed correction set.
+- Automatic members per card prices MPAS-physics members on their own measured memory, so 30 km globes no longer run out of GPU memory.
+- A mid-window start (delayed start) writes the whole initial_time stamp.
+- The MPAS-physics pool decode runs on every core, and forecasts use the reader their wheel carries.
+- Zoom globes rotate a stored template mesh instead of generating one, and fetch the start source beside the mesh and static.
+- Hex init holds its thread pools to the container's CPU quota, and the main thread no longer spins a core waiting on the card.
+- Storm-following moves keep one ocean-ice owner, and moved sea points take the role of their carried ice.
+- MPAS-route runs keep far less host memory: device views use the framework's own storage.
+- Thompson microphysics caps its column workspace at 1.5 GiB per call (`GPUWM_HEX_THOMPSON_WORKSPACE_MIB`), so large ranks no longer run a 32 GB card out of memory at the first microphysics step. Output is unchanged.
+- A bare local-time-stepping run on a refined mesh moves its default step onto the class clock, and two LTS blocks on one card no longer race on a spec upload.
+- The observation scorer runs with no card visible, so card leases can be released when the forecast ends.
+- Packaging links the pinned netCDF for every helper, and two exit-drop tests no longer race.
+- Kernel packs (`kernel-packs-v0.4.9`) carry the corrected MYNN kernel, so a new box does not compile it on first use.
+
 ## 0.4.8
 
 Requires gpuwm>=2.9.7,<2.10.

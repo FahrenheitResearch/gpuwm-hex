@@ -167,7 +167,13 @@ def project_payloads(layout: RegistryLayout, payload: Path, partitions, outputs,
     def field(index):
         row = layout.fields[index]
         original = source.records[row['pool'], row['name']]
-        buffer = None if row['kind'] == 'character' else source.field_buffer(row['pool'], row['name'])
+        # A Registry-initial zero field (decode_registry_pools' fill record) projects to zero words on every
+        # partition: it stays a fill record, so no rank or class writes, hashes and reads back its zeros and its
+        # hydration allocates it untouched.  THE COST THIS REMOVES (MPAS-route host RAM, 2026-10-27): each LTS rate
+        # class wrote 6.8 GB of zeros per 100k cells to disk and copied every word of them into its pools.
+        filled = row['kind'] != 'character' and original.get('fill') is not None
+        buffer = (None if row['kind'] == 'character' or filled
+                  else source.field_buffer(row['pool'], row['name']))
         records = []
         for mapping, local, output in zip(maps, locals_, outputs):
             projected = local.fields[index]
@@ -179,6 +185,8 @@ def project_payloads(layout: RegistryLayout, payload: Path, partitions, outputs,
                 record['origins'] = original['origins']
             if row['kind'] == 'character':
                 record['text'] = original['text']
+            elif filled:
+                record.update(payload=None, sha256=None, text=None, fill=original['fill'])
             else:
                 words = _project_buffer(buffer, row, layout, mapping).tobytes(order='F')
                 name = f'field-{index:06d}.bin'

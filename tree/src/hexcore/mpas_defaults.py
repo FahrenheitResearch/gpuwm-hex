@@ -230,6 +230,41 @@ def default_dt_seconds(
     }
 
 
+def lts_class_clock_dt(selection: dict[str, Any], *, max_rate: int, events: dict[str, float]) -> dict[str, Any]:
+    """The default step moved down so full-step LTS's coarsest class step lands on every event.
+
+    THE BREAKAGE THIS PREVENTS (multi-zoom run3, 2026-10-26, 60 km globe with 3.75/7.5/15 km zones): the default
+    step for the 3.75 km cells is 20 s, the coarsest class steps 8 x 20 = 160 s, which does not divide the 1800 s
+    radiation interval, so full-step LTS refused every bare run on that mesh ("not a whole number of the coarsest
+    class step") and the user had to find 18.75 s by hand.  Only a DEFAULT step is moved (an explicit ``--dt``
+    or a namelist ``config_dt`` is the user's and is still refused by the class clock if it misses): the largest
+    step on the eighth-second grid, at most the default, for which ``step * max_rate`` divides every event.  The
+    cap ``max_rate`` is the class ladder's ceiling, so any class top the mesh grades to (a power of two at most
+    the cap) divides the events too.
+    """
+
+    if selection.get("source") not in ("mesh", "physics cap"):
+        return selection
+    base = float(selection["dt_seconds"])
+    values = [float(v) for v in events.values() if v and float(v) > 0.0]
+
+    def fits(step: float) -> bool:
+        unit = step * int(max_rate)
+        return all(abs(v / unit - round(v / unit)) <= 1.0e-9 * max(v / unit, 1.0) and v / unit >= 1.0 - 1.0e-9
+                   for v in values)
+
+    if fits(base):
+        return selection
+    for eighths in range(int(math.floor(base * 8 + 1.0e-9)), 0, -1):
+        step = eighths / 8.0
+        if fits(step):
+            return {**selection, "dt_seconds": step, "source": "lts class clock",
+                    "default_dt_seconds": base, "lts_max_rate": int(max_rate),
+                    "rule": (f"{selection.get('rule', '')}; moved to {step:g} s so the coarsest LTS class step "
+                             f"({int(max_rate)} x {step:g} s) divides every event {sorted(set(values))}")}
+    return selection
+
+
 def resolve_dt(
     requested: Any,
     *,

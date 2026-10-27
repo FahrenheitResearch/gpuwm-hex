@@ -498,7 +498,7 @@ required item is missing, so it works as a gate in a script.
 
 ### Kernel packs
 
-Kernel packs are pinned assets of the `kernel-packs-v0.4.6` release, for CUDA 12.9, 13.0 and 13.4
+Kernel packs are pinned assets of the `kernel-packs-v0.4.9` release, for CUDA 12.9, 13.0 and 13.4
 NVRTC, and hold the ArWen and MPAS physics kernels.
 `gpuwm-hex fetch-assets --list` lists them. Run
 `gpuwm-hex fetch-assets` to stage them in the cache, or

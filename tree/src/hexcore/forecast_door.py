@@ -1802,6 +1802,7 @@ def resolve_request(
                   + (f" (this engine lacks {', '.join(dt_selection['engine_lacks'])})"
                      if dt_selection.get("engine_lacks") else "")
                   + "; --dt SECONDS runs a step of your choosing", file=sys.stderr, flush=True)
+    dt_selection = lts_step(arguments, dt_selection, float(radiation_seconds))
     dt_selection["registered_row_dt_seconds"] = float(row.dt_seconds)
     dt_seconds = float(dt_selection["dt_seconds"])
     # The preset is a ROW (hexcore.forecast_preset) and resolves into the
@@ -3564,6 +3565,29 @@ def write_kernel_plan_receipt(out: Any) -> None:
         pass
 
 
+def lts_step(arguments: argparse.Namespace, selection: dict[str, Any], radiation_seconds: float) -> dict[str, Any]:
+    """A default step under full-step LTS, moved onto the class clock (:func:`mpas_defaults.lts_class_clock_dt`)."""
+    if not getattr(arguments, "fullstep_local_timestep", False):
+        return selection
+    events = {"radiation": float(radiation_seconds)}
+    history = getattr(arguments, "history_every_minutes", None)
+    if history:
+        events["history"] = float(history) * 60.0
+    hours = getattr(arguments, "hours", None)
+    if hours:
+        events["run length"] = float(hours) * 3600.0
+    rate = getattr(arguments, "fullstep_lts_max_rate", None)
+    if rate is None:
+        from .config_fullstep_lts import FullStepLtsConfig
+        rate = FullStepLtsConfig().fullstep_lts_max_rate
+    moved = mpas_defaults.lts_class_clock_dt(selection, max_rate=int(rate), events=events)
+    if moved is not selection:
+        print(f"gpuwm-hex: timestep {moved['dt_seconds']:g} s for full-step local time stepping (the default "
+              f"{selection['dt_seconds']:g} s puts the coarsest class step off the radiation/history clock)",
+              file=sys.stderr, flush=True)
+    return moved
+
+
 def bind_native_step(arguments: argparse.Namespace, native_text: str) -> str:
     """The MPAS suite route's ``config_dt``: the namelist's, else the door's own step for the mesh.
 
@@ -3605,6 +3629,7 @@ def bind_native_step(arguments: argparse.Namespace, native_text: str) -> str:
     selection = mpas_defaults.resolve_dt(
         requested, nominal_dx_m=nominal_dx_m, row_dt_seconds=row_dt_seconds,
         radiation_seconds=radiation_seconds)
+    selection = lts_step(arguments, selection, radiation_seconds)
     dt = float(selection["dt_seconds"])
     print(f"gpuwm-hex: MPAS suite timestep {dt:g} s ({selection.get('source')}: {selection.get('rule', '')})",
           file=sys.stderr, flush=True)

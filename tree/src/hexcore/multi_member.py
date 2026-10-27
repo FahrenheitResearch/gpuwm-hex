@@ -619,6 +619,84 @@ def suite_route(arguments, door) -> bool:
     return config is not None
 
 
+def argv_physics_route(argv) -> str:
+    """``"mpas"`` or ``"arwen"``: the route a forecast-door argv (``gpuwm-hex forecast ...``) runs, decided the way the
+    door decides it (its parser, the hex default physics, then :func:`suite_route`).
+
+    For the planners that price a member before the door runs (``global_ensemble.group_limit``).  An argv the door
+    would refuse is priced as the MPAS route, the larger one; the door then refuses it by name at launch."""
+    import argparse
+
+    from . import forecast_door, physics_default
+
+    tokens = [str(token) for token in argv or ()]
+    if tokens and tokens[0] == "forecast":
+        tokens = tokens[1:]
+    parser = argparse.ArgumentParser(add_help=False)
+    forecast_door.add_forecast_arguments(parser)
+    try:
+        arguments, _unknown = parser.parse_known_args(tokens)
+        physics_default.apply(arguments)
+        return "mpas" if suite_route(arguments, forecast_door) else "arwen"
+    except (Exception, SystemExit):
+        return "mpas"
+
+
+def _member_cells(member) -> int:
+    from .mesh_rows import _dimensions
+
+    for name in ("grid", "init"):
+        path = getattr(member, name, None)
+        if path:
+            return int(_dimensions(Path(path))["nCells"])
+    raise MultiMemberRefusal("a resident MPAS-suite group needs --grid (or a member init) to price its members")
+
+
+def admit_suite_group(members, gate) -> dict | None:
+    """Refuse an MPAS-suite group the card cannot hold, before any member starts (U-H4).
+
+    Each member is charged the MPAS route's own floor (``device_admission.route_required_free_bytes``) plus its
+    stochastic arrays, through the same ``admit_co_tenancy`` the ArWen roster decides on, so a group that does not
+    fit is refused with "co-tenancy refuses" and the ensemble door splits it.  THE BREAKAGE IT PREVENTS: this
+    roster started every member at once with no memory decision; at 30 km two MPAS members per RTX PRO 6000 ran
+    out of memory ~3 min in.  A single member is not decided here: the one-member door admits it as it always has.
+    The card is read in a child process (``global_ensemble._probe_cards``), so this process opens no CUDA context
+    on the card its members need; behind a card gate the decision is the card's capacity (the group before may
+    still hold it), as in the ArWen roster.  None when one member, or when no card can be read here."""
+    if len(members) < 2:
+        return None
+    from . import forecast_door as door
+    from .device_admission import admit_co_tenancy, card_profile_from_attributes, model_for_card
+    from .global_ensemble import _probe_cards
+
+    cards = _probe_cards(None)
+    if not cards:
+        return None
+    card = cards[0]
+    first = members[0][1]
+    cells = _member_cells(first)
+    levels = 55
+    init = getattr(first, "init", None)
+    if init:
+        interfaces = door._vertical_interfaces(Path(init))
+        levels = 55 if interfaces is None else int(interfaces) - 1
+    profile = card_profile_from_attributes(card["name"], {"MultiProcessorCount": card["sms"],
+                                                          "MaxThreadsPerMultiProcessor": card["threads"]})
+    model = model_for_card(profile, "global", levels, rollback_armed=bool(getattr(first, "stop_on_refusal", False)))
+    headroom = getattr(first, "headroom_mib", None)
+    margin = None if headroom is None else int(round(float(headroom) * door.MIB))
+    from .device_admission import route_required_free_bytes
+
+    solo = route_required_free_bytes(cells, model, margin, route="mpas")
+    additional = tuple(door.stochastic_array_bytes(cells, getattr(member, "stochastic", None), levels=levels)
+                       for _, member in members)
+    total = int(card["total"])
+    return admit_co_tenancy(mesh_kind="point-cull" if getattr(first, "lbc_dir", None) else "global",
+                            cells=cells, levels=levels, members=len(members), card_bytes=total,
+                            free_bytes=total if gate is not None else int(card["free"]),
+                            solo_required_bytes=solo, member_additional_bytes=additional)
+
+
 def _suite_member_main(member, log_path) -> int:
     """One MPAS-suite member, in its own process: exactly the one-member ``gpuwm-hex forecast`` door."""
     import sys as _sys
@@ -656,18 +734,19 @@ def run_suite_members(arguments, door, root, scratch):
 
     from .card_handoff import CardGate
 
+    gate = CardGate.from_environ()
     try:
         members = roster_members(arguments, door)
+        admission = admit_suite_group(members, gate)
     except Exception as error:
         raise _RosterRefused(error) from error
-    gate = CardGate.from_environ()
     # The members inherit no gate: this process holds it for the whole group.
     from .card_handoff import GATE_ENV, TICKET_ENV
     environment = {key: os.environ.pop(key) for key in (GATE_ENV, TICKET_ENV) if key in os.environ}
     context = multiprocessing.get_context("spawn")
     started = time.time()
     result = {"schema": "gpuwm-hex.multi-member/v1", "route": "mpas-suite", "status": "incomplete",
-              "members": [], "default_enabled": False}
+              "admission": admission, "members": [], "default_enabled": False}
     failed = 0
     try:
         if gate is not None:

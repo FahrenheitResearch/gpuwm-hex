@@ -23,7 +23,12 @@ def rotation_between(start, end):
     return np.eye(3) + skew + skew @ skew / (1+c)
 
 
-def rotate_grid(source, output, *, start, end):
+def rotate_grid(source, output, *, start, end, file_id=None):
+    """Rotate SOURCE's global mesh rigidly so START moves to END, written to OUTPUT.
+
+    ``file_id`` (default: a fresh uuid) is the output's MPAS file_id; a caller that keys later artifacts by the
+    output's SHA-256 (the zoom-globe door: the static's prep-store key) passes one derived from the inputs, so the
+    same template and point give the same bytes."""
     from netCDF4 import Dataset
     began = time.perf_counter()
     source, output = Path(source), Path(output)
@@ -66,7 +71,7 @@ def rotate_grid(source, output, *, start, end):
             ds['angleEdge'][:] = np.arctan2(np.einsum('ij,ij->i',normal,north),
                                           np.einsum('ij,ij->i',normal,east))
             changed.append('angleEdge')
-        ds.setncattr('file_id', uuid.uuid4().hex)
+        ds.setncattr('file_id', file_id or uuid.uuid4().hex)
         ds.setncattr('moving_patch_rotation', json.dumps(dict(start=start,end=end)))
     digest=hashlib.sha256()
     with output.open('rb') as stream:

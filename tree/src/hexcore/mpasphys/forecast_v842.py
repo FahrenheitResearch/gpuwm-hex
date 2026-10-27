@@ -15,7 +15,7 @@ from ..config import parse_fortran_namelist
 from ..physics_suites import load_table
 from importlib import import_module
 from .driver_v842 import interval_seconds
-from .pool_v842 import decode_registry_pools
+from .pool_v842 import decode_registry_pools, pool_transport_threads
 
 
 def integral_duration(duration, dt):
@@ -464,7 +464,7 @@ def _in_defaults(element: Any) -> int:
 
 
 def write_default_streams(layout: Any, path: Path, *, history_minutes: float | None = None,
-                          checkpoint_hours: Any = None) -> Path:
+                          checkpoint_hours: Any = None, surface_interval: str | None = None) -> Path:
     """MPAS's own default streams.atmosphere and stream_list.atmosphere.* files, from the Registry this run decoded.
 
     THE BREAKAGE THIS PREVENTS: the MPAS suite route refused every run that named no streams.atmosphere
@@ -479,8 +479,9 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
     ``stream_list.atmosphere.<name>`` (var_arrays then vars, one per line) written beside the streams file,
     a single_file stream carrying its members inline.  The run's own choices are then applied: output and
     diagnostics every ``history_minutes`` (default: the Registry's own intervals), each time to its own file;
-    restart only at ``checkpoint_hours`` (a single interval), else never.  A run that names its streams file
-    is unchanged.
+    restart only at ``checkpoint_hours`` (a single interval), else never; the surface stream at
+    ``surface_interval`` when the run updates SST from a bound series (:func:`surface_series_interval`).  A run
+    that names its streams file is unchanged.
     """
     root = ET.Element('streams')
     history = _mpas_interval(float(history_minutes) * 60.0) if history_minutes else None
@@ -512,6 +513,8 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
             element.set('output_interval', history)
         if name == 'restart':
             element.set('output_interval', restart)
+        if name == 'surface' and surface_interval:
+            element.set('input_interval', surface_interval)
         if 'output' in types and element.get('output_interval', 'none') != 'none' \
                 and declared.get('filename_interval') is None:
             element.set('filename_interval', 'output_interval')
@@ -535,6 +538,26 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
     ET.indent(root)
     path.write_text(ET.tostring(root, encoding='unicode') + '\n')
     return path
+
+
+def surface_series_interval(path: Path, n_cells: int) -> str:
+    """The record interval of a bound surface series, as the default surface stream's ``input_interval``.
+
+    THE BREAKAGE THIS PREVENTS (U-H1, best-180 smoke j1, 2026-10-27): MPAS's Registry declares the surface stream
+    with ``input_interval="none"``, so a run on the default streams that turned on ``config_sst_update`` and bound
+    ``--stream-input surface=FILE`` either refused at the surface alarm or never read a record, and SST and sea
+    ice stayed bit-identical from day 0 to day 7 (the s2s door's ``--surface-series``).  Native MPAS needs the
+    interval written into streams.atmosphere by hand; this writes the series' own uniform record spacing.
+    """
+    from ..surface_series_reader import reader_library
+    from .surface_update_v842 import RustSurfaceRecordReader
+    times = RustSurfaceRecordReader(reader_library(), path, n_cells=n_cells).times
+    if len(times) < 2:
+        raise ValueError(f'surface series {path} needs at least two record times to update SST')
+    spacing = {b - a for a, b in zip(times, times[1:])}
+    if len(spacing) != 1:
+        raise ValueError(f'surface series {path} record interval must be uniform for the surface stream alarm')
+    return _mpas_interval(spacing.pop().total_seconds())
 
 
 def read_streams(path: Path, layout: Any, list_directory: Path | None = None, *, tree=None) -> tuple[Stream, ...]:
@@ -696,7 +719,8 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
     def save_timings():
         (out/'stage-timings.json').write_text(json.dumps({'stages':timings},indent=2)+'\n')
     try:
-        with stage(timings, 'native-pool-decode', parallelism={'device':'CPU','threads':1},
+        pool_threads = pool_transport_threads()  # what decode_registry_pools hands the reader (U-H3)
+        with stage(timings, 'native-pool-decode', parallelism={'device':'CPU','threads':pool_threads},
                    timeline='prep.native.pool_decode'):
             layout = decode_registry_pools(Path(reader).resolve(),Path(source).resolve(),config,text,sources,
                                            scratch/'native-pools')
@@ -705,9 +729,11 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
     if moving is not None:
         moving.mark_restart(layout)
     if streams_path is None:
+        timed = ({'surface_interval': surface_series_interval(bindings['surface'], layout.dimensions['nCells'])}
+                 if config.options['config_sst_update'] and 'surface' in bindings else {})
         streams_path = write_default_streams(layout, scratch/'streams.atmosphere',
                                              history_minutes=getattr(arguments,'history_every_minutes',None),
-                                             checkpoint_hours=None)
+                                             checkpoint_hours=None, **timed)
     parser=load_table()[getattr(config,'table_key','mpasphys_v842')].get('streams_parser')
     tree=None
     if parser is not None:
