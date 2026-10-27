@@ -496,7 +496,16 @@ class Controller:
         # A frozen-far-field member depends on the member it is built from (P1, hexcore.moving_zone).
         return f'{base}x{self.state["current"]}' if self.a.zone_carry and not self.stitch else base
 
-    def request_member(self, centre, why, order=1):
+    def request_member(self, centre, why, order=1, admit=None):
+        """Name of a member at (or serving) ``centre``, starting its preparation when none exists.
+
+        ``admit`` (a centre -> bool rule, the same one :meth:`pick_target` applies) filters the two
+        shortcuts that serve the request with a member at ANOTHER centre: an on-disk member within
+        reuse distance and a member already preparing within min_move_km.  THE BREAKAGE THIS
+        PREVENTS (hex-day2 storm-following runs, 2026-10-27, twice): a due move reused an on-disk
+        member up to min(--reuse-km, min_move_km) off the policy's centre whose predicted core was
+        not safe there for one check, so pick_target refused it once it was READY and the door
+        stopped the run ('moving member ... is ready after holding the forecast')."""
         step = self.session.config.placement.snap_deg
         lat, lon = self.st.snap(centre[0], centre[1], step)
         name = self.member_key(lat, lon)
@@ -545,7 +554,8 @@ class Controller:
                 continue
             distance = great_circle_km(row['center_deg'], (lat, lon))
             from .moving_retention import artifacts_present
-            if distance <= min(self.a.reuse_km, self.session.policy.c.min_move_km) and artifacts_present(row):
+            if (distance <= min(self.a.reuse_km, self.session.policy.c.min_move_km) and artifacts_present(row)
+                    and (admit is None or distance <= 1e-6 or admit(row['center_deg']))):
                 on_disk.append((distance, key))
         if on_disk:
             key = min(on_disk)[1]
@@ -555,7 +565,8 @@ class Controller:
             return key
         busy = [n for n, m in members.items() if m['status'] == 'preparing']
         near = [(great_circle_km(members[n]['center_deg'], (lat, lon)), n) for n in busy]
-        near = [(d, n) for d, n in near if d <= self.session.policy.c.min_move_km]
+        near = [(d, n) for d, n in near if d <= self.session.policy.c.min_move_km
+                and (admit is None or d <= 1e-6 or admit(members[n]['center_deg']))]
         if near:
             name = min(near)[1]
             members[name]['order'] = min(members[name].get('order', order), order)
@@ -765,16 +776,22 @@ class Controller:
         """
         if not fix.ok:
             return None
+        candidates = [(great_circle_km(centre, (fix.lat, fix.lon)), name)
+                      for name, centre in ready.items() if name != self.state['current']
+                      and self.admits(centre, seconds, fix)]
+        return min(candidates)[1] if candidates else None
+
+    def admits(self, centre, seconds, fix):
+        """True when a member at ``centre`` keeps the predicted core (fix and motion uncertainty
+        included) safe for at least one check: the admission rule of :meth:`pick_target`."""
+        if not fix.ok:
+            return False
         policy = self.session.policy
         fixes = [f for f in self.session.fixes if f.seconds < fix.seconds] + [fix]
         velocity, _ = self.session.motion.velocity(fixes)
-        candidates = [(great_circle_km(centre, (fix.lat, fix.lon)), name)
-                      for name, centre in ready.items() if name != self.state['current']
-                      and policy.dwell(centre, (fix.lat, fix.lon), velocity,
-                                       max(0.0, (seconds - fix.seconds) / 60.0),
-                                       max(policy.c.check_minutes, policy.SUBSTEP_MIN))
-                          >= policy.c.check_minutes]
-        return min(candidates)[1] if candidates else None
+        return policy.dwell(centre, (fix.lat, fix.lon), velocity,
+                            max(0.0, (seconds - fix.seconds) / 60.0),
+                            max(policy.c.check_minutes, policy.SUBSTEP_MIN)) >= policy.c.check_minutes
 
     def on_frame(self, seconds, history, control: Path):
         if seconds in {f['model_seconds'] for f in self.state['frames']}:
@@ -814,7 +831,8 @@ class Controller:
                 # The decision is for this frame. The anticipation chain starts at the
                 # NEXT move and can already lie outside this fix's safe radius.
                 centre = decision.centre
-                wanted = (self.request_member(centre, f'move decided at {seconds:.0f} s, no ready member')
+                wanted = (self.request_member(centre, f'move decided at {seconds:.0f} s, no ready member',
+                                              admit=lambda c: self.admits(c, seconds, fix))
                           if fix.ok and great_circle_km(centre, current['center_deg']) > 1e-6
                           else None)
                 # a member reused from disk with a cached operator is ready at once

@@ -817,6 +817,11 @@ def run_regional(args: argparse.Namespace) -> int:
                 receipt.update(outcome="failed", returncode=int(result["returncode"]))
                 status.failed(f"the {name} stage exited {result['returncode']}")
                 return int(result["returncode"])
+            if name == "forecast":
+                # The forecast is the last GPU stage (the products are CPU work in Rust binaries): a card queue
+                # gets its card back now instead of after them (hexcore.card_lease).
+                from .card_lease import gpu_work_done
+                timing["card_given_back"] = gpu_work_done()
         receipt.update(outcome="done", returncode=0)
         status.done(f"{value['row']['id']} {value['cycle']} at {value['point_deg']}: {', '.join(stages)}")
         return 0

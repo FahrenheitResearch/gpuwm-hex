@@ -224,16 +224,22 @@ def carry_lineage(
         except AttributeError:
             return value
 
+    from .netcdf_define import deferred_definition
+
     carried: dict[str, Any] = {}
     with Dataset(str(parent), "r") as source:
         available = {name: source.getncattr(name) for name in source.ncattrs()}
-    with Dataset(str(child), "a") as target:
+    # One define session for every carried attribute: set one at a time, each grew the header of a file that
+    # already holds its data and moved the whole data section again (11-15 s of one core per region cull,
+    # 2026-10-27).  The file's bytes are the same (hexcore.netcdf_define).
+    with deferred_definition(Dataset)(str(child), "a", keepweakref=True) as target:
         present = set(target.ncattrs())
-        for name, value in available.items():
-            if name in present:
-                continue
-            target.setncattr(name, value)
-            carried[name] = plain(value)
+        with target.definition_batch():
+            for name, value in available.items():
+                if name in present:
+                    continue
+                target.setncattr(name, value)
+                carried[name] = plain(value)
         final = sorted(target.ncattrs())
     missing = [name for name in LBC_REQUIRED_ATTRIBUTES if name not in final]
     # The requirement lands on the file that will be handed to

@@ -152,7 +152,11 @@ def _entity_ownership(
                 f"rank {rank} {plural}: local index is outside global extent {n_global}"
             )
         vector = np.asarray(vector, dtype=np.int64)
-        if np.unique(vector).size != vector.size:
+        # The refusal np.unique(vector).size != vector.size made, in one pass over a mark array (the indexes are
+        # known to lie in [0, n_global) above): the sort held the main thread ~4 s of a 30 km 4-rank start.
+        marks = np.zeros(n_global, dtype=np.bool_)
+        marks[vector] = True
+        if int(np.count_nonzero(marks)) != vector.size:
             raise ExecutorError(f"rank {rank} {plural}: duplicate local global index")
         owned = vector[:n_owned]
         duplicates = owned[owner[owned] >= 0]

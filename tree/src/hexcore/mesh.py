@@ -60,8 +60,10 @@ import math
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
+import os
 from pathlib import Path
 import re
+import struct
 from typing import Any, Callable, Iterator, Mapping
 
 import numpy as np
@@ -233,6 +235,16 @@ def _read_netcdf(
         while pending:
             finish_one()
 
+    # Whole numeric variables of a classic file are read from their header offsets on every host-copy thread
+    # (hexcore.classic_netcdf: the same arrays netCDF4 returns); the rest go through netCDF4 as before.
+    classic = None
+    if parallel and os.environ.get("GPUWM_HEX_CLASSIC_READ", "").strip().lower() not in ("off", "0", "no"):
+        from .classic_netcdf import extents
+        try:
+            classic = extents(path)
+        except (OSError, ValueError, KeyError, struct.error):
+            classic = None
+
     executor = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="hex-netcdf-copy")
                 if parallel else nullcontext(None))
     with executor as pool:
@@ -243,8 +255,26 @@ def _read_netcdf(
                 attributes.update(
                     {name: _plain_attribute(getattr(dataset, name)) for name in dataset.ncattrs()}
                 )
+                read_ahead: dict[str, NDArray[Any]] = {}
+                if classic is not None:
+                    from .classic_netcdf import read_variables, readable
+                    table, records = classic
+                    selected = [name for name, variable in dataset.variables.items()
+                                if name not in exclude_variables and name in table
+                                and readable(table[name], records, variable.ncattrs())
+                                and tuple(table[name].shape) == tuple(variable.shape)
+                                and np.dtype(table[name].dtype).newbyteorder("=") == variable.dtype]
+                    read_ahead = read_variables(path, selected, table, workers=threads())
                 for name, variable in dataset.variables.items():
                     if name in exclude_variables:
+                        continue
+                    if name in read_ahead:
+                        arrays[name] = read_ahead.pop(name)
+                        variable_dimensions[name] = tuple(variable.dimensions)
+                        variable_attributes[name] = {
+                            attr: _plain_attribute(getattr(variable, attr))
+                            for attr in variable.ncattrs()
+                        }
                         continue
                     if len(pending) >= 2:
                         finish_one()

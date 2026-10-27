@@ -522,14 +522,15 @@ class ClampAudit:
                 tap_kernel(transport, driver.cache, name, before=self.observe)
             self.tapped = True
 
-    def observe(self, arguments: tuple[Any, ...]) -> None:
+    def observe(self, arguments: tuple[Any, ...], *, first: int = 0) -> None:
         i32 = np.int32
         ntr, nlev, ncells, nedges, max_edges = (int(v) for v in arguments[:5])
         total = ntr * nlev * self.n_owned
         self._kernel(((total + 255) // 256,), (256,), (
             i32(ntr), i32(nlev), i32(self.n_owned), i32(ncells), i32(nedges), i32(max_edges),
             arguments[5], arguments[6], arguments[7], arguments[8], arguments[9],
-            arguments[10], arguments[11], arguments[13], self.weight, self.created, self.count))
+            arguments[10], arguments[11], arguments[13], self.weight,
+            self.created[first:first + ntr], self.count[first:first + ntr]))
 
     def read(self) -> dict[str, list[float]]:
         cp = self.cp
@@ -571,6 +572,22 @@ class _ClassScalars:
         self.step_seconds = 0.0
         self.vertical: tuple[Any, ...] | None = None
         self.audit: ClampAudit | None = None
+        # The tracers [first, last) the limiter pass in flight carries (begin_species_pass);
+        # None is every tracer in one pass.
+        self.species: tuple[int, int] | None = None
+
+    def begin_species_pass(self, first: int, last: int) -> None:
+        if not 0 <= int(first) < int(last) <= self.owner.ntr:
+            raise RuntimeError(f"a limiter pass over tracers [{first}, {last}) is outside the "
+                               f"{self.owner.ntr} tracers the interface tables hold")
+        self.species = (int(first), int(last))
+
+    def _tracer_rows(self, ntr: int) -> slice:
+        """The register and reserve rows of the pass in flight; the per-tracer kernels index them from 0."""
+        first, last = (0, self.owner.ntr) if self.species is None else self.species
+        if ntr != last - first:
+            raise RuntimeError("the flux-corrected stage ran on a shape the interface tables do not describe")
+        return slice(first, last)
 
     # -- hooks -----------------------------------------------------------------
     def on_split_flux(self, arguments: tuple[Any, ...]) -> None:
@@ -597,8 +614,11 @@ class _ClassScalars:
         klass, owner = self.klass, self.owner
         i32 = np.int32
         ntr, nlev, ncells, nedges, max_edges = (int(v) for v in arguments[:5])
-        if ntr != owner.ntr or nlev != owner.nlev or ncells != klass.cell_stride:
+        if nlev != owner.nlev or ncells != klass.cell_stride:
             raise RuntimeError("the flux-corrected stage ran on a shape the interface tables do not describe")
+        rows = self._tracer_rows(ntr)
+        reg_scalar, hold = owner.reg_scalar[rows], owner.hold[rows]
+        amounts = self.amounts[3 * rows.start:3 * rows.stop]
         counts, edges, signs, inverse_area, upwind, residual, mass = arguments[5:12]
         if self.vertical is None:
             raise RuntimeError("the vertical low-order launch was not seen before the horizontal one; "
@@ -609,16 +629,16 @@ class _ClassScalars:
             count = int(klass.coarse_edge.size)
             owner.run("lts_packet_apply", ntr * nlev * count, (
                 i32(ntr), i32(nlev), i32(count), i32(nedges), i32(owner.nslots),
-                klass.coarse_edge, klass.coarse_slot, owner.reg_scalar, upwind, residual))
+                klass.coarse_edge, klass.coarse_slot, reg_scalar, upwind, residual))
             if owner.guard:
                 owner.run("lts_donor_guard", ntr * self.rows, (
                     i32(ntr), i32(nlev), i32(self.rows), i32(klass.reflux_width), i32(ncells),
                     i32(nedges), i32(owner.nslots), i32(max_edges), dt,
-                    klass.reflux_cell, klass.reflux_slot, klass.reflux_coef, owner.reg_scalar,
+                    klass.reflux_cell, klass.reflux_slot, klass.reflux_coef, reg_scalar,
                     owner.active.reg_mass_fine,
                     counts, edges, signs, inverse_area, self.packet_edge,
                     source_old, rho_old, ww, rdzw, upwind, residual, mass, vertical_residual,
-                    self.stats, self.amounts))
+                    self.stats, amounts))
         if self.has_fine_side:
             parent = owner.classes[klass.index - 1]
             pk = parent.klass
@@ -626,22 +646,24 @@ class _ClassScalars:
                 i32(ntr), i32(nlev), i32(parent.rows), i32(pk.reflux_width), i32(nedges),
                 i32(owner.nslots), pk.reflux_slot, pk.reflux_coef, self.edge_of_slot,
                 i32(1 if owner.cap else 0), np.float64(_RESERVE_MARGIN),
-                parent.reserve, parent.content_start, parent.air_start, owner.active.reg_mass_fine,
-                upwind, residual, owner.hold, self.stats, self.amounts))
+                parent.reserve[rows], parent.content_start[rows], parent.air_start,
+                owner.active.reg_mass_fine, upwind, residual, hold, self.stats, amounts))
 
     def on_finish(self, arguments: tuple[Any, ...]) -> None:
         klass, owner = self.klass, self.owner
         i32 = np.int32
         ntr, nlev, _ncells, nedges = (int(v) for v in arguments[:4])
+        rows = self._tracer_rows(ntr)
         if self.has_fine_side:
             parent = owner.classes[klass.index - 1]
             pk = parent.klass
             owner.run("lts_packet_capture", ntr * nlev * parent.rows, (
                 i32(ntr), i32(nlev), i32(parent.rows), i32(pk.reflux_width), i32(nedges),
                 i32(owner.nslots), pk.reflux_slot, pk.reflux_coef, self.edge_of_slot,
-                owner.hold, arguments[10], owner.reg_scalar, parent.reserve, self.amounts))
+                owner.hold[rows], arguments[10], owner.reg_scalar[rows], parent.reserve[rows],
+                self.amounts[3 * rows.start:3 * rows.stop]))
         if self.audit is not None:
-            self.audit.observe(arguments)
+            self.audit.observe(arguments, first=rows.start)
 
 
 class ScalarInterfaces:

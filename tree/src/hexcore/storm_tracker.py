@@ -947,6 +947,17 @@ class PlacementConfig:
     prefer_prepared_fraction: float = 0.75
     max_misses: int = 3
 
+    def __post_init__(self):
+        # THE BREAKAGE THIS PREVENTS (TC-Milton storm-following case, 2026-10-26: a 146 km interior
+        # under the default 150 km core margin): with no safe radius every dwell is unsafe, so the
+        # case was accepted here and failed only after its first member preparation had used the card.
+        if self.safe_km() <= 0:
+            raise ValueError(
+                f'storm-following placement has no safe radius: interior_radius_km '
+                f'{self.interior_radius_km:g} minus core_margin_km {self.core_margin_km:g} is '
+                f'{self.safe_km():g} km, so the storm core can never be inside the fine interior; set '
+                f'tracker.placement.core_margin_km below the interior radius (or use a larger interior)')
+
     def safe_km(self):
         return self.interior_radius_km - self.core_margin_km
 

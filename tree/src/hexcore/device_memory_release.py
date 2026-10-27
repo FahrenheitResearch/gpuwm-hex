@@ -157,6 +157,8 @@ LMEM_MIN_FRAME_DEFAULT = 4096
 POOL_MIN_BYTES_DEFAULT = 8 << 30
 #: A boundary returns idle blocks regardless of the keep when the card's free memory is below this fraction.
 POOL_PRESSURE_FREE_FRACTION = 0.10
+#: How old that free-memory reading may be (seconds) before a boundary asks the driver again.
+POOL_PRESSURE_RECHECK_SECONDS = 1.0
 _OFF = frozenset({"0", "off", "false", "no"})
 _CUDA_ERROR_MEMORY_ALLOCATION = 2
 
@@ -201,6 +203,8 @@ class DevicePhaseRelease:
         # Widest stack limit each phase grew to, per device: the frame its
         # store is grown back to on the phase's next entry.
         self._widest: dict[tuple[int, str], int] = {}
+        # Last memory-pressure reading per device: (clock, card short of memory).
+        self._pressure: dict[int, tuple[float, bool]] = {}
         self.lmem_pinned = False
         self.phases = 0
         self.pool_releases = 0
@@ -231,6 +235,29 @@ class DevicePhaseRelease:
         return self.by_phase.setdefault(
             name, {"pool_bytes_returned": 0, "lmem_resets": 0, "lmem_regrows": 0})
 
+    def _card_short(self, cp: Any) -> bool:
+        """Whether the current card has under a tenth of its memory free, read at most every
+        ``POOL_PRESSURE_RECHECK_SECONDS`` per card.
+
+        THE BREAKAGE THIS PREVENTS (hex host-bound, V5090 2026-10-27): every slot boundary under the
+        keep asked the driver (cudaMemGetInfo), two per slot, about fourteen per physics step; on a
+        shared 8-card host each call took about a millisecond on the thread that issues the card's
+        work (py-spy: 4 % of the MPAS-physics LTS class threads' step-loop CPU).  Another process
+        needing this card's memory is a condition that lasts seconds, so a reading this fresh still
+        returns the idle blocks in time; the keep rule itself is unchanged.
+        """
+        device = int(cp.cuda.runtime.getDevice())
+        now = self._clock()
+        with self._lock:
+            seen = self._pressure.get(device)
+        if seen is not None and now - seen[0] < POOL_PRESSURE_RECHECK_SECONDS:
+            return seen[1]
+        free, total = cp.cuda.runtime.memGetInfo()
+        short = free < POOL_PRESSURE_FREE_FRACTION * total
+        with self._lock:
+            self._pressure[device] = (now, short)
+        return short
+
     def _return_pool(self, cp: Any, name: str) -> None:
         # The default pool acts on the calling thread's current device.
         pool = cp.get_default_memory_pool()
@@ -238,10 +265,8 @@ class DevicePhaseRelease:
         idle = held - int(pool.used_bytes())
         if idle == 0:
             return
-        if idle < self.pool_min_bytes:
-            free, total = cp.cuda.runtime.memGetInfo()
-            if free >= POOL_PRESSURE_FREE_FRACTION * total:
-                return
+        if idle < self.pool_min_bytes and not self._card_short(cp):
+            return
         pool.free_all_blocks()
         returned = held - int(pool.total_bytes())
         if returned:

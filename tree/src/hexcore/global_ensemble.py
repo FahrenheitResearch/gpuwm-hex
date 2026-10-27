@@ -303,8 +303,8 @@ def _probe_cards(devices: str | None) -> list[dict[str, Any]]:
         out = subprocess.run([sys.executable, "-c", _CARD_PROBE], capture_output=True, text=True,
                              timeout=120, env=env)
         cards = json.loads(out.stdout.strip().splitlines()[-1]) if out.returncode == 0 else []
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
-        return []
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError, TypeError, AttributeError):
+        return []  # no readable card here: the forecast door admits at bind
     return cards if isinstance(cards, list) else []
 
 
@@ -388,6 +388,127 @@ def group_limit(value: Mapping[str, Any], args: argparse.Namespace) -> int:
         return 1
     priced = memory_group_limit(value, args)
     return table if priced is None else max(1, min(table, priced))
+
+
+#: Extra columns one rank of a member split over several cards holds beyond its share of the mesh (its halo
+#: rings and the seam packets), as a fraction of that share.  Priced high on purpose until the measured rows
+#: below replace it: a rank that does not fit fails at its first step, a rank priced a little high only costs
+#: a card.
+RANK_HALO_SHARE = 0.10
+
+
+def cards_per_member(value: Mapping[str, Any], args: argparse.Namespace,
+                     cards: list[dict[str, Any]] | None = None) -> int:
+    """Cards one member runs on: ``--cards-per-member``, else the fewest cards whose per-rank price fits the
+    smallest visible card.
+
+    THE BREAKAGE THIS PREVENTS (8x RTX 5090 fit, 2026-10-27): a 30 km MPAS-route member peaks at 75,069 MiB
+    on one card (``device_admission.MPAS_ROUTE_RUN_PEAKS``), more than twice a 32 GB card, and the ensemble
+    door only ever put a member on ONE card (``forecast_argv`` strips ``--samehost-devices``), so a 30 km
+    global ensemble (and the synthetic-radar DA cycle's member forecasts, which run through this door) could
+    not run on any 32 GB card at all.  The forecast door already runs one member over several cards in one
+    process (the same-host rank threads, ``mpasphys.samehost_v842`` on the MPAS route); this picks how many.
+
+    The price of one rank is the member's own route price (``device_admission.route_required_free_bytes``, the
+    MPAS route never below its measured whole runs) at the rank's share of the columns plus
+    :data:`RANK_HALO_SHARE`, against the card's TOTAL memory: the card count is a property of the shape and
+    the card model, not of what another lease holds on the box at the moment (the forecast door's own
+    admission still checks the free memory when it binds).  1 whenever a member fits one card.
+    """
+
+    requested = getattr(args, "cards_per_member", None)
+    resident = getattr(args, "members_per_card", None)
+    if requested in (None, "", "auto") and resident not in (None, "", "auto") and int(resident) > 1:
+        return 1  # several members resident on ONE card were asked for: a member fits one card
+    if cards is None:
+        cards = _probe_cards(getattr(args, "devices", None))
+    visible = max(1, len(cards)) if cards else len(forecast_devices(getattr(args, "devices", None)))
+    if requested not in (None, "", "auto"):
+        count = int(requested)
+        if not 1 <= count <= visible:
+            raise EnsembleDoorError(f"--cards-per-member is 1 to the {visible} cards this door can use, got {count}")
+        return count
+    if not cards:
+        return 1
+    from . import forecast_door as door
+    from .device_admission import card_profile_from_attributes, model_for_card, route_required_free_bytes
+    from .multi_member import argv_physics_route
+
+    argv = list(value["commands"]["forecast"])
+    route = argv_physics_route(argv)
+    headroom = _forecast_flag(argv, "--headroom-mib")
+    margin = None if headroom is None else int(round(float(headroom) * door.MIB))
+    cells = int(value["mesh"]["cells"])
+    smallest = min(cards, key=lambda card: int(card["total"]))
+    profile = card_profile_from_attributes(smallest["name"], {"MultiProcessorCount": smallest["sms"],
+                                                               "MaxThreadsPerMultiProcessor": smallest["threads"]})
+    model = model_for_card(profile, "global", rollback_armed="--stop-on-refusal" in argv)
+    total = int(smallest["total"])
+    if route_required_free_bytes(cells, model, margin, route=route) <= total:
+        return 1
+    for count in range(2, len(cards) + 1):
+        share = -(-int(cells * (1.0 + RANK_HALO_SHARE)) // count)
+        if route_required_free_bytes(share, model, margin, route=route) <= total:
+            return count
+    # Not even every visible card holds it: one card each, and the forecast door's own admission refuses by name.
+    return 1
+
+
+def card_slots(cards: Sequence[str], per_member: int) -> list[str]:
+    """The card sets members run on: consecutive runs of ``per_member`` cards (``"0,1,2"``), one queue each.
+    Cards left over after the last whole set run nothing (named in the forecast stage's record)."""
+
+    if per_member <= 1:
+        return list(cards)
+    return [",".join(cards[at:at + per_member]) for at in range(0, len(cards) - per_member + 1, per_member)]
+
+
+def _set_flag(argv: list[str], flag: str, value: str) -> None:
+    if flag in argv:
+        argv[argv.index(flag) + 1] = value
+    else:
+        argv += [flag, value]
+
+
+def member_forecast_argv(value: Mapping[str, Any], member: Mapping[str, Any], out: Path, scratch: Path,
+                         ranks: int) -> list[str]:
+    """One member alone, over ``ranks`` cards (the forecast door's same-host ranks), with exactly the arguments its
+    roster record would give it (``multi_member.roster_members``): init, start, length, history start, source
+    label and the member's own stochastic identity, so the member is the same member it is on one card."""
+
+    argv = list(value["commands"]["forecast"])
+    if "--samehost-devices" in argv:
+        at = argv.index("--samehost-devices")
+        del argv[at:at + 2]
+    _set_flag(argv, "--init", str(member["init"]))
+    _set_flag(argv, "--out", str(out / member["run_id"]))
+    _set_flag(argv, "--scratch", str(scratch / member["run_id"]))
+    _set_flag(argv, "--start-time", str(member["start_time"]))
+    _set_flag(argv, "--hours", f"{float(member['hours']):g}")
+    _set_flag(argv, "--history-from-minutes", f"{float(member.get('history_from_minutes') or 0):g}")
+    _set_flag(argv, "--init-source", json.dumps(member["provenance"], sort_keys=True))
+    _set_flag(argv, "--stochastic", json.dumps(member["stochastic"], sort_keys=True))
+    return [*argv, "--samehost-devices", ",".join(str(index) for index in range(ranks))]
+
+
+#: Host bytes one member's forecast process holds, per mesh cell, by route, with headroom.  Measured (hex fit/hex-5090
+#: = rel/hex-0.4.9 + this branch, RTX 5090, MPAS physics convection_permitting, 2026-10-27): whole-run VmHWM 4.22 GB
+#: at 40,962 cells (120 km, one rank) and 8.46 GB at 99,898 cells (multi-zoom, fixed step) = 72 KB/cell + 1.3 GB.
+#: Used only to hold back the PIPELINED next process on a card set while the host lacks the memory
+#: (see ``worker`` in run_forecasts).
+HOST_BYTES_PER_CELL = {"mpas": 80 * 1024, "arwen": 60 * 1024}
+#: The interpreter, CUDA context and kernel images of one forecast process.
+HOST_BYTES_FLOOR = 2 << 30
+#: Each same-host rank past the first: 6.68 GB for 2 ranks against 4.22 GB for 1 at 120 km (measured as above).
+HOST_BYTES_PER_EXTRA_RANK = 5 << 29
+
+
+def member_host_bytes(value: Mapping[str, Any], ranks: int = 1) -> int:
+    from .multi_member import argv_physics_route
+    route = argv_physics_route(list(value["commands"]["forecast"]))
+    cells = int(value["mesh"]["cells"])
+    return (HOST_BYTES_FLOOR + cells * HOST_BYTES_PER_CELL.get(route, HOST_BYTES_PER_CELL["mpas"])
+            + max(0, int(ranks) - 1) * HOST_BYTES_PER_EXTRA_RANK)
 
 
 def _init_done(member: Mapping[str, Any], value: Mapping[str, Any]) -> bool:
@@ -626,8 +747,13 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
     work = Path(value["paths"]["work"])
     whole = ensemble or members
     gate = live_draw_gate(len(members)) if live else None
-    limit = group_size or group_limit(value, args)
-    cards = forecast_devices(args.devices)
+    devices = forecast_devices(args.devices)
+    ranks = cards_per_member(value, args)
+    limit = 1 if ranks > 1 else (group_size or group_limit(value, args))
+    cards = card_slots(devices, ranks)
+    if not cards:
+        raise EnsembleDoorError(f"a member needs {ranks} cards and this door can use {len(devices)}")
+    host_need = member_host_bytes(value, ranks)
     pending: "queue.Queue[list[dict[str, Any]]]" = queue.Queue()
     for start in range(0, len(members), limit):
         pending.put(members[start:start + limit])
@@ -672,12 +798,16 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
             identity = m["member"] if m["member"] is not None and not m["provenance"]["lag_hours"] else member_number(m["run_id"])
             m["stochastic"] = member_options(identity, seed=stochastic_seed,
                 source_members=len({item["member"] for item in whole}), ensemble_size=len(whole), **overrides)
-        roster.write_text(json.dumps([
-            {"run_id": m["run_id"], "init": m["init"], "stochastic": m["stochastic"],
-             **{key: m[key] for key in ("start_time", "hours", "history_from_minutes")},
-             "init_source": json.dumps(m["provenance"], sort_keys=True)}
-            for m in group], indent=2) + "\n", encoding="utf-8")
-        argv = forecast_argv(value, roster, out, scratch, group[0]["init"])
+        if ranks > 1:
+            # One member over the card set: the forecast door's same-host ranks (a roster cannot span cards).
+            argv = member_forecast_argv(value, group[0], out, scratch, ranks)
+        else:
+            roster.write_text(json.dumps([
+                {"run_id": m["run_id"], "init": m["init"], "stochastic": m["stochastic"],
+                 **{key: m[key] for key in ("start_time", "hours", "history_from_minutes")},
+                 "init_source": json.dumps(m["provenance"], sort_keys=True)}
+                for m in group], indent=2) + "\n", encoding="utf-8")
+            argv = forecast_argv(value, roster, out, scratch, group[0]["init"])
         log = work / "ensemble" / f"{name}.log"
         ticket = work / "ensemble" / f"{name}.card-ticket.json"
         ticket.unlink(missing_ok=True)
@@ -703,7 +833,8 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
                     m["first_look"] = look.finish()
                     receipt = look.receipt()
                     m["live_frames"] = str(receipt) if receipt else None
-        row = {"group": name, "card": card, "members": [m["run_id"] for m in group], "returncode": rc,
+        row = {"group": name, "card": card, "cards_per_member": ranks, "members": [m["run_id"] for m in group],
+               "returncode": rc,
                "seconds": round(time.monotonic() - began, 1), "log": str(log), "out": str(out)}
         try:
             row["card_handoff"] = json.loads(ticket.read_text(encoding="utf-8"))
@@ -747,6 +878,16 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
                             return
                     time.sleep(0.5)  # a split group may still be queued by another card
                     continue
+                # Host-RAM admission for the PIPELINED start: the next group's process prepares on the host while
+                # this card's current group still holds its own host memory.  THE BREAKAGE THIS PREVENTS (V8X,
+                # 8x RTX 5090, 251 GB host, 2026-10-27): hex 60 km forecast children at 21-29 GB each were the
+                # cgroup OOM killer's victims 30 times in one night.  Waits only while another group of this card
+                # is still running (a first group always starts) and never longer than that group runs.
+                while any(item.is_alive() for item in running):
+                    available = _available_host_bytes()
+                    if available is None or available >= host_need:
+                        break
+                    time.sleep(2.0)
                 started = threading.Event()
                 thread = threading.Thread(target=run_group, args=(card, group, started),
                                           name=f"hex-card-{card}", daemon=True)
@@ -763,7 +904,9 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
     for thread in threads:
         thread.join()
     failed = [m["run_id"] for m in members if m.get("forecast_returncode") != 0]
-    return {"members_per_group": limit, "cards": cards, "groups": groups, "failed": failed}
+    return {"members_per_group": limit, "cards_per_member": ranks, "cards": cards,
+            "cards_unused": [card for card in devices if not any(card in slot.split(",") for slot in cards)],
+            "host_bytes_per_member": host_need, "groups": groups, "failed": failed}
 
 
 def restore_forecasts(value, members):
@@ -933,5 +1076,8 @@ def add_ensemble_arguments(parser: argparse.ArgumentParser) -> None:
                              "then the members resident on the card in groups (see --members-per-card)")
     parser.add_argument("--members-per-card", default="auto", metavar="N|auto",
                         help="resident members per group, 1 to 4 (default: the co-tenancy table's limit, capped by what the card's memory holds)")
+    parser.add_argument("--cards-per-member", default="auto", metavar="N|auto",
+                        help="cards one member runs on (the forecast door's same-host ranks; default auto: 1 when a "
+                             "member fits one card, else the fewest cards whose per-rank price fits)")
     parser.add_argument("--init-jobs", default="auto", metavar="N|auto",
                         help="member inits built at once (default auto: one per four cores, bounded by host RAM)")

@@ -1,0 +1,16 @@
+{
+  "schema": "gpuwm-hex.fullstep-lts-step-cost/v1",
+  "description": "The measured cost of one step on one card, per physics route: a fixed part per (class) step plus a part per cell. hexcore.fullstep_lts_choice predicts the fixed step and full-step LTS at each top class from a mesh's class census with these numbers, and the forecast door runs the cheapest. Each row is a least-squares fit to whole runs on the same mesh, case, card and tree (warm hours 2-3, history file to history file, so per-frame output is inside the fixed part at hourly frames). A new route is a new row; a tree that changes the step loop's host cost re-measures its rows.",
+  "routes": {
+    "mpas-suite": {
+      "seconds_per_step": 0.0864,
+      "seconds_per_cell_step": 1.972e-06,
+      "source": "HEX-LTS-REGRESSION-2026-10-27, hex 0.4.9 fold tree be796866 (host-bound, lts-share, class clock, hoisted kernels from 30,000 edges), MPAS convection_permitting, correct mode, fast numerics, one RTX 5090 per arm, the 149,322-cell 96 -> 3 km zoom globe, GFS 2025-05-19 18Z, warm hours 2-3, least squares over four runs in two same-time pairs: fixed 18 s 77.2 and 75.2 s/h, LTS top class 8 at 15 s 75.4 s/h, LTS top class 4 at 18 s 64.0 s/h; each fit within 1 s/h"
+    },
+    "arwen": {
+      "seconds_per_step": 0.1063,
+      "seconds_per_cell_step": 1.9821e-06,
+      "source": "HEX-LTS-REGRESSION-2026-10-27, hex 0.4.9 fold tree be796866 (host-bound, lts-share, class clock, hoisted kernels from 30,000 edges), --physics-suite arwen_mpas_column, fast numerics, one RTX 5090 per arm, the 149,322-cell 96 -> 3 km zoom globe, GFS 2025-05-19 18Z, warm hours 2-3, least squares over three runs: fixed 18 s 80.2 s/h and LTS top class 4 at 18 s 73.2 s/h (same time, two cards), LTS top class 8 at 15 s 83.0 s/h (release leg always-ready-hex049-lts); each fit within 2 s/h"
+    }
+  }
+}

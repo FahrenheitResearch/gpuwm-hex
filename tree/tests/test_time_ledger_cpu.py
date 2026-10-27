@@ -35,3 +35,31 @@ def test_marks_and_relayed_boundaries_carry_no_cpu():
     assert time_ledger._cpu_attrs({"a": 1}, "mark", None) == {"a": 1}
     assert time_ledger._cpu_attrs(None, "begin", 12.5) is None
     assert "cpu_s" in time_ledger._cpu_attrs(None, "end", None)
+
+
+def test_tree_clock_walks_the_thread_children_at_most_every_refresh(monkeypatch):
+    """Host-bound V5090 2026-10-27: gpuwm's tree walk read /proc/<pid>/task/<tid>/children for ~170 threads at
+    every stage boundary (34 % of the MPAS-physics LTS class threads' step CPU).  The pid list is reused for
+    TREE_REFRESH_SECONDS; each boundary still reads the tree's own and reaped ticks, so the clock moves."""
+    import sys
+    import types
+    import pytest
+    if not sys.platform.startswith("linux"):
+        pytest.skip("reads /proc")
+    walks = []
+    module = types.ModuleType("gpuwm.timeline.parallelism")
+    module.tree_pids = lambda root=None: (walks.append(root), [os.getpid()])[1]
+    monkeypatch.setitem(sys.modules, "gpuwm.timeline.parallelism", module)
+    monkeypatch.setattr(time_ledger, "_tree", {"pids": None, "at": 0.0, "root": None})
+    now = [50.0]
+    first = time_ledger.tree_cpu_seconds(clock=lambda: now[0])
+    x = 0
+    for i in range(3_000_000):
+        x += i
+    second = time_ledger.tree_cpu_seconds(clock=lambda: now[0])
+    assert len(walks) == 1 and second > first
+    now[0] += time_ledger.TREE_REFRESH_SECONDS
+    time_ledger.tree_cpu_seconds(clock=lambda: now[0])
+    assert len(walks) == 2
+    t = os.times()
+    assert abs(second - (t.user + t.system + t.children_user + t.children_system)) < 0.5

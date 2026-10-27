@@ -6,6 +6,7 @@ unclipped prognostic water vapour, as MPAS does before writing its streams.
 from __future__ import annotations
 
 import numpy as np
+from functools import lru_cache
 from importlib.resources import files
 
 from ..cuda_physics_prep_v841 import RV_OVER_RD_F32
@@ -47,8 +48,14 @@ extern "C" __global__ void mpas_cold_thermodynamics_v842(
 '''
 
 
+@lru_cache(maxsize=1)
 def native_diagnostic_source():
-    """Bind shared device math; mpas_atm_time_integration.F:7628-7650."""
+    """Bind shared device math; mpas_atm_time_integration.F:7628-7650.
+
+    Built once per process: the three headers are package data.  THE BREAKAGE THIS PREVENTS (hex host-bound,
+    V5090 2026-10-27): every pool synchronize (two or three a physics step) re-read the three files from disk
+    and re-joined them on the thread that issues the card's work.
+    """
     root = files('gpuwm.core.kernels')
     return '\n'.join(root.joinpath(name).read_text() for name in (
         'glibc_flt32.cuh', 'glibc_flt64.cuh', 'thompson_aerosol_libm.cuh')) + CUDA_SOURCE

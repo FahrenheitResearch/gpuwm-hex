@@ -393,7 +393,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_transport_v841.py": {
         "recorded": "55c66759d9c81f65ed71ce77570897c102fd64661da6ad6c37b438b27771ab23",
-        "current": "222fbfa4cb6266435070f15057607cc7b6bf4241998cfa51c02545024a9a0ef1",
+        "current": "8342d4fc5fd4bb03aaaed11a2f3c7ba96ed85d70f766efa11d4aa4bf4a3ff7f3",
         "why": (
             "2026-10-19 LTS hook repair: unspecialized lookups retain their "
             "two-part key; the acoustic tap uses the launched shape identity. "

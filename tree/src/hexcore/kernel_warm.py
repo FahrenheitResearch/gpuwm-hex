@@ -75,6 +75,16 @@ def _include_metadata(source):
     return macros, [value.strip() for value in includes]
 
 
+def _tree_listing(root, files):
+    """Each file of a bound header tree by name, size, inode, mtime and ctime (no reads)."""
+    rows = []
+    for file in files:
+        info = file.stat()
+        rows.append([str(file.relative_to(root)), info.st_size, info.st_dev, info.st_ino,
+                     info.st_mtime_ns, info.st_ctime_ns])
+    return rows
+
+
 def _expanded_headers(operand, macros):
     """Conservatively expand finite object-like header alternatives."""
     if operand.startswith(('"', '<')):
@@ -141,8 +151,10 @@ class Store:
         """Bind explicit include trees once per process, with parallel byte hashing.
 
         Existing NVRTC caches assume installed compiler/header inputs stay fixed
-        while a process runs. We make the same assumption, but rehash headers on
-        every fresh process, including edited files with unchanged timestamps.
+        while a process runs. We make the same assumption. A fresh process reuses
+        a tree's stored binding only when every file has the same size, inode,
+        mtime and ctime (``_stored_tree``); an edited file always has a new ctime,
+        including one whose mtime was reset, so it is reparsed and rehashed.
         """
         roots = []
         source_macros, source_includes = _include_metadata(source)
@@ -247,10 +259,16 @@ class Store:
                                     computed.append((str(file.parent), operand))
                         return ((str(file.relative_to(path)), hashlib.sha256(content).hexdigest()),
                                 definitions, computed)
-                    rows = list(self.pool.map(hashed, files))
-                    future.set_result((_digest([row[0] for row in rows]),
-                                       [row[1] for row in rows],
-                                       [entry for row in rows for entry in row[2]]))
+                    began_ns = time.time_ns()
+                    listing = _tree_listing(path, files)
+                    bound = self._stored_tree(token, listing)
+                    if bound is None:
+                        rows = list(self.pool.map(hashed, files))
+                        bound = (_digest([row[0] for row in rows]),
+                                 [row[1] for row in rows],
+                                 [entry for row in rows for entry in row[2]])
+                        self._store_tree(token, listing, bound, began_ns)
+                    future.set_result(bound)
                 except BaseException as error:
                     future.set_exception(error)
                     raise
@@ -277,6 +295,49 @@ class Store:
                                                    for base in bounded_paths):
                         raise ValueError("computed local include is outside bound header trees")
         return result
+
+    def _tree_path(self, token):
+        return self.root / "header-trees" / (hashlib.sha256(token.encode()).hexdigest() + ".json")
+
+    def _stored_tree(self, token, listing):
+        """A header tree's binding from an earlier process, when every file in it is the same file.
+
+        THE COST THIS REMOVES (V5090 box, 2026-10-27): every forecast process read and regex-parsed
+        each file of every bound include tree (the CUDA/CCCL headers: thousands of files) on the
+        hex-warm-io pool.  The parse is Python and holds the GIL, so for 4-18 s of each start the
+        pool starved the main thread's host preparation (a 3 km region's dycore inputs took 7.7 s
+        with 1.3 s of main-thread CPU).  A stored binding is used only when the tree lists the same
+        files with the same size, inode, mtime and ctime.  Any write to a file changes its ctime,
+        which no edit can preserve, so an edited header is reparsed and rehashed exactly as before.
+        File times are coarse (one clock tick), so an edit in the same tick as the file's last
+        change could keep every stamp: a binding is stored as usable only when every file's ctime
+        was more than a second older than the parse that made it (git's racy-clean rule).  A file
+        changed after that parse then has a later ctime, and one changed before it was parsed.
+        """
+        try:
+            stored = json.loads(self._tree_path(token).read_text())
+            if (stored.get("schema") != SCHEMA or stored.get("token") != token
+                    or stored.get("listing") != listing):
+                return None
+            definitions = [{name: {value for value in values} for name, values in row.items()}
+                           for row in stored["definitions"]]
+            computed = [(parent, operand) for parent, operand in stored["computed"]]
+            return stored["digest"], definitions, computed
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    def _store_tree(self, token, listing, bound, began_ns):
+        digest, definitions, computed = bound
+        if any(row[5] >= began_ns - 1_000_000_000 for row in listing):
+            return  # racily clean: a file changed within a second of the parse; parse again next time
+        try:
+            _atomic(self._tree_path(token), json.dumps({
+                "schema": SCHEMA, "token": token, "listing": listing, "digest": digest,
+                "definitions": [{name: sorted(values, key=lambda v: (v is not None, v or ""))
+                                 for name, values in row.items()} for row in definitions],
+                "computed": [list(entry) for entry in computed]}).encode())
+        except OSError:
+            pass  # the next process parses the tree again, as before
 
     def request(self, route, arguments):
         # All words remain in order: duplicate compiler flags can affect the

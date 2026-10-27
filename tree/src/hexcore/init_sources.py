@@ -30,10 +30,12 @@ import bz2
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -571,33 +573,239 @@ def plan_products(row: dict[str, Any], cycle: Cycle, member: int | None, lead_ho
 # acquisition
 # ---------------------------------------------------------------------------
 _RETRY_STATUS = {429, 500, 502, 503, 504}
+_USER_AGENT = "gpuwm-hex-init-source/1"
+
+#: Every https read of every row (index, record ranges, whole objects, the HEAD that sizes them) goes through
+#: :func:`_hedged`.  A request whose connections have delivered no byte for this long is stalled: the same request
+#: starts again on a NEW connection beside it, and the first copy that finishes is kept.  THE BREAKAGE THIS
+#: PREVENTS (hex LAM vs zoom-globe measurement, V5090, 2026-10-27): one GFS f006 byte-range request stalled on its
+#: S3 connection and the region's boundaries waited the full 300 s socket timeout before retrying it, 300 s of a
+#: 557 s prep.  A 4 MiB piece from the NOAA, ECMWF or DWD buckets normally finishes well inside a second.
+FETCH_STALL_SECONDS = 10.0
+#: A connection with no byte for this long is closed by its socket timeout and counts as one failed attempt.
+#: A hedge started at FETCH_STALL_SECONDS has normally finished long before.
+FETCH_DEAD_SECONDS = 60.0
+#: Copies of one request in flight at once: the first and up to two hedges.
+FETCH_MAX_COPIES = 3
+#: Bytes asked of the socket per read; progress (the stall clock) is measured at this grain.
+_READ_BYTES = 1 << 18
+#: Every hedge this process started, for the acquisition receipt (``stalls_hedged``).
+_HEDGES: list[dict[str, Any]] = []
+_HEDGES_LOCK = threading.Lock()
+
+
+class _MemorySink:
+    """A copy's body in memory: an index or one range piece.  A body shorter than the range asked for, or than the
+    Content-Length the host declared, is a cut connection (http.client returns a short body without raising)."""
+
+    def __init__(self, expect: int | None = None, check_length: bool = True):
+        self.expect, self.check_length, self.blocks = expect, check_length, []
+
+    def write(self, block: bytes) -> None:
+        self.blocks.append(block)
+
+    def finish(self, headers) -> tuple[Any, bytes]:
+        body = b"".join(self.blocks)
+        declared = headers.get("Content-Length") if self.check_length else None
+        if self.expect is not None and len(body) != self.expect:
+            raise OSError(f"returned {len(body)} bytes of the {self.expect} asked for")
+        if declared is not None and declared.isdigit() and len(body) != int(declared):
+            raise OSError(f"returned {len(body)} of the {declared} bytes it declared")
+        return headers, body
+
+    def discard(self) -> None:
+        self.blocks = []
+
+
+class _FileSink:
+    """A copy's whole object streamed to its own ``.part<n>`` file, decoded on the way when the row declares a codec
+    (a bz2 object may hold several concatenated streams, as ``bz2.BZ2File`` reads them)."""
+
+    def __init__(self, path: Path, codec: str | None):
+        self.path, self.codec, self.raw = path, codec, 0
+        self.handle = path.open("wb")
+        self.decoder = bz2.BZ2Decompressor() if codec == "bz2" else None
+        self.streams, self.open_stream, self.trailing = 0, False, False
+
+    def write(self, block: bytes) -> None:
+        self.raw += len(block)
+        if self.decoder is None:
+            self.handle.write(block)
+            return
+        while block and not self.trailing:
+            try:
+                self.handle.write(self.decoder.decompress(block))
+            except OSError:
+                if self.streams == 0 or self.open_stream:
+                    raise
+                self.trailing = True  # bytes after the last whole stream: ignored, as bz2.BZ2File ignores them
+                return
+            self.open_stream = not self.decoder.eof
+            if self.decoder.eof:
+                self.streams += 1
+                block = self.decoder.unused_data
+                self.decoder = bz2.BZ2Decompressor()
+            else:
+                block = b""
+
+    def finish(self, headers) -> Path:
+        self.handle.close()
+        declared = headers.get("Content-Length")
+        if declared is not None and declared.isdigit() and self.raw != int(declared):
+            raise OSError(f"returned {self.raw} of the {declared} bytes it declared")
+        if self.decoder is not None and (self.open_stream or self.streams == 0):
+            raise OSError(f"the {self.codec} stream ended part way ({self.raw} bytes read)")
+        return self.path
+
+    def discard(self) -> None:
+        try:
+            self.handle.close()
+        finally:
+            self.path.unlink(missing_ok=True)
+
+
+class _Copy:
+    """One connection's attempt at a request: when it started, when its last byte arrived."""
+
+    def __init__(self, number: int):
+        self.number = number
+        self.started = self.last = time.monotonic()
+        self.received = 0
+        self.cancelled = False
+
+
+class _Race:
+    """The copies of one request.  ``decided`` is set under the lock once a copy has won (or the request is
+    refused); a copy that reports after that drops its own bytes, so a late loser leaves no file behind."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.decided = False
+        self.results: queue.SimpleQueue = queue.SimpleQueue()
+
+
+def _run_copy(url: str, method: str, headers: dict[str, str], copy: _Copy, sink, race: _Race) -> None:
+    outcome, error = None, None
+    try:
+        request = urllib.request.Request(url, method=method, headers=headers)
+        with urllib.request.urlopen(request, timeout=FETCH_DEAD_SECONDS) as response:
+            copy.last = time.monotonic()
+            read = getattr(response, "read1", response.read)
+            while not copy.cancelled:
+                block = read(_READ_BYTES)
+                if not block:
+                    break
+                sink.write(block)
+                copy.received += len(block)
+                copy.last = time.monotonic()
+            if not copy.cancelled:
+                outcome = sink.finish(response.headers)
+    except BaseException as caught:  # HTTPError, URLError, timeouts and resets (OSError), IncompleteRead, codec errors
+        error = caught
+    with race.lock:
+        report = not race.decided and not copy.cancelled
+        if report:
+            race.results.put((copy, outcome, error, sink))
+    if not report:
+        sink.discard()
+
+
+def _end_race(race: _Race, live: list[_Copy]) -> None:
+    with race.lock:
+        race.decided = True
+    for copy in live:
+        copy.cancelled = True
+    while True:
+        try:
+            _copy, _outcome, _error, sink = race.results.get_nowait()
+        except queue.Empty:
+            return
+        sink.discard()
+
+
+def _hedged(url: str, *, sink_factory, method: str = "GET", headers: dict[str, str] | None = None,
+            attempts: int = 10, label: str = "") -> tuple[Any, dict[str, Any]]:
+    """One HTTP request that a stalled connection cannot hold up.
+
+    The request runs on its own connection.  When no live copy has delivered a byte for ``FETCH_STALL_SECONDS``
+    a new copy starts on a new connection (up to ``FETCH_MAX_COPIES`` at once) and the first copy to finish is
+    kept; the others are dropped.  A copy that fails (5xx, reset, socket timeout after ``FETCH_DEAD_SECONDS``
+    without a byte, a short body) counts one attempt; when no copy is left the request starts again after the
+    usual backoff.  A non-retryable HTTP answer refuses at once, naming the address.  Returns the winning sink's
+    result and how it was won (copies started, hedges, the winning copy)."""
+
+    headers = {"User-Agent": _USER_AGENT, **(headers or {})}
+    race = _Race()
+    live: list[_Copy] = []
+    started = 0
+    hedges = 0
+    failures = 0
+    last_error: BaseException | None = None
+    delay = 2.0
+    poll = max(0.05, min(1.0, FETCH_STALL_SECONDS / 4.0))
+
+    def launch() -> None:
+        nonlocal started
+        started += 1
+        copy = _Copy(started)
+        sink = sink_factory(started)
+        live.append(copy)
+        threading.Thread(target=_run_copy, args=(url, method, headers, copy, sink, race), daemon=True,
+                         name=f"hex-fetch-{started}").start()
+
+    launch()
+    while True:
+        try:
+            copy, outcome, error, sink = race.results.get(timeout=poll)
+        except queue.Empty:
+            now = time.monotonic()
+            quiet = now - max(item.last for item in live)
+            if len(live) < FETCH_MAX_COPIES and quiet >= FETCH_STALL_SECONDS:
+                hedges += 1
+                event = {"url": url, "range": headers.get("Range"), "label": label,
+                         "no_byte_for_s": round(quiet, 1), "copy": started + 1}
+                with _HEDGES_LOCK:
+                    _HEDGES.append(event)
+                print(f"init-source: no byte for {quiet:.0f} s from {_host(url)} ({headers.get('Range') or 'whole'}"
+                      f" of {url.rsplit('/', 1)[-1]}); copy {started + 1} started on a new connection",
+                      file=sys.stderr, flush=True)
+                launch()
+            continue
+        live.remove(copy)
+        if error is None:
+            _end_race(race, live)
+            return outcome, {"copies": started, "hedges": hedges, "winner": copy.number,
+                             "seconds": round(time.monotonic() - copy.started, 3)}
+        sink.discard()
+        if isinstance(error, urllib.error.HTTPError) and error.code not in _RETRY_STATUS:
+            _end_race(race, live)
+            _refuse(f"{url} answered HTTP {error.code}; the product is not published at that address")
+        failures += 1
+        last_error = error
+        if failures >= attempts:
+            _end_race(race, live)
+            _refuse(f"{url} could not be read after {attempts} attempts ({last_error}); no partial product is kept")
+        if not live:
+            time.sleep(delay)
+            delay = min(delay * 1.6, 30.0)
+            launch()
+
+
+def _hedges_for(urls: set[str], since: int) -> list[dict[str, Any]]:
+    with _HEDGES_LOCK:
+        return [event for event in _HEDGES[since:] if event["url"] in urls]
 
 
 def _http_get(url: str, *, byte_range: tuple[int, int | None] | None = None, attempts: int = 10) -> bytes:
-    delay = 2.0
-    last: Exception | None = None
-    for _ in range(attempts):
-        request = urllib.request.Request(url, headers={"User-Agent": "gpuwm-hex-init-source/1"})
-        if byte_range is not None:
-            last_byte = "" if byte_range[1] is None else str(byte_range[1])
-            request.add_header("Range", f"bytes={byte_range[0]}-{last_byte}")
-        try:
-            with urllib.request.urlopen(request, timeout=300) as response:
-                body = response.read()
-            if (byte_range is not None and byte_range[1] is not None
-                    and len(body) != byte_range[1] - byte_range[0] + 1):
-                raise OSError(f"range {byte_range} of {url} returned {len(body)} bytes")
-            return body
-        except urllib.error.HTTPError as error:
-            if error.code not in _RETRY_STATUS:
-                _refuse(f"{url} answered HTTP {error.code}; the product is not published at that address")
-            last = error
-        except OSError as error:
-            last = error
-        time.sleep(delay)
-        delay = min(delay * 1.6, 30.0)
-    _refuse(f"{url} could not be read after {attempts} attempts ({last}); no partial product is kept")
-    raise AssertionError("unreachable")
+    headers: dict[str, str] = {}
+    expect = None
+    if byte_range is not None:
+        last_byte = "" if byte_range[1] is None else str(byte_range[1])
+        headers["Range"] = f"bytes={byte_range[0]}-{last_byte}"
+        expect = None if byte_range[1] is None else byte_range[1] - byte_range[0] + 1
+    (_headers, body), _how = _hedged(url, headers=headers, attempts=attempts,
+                                     sink_factory=lambda _n: _MemorySink(expect))
+    return body
 
 
 def select_index_records(index_text: str, select: dict[str, str]) -> list[dict[str, Any]]:
@@ -770,13 +978,13 @@ def _fetch_whole(plan: ProductPlan, target: Path, jobs: int = 1) -> dict[str, An
 def _object_size(url: str) -> int | None:
     """The object's byte count when the host serves byte ranges, else None (one stream then)."""
 
-    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "gpuwm-hex-init-source/1"})
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            size = response.headers.get("Content-Length")
-            ranges = (response.headers.get("Accept-Ranges") or "").lower()
-    except (urllib.error.HTTPError, OSError):
+        (headers, _body), _how = _hedged(url, method="HEAD", attempts=3,
+                                         sink_factory=lambda _n: _MemorySink(check_length=False))
+    except InitSourceRefusal:
         return None
+    size = headers.get("Content-Length")
+    ranges = (headers.get("Accept-Ranges") or "").lower()
     return int(size) if size and size.isdigit() and int(size) > 0 and ranges == "bytes" else None
 
 
@@ -812,26 +1020,13 @@ def _fetch_whole_parallel(target: Path, url: str, jobs: int) -> dict[str, Any] |
 
 
 def _fetch_whole_from(plan: ProductPlan, target: Path, url: str) -> dict[str, Any]:
-    partial = target.with_name(target.name + ".part")
-    delay = 2.0
-    for attempt in range(10):
-        request = urllib.request.Request(url, headers={"User-Agent": "gpuwm-hex-init-source/1"})
-        try:
-            with urllib.request.urlopen(request, timeout=600) as response, partial.open("wb") as handle:
-                stream = bz2.BZ2File(response) if plan.codec == "bz2" else response
-                shutil.copyfileobj(stream, handle, length=1 << 22)
-            partial.replace(target)
-            return {"attempts": attempt + 1}
-        except urllib.error.HTTPError as error:
-            if error.code not in _RETRY_STATUS:
-                _refuse(f"{url} answered HTTP {error.code}; the product is not published at that address")
-        except OSError:
-            pass
-        time.sleep(delay)
-        delay = min(delay * 1.6, 30.0)
-    partial.unlink(missing_ok=True)
-    _refuse(f"{url} could not be read after 10 attempts; no partial product is kept")
-    raise AssertionError("unreachable")
+    """One object on one stream (a host without ranges, or a row codec such as bz2), hedged like every request:
+    each copy streams to its own ``.part<n>`` file and the first complete one becomes the product."""
+
+    path, how = _hedged(url, attempts=10, label=plan.filename,
+                        sink_factory=lambda n: _FileSink(target.with_name(f"{target.name}.part{n}"), plan.codec))
+    path.replace(target)
+    return {"attempts": how["copies"], "hedges": how["hedges"]}
 
 
 def _fetch_cds(plan: ProductPlan, target: Path, cycle: Cycle) -> dict[str, Any]:
@@ -905,10 +1100,17 @@ def acquire(plans: list[ProductPlan], dest: Path, cycle: Cycle, *, staged: list[
             how = {"argv": argv, "workers": workers, "log": str(log)}
         elif plan.transport == "cds":
             how = _fetch_cds(plan, target, cycle)
-        elif plan.index_url is not None:
-            how = _fetch_selected(plan, target, _streams(plan, jobs))
         else:
-            how = _fetch_whole(plan, target, _streams(plan, jobs))
+            with _HEDGES_LOCK:
+                since = len(_HEDGES)
+            if plan.index_url is not None:
+                how = _fetch_selected(plan, target, _streams(plan, jobs))
+            else:
+                how = _fetch_whole(plan, target, _streams(plan, jobs))
+            hedged = _hedges_for({plan.url, *plan.url_mirrors, *([plan.index_url] if plan.index_url else []),
+                                  *plan.index_mirrors}, since)
+            if hedged:
+                how = {**how, "stalls_hedged": hedged}
         if target.stat().st_size == 0:
             _refuse(f"{target} is empty; an empty product decodes to missing fields")
         out.append({"role": plan.role, "file": str(target), "bytes": target.stat().st_size,

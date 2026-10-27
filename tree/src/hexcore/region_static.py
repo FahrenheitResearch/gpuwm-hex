@@ -124,8 +124,13 @@ def assemble_parent_static(*, parent_grid: Path, halo_grid: Path, halo_static: P
     where: dict[str, Any] = {}
     nearest: dict[str, Any] = {}
     counts: dict[str, int] = {}
+    from .netcdf_define import deferred_definition
+
+    # Every variable and attribute is defined in one define session before any data is written: defined one at a
+    # time after the first variable's data, each definition moved the whole data section again (26 s of one core
+    # on a 3 km region's parent, 2026-10-27).  The file's bytes are the same (hexcore.netcdf_define).
     with Dataset(str(parent_grid)) as grid, Dataset(str(halo_static)) as halo, Dataset(str(terrain)) as overlay, \
-            Dataset(str(tmp), "w", format=halo.data_model) as dst:
+            deferred_definition(Dataset)(str(tmp), "w", format=halo.data_model, keepweakref=True) as dst:
         for source in (grid, halo, overlay):
             source.set_auto_maskandscale(False)
         dst.set_auto_maskandscale(False)
@@ -145,12 +150,22 @@ def assemble_parent_static(*, parent_grid: Path, halo_grid: Path, halo_static: P
         # overlay's binary64 (the full build's own), and so is the attribute that says which.
         attrs = {key: halo.getncattr(key) for key in halo.ncattrs()}
         attrs.update({key: overlay.getncattr(key) for key in overlay.ncattrs() if key.startswith("rw_coordinate_")})
-        dst.setncatts(attrs)
         sources: dict[str, str] = {}
+        defined = {}
+        with dst.definition_batch():
+            dst.setncatts(attrs)
+            for name, var in halo.variables.items():
+                dtype = overlay.variables[name].dtype if name in overlay.variables else var.dtype
+                out_var = dst.createVariable(name, dtype, var.dimensions)
+                out_var.setncatts({key: var.getncattr(key) for key in var.ncattrs()})
+                defined[name] = out_var
+            dst.setncattr("rw_hex_region_parent_static", json.dumps({
+                "schema": "gpuwm-hex.region-parent-static/v1",
+                "note": "terrain overlay and parent topology everywhere; halo static on the halo, nearest halo "
+                        "element beyond it (only columns the cull discards)",
+                "halo_static": str(halo_static), "terrain": str(terrain), "parent_grid": str(parent_grid)}))
         for name, var in halo.variables.items():
-            dtype = overlay.variables[name].dtype if name in overlay.variables else var.dtype
-            out_var = dst.createVariable(name, dtype, var.dimensions)
-            out_var.setncatts({key: var.getncattr(key) for key in var.ncattrs()})
+            out_var = defined[name]
             mesh_dim = var.dimensions[0] if var.dimensions and var.dimensions[0] in MESH_DIMS else None
             if name in overlay.variables:
                 values, sources[name] = np.asarray(overlay.variables[name][:]), "terrain"
@@ -169,11 +184,6 @@ def assemble_parent_static(*, parent_grid: Path, halo_grid: Path, halo_static: P
             else:
                 values, sources[name] = np.asarray(var[:]), "halo"
             out_var[...] = values
-        dst.setncattr("rw_hex_region_parent_static", json.dumps({
-            "schema": "gpuwm-hex.region-parent-static/v1",
-            "note": "terrain overlay and parent topology everywhere; halo static on the halo, nearest halo "
-                    "element beyond it (only columns the cull discards)",
-            "halo_static": str(halo_static), "terrain": str(terrain), "parent_grid": str(parent_grid)}))
     tmp.replace(out)
     return {"seconds": round(time.perf_counter() - started, 2), "sources": sources,
             "halo_elements": {dim: int(where[dim].size) for dim in MESH_DIMS}, "parent_elements": counts}

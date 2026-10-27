@@ -18,6 +18,19 @@ Fixed:
 - Thompson microphysics caps its column workspace at 1.5 GiB per call (`GPUWM_HEX_THOMPSON_WORKSPACE_MIB`), so large ranks no longer run a 32 GB card out of memory at the first microphysics step. Output is unchanged.
 - A bare local-time-stepping run on a refined mesh moves its default step onto the class clock, and two LTS blocks on one card no longer race on a spec upload.
 - The observation scorer runs with no card visible, so card leases can be released when the forecast ends.
+- MPAS-physics steps do their per-step host bookkeeping off the step thread: a storm-following local-time-stepping run goes from 43.1 to 29.5 s per model hour on one card. Output is unchanged.
+- One-card local time stepping shares one work arena across its classes and runs the limiter one species per pass, so a 48/3 km storm-following run fits a 32 GB card.
+- A global member that does not fit one card runs over several cards on the same host, and the next pipelined member's host memory is priced per rank.
+- The MPAS-physics route applies `--acoustic-substeps`, `--time-integration-order` and `--monotonic`.
+- A bare local-time-stepping run picks its step for the mesh's real coarsest class, so a 96 -> 3 km zoom globe steps 15 s instead of 12.5 s.
+- The zoom globe's products pass keeps the column stores the live loop already wrote instead of rewriting them on one core.
+- A stalled source download is retried on a new connection after 10 s instead of waiting 300 s.
+- Local time stepping picks the fastest class plan for the mesh and runs the plain fixed step where that is faster; on a 96 -> 3 km zoom globe a bare LTS request now runs about 1.2x faster than the fixed step on MPAS physics.
+- MPAS-physics local time stepping deposits and assembles its history frames off the class step threads, so the classes no longer wait 1-2 s at every frame.
+- MPAS-physics start-up and history output no longer wait on one core: the pool decode, init reads, region preparation and frame encoding run in parallel (a 30 km member over 4 cards starts in 85 s instead of 112 s; output unchanged).
+- Zoom-globe, global, regional and country runs give their card back to a card queue when the forecast ends and draw their products on the CPU.
+- Local time stepping runs its rate classes on the faster dycore kernels (about 1.2x faster on a 3 km zoom globe).
+- A storm-following move no longer stops the run when a member reused from disk is ready but unsafe for the storm, and a case with no safe radius is refused when it is loaded.
 - Packaging links the pinned netCDF for every helper, and two exit-drop tests no longer race.
 - Kernel packs (`kernel-packs-v0.4.9`) carry the corrected MYNN kernel, so a new box does not compile it on first use.
 

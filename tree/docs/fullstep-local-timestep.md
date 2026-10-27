@@ -666,6 +666,39 @@ and the maps show no seam at a class boundary. On a mesh this small LTS does not
 step costs a fixed host time. The MPAS route takes about 1.9 times the ArWen route's time with LTS on and with
 it off.
 
+The door chooses between the fixed step and LTS at each top class, on both physics routes
+(`hexcore.fullstep_lts_choice`). It counts the mesh's classes from geometry alone (the admission's ladder, the
+convective hold, the buffer and the grading) for every top class from the mesh's own down to 2, gives each the step
+its class clock allows (a default step moves down only as far as that class needs; an explicit step is priced only
+where it already fits), and predicts every plan and the fixed step from the per-step cost measured on the run's
+route, one row per route in `hexcore/data/fullstep-lts-step-cost.v1.json`. It runs the cheapest. A lower top class
+sets `--fullstep-lts-max-rate` and its step; where the fixed step wins, the run is the plain fixed run (the fixed
+step's own timestep, no LTS argument left). `fullstep-lts-choice.json` beside the frames records every prediction.
+One card, closed meshes and runs without a moving region only; `GPUWM_HEX_FULLSTEP_LTS_FORCE=1` runs LTS at the top
+class anyway.
+
+Measured on the 96 -> 3 km zoom globe (149,322 cells, GFS 2025-05-19 18Z, 3 h, one RTX 5090 per arm, hex 0.4.9 fold
+tree, seconds per forecast hour, warm hours 2-3; each LTS arm ran at the same time as its fixed arm on a second card):
+
+| Route | Fixed, 18 s | LTS top class 8, 15 s | LTS top class 4, 18 s | Row: per class step + per cell-step |
+|---|---:|---:|---:|---|
+| MPAS suite | 77.2 / 75.2 | 75.4 | 64.0 (1.18x) | 0.086 s + 2.0 us |
+| ArWen | 80.2 | 83.0 | 73.2 (1.10x) | 0.106 s + 2.0 us |
+
+Why the top class matters on that mesh: radiation every 1800 s, and 8 x 18 s = 144 s does not divide it, so top
+class 8 needs a 15 s step (20 % more base steps than the fixed step) and 15 class steps per 120 s; top class 4 keeps
+18 s (4 x 18 s = 72 s) and takes 7 class steps per 72 s. The zoom globe keeps 43 % of its cells at the finest rate
+(the 3 km core and every cell finer than 8 km), so its cell work per base step is at most 1.95 times less than the
+fixed step's, and every class step also pays a fixed part (the step loop's host work and its smallest kernels).
+Before hex 0.4.9 every LTS class on that mesh also ran the slower element stencil kernels (the hoisted kernels
+started at 400,000 edges; the fixed step's 447,960 edges were above it, no LTS class was), and the MPAS route paid
+about twice today's per-step host time: LTS then ran 0.81 times the fixed step's speed on both routes. A mesh whose
+cells are mostly coarse (the 48-3 km patch mesh, ceiling 5.0, 2.0x on one card in October) keeps a larger win.
+
+The class clock moves a default step so that the coarsest class's step lands on every event. That class is the
+mesh's own top class (`hexcore.fullstep_lts_census`), at most `--fullstep-lts-max-rate` (default 8, the executors' default), so the 96 -> 3 km
+zoom globe steps 15 s (8 x 15 s = 120 s), not 12.5 s.
+
 Refused by name on this route: `--local-timestep` (the acoustic ladder needs RK3 with six sub-steps and no FCT
 limiter), several cards, restart, DA cycling, IAU, stochastic forcing, chemistry, the balance series, nest
 triggers, timed surface updating, limited-area meshes and the forked RRFS dycore. A moving segment keeps the

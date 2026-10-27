@@ -328,3 +328,50 @@ def test_header_directives_preserve_lines_strings_and_comment_boundaries():
     assert definitions['UNUSED'] == {'"literal/*string*/.h"'}
     assert definitions['FUNCTION'] == {None}
     assert _include_metadata('#\ninclude "not-a-directive.h"\n')[1] == []
+
+
+def _settled_header_tree(tmp_path):
+    include = tmp_path / "include"
+    include.mkdir()
+    (include / "config.h").write_text("#define VALUE 1\n")
+    (include / "other.h").write_text('#include "config.h"\n#define OTHER VALUE\n')
+    return include, dict(source='#include "config.h"\n', options=["-I" + str(include)], arch="120",
+                         filename="k.cu")
+
+
+def test_settled_header_tree_is_not_reparsed_by_a_new_process(tmp_path, monkeypatch):
+    """THE COST THIS REMOVES: every forecast process read and regex-parsed every file of every bound include tree
+    (thousands of CUDA/CCCL headers) on the GIL, 4-18 s that starved the main thread's host preparation.  A tree
+    whose files all keep their size, inode, mtime and ctime binds from the stored result: the same request key."""
+    import time
+    include, args = _settled_header_tree(tmp_path)
+    real = time.time_ns
+    monkeypatch.setattr(time, "time_ns", lambda: real() + 5_000_000_000)   # the files are seconds old
+    identity = dict(nvrtc=[13, 4], library="compiler-a")
+    first = Store(tmp_path / "cache", identity, "shape", workers=2)
+    key = first.request("nvrtc", args)
+    first.pool.shutdown()
+    assert list((tmp_path / "cache" / "header-trees").glob("*.json"))
+    second = Store(tmp_path / "cache", identity, "shape", workers=2)
+    second.pool.map = lambda *a, **k: pytest.fail("an unchanged settled header tree was parsed again")
+    assert second.request("nvrtc", args) == key
+    second.pool.shutdown()
+    # A file added to the tree changes its listing: the tree is parsed again.
+    (include / "added.h").write_text("#define ADDED 1\n")
+    third = Store(tmp_path / "cache", identity, "shape", workers=2)
+    parsed = []
+    real_map = third.pool.map
+    third.pool.map = lambda *a, **k: parsed.append(1) or real_map(*a, **k)
+    assert third.request("nvrtc", args) != key
+    assert parsed
+    third.pool.shutdown()
+
+
+def test_a_tree_changed_within_a_second_of_its_parse_is_never_stored(tmp_path):
+    """File times are coarse: an edit in the same clock tick can keep every stamp, so a tree whose newest change
+    is under a second old is parsed again by the next process (git's racy-clean rule)."""
+    include, args = _settled_header_tree(tmp_path)
+    store = Store(tmp_path / "cache", dict(nvrtc=[13, 4]), "shape", workers=2)
+    store.request("nvrtc", args)
+    store.pool.shutdown()
+    assert not list((tmp_path / "cache" / "header-trees").glob("*.json"))

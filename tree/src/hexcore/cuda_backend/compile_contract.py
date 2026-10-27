@@ -336,6 +336,11 @@ class CompileManifest:
     def fingerprint_sha256(self) -> str:
         return str(self._binding["sha256"])
 
+    def platform(self) -> dict[str, Any]:
+        """The compile-platform binding alone: ``snapshot()["compile_platform"]`` without the module inventory."""
+
+        return {"fingerprint": dict(self._binding["fingerprint"]), "sha256": self._binding["sha256"]}
+
     def declare_module(
         self,
         module_key: str,
@@ -461,6 +466,19 @@ class CompileManifest:
         return document
 
 
+def kernel_cache_platform(cache: Any) -> dict[str, Any]:
+    """A ``KernelCache``'s compile-platform binding (``compile_manifest()["compile_platform"]``) without the JSON
+    round trip of every module the cache has compiled.
+
+    Read here, not as a ``KernelCache`` method: ``cuda_backend/runtime.py`` is one of the sources the regional kernel
+    set digests (``regional_admission.MINTED_KERNEL_SET_SHA256``), so a method added there lapses every minted
+    regional class and refuses every limited-area CUDA run.  THE BREAKAGE THIS PREVENTS: fix/hex-host-bound 6ce2da3e
+    added ``KernelCache.compile_platform`` and nine regional-mint / wheel-reach tests went red (2026-10-27).
+    """
+
+    return cache._compile_manifest.platform()
+
+
 __all__ = [
     "COMPILE_MANIFEST_SCHEMA",
     "CompileContractError",
@@ -469,6 +487,7 @@ __all__ = [
     "STATUS_RESOLVED",
     "STATUS_UNAVAILABLE",
     "canonical_sha256",
+    "kernel_cache_platform",
     "compile_platform_binding",
     "resolve_compile_platform_fingerprint",
     "source_sha256",

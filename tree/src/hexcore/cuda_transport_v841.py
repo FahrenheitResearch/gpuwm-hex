@@ -1486,8 +1486,14 @@ def advance_scalars_monotonic_cuda_v841(
     output = cp.empty_like(old)
     per_pass = limiter_species_per_pass(ntracers, halo_exchange)
     parts = -(-ntracers // per_pass)
+    # An exchanger whose interface tables act inside the limiter (the one-card
+    # active LTS class exchanger: packets, donor guard and reserves per tracer)
+    # is told which contiguous species each pass carries.
+    begin_species_pass = getattr(halo_exchange, "begin_species_pass", None)
     for part, first in enumerate(range(0, ntracers, per_pass)):
         last = min(first + per_pass, ntracers)
+        if begin_species_pass is not None:
+            begin_species_pass(first, last)
         _monotonic_species_pass(
             cp, old[first:last], stage[first:last],
             None if source is None else source[first:last],
@@ -1520,15 +1526,20 @@ def limiter_species_per_pass(ntracers: int, halo_exchange: Any | None = None) ->
     once per pass, so the passes are the round-E slots the rank's exchanger
     declares (``fct_scale_parts``, the run of E in its schedule;
     partition_executor_v841.expected_round_sequence).  An exchanger that
-    declares one, or none (the LTS block exchangers), keeps every species in
-    one pass.
+    declares one, or none (the multi-card LTS block exchangers, whose round E
+    is one peer message per stage), keeps every species in one pass.  An
+    exchanger whose round E receives nothing declares ``fct_scale_parts =
+    None`` (the one-card active LTS class exchanger): the route default below
+    applies, exactly as with no exchanger.
     """
 
     ntracers = int(ntracers)
     if ntracers <= 0:
         return 1
-    if halo_exchange is not None:
-        parts = int(getattr(halo_exchange, "fct_scale_parts", 1) or 1)
+    declared = (1 if halo_exchange is None
+                else getattr(halo_exchange, "fct_scale_parts", 1))
+    if halo_exchange is not None and declared is not None:
+        parts = int(declared or 1)
         if parts <= 1:
             return ntracers
         per_pass = -(-ntracers // parts)

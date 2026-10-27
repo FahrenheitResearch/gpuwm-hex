@@ -666,7 +666,10 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             host["regional"]["start_time"] = datetime.strptime(checkpoint["valid_time"], "%Y-%m-%d_%H:%M:%S")
 
     result: dict[str, Any] = {}
-    with scoped_physics_resources() as physics_scope:
+    # The classes step one after another on this card, so their large work buffers share one
+    # arena (hexcore.class_work_arena: the breakage it prevents is named there).
+    from hexcore.class_work_arena import shared_large_work_buffers
+    with scoped_physics_resources() as physics_scope, shared_large_work_buffers(cp) as work_arena:
         construct_started = time.perf_counter()
         stacks, areas, physics_remaps = [], [], []
         mapped_physics_cache = {"target_landmask": host["constructor_values"]["landmask"]}
@@ -1257,6 +1260,7 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             "restart": restart_receipt,
             "checkpoints": checkpoint_files,
             "construct_seconds": construct_seconds,
+            "work_buffer_arena": work_arena.receipt(),
             "macros": macro_rows,
             "warm_seconds_per_forecast_hour": (
                 sum(row["seconds"] for row in warm) / (sum(row["base_steps"] for row in warm) * base_dt) * 3600.0

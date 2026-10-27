@@ -450,3 +450,43 @@ def test_mpas_suite_roster_refuses_a_group_the_card_cannot_hold(tmp_path, monkey
         route="mpas")
     # Never below the measured single-member peak, plus the curve's 10 %; and one member still fits the card.
     assert 75_069 * 1024**2 * 1.10 < admitted < _PRO_6000["free"]
+
+
+_RTX_5090 = {"name": "NVIDIA GeForce RTX 5090", "free": 32_100 * 1024**2, "total": 32_607 * 1024**2,
+             "sms": 170, "threads": 1536}
+
+
+def test_a_30km_mpas_member_runs_over_several_32gb_cards(tmp_path, monkeypatch):
+    """8x RTX 5090 fit (2026-10-27): a 30 km MPAS-route member peaks 75,069 MiB on one card and the ensemble door put
+    every member on ONE card, so a 30 km global ensemble (the synthetic-radar DA cycle's members) could not run on a
+    32 GB card at all.  Auto now spreads one member over the fewest cards whose per-rank price fits, as the forecast
+    door's same-host ranks, with the member's own init, start, label and stochastic identity; a member that fits one
+    card keeps one card and its roster."""
+    value, args = _plan(tmp_path, source="gefs", members="1-3", devices="0,1,2,3,4,5,6,7")
+    value["mesh"]["cells"] = 655_362
+    monkeypatch.setattr(global_ensemble, "_probe_cards", lambda devices: [dict(_RTX_5090) for _ in range(8)])
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    ranks = global_ensemble.cards_per_member(value, args)
+    assert 2 <= ranks <= 4
+    calls = []
+
+    def fake(argv, log, env):
+        calls.append((argv, env["CUDA_VISIBLE_DEVICES"]))
+        log.write_text("ok")
+        return 0
+
+    monkeypatch.setattr(global_ensemble, "_cli", fake)
+    result = global_ensemble.run_forecasts(value, value["members"], args, _Status(), {})
+    assert result["failed"] == [] and result["cards_per_member"] == ranks and result["members_per_group"] == 1
+    assert len(calls) == 3 and all("--members" not in argv for argv, _ in calls)
+    for argv, cards in calls:
+        assert len(cards.split(",")) == ranks
+        assert argv[argv.index("--samehost-devices") + 1] == ",".join(str(i) for i in range(ranks))
+        member = next(m for m in value["members"] if argv[argv.index("--init") + 1] == m["init"])
+        assert argv[argv.index("--out") + 1] == member["forecast"]
+        assert json.loads(argv[argv.index("--stochastic") + 1]) == json.loads(json.dumps(member["stochastic"]))
+        assert json.loads(argv[argv.index("--init-source") + 1]) == member["provenance"]
+    # 120 km members still fit one card each: one card, the roster.
+    small, small_args = _plan(tmp_path / "small", source="gefs", members="1-2", devices="0,1")
+    monkeypatch.setattr(global_ensemble, "_probe_cards", lambda devices: [dict(_RTX_5090) for _ in range(2)])
+    assert global_ensemble.cards_per_member(small, small_args) == 1

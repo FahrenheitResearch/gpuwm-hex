@@ -305,8 +305,12 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # validation threshold moves; no field is written differently.
     # Re-frozen for the Morrison row: per-bucket signed-fallout validation
     # preserves native words; the default positive-sum policy is unchanged.
+    # Re-derived 2026-10-27 (fix/hex-host-bound): the kernel-cache contract check reads the
+    # compile-platform binding alone (compile_contract.kernel_cache_platform) instead of a full
+    # manifest JSON round trip at every coupling launch.  No kernel, launch or operand changed;
+    # 2 h Milton LTS forecast 0 of 1,167,818,735 words differ (HEX-HOST-BOUND-2026-10-27).
     "src/hexcore/cuda_physics_v841.py": (
-        "43aa675137139bde8e71d52d76e2acac7363623c711eda17ebfe18b449e29761"
+        "fefc206be44b94cecfcdf91f1ef792f4597db669d9bcfdda6557bf494d1b18e1"
     ),
     # Re-frozen during the 12 GiB capacity work: the dynamics subcycle stopped
     # copying a scalar block nothing writes, stopped taking a private image of
@@ -874,7 +878,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # This is the current execution identity, not a re-mint of archived x4
     # or regional forecast evidence. Device requalification remains pending.
     "src/hexcore/cuda_transport_v841.py": (
-        "222fbfa4cb6266435070f15057607cc7b6bf4241998cfa51c02545024a9a0ef1"
+        "8342d4fc5fd4bb03aaaed11a2f3c7ba96ed85d70f766efa11d4aa4bf4a3ff7f3"
     ),
     # THE BREAKAGE THESE TWO PREVENT, found by the NVRTC reciprocal-rewrite
     # lane (the NVRTC reciprocal-rewrite defect): a pinned translation unit does not compile its own file.

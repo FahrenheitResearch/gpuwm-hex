@@ -700,8 +700,16 @@ class RegionalContract:
 #: since (20); no CUDA source string or arithmetic changed. Re-derived by
 #: tools/repin_source_tables.py; not a new regional forecast mint, archived
 #: scope unchanged.
+#: (22) 2026-10-27 (hex 0.4.9 fold-everything batch): cuda_transport_v841.py
+#: tells an exchanger that declares begin_species_pass which species each
+#: limiter pass carries, and an exchanger declaring fct_scale_parts None takes
+#: the route default (fix/lts-share-0.4.9 7b2ac42a, the one-card active LTS
+#: class exchanger). Regional exchangers declare neither, so their passes are
+#: unchanged. The only changed member of this set since (21); no CUDA source
+#: string or arithmetic changed. Re-derived by tools/repin_source_tables.py;
+#: not a new regional forecast mint, archived scope unchanged.
 MINTED_KERNEL_SET_SHA256 = (
-    "f0c98a939d59c22ad122a941fc491a0c9e35e0537f3ce028b3cd71f76ce08dec"
+    "6a7c565e3981af1b33bb07e934bbdb5012ab78133169d72de480be44d8101473"
 )
 
 _DRY_MINT_CAVEAT = (

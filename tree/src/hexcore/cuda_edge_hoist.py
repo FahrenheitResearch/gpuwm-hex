@@ -12,9 +12,24 @@ unchanged -- the same operands, the same slot order, the same helper calls --
 so the result carries the same bits; only the launch mapping moved.
 
 ``GPUWM_HEX_EDGE_HOIST``: ``auto`` (default) selects the hoisted kernels when
-the rank has at least ``HOIST_MIN_EDGES`` edges (below that, one thread per
-edge under-fills the card and the element mapping is faster); ``1`` forces
-them, ``0`` restores the element kernels.
+the rank has at least ``HOIST_MIN_EDGES`` edges; ``1`` forces them, ``0``
+restores the element kernels.  ``GPUWM_HEX_EDGE_HOIST_MIN_EDGES`` overrides
+the size.
+
+THE BREAKAGE THE OLD SIZE OF 400,000 EDGES CAUSED, MEASURED (2026-10-12, G3, RTX
+PRO 6000, dynamics plus transport of six species): that size dates from the
+first hoisted kernels, which ran one thread per owner over every level and
+under-filled the card on a small rank.  ``levels_per_thread`` has since cut each
+owner into level chunks tuned per kernel, size and card, and with it the
+hoisted kernels win at every size measured: a full-step LTS rate class of
+76,456 columns (232,042 edges) stepped in 203.2 ms on the element kernels and
+122.2 ms hoisted; classes of 22,578, 15,147 and 12,055 columns (68,074, 46,791
+and 36,870 edges) in 94.3, 69.1 and 63.9 ms against 57.8, 40.9 and 37.5 ms.
+Every block of a multi-card LTS run on the 60-3 km mesh (61 to 108 thousand
+columns) sat under the old size, on kernels that cost 2.7 microseconds per
+column-step where the fixed ranks beside them (over 400,000 edges) paid 1.6.
+Final-state hashes are identical either way.  Below 36,870 edges nothing was
+measured, so the element kernels stay below ``HOIST_MIN_EDGES`` = 30,000.
 
 ``GPUWM_HEX_EDGE_HOIST_CHECK=N`` also runs the element kernel on the first N
 calls of each hoisted kernel on each device and compares the two outputs word
@@ -27,7 +42,7 @@ import json
 import os
 import threading
 
-HOIST_MIN_EDGES = 400_000
+HOIST_MIN_EDGES = 30_000
 _LOCK = threading.Lock()
 _CALLS: dict[tuple[str, int], int] = {}
 
@@ -36,7 +51,9 @@ def enabled(nedges: int) -> bool:
     mode = os.environ.get("GPUWM_HEX_EDGE_HOIST", "auto")
     if mode not in ("auto", "0", "1"):
         raise ValueError("GPUWM_HEX_EDGE_HOIST must be auto, 0 or 1")
-    return mode == "1" or (mode == "auto" and int(nedges) >= HOIST_MIN_EDGES)
+    floor = os.environ.get("GPUWM_HEX_EDGE_HOIST_MIN_EDGES")
+    return mode == "1" or (mode == "auto" and int(nedges) >= (
+        HOIST_MIN_EDGES if floor is None else int(floor)))
 
 
 _LPT: dict[tuple[str, int, int, int], int] = {}

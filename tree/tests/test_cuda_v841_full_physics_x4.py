@@ -134,7 +134,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
             "af22e7a450d1bbdf1a1dc9dcdf2a7a9d0da13f7d230751941cdf0a3418f0f00b"
         ),
         "src/hexcore/cuda_physics_v841.py": (
-            "43aa675137139bde8e71d52d76e2acac7363623c711eda17ebfe18b449e29761"
+            "fefc206be44b94cecfcdf91f1ef792f4597db669d9bcfdda6557bf494d1b18e1"
         ),
         # Re-frozen 2026-08-26 for the convection ruling: the physics cadence
         # table reports convection: None when no scheme is selected; and again
@@ -257,7 +257,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         ),
         # Current d15ea3482cc5 cache-key correction; archived proofs unchanged.
         "src/hexcore/cuda_transport_v841.py": (
-            "222fbfa4cb6266435070f15057607cc7b6bf4241998cfa51c02545024a9a0ef1"
+            "8342d4fc5fd4bb03aaaed11a2f3c7ba96ed85d70f766efa11d4aa4bf4a3ff7f3"
         ),
         "src/hexcore/cuda_transport.py": (
             "013ed46f8ef3bcc1a445b2e81135e262c23c49950e52e5b62b22e4274644b15e"

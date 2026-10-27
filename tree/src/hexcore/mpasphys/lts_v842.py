@@ -82,6 +82,7 @@ class _Board:
         self.parked = [False] * classes  # waiting in before_step, or finished
         self.macro_seconds = -1.0        # model seconds since the start of the last completed macro boundary
         self.deposits: dict[tuple, dict[int, dict]] = {}
+        self.assembled: set[tuple] = set()  # frames class 0 has assembled (every class's deposit read)
         self.stop_requested: float | None = None   # model seconds a moving controller stopped this segment at
 
     def fail(self, reason: str) -> None:
@@ -118,6 +119,26 @@ def session_partition(layout):
 def _device_synchronize():
     import cupy as cp
     cp.cuda.Device().synchronize()
+
+
+class _FrameReady:
+    """A class frame's download wait (``PhysicsStreams._capture``), with the frame's deposit key and its card.
+
+    The writer worker runs it on the card the class captured on, so the staging block goes back to that card's
+    pool when a block of a class cut across cards finishes its download.
+    """
+
+    __slots__ = ('wait', 'key', 'device')
+
+    def __init__(self, wait, key, device):
+        self.wait, self.key, self.device = wait, key, device
+
+    def __call__(self):
+        if self.device is None:
+            return self.wait()
+        import cupy as cp
+        with cp.cuda.Device(self.device):
+            return self.wait()
 
 
 class LtsClassExecution:
@@ -291,29 +312,71 @@ class LtsClassExecution:
                     convective.driver.vertex_order = cp.asarray(
                         np.argsort(np.asarray(execution.partition.vertex_l2g), kind='stable').astype(np.int64))
 
-            def _snapshot(self, selected):
-                local = super()._snapshot(selected)
-                board = execution.board
+            #: Every frame but the held f000 one takes ``PhysicsStreams.write``'s writer-thread path: the step thread
+            #: only queues the frame's download, and this class's assembly worker (``_assemble_captured``) waits for
+            #: it, deposits the words and, on class 0, assembles the global frame ahead of the encode.  THE BREAKAGE
+            #: THIS PREVENTS: every class waited for its download and copied its deposit on its step thread, and
+            #: class 0 assembled the global frame there, so at every frame each class parked late and the
+            #: coordinator, which starts a macro only when every class is parked, held the whole card about 2 s
+            #: (about 4 s per model hour on the 96/3 km storm mesh, HEX-HOST-BOUND-2026-10-27 'What remains').
+            WRITER_THREAD_CAPTURE = True
+
+            def _capture(self, selected):
+                local, ready = super()._capture(selected)
+                # The frame's key and card are read here, on the step thread, while the class clock stands on it.
                 key = (str(self.current_time(step=0, dt=0)), tuple(s.name for s in selected))
+                views = getattr(self.session, 'device_pools', None)
+                cp = getattr(views, 'cp', None) if views is not None else None
+                device = cp.cuda.Device().id if hasattr(cp, 'cuda') else None
+                return local, _FrameReady(ready, key, device)
+
+            def _snapshot(self, selected):
+                # The held f000 frame only (complete_first_frame reads it on the forecast thread).  Copies: a class
+                # other than 0 releases its pinned writer storage as soon as its (empty) encode returns.
+                local, ready = self._capture(selected)
+                ready()
+                return self._deposit(ready.key, local, copy_words=True)
+
+            def _assemble_captured(self, ready, snapshot):
+                # This class's assembly worker, in frame order: the download landed, then deposit (and assemble).
+                ready()
+                return self._deposit(ready.key, snapshot, copy_words=False)
+
+            def _deposit(self, key, local, *, copy_words):
+                board = execution.board
+                words = ({name: (copy(item) if not hasattr(item, 'values') else
+                                 type(item)(np.array(item.values, copy=True), item.dimensions, item.attrs))
+                          for name, item in local.items()} if copy_words else dict(local))
                 with board.lock:
-                    slot = board.deposits.setdefault(key, {})
-                    # Copies: this class's pinned writer storage is reused at its next frame.
-                    slot[execution.index] = {name: (copy(item) if not hasattr(item, 'values') else
-                                                    type(item)(np.array(item.values, copy=True), item.dimensions,
-                                                               item.attrs))
-                                             for name, item in local.items()}
+                    board.deposits.setdefault(key, {})[execution.index] = words
                     board.lock.notify_all()
                 if execution.index != 0:
+                    if not copy_words:
+                        # The words are this class's pinned writer storage: the frame (so its host slot) stays in
+                        # flight until class 0 has read them.
+                        board.wait(lambda: key in board.assembled, f'class 0 to assemble frame {key[0]}')
                     return {}
                 # Class 0 always writes, so per-file frame counts (append records) never move between classes.
-                board.wait(lambda: len(board.deposits.get(key, {})) == board.classes, f'every class at frame {key[0]}')
+                try:
+                    board.wait(lambda: len(board.deposits.get(key, {})) == board.classes,
+                               f'every class at frame {key[0]}')
+                    with board.lock:
+                        slot = board.deposits.pop(key)
+                    snapshots = [slot[i] for i in range(board.classes)]
+                    # On all cores (samehost_v842.assemble_snapshot).  The serial guard that stood here cited the
+                    # first-step validation refusals, whose cause was the physics edge projection reading past its
+                    # tendency arrays (resident_v842.ResidentPhysicsGlue, dummy-cell geometry), not the assembly.
+                    # Every decomposed field is a new global array; the rest are class 0's own words.
+                    frame = assemble_snapshot(snapshots, execution.partitions, self.rows, execution.global_layout)
+                except LtsAborted:
+                    raise
+                except BaseException as error:
+                    board.fail(f'class 0 frame {key[0]} assembly: {type(error).__name__}: {error}')
+                    raise
                 with board.lock:
-                    slot = board.deposits.pop(key)
-                snapshots = [slot[i] for i in range(board.classes)]
-                # On all cores (samehost_v842.assemble_snapshot).  The serial guard that stood here cited the
-                # first-step validation refusals, whose cause was the physics edge projection reading past its
-                # tendency arrays (resident_v842.ResidentPhysicsGlue, dummy-cell geometry), not the assembly.
-                return assemble_snapshot(snapshots, execution.partitions, self.rows, execution.global_layout)
+                    board.assembled.add(key)
+                    board.lock.notify_all()
+                return frame
 
             def _encode(self, jobs, snapshot, when, step, *extra, **options):
                 if execution.index != 0:

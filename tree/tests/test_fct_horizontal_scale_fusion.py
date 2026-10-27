@@ -16,9 +16,11 @@ def test_fused_low_order_keeps_the_lts_hook_before_the_accumulation(monkeypatch)
     arguments = tuple(np.int32(v) for v in (2, 55, 129, 389, 11)) + tuple(
         object() for _ in range(12))
     hook = object.__new__(lts._ClassScalars)
-    hook.owner = SimpleNamespace(ntr=2, nlev=55, cp=None)
+    hook.owner = SimpleNamespace(ntr=2, nlev=55, cp=None, reg_scalar=np.zeros(2), hold=np.zeros(2))
+    hook.amounts = np.zeros(6)  # the pass's rows are sliced up front since lts-share 7b2ac42a
     hook.klass = SimpleNamespace(cell_stride=129)
     hook.vertical = (None,) * 6
+    hook.species = None     # every tracer in one pass, as _ClassScalars.__init__ sets it (lts-share 7b2ac42a)
     hook.has_coarse_side = hook.has_fine_side = False
 
     def before(args):

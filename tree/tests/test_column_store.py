@@ -25,6 +25,40 @@ def test_surface_only_and_switched_off_write_nothing(monkeypatch):
                               say=lambda *a, **k: None)["skipped"] == "GPUWM_COLUMNS=off"
 
 
+def test_a_frame_the_live_loop_stored_is_kept_not_written_again(monkeypatch, tmp_path):
+    """The zoom globe's products pass converts every frame again for its whole-run maps; the frames whose store the live
+    loop wrote keep it (RESULT.md defect 3: 162 s after a 3 h 3 km zoom globe, 15-20 min after a 24 h one)."""
+    import gpuwm.soundings as soundings
+
+    calls = []
+
+    def fake(frame, out):
+        m = column_store._FRAME.match(Path(frame).name)
+        path = Path(out) / m[1] / f"{m[2]}{m[3]}{m[4]}T{m[5]}{m[6]}{m[7]}Z.wcol"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"RWSTORE2")
+        calls.append(Path(frame).name)
+        return [{"path": str(path), "bytes": 8}]
+    monkeypatch.setattr(soundings, "write_columns", fake)
+    frames = [tmp_path / f"wrfout_d01_2025-05-19_{h:02d}_00_00" for h in (18, 19, 20, 21)]
+    out = tmp_path / "columns"
+    # The live loop: one frame at a time as each lands.
+    for frame in frames[:3]:
+        assert column_store.write([frame], out, say=lambda *a, **k: None)["files"] == 1
+    # The products pass: every frame; only the one the live loop did not reach is written.
+    calls.clear()
+    receipt = column_store.write(frames, out, say=lambda *a, **k: None)
+    assert calls == ["wrfout_d01_2025-05-19_21_00_00"]
+    assert (receipt["files"], receipt["kept"]) == (1, 3)
+    # Everything stored already: nothing written, and the writer is not even loaded.
+    calls.clear()
+    assert column_store.write(frames, out, say=lambda *a, **k: None)["kept"] == 4 and calls == []
+    # An empty file (never left by rw-store, which renames whole files in) is written again.
+    (out / "d01" / "20250519T180000Z.wcol").write_bytes(b"")
+    column_store.write(frames, out, say=lambda *a, **k: None)
+    assert calls == ["wrfout_d01_2025-05-19_18_00_00"]
+
+
 def test_a_frame_that_fails_is_named_and_the_door_goes_on(monkeypatch):
     import gpuwm.soundings as soundings
 

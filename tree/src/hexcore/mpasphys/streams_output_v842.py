@@ -4,6 +4,7 @@ MPAS v8.4.2 mpas_atm_core.F:663-705,877-902 owns alarm/reset order;
 mpas_io_streams.F:1659-1857 owns constituent and owned-entity selection.
 """
 import json
+import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -141,7 +142,12 @@ class PhysicsStreams(NativePoolStreams):
                 self.alarms = StreamAlarms(self.streams, self.start, self.initial, self.final,
                     do_restart=self.control.config_do_restart,
                     active_packages=frozenset(self.layout.packages))
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mpas-output')
+        # Frames encode side by side, each in its own rw_mpas_stream process (see ENCODE_WORKERS).
+        self._executor = ThreadPoolExecutor(max_workers=self.ENCODE_WORKERS, thread_name_prefix='mpas-output')
+        # The previous frame's completion (its files written and published); see _submit_encode.
+        self._last_done = threading.Event()
+        self._last_done.set()
+        self._publish_after = {}
         # Download wait and owner assembly (several ranks) run on their own
         # worker, so frame N+1 is assembled while frame N encodes.
         self._assembler = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mpas-output-assemble')
@@ -293,11 +299,23 @@ class PhysicsStreams(NativePoolStreams):
             return result, _ready_now
         return result, self._queue_download(cp, queued)
 
+    #: A subclass that overrides ``_snapshot`` (its synchronous frames) but takes the writer-thread path for every
+    #: other frame (the MPAS LTS class executor, ``lts_v842``) sets this and overrides ``_assemble_captured``.
+    WRITER_THREAD_CAPTURE = False
+
     #: Frames written at once (each holds its own pinned host storage). THE BREAKAGE THIS PREVENTS: with one
     #: frame in flight, a 60 km frame on 2 cards (owner assembly ~0.7 s plus a 3.6-4.6 s encode) outlasted the
     #: 3.6 s between hourly frames, so the next frame's step waited 1.2 s for the writer
     #: (MPAS-ROUTE-SPEED-2026-10-24, frame-async 2-card arm).
     FRAMES_IN_FLIGHT = 2
+
+    #: Frames encoded at once.  THE COST THIS REMOVES (30 km globe over 4 cards, V5090 box, 2026-10-27): one
+    #: rw_mpas_stream process encodes a frame on one core (netCDF-C), 24-36 s for a 30 km history frame against
+    #: ~23 s of stepping per forecast hour, so frames queued behind one encoder and the run waited 40-63 s after
+    #: its last step.  Each frame is its own process now, up to FRAMES_IN_FLIGHT at once; a frame that appends to
+    #: a file (or writes a restart) waits for every earlier frame, each file's id is drawn in frame order on the
+    #: forecast thread, and frames are published (durable marker, history-ready.jsonl) in frame order.
+    ENCODE_WORKERS = FRAMES_IN_FLIGHT
 
     #: Device memory a staged frame leaves free (bytes, or a fraction of the card, whichever is larger):
     #: the staging block is transient, but it must not take the room a physics slot's peak needs.
@@ -401,7 +419,7 @@ class PhysicsStreams(NativePoolStreams):
             snapshot[name] = HistoryField(arrays[name], item.dimensions, item.attrs)
         self.first_frame_receipt = record
         receipt['f000_first_call_diagnostics'] = record
-        self._inflight.append((self._executor.submit(self._encode, jobs, snapshot, when, step, extras),
+        self._inflight.append((self._submit_encode(jobs, step, self._encode, jobs, snapshot, when, step, extras),
                                receipt, slot))
         return record
 
@@ -455,8 +473,10 @@ class PhysicsStreams(NativePoolStreams):
                 and all(s.name != 'restart' for s in selected))
         # A held f000 frame is completed on the forecast thread from the global
         # words (complete_first_frame), and a subclass that overrides _snapshot
-        # keeps its own forecast-thread capture: both capture synchronously.
-        asynchronous = not held and type(self)._snapshot is PhysicsStreams._snapshot
+        # keeps its own forecast-thread capture unless it sets
+        # WRITER_THREAD_CAPTURE (its _assemble_captured then does that work).
+        asynchronous = not held and (self.WRITER_THREAD_CAPTURE or
+                                     type(self)._snapshot is PhysicsStreams._snapshot)
         if asynchronous:
             snapshot, ready = self._capture(selected)
         else:
@@ -486,9 +506,9 @@ class PhysicsStreams(NativePoolStreams):
         else:
             if asynchronous:
                 assembled = self._assembler.submit(self._assemble_captured, ready, snapshot)
-                future = self._executor.submit(self._encode_assembled, assembled, jobs, when, step, extras)
+                future = self._submit_encode(jobs, step, self._encode_assembled, assembled, jobs, when, step, extras)
             else:
-                future = self._executor.submit(self._encode, jobs, snapshot, when, step, extras)
+                future = self._submit_encode(jobs, step, self._encode, jobs, snapshot, when, step, extras)
             self._inflight.append((future, receipt, slot))
         for stream, target, record in jobs:
             self.records[target] = record + 1
@@ -511,14 +531,37 @@ class PhysicsStreams(NativePoolStreams):
         """Encode worker, in frame order: the assembled frame, encoded."""
         return self._encode(jobs, assembled.result(), when, step, extras)
 
-    def _encode(self, jobs, snapshot, when, step, extras=None):
-        records = []
+    def _bind_file_attributes(self, jobs):
+        """Each new file's global attributes, its id drawn from the native sequence in frame order."""
         for stream, target, record in jobs:
-            started = perf_counter()
             if target not in self._file_attributes:
                 self._file_attributes[target] = dict(self.attrs, file_id=self.file_ids.next())
                 if stream.name in ('output', 'history') and getattr(self, 'extra_history_attrs', None):
                     self._file_attributes[target].update(self.extra_history_attrs)
+
+    def _submit_encode(self, jobs, step, function, *arguments):
+        """Queue one frame's encode (see ENCODE_WORKERS); called on the forecast thread, in frame order."""
+        self._bind_file_attributes(jobs)
+        previous, done = self._last_done, threading.Event()
+        self._last_done = done
+        self._publish_after[step] = previous
+        ordered = any(record or stream.name == 'restart' for stream, _, record in jobs)
+
+        def encode():
+            try:
+                if ordered:
+                    previous.wait()
+                return function(*arguments)
+            finally:
+                self._publish_after.pop(step, None)   # a rank that encodes nothing never publishes
+                done.set()
+        return self._executor.submit(encode)
+
+    def _encode(self, jobs, snapshot, when, step, extras=None):
+        records = []
+        self._bind_file_attributes(jobs)
+        for stream, target, record in jobs:
+            started = perf_counter()
             options = dict(initial_time=self.initial, active_packages=self.layout.packages,
                            streams=self.streams, global_attrs=self._file_attributes[target],
                            field_attrs=self.field_attrs, scratch=self.output/'stream-scratch',
@@ -549,6 +592,10 @@ class PhysicsStreams(NativePoolStreams):
         the post-run marking. Nothing on the forecast thread waits for this.
         """
         from ..history_writer import mark_closed_frame_durable
+        waiting = getattr(self, '_publish_after', None)
+        previous = None if waiting is None else waiting.pop(step, None)
+        if previous is not None:
+            previous.wait()   # frames are published in frame order (ENCODE_WORKERS)
         for stream, target, record in jobs:
             if stream.name != 'output' or record != 0 or not _one_frame_per_file(stream):
                 continue

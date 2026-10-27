@@ -634,6 +634,10 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                 *step, "--history-every-minutes", arguments.history_every_minutes,
                 "--out", run, "--scratch", root / "scratch", "--no-products", *extra])
             receipt["first_look"] = look.finish()
+            # The forecast was the run's last GPU work; the products are CPU work in Rust binaries, so a card
+            # queue gets its card back now instead of after the maps (hexcore.card_lease).
+            from .card_lease import gpu_work_done
+            receipt["card_given_back_before_products"] = gpu_work_done(env)
             receipt["predicted_vs_measured"] = card_fit.comparison(measured_fit, measured)
             products = [*prefix, "products", run, "--out", root / "products", "--case", case, "--jobs", arguments.jobs,
                         *label_argv(arguments)]

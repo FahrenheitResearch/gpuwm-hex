@@ -428,6 +428,20 @@ class _Holder:
 class _Exchanger:
     """The driver's halo hook for one class: accepted-state fills at rounds B and C."""
 
+    #: Round E receives nothing (``round_fct_scale``), so the scalar limiter runs its
+    #: species in the route's passes (cuda_transport_v841.limiter_species_per_pass, one
+    #: species per pass by default) instead of all at once.  THE BREAKAGE THIS PREVENTS
+    #: (hex 48/3 km Milton storm-following, 353,352 cells, four rate classes, one RTX 5090,
+    #: V8X/V5090 2026-10-27): with no declaration every class step ran all six species in
+    #: one pass, so the 264,024-column class held a six-species limiter block (three
+    #: 998 MiB edge arrays and ten 332 MiB cell arrays, about 5.7 GiB) on top of the four
+    #: classes' resident state, and the run stopped at base step 16, in that class's limiter,
+    #: with "Out of memory allocating 1,046,062,080 bytes (allocated so far: 31,434,163,200
+    #: bytes)".  The passes compute the same words (each FCT kernel indexes tracer-major and never
+    #: reads across tracers; the class's scalar interface works on the pass's tracer rows,
+    #: see begin_species_pass).
+    fct_scale_parts = None
+
     def __init__(self, owner: "FullStepLtsActive", klass: "_Class") -> None:
         self.owner = owner
         self.klass = klass
@@ -602,8 +616,18 @@ class _Exchanger:
             return      # a copy of the step-start block that round A has just filled
         scalars.fill(self.klass, scalar_stage, *self._scalar_spec("D", END if entry == 3 else MID))
 
-    def round_fct_scale(self, scale_in: Any, scale_out: Any) -> None:
-        """E: nothing to receive.
+    def begin_species_pass(self, first: int, last: int) -> None:
+        """The limiter's next pass carries species [first, last) (cuda_transport_v841).
+
+        The class's scalar interface applies its packets, donor guard and reserve cap
+        inside the limiter, per tracer; it reads and writes the rows of that slice.
+        """
+
+        if self.owner.scalars is not None:
+            self.owner.scalars.classes[self.klass.index].begin_species_pass(first, last)
+
+    def round_fct_scale(self, scale_in: Any, scale_out: Any, *, part: int = 0, parts: int = 1) -> None:
+        """E: nothing to receive, in one pass or in ``parts`` species passes (counted once).
 
         An owned edge reads the limiter factors of its two cells.  A carried
         scratch cell's factors are this class's own; an edge to a finer cell
@@ -611,7 +635,8 @@ class _Exchanger:
         multiply nothing.
         """
 
-        self.rounds["E"] += 1
+        if part == 0:
+            self.rounds["E"] += 1
 
     def round_physics_candidate(self, atmosphere: Any) -> None:
         """P: the unpublished endpoint's halo, before the microphysics reads every local column.

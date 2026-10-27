@@ -192,7 +192,8 @@ def test_decided_move_waits_for_current_centre_not_next_anticipated_move(tmp_pat
     controller.observe = lambda *args: (fix, 0.1)
     controller.anticipate_chain = lambda *args: [dict(centre=future, at_seconds=9000)]
     requested = []
-    def request(centre, why):
+    def request(centre, why, admit=None):
+        assert admit is not None and admit(chosen)     # the due move asks with pick_target's admission
         requested.append(centre)
         controller.state['members']['chosen'] = dict(status='prepared', center_deg=centre)
         return 'chosen'

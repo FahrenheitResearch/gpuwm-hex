@@ -492,12 +492,22 @@ def run_samehost_ranks(arguments, config, layout, payload, streams, start, stop,
     inputs, analysis_receipt = recouple_analysis(arguments, layout, inputs, work_dir=job/'da-cycling')
     tables = build_all(partitions)
     indices = build_field_indices(partitions, mesh.arrays['cellsOnEdge'], tables=tables)
-    from .partition_v842 import project_payload
+    from .partition_v842 import project_payloads
+
+    # Every rank's payload in one pass: each global field is read once and projected for all ranks, every field
+    # on its own worker.  THE COST THIS REMOVES (30 km globe over 4 cards, 2026-10-27): each rank thread ran its
+    # own project_payload, so the whole global payload (6 GB at 30 km) was read and decoded once per rank, four
+    # passes contending for the same cores and GIL before any card worked.  project_payloads writes the same
+    # bytes and manifests as project_payload (hexcore.mpasphys.partition_v842).
+    projection_began = time.perf_counter()
+    projected = project_payloads(layout, payload, partitions,
+                                 [job / f'pool.rank{rank}' for rank in range(len(partitions))])
+    projection_seconds = time.perf_counter() - projection_began
 
     def prepare(rank):
         rank_began = time.perf_counter()
         local_payload = job / f'pool.rank{rank}'
-        local_layout = project_payload(layout, payload, partitions[rank], local_payload)
+        local_layout = projected[rank]
         local_layout.samehost_partition = True
         local_layout.configs = dict(configs_before)
         if moving_state is not None:
@@ -514,6 +524,7 @@ def run_samehost_ranks(arguments, config, layout, payload, streams, start, stop,
                    preparation_seconds=time.perf_counter() - began, preparation_started_utc=started,
                    preparation_parallelism=f'{len(partitions)} host projection threads; before rank CUDA work',
                    rank_preparation_seconds=[item[3] for item in prepared],
+                   payload_projection_seconds=projection_seconds,
                    owned_cells=[int(part.n_owned_cells) for part in partitions],
                    local_cells=[int(part.n_local_cells) for part in partitions])
     write_rank_receipt(out / 'samehost-rank-launch.json', receipt)

@@ -39,6 +39,7 @@ from .cuda_backend.containers import TransferStats, require_resident_array
 from .cuda_backend.compile_contract import (
     CompileContractError,
     canonical_sha256,
+    kernel_cache_platform,
     validate_compile_platform_fingerprint,
 )
 from .cuda_backend.runtime import KernelCache
@@ -1709,10 +1710,9 @@ def _require_kernel_cache_contract(cache: KernelCache) -> None:
             "v8.4.1 physics KernelCache base_options must be exactly "
             f"{_REQUIRED_KERNEL_CACHE_OPTIONS}; got {options}"
         )
-    manifest = cache.compile_manifest()
-    platform = (
-        manifest.get("compile_platform") if isinstance(manifest, Mapping) else None
-    )
+    # The binding alone (THE BREAKAGE THIS PREVENTS, hex host-bound V5090 2026-10-27: this check runs at every
+    # physics coupling launch, and the full manifest snapshot JSON-round-tripped every compiled module each time).
+    platform = kernel_cache_platform(cache)
     fingerprint = platform.get("fingerprint") if isinstance(platform, Mapping) else None
     digest = platform.get("sha256") if isinstance(platform, Mapping) else None
     try:

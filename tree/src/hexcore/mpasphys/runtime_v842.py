@@ -898,7 +898,11 @@ def load_native_dynamics_inputs(arguments, layout, payload, *, keep_initialized_
     # Native allocates every selected carrier, including absent input species;
     # Registry.xml:1701-1754; mpas_atmphys_init_microphysics.F:98-226. Rust already
     # applied their Registry defaults while decoding the complete scalar buffer.
-    state.scalars=np.ascontiguousarray(hydration.field_buffer('state','scalars')[...,:-1])
+    # The same bytes as np.ascontiguousarray, copied in blocks on host threads (hexcore.host_parallel): the Fortran-
+    # ordered scalars of a 30 km init are ~1.4 GB, a strided copy of ~6 s on the main thread before (2026-10-27).
+    from ..host_parallel import contiguous_copy
+    scalars=hydration.field_buffer('state','scalars')[...,:-1]
+    state.scalars=contiguous_copy(scalars,dtype=scalars.dtype)
     for name in ('defc_a','defc_b'):
         if keep_initialized_deformation:
             # MPAS-Model-rrfs/src/core_atmosphere/mpas_atm_core.F:373-614:

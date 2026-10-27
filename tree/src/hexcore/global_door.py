@@ -1026,6 +1026,11 @@ def run_global(args: argparse.Namespace) -> int:
                     result["first_look"] = look.finish()
                     live_receipt = look.receipt()
                     status.note(f"first look: {result['first_look'].get('status')}")
+                if name == "forecast" and rc == 0:
+                    # The forecast is the last GPU stage (products, export and score are CPU work): a card queue
+                    # gets its card back now instead of after them (hexcore.card_lease).
+                    from .card_lease import gpu_work_done
+                    result["card_given_back"] = gpu_work_done(env)
                 if name == "score" and rc == 3:
                     completed = completed_scorecard(value["paths"]["forecast"], score_config)
                     if completed is not None:

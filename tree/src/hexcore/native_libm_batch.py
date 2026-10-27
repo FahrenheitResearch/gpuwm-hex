@@ -76,13 +76,30 @@ pub unsafe extern "C" fn batch_binary(
 _BUILD_LOCK = threading.Lock()
 
 
+def source_key() -> str:
+    """The bridge's address: its embedded source, for this machine and system."""
+    return hashlib.sha256((_SOURCE + platform.machine() + platform.system()).encode()).hexdigest()
+
+
+def packaged_name(key: str) -> str:
+    """The wheel's prebuilt bridge for ``key`` (setup.py builds it into hexcore/libexec)."""
+    return f"libhex_libm_batch-{key}.so"
+
+
 @lru_cache(maxsize=1)
 def _library():
     # Source-addressed, atomically published; neither a compiler nor a build is
     # required when the same bridge already exists in the native CPU cache.
-    key = hashlib.sha256((_SOURCE + platform.machine() + platform.system()).encode()).hexdigest()
+    #
+    # THE BREAKAGE THIS PREVENTS (30 km globe over 4 cards on the V5090 box, 2026-10-27): a host without
+    # rustc (every WOOF run box: the image never carries the toolchain) had no bridge, so every batch fell
+    # back to one ctypes call per element on the GIL: the vertical velocity damping of each rank's mesh took
+    # ~25 s of the dycore build at 1.7 cores for 4 ranks, and every new region mesh paid it.  The wheel now
+    # carries the bridge built from this same source (setup.py), found by the same source key first.
+    key = source_key()
+    packaged = Path(__file__).with_name("libexec") / packaged_name(key)
     root = Path(os.environ.get("HEXCORE_NATIVE_CPU_CACHE", str(Path.home()/".cache"/"woof"/"dycore"))) / key
-    target = root / "libm_batch.so"
+    target = packaged if packaged.is_file() else root / "libm_batch.so"
     with _BUILD_LOCK:
         if not target.is_file():
             compiler = shutil.which("rustc")

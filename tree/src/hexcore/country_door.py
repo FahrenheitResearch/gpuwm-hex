@@ -541,6 +541,11 @@ def run_country(args):
             if result["returncode"] != 0:
                 status.failed(f"the {name} stage exited {result['returncode']}")
                 return result["returncode"]
+            if name == "forecast":
+                # The forecast is the last GPU stage (products and score are CPU work): a card queue gets its
+                # card back now instead of after them (hexcore.card_lease).
+                from .card_lease import gpu_work_done
+                timing["card_given_back"] = gpu_work_done()
         status.done(f"{args.row} {args.cycle}: {', '.join(stages)}")
         return 0
     except MpasPortError as error:

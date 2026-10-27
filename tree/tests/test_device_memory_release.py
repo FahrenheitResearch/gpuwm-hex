@@ -309,3 +309,25 @@ def test_card_pressure_returns_idle_blocks_under_the_keep():
     with release.phase("slot:pbl"):
         pool.held = 400            # this phase left idle blocks behind
     assert pool.held == pool.used and release.receipt()["pool_release"]["releases"] == 1
+
+
+def test_card_pressure_is_read_at_most_once_a_second_per_card():
+    """Host-bound V5090 2026-10-27: two cudaMemGetInfo calls per physics slot, ~1 ms each on a shared host,
+    on the thread that issues the card's work.  The reading is reused for POOL_PRESSURE_RECHECK_SECONDS."""
+    from hexcore.device_memory_release import POOL_PRESSURE_RECHECK_SECONDS
+    cp, pool, runtime = _fake_cp()
+    reads = []
+    real = runtime.memGetInfo
+    runtime.memGetInfo = lambda: (reads.append(1), real())[1]
+    now = [100.0]
+    release = DevicePhaseRelease(cp, environ={}, clock=lambda: now[0])
+    for _ in range(5):                       # five slots inside one second: one reading
+        with release.phase("slot:pbl"):
+            pool.held = pool.used + 400      # idle under the keep: the reading decides
+    assert len(reads) == 1 and release.receipt()["pool_release"]["releases"] == 0
+    runtime.free_bytes = 5 << 30             # another process takes the card's memory
+    now[0] += POOL_PRESSURE_RECHECK_SECONDS  # the next boundary past the recheck sees it
+    with release.phase("slot:pbl"):
+        pool.held = pool.used + 400
+    assert len(reads) == 2 and pool.held == pool.used
+    assert release.receipt()["pool_release"]["releases"] >= 1

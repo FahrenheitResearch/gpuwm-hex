@@ -43,6 +43,20 @@ def hostprep_engine() -> tuple[Path, str]:
     return path, _check_binary(str(path), stat.st_size, stat.st_mtime_ns)
 
 
+def _widen_pipe(stream) -> None:
+    """Give the bridge's pipe 1 MiB instead of the kernel's 64 KiB default (the same bytes cross it).
+
+    THE COST THIS REMOVES (30 km globe over 4 cards, V5090 box, 2026-10-27): the momentum correction's ~1.5 GB of
+    arrays crossed a 64 KiB pipe in 1 MiB writes, ~6 s of the main thread's start-up on a loaded box, each write
+    waiting on 16 reader wake-ups.  A host that refuses the size (pipe-max-size) keeps the default.
+    """
+    try:
+        import fcntl
+        fcntl.fcntl(stream.fileno(), getattr(fcntl, "F_SETPIPE_SZ", 1031), 1 << 20)
+    except (ImportError, OSError, ValueError, AttributeError):
+        pass
+
+
 def _run(*, mode: int, dtype: np.dtype, counts, edges, n_edges: int,
          n_levels: int, arrays, outputs):
     dtype = np.dtype(dtype)
@@ -53,6 +67,8 @@ def _run(*, mode: int, dtype: np.dtype, counts, edges, n_edges: int,
     process = subprocess.Popen([str(engine), "--protocol", "hex-hostprep-v1"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+    _widen_pipe(process.stdin)
+    _widen_pipe(process.stdout)
     values = []
     try:
         process.stdin.write(struct.pack("<8sQQQQBB", b"HEXHOST1", n_cells,

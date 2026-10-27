@@ -24565,6 +24565,18 @@ def _tile_columns(ncol, workspace_bytes, processors, blocks_per_processor, free_
     return min(max(LANES, wanted), affordable)
 
 
+@lru_cache(maxsize=None)
+def _device_properties(device):
+    """cudaGetDeviceProperties of one device, read once per process (the fields read here never change).
+
+    THE BREAKAGE THIS PREVENTS (hex host-bound, V5090 2026-10-27): every GF call (every physics step of every
+    LTS class) read the device's whole property set on the thread that issues the card's work; py-spy put it at
+    the top of the MPAS-physics LTS class threads' per-step host work (about 6 %).  The tile it sizes is the same.
+    """
+    import cupy as cp
+    return cp.cuda.runtime.getDeviceProperties(device)
+
+
 def _blocks_per_processor(function, properties):
     """Resident 128-thread blocks per SM from the loaded image's registers."""
     from cupy.cuda import driver
@@ -24649,7 +24661,7 @@ def launch_columns(levels, surface, kpbl, *, control, constants, lanes=False, or
     lanes_out = cp.zeros((slabs, 6, nz, LANES), dtype=cp.float32)
     outputs["surface"].fill(0)
     outputs["integer"].fill(0)
-    properties = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+    properties = _device_properties(cp.cuda.runtime.getDevice())
     free_bytes, _ = cp.cuda.runtime.memGetInfo()
     kernel = _module(cp.cuda.runtime.getDevice()).get_function("gf_mpas_columns")
     slot_bytes = scratch_bytes + CHARACTER_BYTES

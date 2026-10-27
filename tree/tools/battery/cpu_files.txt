@@ -1108,3 +1108,24 @@ tests/test_lts_class_clock.py
 tests/test_cpu_budget.py
 # Storm-following ocean-ice roles of moved sea points (polar remap, 009fe1bc2 port), host-only.
 tests/test_moving_surface_roles.py
+# Full-step LTS: the class clock takes the plan's real top class (HEX-LAM-VS-ZOOM-2026-10-27 defect 1), host-only.
+tests/test_lts_clock_top.py
+# Fold-everything batch 1 rows (host-only): init-source stall hedge, MPAS suite route dycore flags.
+tests/test_fetch_stall_hedge.py
+tests/test_suite_dycore_flags.py
+# Storm-following admission: a due move reuses only admitted members; no-safe-radius cases refused at load (host-only).
+tests/test_storm_follow_admission.py
+# MPAS-route pool decode split over reader processes (G1 hex start-up, fix/hex-startup-g1), host-only.
+tests/test_pool_reader_processes.py
+# The libm batch bridge carried by the wheel (G1 hex start-up, fix/hex-startup-g1), host-only.
+tests/test_libm_batch_packaged.py
+# MPAS-route frames encoded side by side (G1, fix/hex-startup-g1), host-only.
+tests/test_mpas_concurrent_frame_encode.py
+# Threaded whole-variable reads of classic netCDF files (G1, fix/hex-startup-g1), host-only.
+tests/test_classic_netcdf_reader.py
+# Same-host ownership duplicate refusal on a mark array (G1, fix/hex-startup-g1), host-only.
+tests/test_samehost_ownership_duplicates.py
+# MPAS-route LTS frame deposit and class-0 assembly off the class step threads (host-only).
+tests/test_mpas_lts_frame_async.py
+# Full-step LTS: the door runs the cheapest of the fixed step and LTS at each top class, on both routes (HEX-LAM-VS-ZOOM-2026-10-27 defect 2, HEX-LTS-REGRESSION-2026-10-27), host-only.
+tests/test_lts_clock_top_and_choice.py

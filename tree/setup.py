@@ -239,6 +239,12 @@ class BuildPy(build_py):
         geometry = self.build_geometry_math(root)
         if geometry is not None:
             shutil.copy2(geometry, destination.parent / GEOMETRY_MATH)
+        # THE BREAKAGE THIS PREVENTS (30 km globe over 4 cards, V5090 box, 2026-10-27): the GNU float batch bridge
+        # (hexcore.native_libm_batch) was built on first use with rustc, which no run box carries, so its callers
+        # fell back to one ctypes call per element on the GIL (the damping build: ~25 s per rank at 30 km).
+        bridge = self.build_libm_batch(root)
+        if bridge is not None:
+            shutil.copy2(bridge, destination.parent / bridge.name)
         deflate = self.build_history_deflate(root)
         if deflate is not None:
             shutil.copy2(deflate, destination.parent / HISTORY_DEFLATE)
@@ -315,6 +321,32 @@ class BuildPy(build_py):
               "libnetcdf (install the netCDF-C development files, e.g. libnetcdf-dev or "
               "netcdf-devel); the init door will copy vertical templates the slow way and "
               "refuse meshes past the CDF-2 limit by name", file=sys.stderr)
+        return None
+
+    @staticmethod
+    def build_libm_batch(root: Path) -> Path | None:
+        """hexcore.native_libm_batch's bridge, compiled from the source the module embeds, by the module's own command.
+
+        Named by the module's source key, so a runtime whose embedded source differs never loads it.
+        """
+        if not sys.platform.startswith("linux"):
+            return None
+        module = ast.parse((root / "src/hexcore/native_libm_batch.py").read_text())
+        source = next(ast.literal_eval(node.value) for node in module.body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "_SOURCE" for target in node.targets))
+        key = hashlib.sha256((source + platform.machine() + platform.system()).encode()).hexdigest()
+        out = root / "build/libm-batch"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "libm_batch.rs").write_text(source)
+        target = out / f"libhex_libm_batch-{key}.so"
+        rustc = shutil.which("rustc")
+        built = None if rustc is None else subprocess.run(
+            [rustc, "--edition=2021", "--crate-type=cdylib", "-C", "opt-level=2", str(out / "libm_batch.rs"),
+             "-o", str(target)])
+        if built is not None and built.returncode == 0 and target.is_file():
+            return target
+        print("gpuwm-hex: libhex_libm_batch NOT BUILT: rustc could not compile hexcore.native_libm_batch's bridge; "
+              "an install without it evaluates GNU float batches one element at a time", file=sys.stderr)
         return None
 
     @staticmethod

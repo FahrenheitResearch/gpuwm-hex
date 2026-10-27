@@ -4,23 +4,76 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 _member = ContextVar("hex_ledger_member", default=None)
 
+#: How old the list of this process tree's pids may be before a stage boundary walks /proc for it again.
+TREE_REFRESH_SECONDS = 2.0
+_tree_lock = threading.Lock()
+_tree = {"pids": None, "at": 0.0, "root": None}
+try:
+    _TICK = float(os.sysconf("SC_CLK_TCK"))
+except (AttributeError, ValueError, OSError):
+    _TICK = 100.0
+
+
+def _own_and_reaped_ticks(pid):
+    """utime + stime + cutime + cstime of one pid (``gpuwm.timeline.parallelism._stat``'s sum), or None when gone."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return None
+    fields = raw[raw.rfind(b")") + 2:].split()
+    return int(fields[11]) + int(fields[12]) + int(fields[13]) + int(fields[14])
+
+
+def tree_cpu_seconds(*, clock=time.monotonic):
+    """This process tree's CPU seconds, counted as ``gpuwm.timeline.parallelism.tree_cpu_seconds`` counts them
+    (every pid of the tree: its own ticks plus its reaped children's), at a cost that does not grow with threads.
+
+    THE BREAKAGE THIS PREVENTS (hex host-bound, V5090 2026-10-27): ``tree_cpu_seconds`` finds the live
+    descendants by reading ``/proc/<pid>/task/<tid>/children`` for every thread, at every stage boundary.  A hex
+    forecast holds ~170 threads (the 128-thread kernel I/O pool among them) and the MPAS-physics step loop opens
+    and closes three timed stages a step, so every step read ~1,000 /proc files on the thread that issues the
+    card's work: py-spy put 34 % of the LTS class threads' step-loop CPU there (96/3 km Milton mesh, 4 classes),
+    with the card idle meanwhile.  Here the pid list is rediscovered (that same walk) at most every
+    ``TREE_REFRESH_SECONDS``; between walks a boundary reads one ``/proc/<pid>/stat`` per known pid (usually one or
+    two).  A child that is reaped between walks is counted in its parent's reaped ticks, as before; one born and
+    still alive since the last walk is counted from the next walk on, at most 2 s late.  The ledger's cpu_s is a
+    diagnostic (stage cores = CPU / wall); no forecast word depends on it.
+    """
+    from gpuwm.timeline.parallelism import tree_pids
+    now = clock()
+    root = os.getpid()
+    with _tree_lock:
+        pids = _tree["pids"]
+        if pids is None or _tree["root"] != root or now - _tree["at"] >= TREE_REFRESH_SECONDS:
+            pids = _tree["pids"] = tuple(tree_pids(root))
+            _tree["at"], _tree["root"] = now, root
+    total = 0
+    for pid in pids:
+        ticks = _own_and_reaped_ticks(pid)
+        if ticks is not None:
+            total += ticks
+    return round(total / _TICK, 3)
+
 
 def _cpu_attrs(attrs, phase, t_mono):
     """Every live begin/end carries attrs.cpu_s, its process tree's CPU seconds at that moment, so each stage's
     cores = CPU / wall (owner ruling 2026-10-16: no stage on one CPU thread while cards or cores wait). Read here, not at
     append time, because hex holds early events until its run folder exists and replays them with their own
-    clocks. gpuwm.timeline.parallelism reads /proc (live descendants and reaped children); an engine without it
-    falls back to os.times(). No device sync, no profiler."""
+    clocks. ``tree_cpu_seconds`` reads /proc (live descendants and reaped children); off Linux, or with an engine
+    without gpuwm.timeline.parallelism, it falls back to os.times(). No device sync, no profiler."""
     if phase not in ("begin", "end") or t_mono is not None or (attrs and "cpu_s" in attrs):
         return attrs
     try:
-        from gpuwm.timeline.parallelism import tree_cpu_seconds
+        if not sys.platform.startswith("linux"):
+            raise OSError("no /proc")
         cpu = tree_cpu_seconds()
     except Exception:
         t = os.times()
