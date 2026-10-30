@@ -61,7 +61,10 @@ def test_every_time_lands_once_whatever_the_process_count(tmp_path, workers, mon
     assert all(p.read_text().endswith(" 3600") for p in out.glob("lbc.*.nc"))
     assert not list(out.glob(".part-*"))
     receipt = json.loads((out / "lbc-door-receipt.json").read_text())
-    assert receipt["processes"] == workers and len(receipt["files"]) == 7
+    # The door runs at most one process per CPU this process may use (lbc_workers); a 4-CPU CI runner gave
+    # 4 for 7 requested (gpuwm-hex public ci, 0.4.10 main 765a6eff, 2026-10-30).
+    from hexcore.cpu_budget import available_cpus
+    assert receipt["processes"] == min(workers, available_cpus(), 16) and len(receipt["files"]) == 7
 
 
 def test_workers_follow_cpus_and_memory(monkeypatch, tmp_path):

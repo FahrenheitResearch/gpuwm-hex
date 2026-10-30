@@ -41,7 +41,8 @@ def test_every_class_step_is_in_the_run_timeline(tmp_path):
     on_disk = json.loads((tmp_path / 'native-runtime-timings.json').read_text())['stages']
     assert on_disk == json.loads(json.dumps(stages))
     assert [s['stage'] for s in on_disk].count('native-runtime') == 1          # the run's, the coordinator's
-    assert on_disk[0]['wall_seconds'] == 30.0
+    # perf + 30.0 - perf is 30.0 only to the clock's precision (29.999999999999886 on a CI runner, 2026-10-30).
+    assert on_disk[0]['wall_seconds'] == pytest.approx(30.0)
     steps = [s for s in on_disk if s['stage'] == 'dycore-and-post-transport']
     assert [s['lts_class'] for s in steps] == [0] * 8 + [1] * 4
     assert {s['lts_rate'] for s in steps if s['lts_class'] == 1} == {2}
