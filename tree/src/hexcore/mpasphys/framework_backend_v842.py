@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from .framework_calendar_v842 import PhysicsClock, interval_from_rkind
+from ..host_parallel import copied, copy_into
 
 
 DATA = Path(__file__).resolve().parents[1] / 'data' / 'mpasphys-framework'
@@ -42,10 +43,12 @@ class FrameworkPhysics:
     framework_only = True
     lib = None
     pin_set = 'v8.4.2'
+    # Installed declarations of the pinned source (a pin set's subclass names its own).
+    data = DATA
 
     def __init__(self, *, layout=None, resources=None, stream_factory=None):
         self.layout, self.resources = layout, resources
-        self.abi = json.loads((DATA / 'metadata.json').read_text())
+        self.abi = json.loads((self.data / 'metadata.json').read_text())
         self._pools, self._fields, self._configs, self._text_fields = {}, {}, {}, {}
         self._dimensions, self._dimension_values = {}, {}
         self._registered, self._registration, self._decompositions = {}, {}, {}
@@ -137,7 +140,35 @@ class FrameworkPhysics:
         target = self._storage[key][level-1]
         if a is not target:
             # The device views write the live storage in place (field_storage); handing it back is a no-op.
-            np.copyto(target, a)
+            # Large fields copy in blocks on host threads (host_parallel.copy_into: the same words).
+            copy_into(target, a)
+
+    def adopt_field(self, pool, name, value, *, nlevels=1):
+        """``put_field`` of every time level of a new field, keeping ``value`` itself as level 1's storage.
+
+        For words the caller hands over and never touches again: the physics session's hydration passes each
+        field's freshly read payload buffer (pool_v842.NativePoolHydration.populate).  Level 1 holds those words
+        and every other level a copy of them, the words ``put_field`` stores at each level.  THE COST THIS
+        REMOVES (RRFS hrrrv5 mv3km, V6000, 2026-10-28): hydration allocated a zeroed copy of every buffer it had
+        just read and copied the words in on one core, ~4 s for 206,726 cells and about 11x that on conus3km.
+        Anything ``put_field`` would treat differently (a field already held, a non-Fortran or read-only buffer)
+        goes through ``put_field``.
+        """
+        a = value
+        key = (pool, name)
+        if (key in self._fields or key in self._text_fields or not isinstance(a, np.ndarray)
+                or not a.flags.f_contiguous or not a.flags.writeable or not a.flags.aligned
+                or not a.dtype.isnative or nlevels < 1):
+            for level in range(1, nlevels + 1):
+                self.put_field(pool, name, a, level=level, nlevels=nlevels)
+            return
+        self.pool(pool)
+        _name(name)
+        if not ((a.dtype == np.float32 and a.ndim <= 5) or
+                (a.dtype == np.int32 and a.ndim <= 3)):
+            raise TypeError('MPAS field requires RKIND rank <= 5 or integer rank <= 3')
+        self._storage[key] = [a] + [copied(a, order='F') for _ in range(nlevels - 1)]
+        self._fields[key] = (a.dtype, a.shape, nlevels)
 
     def put_zero_field(self, pool, name, shape, dtype, *, nlevels=1):
         """Every time level of a field whose words are the Registry initial zero, allocated and not written.
@@ -187,7 +218,7 @@ class FrameworkPhysics:
         dtype, shape, levels = self._fields[pool, name]
         if not 1 <= level <= levels:
             raise ValueError('invalid MPAS field time level')
-        result = self._storage[pool, name][level-1].copy(order='F')
+        result = copied(self._storage[pool, name][level-1], order='F')
         if out is None:
             return result
         if out.shape != shape or out.dtype != dtype:
@@ -423,6 +454,10 @@ class FrameworkPhysics:
         else:
             raise RuntimeError('MPAS framework operation has no Python implementation: ' + name)
 
+    def _allocation_local(self, name, value):
+        """A bound that is a local of the allocate routine, not a module integer (None: not one)."""
+        return 14 if value == 'nbndsw' else None
+
     def _allocate(self, name):
         for variable, bounds in self.abi['allocations'][name].items():
             if variable in self._variables:
@@ -430,8 +465,9 @@ class FrameworkPhysics:
             lower, shape = [], []
             for lo, hi in bounds:
                 def bound(value):
-                    if value == 'nbndsw':
-                        return 14
+                    local = self._allocation_local(name, value)
+                    if local is not None:
+                        return local
                     if value.isdigit():
                         return int(value)
                     # Generated expressions contain only module integer names and +/- integers.

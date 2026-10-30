@@ -988,7 +988,7 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             began = time.perf_counter()
             path = Path(output_root) / f"cuda-history.{schedule['labels'][step]}.nc"
             if history_writer is None and process_history is None:
-                # Synchronous (every run without the moving controller): the original order.
+                # Synchronous (GPUWM_HEX_ASYNC_HISTORY=0): the original order.
                 frame_records[str(step)] = proof.write_snapshot_netcdf(path, snapshot, static)
             write_seconds += time.perf_counter() - began
             if not boundary_done:
@@ -1048,16 +1048,30 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 moving_control.frame_written(model_seconds=clock_offset + step * base_dt,
                                              history_path=str(path), final=step >= steps)
 
-        # Opt-in for the regional one-card executor. The child uses the same
-        # native writer and constants, bounded to two frames; boundary reads
-        # never share its NetCDF/HDF5 library. Other execution modes stay as-is.
-        if os.environ.get("GPUWM_HEX_ASYNC_HISTORY") == "process":
+        # The history writer, ``GPUWM_HEX_ASYNC_HISTORY``: ``process`` (the
+        # default without the moving controller) writes each frame in the native
+        # writer's child process, bounded to two frames, so the NetCDF write
+        # overlaps the next macros and never shares the NetCDF/HDF5 library with
+        # a boundary read on this thread; ``1`` (the default under the moving
+        # controller, unchanged) writes on a thread; ``0`` writes inline, the
+        # original order.  The written bytes are identical in all three; only
+        # their timing moves.  Breakage the default prevents (HEX-LTS-REGRESSION
+        # 2026-10-27): every one-card LTS run without the moving controller wrote
+        # its frames on the step thread, 6.8 s per 1.4 GB frame on the 149k-cell
+        # 96 -> 3 km zoom globe (27.2 s of a 3 h run), about 10 % of the LTS
+        # forecast hour, while the fixed step's same-host executor writes off the
+        # step path by default.
+        async_history = os.environ.get("GPUWM_HEX_ASYNC_HISTORY",
+                                       "1" if moving_control is not None else "process")
+        if async_history not in ("0", "1", "process"):
+            raise ValueError("GPUWM_HEX_ASYNC_HISTORY must be 0, 1 or process; prevents an ambiguous "
+                             "history-writer receipt")
+        if async_history == "process":
             from hexcore.history_frames import ProcessHistoryFrames
             process_history = ProcessHistoryFrames(proof.write_snapshot_netcdf, process_frame_written)
-        # Asynchronous history writes: on under the moving controller (whose frames
-        # are hourly 0.7 GB writes, ~22 min of a 48 h run when synchronous), or on
-        # request.  The written bytes are identical; only their timing moves.
-        elif moving_control is not None or os.environ.get("GPUWM_HEX_ASYNC_HISTORY") == "1":
+        # Thread writer: the moving controller's frames are hourly 0.7 GB writes,
+        # ~22 min of a 48 h run when synchronous.
+        elif async_history == "1":
             import concurrent.futures
             import threading
             history_lock = threading.Lock()
@@ -1294,6 +1308,8 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 "snapshot_capture_seconds": capture_seconds,
                 "history_write_seconds": write_seconds,
                 "history_writer": None if process_history is None else process_history.receipt(),
+                "history_writer_mode": {"process": "child process", "1": "thread",
+                                        "0": "inline"}[async_history],
                 "history_write_note": ("worker work overlaps integration; not caller blocking time"
                                        if process_history is not None else "synchronous or legacy thread writer"),
                 "health_gate_seconds": health_seconds,

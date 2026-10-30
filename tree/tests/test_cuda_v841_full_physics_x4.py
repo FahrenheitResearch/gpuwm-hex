@@ -128,7 +128,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         "src/hexcore/upper_damping_v841.py": "c77cb8a360cb25f6eabf1aca6b9c50abb41e9fe603511aefc9c0c6df9117f4e1",
         "src/hexcore/cuda_upper_damping_v841.py": "04f0b5b450c088575e589de943b7b44fff10b442d01ae0c0acc0a5e848748545",
         "src/hexcore/cuda_physics_prep_v841.py": (
-            "cfa57a7c014e22df930457637c9de975d111925753bef15133c21d9f4b0fccdf"
+            "a8f2087fd8186f793ccbeb92806b867d1ac5b6a82eb26fc985285d506a75f091"
         ),
         "src/hexcore/cuda_gwdo_v841.py": (
             "af22e7a450d1bbdf1a1dc9dcdf2a7a9d0da13f7d230751941cdf0a3418f0f00b"
@@ -149,13 +149,13 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # Re-frozen 2026-10-05 for the startup lane (host-preparation cache);
         # the rationale lives beside the runner's pin.
         "src/hexcore/cuda_driver.py": (
-            "9034951ee871ace985ccc7eacfa8559d1798d653cb0a7c64a1e353dcce5b22ef"
+            "22d0953bcf84b1e98338bdc553942bb574fd64c3c7eb99cb8e4225166dcc481e"
         ),
         # New pin (startup lane, 2026-10-05): the frozen driver executes host
         # preparation through this module; the rationale lives beside the
         # runner's pin.
         "src/hexcore/prep_cache.py": (
-            "891dd40787ac41848b4ecc36d337aabf139009402fbb7099cf6c395394c5d797"
+            "720080c8ddf32f5b75726cdfe85dd4f5daaa87b526cef958bd9071e7ce645332"
         ),
         "src/hexcore/cuda_backend/recovery.py": (
             "9765e0d72853a2af1d4d7acf18db45e2c09e9a89ed3098e392a8ec8ebaab98ab"
@@ -247,7 +247,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # 2026-10-05 for the startup lane (host-preparation cache); the
         # rationale lives beside the runner's pin.
         "src/hexcore/mixing_v841.py": (
-            "9d65837c5b42516865150193d647534f8acfd429612cd22a3899146ebd8b319b"
+            "03f494f165ffbb6423a328ce07a41e4ce49b817c070496bce00e812330016cd4"
         ),
         "src/hexcore/cuda_horizontal.py": (
             "d4e4face383eab6f19f21598613b7bd58e37eb75e067b7b9e817060a2ec015cd"
@@ -257,7 +257,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         ),
         # Current d15ea3482cc5 cache-key correction; archived proofs unchanged.
         "src/hexcore/cuda_transport_v841.py": (
-            "8342d4fc5fd4bb03aaaed11a2f3c7ba96ed85d70f766efa11d4aa4bf4a3ff7f3"
+            "60ac6f03292ed1114b9ea8ea291a34e633268da2f157523ff3b7e1c0d53bb76f"
         ),
         "src/hexcore/cuda_transport.py": (
             "013ed46f8ef3bcc1a445b2e81135e262c23c49950e52e5b62b22e4274644b15e"

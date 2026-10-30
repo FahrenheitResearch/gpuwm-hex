@@ -303,7 +303,9 @@ def add_label_arguments(parser) -> None:
     parser.add_argument(
         "--model-label", default=None, metavar="NAME",
         help="the model the maps and soundings name, top left (e.g. 'WOOF Hex'; "
-             "the mesh spacing is added); forwarded to the product stage. Default: hex")
+             "the mesh spacing is added; a map's row takes 32 characters, a longer "
+             "name ends in its whole words and '...'); forwarded to the product "
+             "stage. Default: hex")
     parser.add_argument(
         "--brand", default=None, metavar="TEXT",
         help="bold text at the top right of every sounding and meteogram (e.g. "
@@ -1117,7 +1119,8 @@ def _merge_views(parts: list[tuple[int, dict | None, str | None]]) -> tuple[int,
 
 def _render_view(*, histories, mesh, init, start, out_case, scratch_root, view,
                  window, products, size, model_label, remap, exes, basemap_dir,
-                 keep_scratch, frame_jobs=1, source_label=None, part="") -> tuple[int, dict | None, str | None]:
+                 keep_scratch, frame_jobs=1, source_label=None, part="",
+                 tiles="none") -> tuple[int, dict | None, str | None]:
     """One view through the render door in standard-set mode."""
 
     args = argparse.Namespace(
@@ -1130,7 +1133,7 @@ def _render_view(*, histories, mesh, init, start, out_case, scratch_root, view,
         nc_format="cdf5", scratch=str(Path(scratch_root) / f"render-{view}{part}"),
         keep_scratch=keep_scratch, basemap_dir=basemap_dir,
         convert_exe=exes[0], renderer_exe=exes[1], remap=remap,
-        standard_set=True, series=True, frame_jobs=frame_jobs)
+        standard_set=True, series=True, frame_jobs=frame_jobs, tiles=tiles)
     print(f"PRODUCTS view={view} window={window}", flush=True)
     try:
         rc = render_door.run_render(args)
@@ -1268,18 +1271,110 @@ def index_tree(out_case: Path) -> dict[str, dict[str, list[list[str]]]]:
     for view_dir in sorted(p for p in out_case.iterdir() if p.is_dir()):
         products: dict[str, list[list[str]]] = {}
         for product_dir in sorted(p for p in view_dir.iterdir() if p.is_dir()):
-            pictures = sorted(product_dir.rglob("*.png"),
-                              key=lambda p: (p.parent.name, p.name))
-            rows = []
-            for png in pictures:
-                lead = _LEAD_IN_NAME.search(png.name)
-                rows.append([lead.group(1) if lead else png.parent.name,
-                             png.relative_to(out_case).as_posix()])
-            if rows:
-                products[product_dir.name] = rows
+            # A tiled view (render --tiles) files each product's pictures under its tile:
+            # <product>/full/<day>/ and <product>/<cut>/<day>/.  Each tile is its own entry
+            # (the whole window keeps the product's own name), so the frames of one tile are
+            # never interleaved with another's.
+            groups = [(product_dir.name, product_dir)]
+            tiled = [child for child in product_dir.iterdir()
+                     if child.is_dir() and child.name in render_door.TILE_NAMES]
+            if tiled:
+                groups = [(product_dir.name if child.name == render_door.TILE_FULL
+                           else f"{product_dir.name}/{child.name}", child)
+                          for child in sorted(tiled, key=lambda c: render_door.TILE_NAMES.index(c.name))]
+            for key, folder in groups:
+                pictures = sorted(folder.rglob("*.png"),
+                                  key=lambda p: (p.parent.name, p.name))
+                rows = []
+                for png in pictures:
+                    lead = _LEAD_IN_NAME.search(png.name)
+                    rows.append([lead.group(1) if lead else png.parent.name,
+                                 png.relative_to(out_case).as_posix()])
+                if rows:
+                    products[key] = rows
         if products:
             tree[view_dir.name] = products
     return tree
+
+
+COLUMNS_INDEX_SCHEMA = "gpuwm-hex.columns-index/v1"
+COLUMNS_INDEX_NAME = "columns-index.json"
+
+
+def _window_spec(record: dict, out_case: Path) -> dict | None:
+    """A view's converter window, as the render manifest recorded it (the view's own record, else the
+    render-manifest.json beside its maps, which a view drawn live has)."""
+    spec = record.get("window_spec")
+    if spec is None:
+        try:
+            doc = json.loads((Path(out_case) / record["view"] / "render-manifest.json").read_text(encoding="utf-8"))
+            spec = (doc.get("convert") or {}).get("window_spec")
+        except (OSError, ValueError, AttributeError):
+            spec = None
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError:
+            return None
+    return spec if isinstance(spec, dict) else None
+
+
+def write_columns_index(out_case: Path, views: list[dict]) -> Path | None:
+    """``<case>/columns-index.json``: every view's any-point column store (column_store.py), finest grid first.
+
+    Each view writes its own store beside its maps (``<case>/<view>/columns/<dNN>/<stamp>.wcol``, every output hour),
+    and every store's own frame file names its grid ``d01``, so a reader cannot tell from the store's path which grid
+    it holds. Here each is listed with its view, its spacing (km) and its window, and ranked finest first, so a
+    sounding at a point is read from the finest grid that holds it and the whole globe outside a refined core. THE
+    BREAKAGE THIS SERVES (WOOF production, 2026-10-28): a reader that filed every store by the frame's ``d01`` took a
+    96 -> 3 km zoom globe's ~25 km globe for its 3 km core. Nothing is written when no view has a store."""
+
+    rows = []
+    for record in views:
+        name = record.get("view")
+        folder = Path(out_case) / str(name) / "columns"
+        if not name or name == "points" or not folder.is_dir():
+            continue
+        files = sorted(f for f in folder.glob("d[0-9][0-9]/*.wcol") if f.stat().st_size > 0)
+        if not files:
+            continue
+        spec = _window_spec(record, out_case) or {}
+        spacing = None
+        try:
+            if spec.get("dx_metres"):
+                spacing = round(float(spec["dx_metres"]) / 1000.0, 3)
+            elif spec.get("spacing_degrees"):
+                spacing = round(float(spec["spacing_degrees"]) * 111.195, 3)
+        except (TypeError, ValueError):
+            spacing = None
+        bounds = None
+        if spec.get("kind") == "latlon":
+            try:
+                bounds = [float(spec["west"]), float(spec["south"]), float(spec["east"]), float(spec["north"])]
+            except (KeyError, TypeError, ValueError):
+                bounds = None
+        centre = window_centre({"convert": {"window_spec": spec}}) if spec else None
+        rows.append({
+            "view": name,
+            "window": record.get("window"),
+            "folder": "/".join((name, "columns", files[0].parent.name)),
+            "spacing_km": spacing,
+            "bounds": bounds,
+            "centre": ({"lat": round(centre[0], 4), "lon": round(centre[1], 4), "half_extent_km": round(centre[2], 1)}
+                       if centre else None),
+            "valid_times": [f"{f.stem[0:4]}-{f.stem[4:6]}-{f.stem[6:8]}T{f.stem[9:11]}:{f.stem[11:13]}:{f.stem[13:15]}Z"
+                            for f in files],
+            "bytes": sum(f.stat().st_size for f in files),
+        })
+    if not rows:
+        return None
+    rows.sort(key=lambda r: (r["spacing_km"] is None, r["spacing_km"] or 0.0, r["view"]))
+    for rank, row in enumerate(rows):
+        row["rank"] = rank
+    path = Path(out_case) / COLUMNS_INDEX_NAME
+    path.write_text(json.dumps({"schema": COLUMNS_INDEX_SCHEMA, "order": "finest first", "views": rows},
+                               indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 def write_index(out_case: Path, case: str, start: str, first: dict | None = None) -> Path | None:
@@ -1410,7 +1505,8 @@ def run_products(args) -> int:
         common = dict(mesh=mesh, init=init, start=start, out_case=out_case, scratch_root=scratch_root, view=name,
                       window=window, size=size, model_label=args.model_label, remap=args.remap, exes=exes,
                       basemap_dir=args.basemap_dir, keep_scratch=args.keep_scratch, frame_jobs=frame_jobs,
-                      source_label=getattr(args, "source_label", None))
+                      source_label=getattr(args, "source_label", None),
+                      tiles=getattr(args, "tiles", "auto") if window != "global" else "none")
         if live is None:
             rc, manifest, refusal = _render_view(
                 histories=histories, products=tuple(products) + chemistry_products, **common)
@@ -1455,9 +1551,15 @@ def run_products(args) -> int:
                 "products_drawn": manifest.get("products_drawn"),
                 "products_unavailable": manifest.get("products_unavailable"),
                 "window_description": (manifest.get("convert") or {}).get("window_description"),
+                "window_spec": (manifest.get("convert") or {}).get("window_spec"),
                 "remap": (manifest.get("convert") or {}).get("remap"),
                 "product_remap": (manifest.get("convert") or {}).get("product_remap"),
                 "precipitation_budget": (manifest.get("convert") or {}).get("precipitation_budget"),
+                "tiles": ({"why": manifest["tiles"].get("why"),
+                           "cuts": [{key: cut.get(key) for key in ("name", "window", "rc", "counts",
+                                                                   "elapsed_seconds")}
+                                    for cut in manifest["tiles"].get("cuts") or []]}
+                          if manifest.get("tiles") else None),
             })
         views.append(record)
         return rc, manifest, refusal
@@ -1687,6 +1789,10 @@ def run_products(args) -> int:
     }
     index = write_index(out_case, case, start, opening or None)
     manifest["index"] = index.name if index is not None else None
+    columns_index = write_columns_index(out_case, views)
+    manifest["columns_index"] = columns_index.name if columns_index is not None else None
+    if columns_index is not None:
+        print(f"PRODUCTS columns index {columns_index}", flush=True)
     path = out_case / "products-manifest.json"
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     if index is not None:
@@ -1732,7 +1838,9 @@ def add_products_arguments(parser) -> None:
                              "conservative precipitation)")
     parser.add_argument("--model-label", default=render_door.DEFAULT_MODEL_LABEL,
                         help="the model the maps and soundings name, top left (the mesh "
-                             "spacing is added, e.g. 'hex 121 km'); default: hex")
+                             "spacing is added, e.g. 'hex 121 km'; a map's row takes 32 "
+                             "characters, a longer name ends in its whole words and '...'); "
+                             "default: hex")
     parser.add_argument("--brand", default=None, metavar="TEXT",
                         help="bold text at the top right of every sounding and meteogram, "
                              "e.g. 'WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z' "
@@ -1752,6 +1860,11 @@ def add_products_arguments(parser) -> None:
                              "(default): from the host's available memory and cores "
                              "(8 history files of memory per frame in flight, half of "
                              "what is available, at most 8); 1 where memory cannot be read")
+    parser.add_argument("--tiles", default="auto", choices=render_door.TILE_MODES,
+                        help="regional tiles on the regional views (see `gpuwm-hex render --tiles`): "
+                             "auto (default) adds the six cuts where a view has more grid points "
+                             "across than its picture has pixels (a 3 km CONUS domain); regional "
+                             "always; none never. The global view is never tiled")
     parser.add_argument("--no-global", action="store_true")
     parser.add_argument("--no-mesh-view", action="store_true")
     parser.add_argument("--no-points", action="store_true")

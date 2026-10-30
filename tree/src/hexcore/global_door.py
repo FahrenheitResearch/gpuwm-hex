@@ -109,7 +109,7 @@ def resolve_row(table: Mapping[str, Any], name: str, physics: str | None = None
     return row, dict(table["meshes"][row["mesh"]]), dict(table["physics"][row["physics"]])
 
 
-_FORECAST_PHYSICS_FLAGS = {"--physics-suite": "suite", "--physics-mode": "mode",
+_FORECAST_PHYSICS_FLAGS = {"--physics-profile": "profile", "--physics-suite": "suite", "--physics-mode": "mode",
                            "--physics-namelist": "namelist"}
 
 
@@ -531,6 +531,11 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
     from .init_sources import load_table as load_sources, resolve_source
     accepted = getattr(args, "accept_licence", ())
     source_row = resolve_source(load_sources(), source, accepted)
+    from .init_sources import admit_cycle
+
+    # Refused before the mesh, the static and any download: a cycle the publisher never posted or posted
+    # without what the init needs (the row's cycles block).
+    admit_cycle(source_row, _cycle(args.cycle))
     from .source_horizon import beyond_source, label as horizon_label
     # The hours past the source's last forecast hour are a free run of our own model (a globe needs no boundaries).
     extension = beyond_source(source_row, _cycle(args.cycle), lead, hours)
@@ -571,6 +576,13 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
                      "--hours", f"{hours:g}", "--history-every-minutes", str(every),
                      "--out", str(forecast), "--scratch", str(work / "scratch"),
                      "--case-label", f"{row['id']}-{cycle.strftime('%Y%m%d%H')}", "--no-products"]
+    from gpuwm.output_formats import argument_values
+    forecast_argv += argument_values(args)
+    # Resolve a config-only base before ensemble commands add their member paths.
+    from gpuwm.output_formats import options
+    _, output_store = options(args)
+    if output_store is not None and "--icechunk-store" not in forecast_argv:
+        forecast_argv += ["--icechunk-store", str(output_store)]
     if getattr(args, "chemistry_config", None) is not None:
         forecast_argv += ["--chemistry-config", str(args.chemistry_config)]
     for key, value in physics["overrides"].items():
@@ -1090,6 +1102,8 @@ def run_plan_command(args: argparse.Namespace) -> int:
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
+    from gpuwm.output_formats import add_arguments
+    add_arguments(parser)
     parser.add_argument("--row", default=None, help="a row of data/global-runs.v1.json (see --list)")
     parser.add_argument("--cycle", default=None,
                         help="YYYY-MM-DDTHH, the init cycle; or latest: the source's newest due cycle, "

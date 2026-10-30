@@ -999,6 +999,9 @@ def test_samehost_two_device_run_finishes_the_door_receipt(tmp_path, monkeypatch
 
     @contextmanager
     def installed(driver, **received):
+        # A rank process rebuilds the forecast's module state from the door's own request and driver argv.
+        replay = received.pop("door_replay")
+        assert set(replay) == {"repo", "request", "driver_argv"} and "--output" in replay["driver_argv"]
         assert received == options
         selected.append(True)
         try:

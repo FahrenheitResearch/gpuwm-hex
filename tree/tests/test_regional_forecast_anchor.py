@@ -94,7 +94,7 @@ def test_the_named_forecast_pair_is_masked_digest_identical(receipts):
 SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     "src/hexcore/cuda_driver.py": {
         "recorded": "cb6477ef2fd02ad551e9b6c8af0724c94fc4d90bdc712fff1378d218662f5d04",
-        "current": "9034951ee871ace985ccc7eacfa8559d1798d653cb0a7c64a1e353dcce5b22ef",
+        "current": "22d0953bcf84b1e98338bdc553942bb574fd64c3c7eb99cb8e4225166dcc481e",
         "why": (
             "convection ruling, 2026-08-26: _v841_physics_cadences reports "
             "convection: None when no cumulus scheme is selected instead of "
@@ -145,7 +145,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_regional_forecast_v841.py": {
         "recorded": "3aa30ec3c3a11c1152a67d1fcbc8b2d470fd8ac2446ec8f7ec34906873421e88",
-        "current": "408b6d8f740071ca4da6e4fd801925a9f504eed47902519f22e4b10cfab8b2ec",
+        "current": "e0717bdbe36e5b85e2d0f27a041a398c1c93d329c638abb13eeed27cb7934a4c",
         "why": (
             "Integration 2026-10-04 adds explicit rank constructor dispatch "
             "and preserves the ordinary constructor. The twelve arithmetic "
@@ -294,7 +294,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_backend/containers.py": {
         "recorded": "02b7b2bee1779a5072df1c3f79fa82ff0d71ccc047e9edd05c09ffc6f0967ec1",
-        "current": "b510614f408df4908fcfeb3ee1a4de3936bc57ef28a0e4869cd0feba36b0da47",
+        "current": "ca642c249282b9cd0acedf0288e3b10ccbf351c1ca2f7b9de11edceb3d1a964d",
         "why": (
             "Package rename and compact host copies were followed by the "
             "2026-10-17 startup fix: finite checks use bounded host blocks; "
@@ -310,7 +310,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_dynamics_v841.py": {
         "recorded": "d050cabd1a1d199f014de0306f2987a68fb3184bf45291c57dafdb528569e9e7",
-        "current": "189f312d65e508e496998fc1607fd3eeeecef0245dfb62872b6ebd77daac3636",
+        "current": "d3908f72339816d83cb9f03cf633b1f06fffa264758bdc7a1ef451c15a952beb",
         "why": (
             "2026-10-19 current-source refresh after f65ab11c: immutable "
             "kernel dimensions are specialized and cache keys include shape. "
@@ -393,8 +393,15 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_transport_v841.py": {
         "recorded": "55c66759d9c81f65ed71ce77570897c102fd64661da6ad6c37b438b27771ab23",
-        "current": "8342d4fc5fd4bb03aaaed11a2f3c7ba96ed85d70f766efa11d4aa4bf4a3ff7f3",
+        "current": "60ac6f03292ed1114b9ea8ea291a34e633268da2f157523ff3b7e1c0d53bb76f",
         "why": (
+            "2026-10-28 level-parallel integer zero classification: cells then "
+            "levels preserve uint32 OR exactly; fast and strict device "
+            "transport checks pass. Floating-point CUDA text is unchanged. "
+            "2026-10-28 bounded batching and repeated-zero result reuse: "
+            "CUDA arithmetic strings are unchanged; host launch word checks "
+            "pass. Device checks and same-card speed remain release gates. "
+            "This refresh describes current sources, not a new forecast mint. "
             "2026-10-19 LTS hook repair: unspecialized lookups retain their "
             "two-part key; the acoustic tap uses the launched shape identity. "
             "CUDA arithmetic and archived recorded hashes are unchanged. "

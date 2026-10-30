@@ -1,13 +1,14 @@
 # gpuwm-hex
 
-MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.1 ports the whole model to
+MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.10 ports the whole model to
 CUDA: the dynamical core, both MPAS physics suites and their scheme options,
 initialization and static fields, the incremental analysis update, limited-area
 runs, streams, restart and diagnostics (the scheme list and what is not yet in
-are in `tree/README.md`). Alongside it runs ArWen's own physics
-(the default) and capabilities MPAS does not have: one-command global
-forecasts, local time stepping and an experimental storm-following region. It
-runs on one consumer card.
+are in `tree/README.md`). MPAS's own physics is the default; ArWen's physics
+stays one flag away (`--physics-suite arwen_mpas_column`), and hex adds
+capabilities MPAS does not have: one-command global forecasts, local time
+stepping and an experimental storm-following region. It runs on one consumer
+card.
 
 This is the repository. The distribution it builds lives in [`tree/`](tree/),
 and its user documentation is [`tree/README.md`](tree/README.md) (the
@@ -16,11 +17,11 @@ capability contract: every claim with its scope) and the
 what it is matched against and how that is checked.
 
 **Install:** `pip install gpuwm-hex`. It requires the ArWen engine, gpuwm 2.9
-(`gpuwm>=2.9.4,<2.10`), and pip resolves it.
+(`gpuwm>=2.9.7,<2.10`), and pip resolves it.
 
 ---
 
-## What 0.4.1 claims, and how far
+## What 0.4.10 claims, and how far
 
 Each line is measured, and each carries its scope. Nothing outside the scope
 is claimed. [`tree/README.md`](tree/README.md) gives the detail.
@@ -30,14 +31,14 @@ Kernels compile with fast numerics by default (FMA contraction, flush-to-zero); 
 | Claim | Scope |
 |---|---|
 | The dynamical core is byte-identical to native MPAS-A v8.4.2 built with the pinned strict recipe (GNU Fortran, single precision, no FP contraction or vectorised reassociation). | `x1.40962`, 55 levels, real terrain, dry, 5 days, two dates; the same mesh with water vapour and with five condensates transported, on 1, 2 and 4 ranks of one card; `x1.163842` with water vapour; one dry step on `x1.2562`. Hex and the reference run on the same host C library. |
-| A 24-hour forecast of the `convection_permitting` suite with all ten of its physics schemes on the GPU is bitwise identical to native MPAS-A v8.4.2 in every field hex writes: 545,733,285 values, 0 different. | `x1.2562`, one process, 2023-03-31 12Z, exact mode. Native also writes about 105 million values hex does not write yet; they are counted, not hidden. |
+| A 24-hour forecast of the `convection_permitting` suite with all ten of its physics schemes on the GPU is bitwise identical to native MPAS-A v8.4.2: every field native writes in this forecast, hex writes too, 650,457,072 values in 13,938 written fields, 0 different. | `x1.2562`, one process, 2023-03-31 12Z, exact mode, strict numerics. |
 | Every other MPAS-A v8.4.2 physics scheme in this release is bitwise identical to native on real inputs captured from a native run, and a forecast with it on was compared with native, map by map. | Per scheme. A whole-forecast match is claimed only for the forecast above. |
 | Correct mode is the default on every route. On the MPAS suites it fixes 5 defects found in native MPAS-A v8.4.2; on the ArWen route it applies the corrections the engine carries (WB4, WB5); `--physics-mode exact` reproduces native bit for bit. | Each fix is checked against its own native referee build. No combined referee is claimed. |
 | Real-data initialization and the static builder match native field for field. IAU, limited-area boundaries, streams, restart and the diagnostics match native on real captured inputs. | Per unit, on the cases in `tree/README.md`. A few static words where native reads undefined memory are labelled declared residue, never identical. |
 | `gpuwm-hex forecast --analysis` starts a forecast from an MPAS analysis bundle (direct insertion, IAU, cycling restart, remap). | Measured on the ArWen physics route. IAU also runs across a restart, on the explicit MPAS suite route, on same-host multi-card ranks and in member rosters; IAU on multi-card local time stepping is refused by name. |
 | `gpuwm-hex global` runs a global forecast in one command. It is the main global model; gpuwm-global remains available as a second (spectral) global model. | Rows are defined at 120, 60, 30 and 15 km, on ArWen physics and on the gpuwm-global suite; the measured runs are the 120 km rows. |
 | A storm-following 3 km region, experimental: `gpuwm-hex moving`. | ArWen physics, three 48-hour tropical cyclone runs; the balanced remap between moves is the default. |
-| RRFS-MPAS runs end to end from a pip install: the GSL fork's dycore on the GPU, its ported physics on the GPU by default, the rest through the fork's native library, which `physics-resources build` compiles from the fork's source on your machine. | With every physics slot on the native library (`--physics-default-backend native-cpu`), a one-hour `hrrrv5` run on `x1.2562`, one process, is bitwise to the native fork build in every field hex writes; each GPU port is bitwise as a module replay. RRFS initial conditions come from the fork's own init (named gap). |
+| RRFS-MPAS runs end to end from a pip install: the GSL fork's dycore and table-admitted physics run on the GPU by default. `hrrrv5`, `rrfs_convection_permitting`, `rrfs_mesoscale_reference`, and RRFS New Tiedtke use the ported framework without a native library. Native comparison backends remain explicit site builds. | With every physics slot on the native library (`--physics-default-backend native-cpu`), a one-hour `hrrrv5` run on `x1.2562`, one process, is bitwise to the native fork build in every field hex writes; each GPU port is bitwise as a module replay. RRFS initial conditions and hourly boundaries come from `gpuwm-hex init --physics-suite hrrrv5`, the fork's init ported to Rust ([RRFS init](tree/docs/rrfs-init.md)). |
 
 Named gaps, each with its reason, are listed in
 [`tree/README.md`](tree/README.md#not-in-this-release).
@@ -78,13 +79,13 @@ bias that is wrong against observations is still wrong.
 
 ### To `gpuwm` (ArWen): a one-way dependency
 
-- **The default physics** is ArWen's, reached through the engine's
-  column-batch seam, so gpuwm-hex and `gpuwm` share one implementation of it.
-  Sixteen engine files are pinned by SHA-256; `gpuwm-hex doctor` reports
-  whether the installed engine still matches.
-- **The MPAS physics ports** are this project's own (`tree/src/hexcore/mpasphys/`).
-  They compile with device maths headers read from the installed `gpuwm` at
-  run time.
+- **The MPAS physics ports**, the default physics since 0.4.6, are this
+  project's own (`tree/src/hexcore/mpasphys/`). They compile with device maths
+  headers read from the installed `gpuwm` at run time.
+- **ArWen's physics** (`--physics-suite arwen_mpas_column`) is reached through
+  the engine's column-batch seam, so gpuwm-hex and `gpuwm` share one
+  implementation of it. Sixteen engine files are pinned by SHA-256;
+  `gpuwm-hex doctor` reports whether the installed engine still matches.
 - **The Rust field engines** (`rw_mpas_init`, `rw_mpas_static`,
   `rw_mpas_convert`, `rw_mpas_mesh`, `rw_mpas_lbc`, `rw_wrfbatch` and the
   others) are built in `gpuwm`'s Rust workspace and reach a user through its
@@ -140,18 +141,19 @@ Apache-2.0, the same licence `gpuwm` ships under, except where an upstream's
 own terms govern a ported portion. MPAS-Atmosphere (LANS and UCAR) is
 BSD-3-Clause, and its terms travel with every copy. The physics ports also
 carry NCAR MMM-physics (BSD-3-Clause), WRF physics as MPAS distributes it (the
-WRF public-domain notice), RRTMG (AER, BSD-3-Clause) and Noah-MP (UCAR's terms,
-which are **not** Apache-2.0 and do not allow selling it or a work that
-contains it). `NOTICE` names every upstream and its terms,
+WRF public-domain notice) and RRTMG (AER, BSD-3-Clause), and the RRFS stage
+ports NOAA GSL physics (UGWP, MYNN-EDMF, MYNN-SFC, RUC, GFL, smoke), which the
+project treats as works of the US Government. `NOTICE` names every upstream and its terms,
 `tree/THIRD-PARTY-NOTICES.txt` lists the derived files, and `tree/licenses/`
 holds the texts, including those of the Rust crates the wheel's compiled
 helpers link; all required permissive texts ship in the wheel and sdist.
 
-UCAR Noah-MP v5.0 and UGWP ports are withheld from this public export.
-UCAR's Noah-MP terms forbid sale; UGWP remains on licence hold. Their
-upstream pins and attribution remain in `NOTICE` sections 4 and 8. The public
-wheel contains no Fortran runtime. An opt-in cannot restore an excluded port.
-The default ArWen route uses its separate WRF-lineage physics.
+The UCAR Noah-MP v5.0 port is withheld from this public export: UCAR's
+terms (**not** Apache-2.0) forbid selling it or a work that contains it. Its
+upstream pin and attribution remain in `NOTICE` section 4. The public wheel
+contains no Fortran runtime. An opt-in cannot restore an excluded port. The
+Noah-MP that hex runs is the ArWen route's separate WRF-lineage v4.x, which is not
+MPAS-bitwise.
 
 This is **not** the version available from LANS and UCAR, and neither they nor
 their contributors endorse it. Results from gpuwm-hex are not results from

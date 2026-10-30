@@ -26,7 +26,9 @@ _EXE = ".exe" if sys.platform == "win32" else ""
 # what breaks without them); hexcore.mpasphys.resources_build binds these names.
 PHYSICS_TABLES = ({"win32": "lookup_decode.dll", "darwin": "liblookup_decode.dylib"}.get(
                       sys.platform, "liblookup_decode.so"),
-                  "table_decode" + _EXE, "rw_mpas_rrtmg_lw_tables" + _EXE, "rw_mpas_rrtmg_sw_tables" + _EXE)
+                  "table_decode" + _EXE, "rw_mpas_rrtmg_lw_tables" + _EXE, "rw_mpas_rrtmg_sw_tables" + _EXE,
+                  "ruc_table_decode" + _EXE,
+                  "tempo_table_compute" + _EXE, "tempo_table_init" + _EXE)
 # The MPAS route's Registry pool reader (rust/physics-pool/Cargo.toml says what
 # breaks without it); hexcore.mpasphys.resources_build binds this name.
 POOL_READER = "rw_mpas_physics_pool" + _EXE

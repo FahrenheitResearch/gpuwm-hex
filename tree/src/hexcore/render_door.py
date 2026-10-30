@@ -48,7 +48,9 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from . import engines
 from .errors import MpasPortError
@@ -166,10 +168,234 @@ def resolve_remap(requested: str, composite: bool) -> str:
     return requested
 
 
+#: Regional tiles (``--tiles``).  A window wider than its picture puts several grid points into each
+#: pixel, so a 3 km domain the size of the CONUS (RRFS v2's 1800 x 1060 grid) shows none of its own
+#: detail on one map.  NOAA's HRRR and RRFS graphics answer that with the whole domain plus regional
+#: cuts; this door draws the same set: ``full`` and six cuts, three columns by two rows of the window's
+#: own grid points, overlapping so a feature on a seam is whole in at least one of them.  They are
+#: product subfolders (render folder law): ``<view>/<product>/<tile>/<valid-day>/``.  Every cut is an
+#: exact sub-grid of the full window (same projection, spacing and grid points), converted from the
+#: history by the same Rust remap.
+TILE_FULL = "full"
+#: name -> ((west, east) column fractions, (south, north) row fractions) of the full window.
+TILE_CUTS = {
+    "nw": ((0.0, 0.4), (0.45, 1.0)),
+    "nc": ((0.3, 0.7), (0.45, 1.0)),
+    "ne": ((0.6, 1.0), (0.45, 1.0)),
+    "sw": ((0.0, 0.4), (0.0, 0.55)),
+    "sc": ((0.3, 0.7), (0.0, 0.55)),
+    "se": ((0.6, 1.0), (0.0, 0.55)),
+}
+TILE_NAMES = (TILE_FULL, *TILE_CUTS)
+#: ``none`` draws the window whole (the layout with no tile segment); ``regional`` always adds the
+#: six cuts; ``auto`` adds them when a Lambert window has more grid points across than its picture
+#: has pixels.
+TILE_MODES = ("none", "auto", "regional")
+
+_WRF_EARTH_RADIUS_M = 6_370_000.0
+
+
+def _lambert_cone(truelat1: float, truelat2: float) -> float:
+    rad = math.pi / 180.0
+    if abs(truelat1 - truelat2) > 0.1:
+        return ((math.log10(math.cos(truelat1 * rad)) - math.log10(math.cos(truelat2 * rad)))
+                / (math.log10(math.tan((45.0 - abs(truelat1) / 2.0) * rad))
+                   - math.log10(math.tan((45.0 - abs(truelat2) / 2.0) * rad))))
+    return math.sin(abs(truelat1) * rad)
+
+
+def lambert_ijll(spec: dict, i: float, j: float) -> tuple[float, float]:
+    """Latitude and longitude of grid point ``(i, j)`` (1-based) of a converter Lambert window.
+
+    WRF ``set_lc`` / ``ijll_lc`` as ``rw_mpas::window::LambertProjection`` transcribes them, with
+    the window's known point at its centre ``((nx+1)/2, (ny+1)/2)``.  Used only to name the centre
+    of a tile cut; the converter lays down every grid point itself."""
+
+    rad, deg = math.pi / 180.0, 180.0 / math.pi
+    t1, t2 = float(spec["truelat1"]), float(spec["truelat2"])
+    stand_lon = float(spec["stand_lon"])
+    radius_m = float(spec.get("earth_radius_m", _WRF_EARTH_RADIUS_M))
+    cone = _lambert_cone(t1, t2)
+    hemi = 1.0 if t1 >= 0.0 else -1.0
+    rebydx = radius_m / float(spec["dx_metres"])
+    known_lat, known_lon = float(spec["centre_lat"]), float(spec["centre_lon"])
+    known_i, known_j = 0.5 * (int(spec["nx"]) + 1.0), 0.5 * (int(spec["ny"]) + 1.0)
+    delta_lon = known_lon - stand_lon
+    if delta_lon > 180.0:
+        delta_lon -= 360.0
+    if delta_lon < -180.0:
+        delta_lon += 360.0
+    ctl1r = math.cos(t1 * rad)
+    rsw = rebydx * ctl1r / cone * (math.tan((90.0 * hemi - known_lat) * rad / 2.0)
+                                   / math.tan((90.0 * hemi - t1) * rad / 2.0)) ** cone
+    arg = cone * (delta_lon * rad)
+    polei = hemi * known_i - hemi * rsw * math.sin(arg)
+    polej = hemi * known_j + rsw * math.cos(arg)
+    chi1 = (90.0 - hemi * t1) * rad
+    chi2 = (90.0 - hemi * t2) * rad
+    xx = hemi * i - polei
+    yy = polej - hemi * j
+    radius_squared = xx * xx + yy * yy
+    radius = math.sqrt(radius_squared) / rebydx
+    longitude = (stand_lon + deg * math.atan2(hemi * xx, yy) / cone + 360.0) % 360.0
+    if abs(chi1 - chi2) < 1.0e-12:
+        chi = 2.0 * math.atan((radius / math.tan(chi1)) ** (1.0 / cone) * math.tan(chi1 * 0.5))
+    else:
+        chi = 2.0 * math.atan((radius * cone / math.sin(chi1)) ** (1.0 / cone) * math.tan(chi1 * 0.5))
+    latitude = (90.0 - chi * deg) * hemi
+    if radius_squared == 0.0:
+        latitude, longitude = hemi * 90.0, stand_lon
+    if longitude > 180.0:
+        longitude -= 360.0
+    elif longitude < -180.0:
+        longitude += 360.0
+    return latitude, longitude
+
+
+def _cut(points: int, fractions: tuple[float, float]) -> tuple[int, int]:
+    """1-based first and last grid point of a fraction range of ``points`` points."""
+
+    first = 1 + int(math.floor(fractions[0] * (points - 1) + 1e-9))
+    last = 1 + int(math.ceil(fractions[1] * (points - 1) - 1e-9))
+    return first, max(last, first + 1)
+
+
+def plan_tiles(window_spec, mode: str, width: int, height: int) -> tuple[list[dict], str]:
+    """The regional cuts of a converted window: ``([{name, window, i, j}, ...], why)``.
+
+    ``window`` is the converter window spec of the cut (``lambert:`` or ``latlon:``), an exact
+    sub-grid of the full window; ``i``/``j`` are its 1-based point ranges in the full grid.  An
+    empty list means the window is drawn whole, and ``why`` says why."""
+
+    if mode not in TILE_MODES:
+        raise RenderDoorError(f"--tiles {mode!r} is not one of {', '.join(TILE_MODES)}")
+    if mode == "none":
+        return [], "tiles off"
+    spec = window_spec
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError:
+            spec = None
+    if not isinstance(spec, dict) or spec.get("kind") not in ("lambert", "latlon"):
+        if mode == "regional":
+            raise RenderDoorError(
+                "--tiles regional cuts the tiles from the converter's window grid (Lambert or "
+                "lat-lon), and this converter's receipt names none, so no tile could be placed on "
+                "the full window's grid points; use --tiles none")
+        return [], "the converter named no window grid"
+    kind = spec["kind"]
+    if mode == "auto" and kind != "lambert":
+        return [], "a lat-lon (global or region-latlon) window is tiled only with --tiles regional"
+    try:
+        if kind == "lambert":
+            nx, ny = int(spec["nx"]), int(spec["ny"])
+            spacing = None
+            lambert_ijll(spec, 1.0, 1.0)
+        else:
+            spacing = float(spec["spacing_degrees"])
+            nx = int(round((float(spec["east"]) - float(spec["west"])) / spacing)) + 1
+            ny = int(round((float(spec["north"]) - float(spec["south"])) / spacing)) + 1
+    except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+        if mode == "regional":
+            raise RenderDoorError(
+                f"--tiles regional cuts the tiles from the converter's window grid, and its receipt's "
+                f"{kind} window spec is incomplete ({type(error).__name__}: {error}), so no tile could "
+                f"be placed on the full window's grid points; use --tiles none") from None
+        return [], f"the converter's {kind} window spec is incomplete"
+    if mode == "auto":
+        if nx <= width and ny <= height:
+            return [], f"the {nx} x {ny} window fits its {width} x {height} picture"
+    plan = []
+    for name, (columns, rows) in TILE_CUTS.items():
+        i0, i1 = _cut(nx, columns)
+        j0, j1 = _cut(ny, rows)
+        if kind == "lambert":
+            lat, lon = lambert_ijll(spec, 0.5 * (i0 + i1), 0.5 * (j0 + j1))
+            window = (f"lambert:{lat!r},{lon!r},{float(spec['dx_metres'])!r},{i1 - i0 + 1},{j1 - j0 + 1},"
+                      f"{float(spec['truelat1'])!r},{float(spec['truelat2'])!r},{float(spec['stand_lon'])!r}")
+        else:
+            south, west = float(spec["south"]), float(spec["west"])
+            window = (f"latlon:{south + (j0 - 1) * spacing!r},{south + (j1 - 1) * spacing!r},"
+                      f"{west + (i0 - 1) * spacing!r},{west + (i1 - 1) * spacing!r},{spacing!r}")
+        plan.append({"name": name, "window": window, "i": [i0, i1], "j": [j0, j1]})
+    why = f"{nx} x {ny} window" + ("" if mode == "regional" else f" wider than its {width} x {height} picture")
+    return plan, why
+
+
+def tile_workers(count: int, histories: list[Path] | None, frame_jobs: int) -> tuple[int, int]:
+    """``(tile passes at a time, frames each pass converts at a time)``.
+
+    The cuts are independent passes, so they run side by side on the host's cores.  Every pass
+    reads whole histories, so how many run at once is also bounded by memory (half of what is
+    available, three history files per pass in flight), and the frames-at-a-time the caller sized
+    for one pass are shared among the passes, never multiplied."""
+
+    cpus = os.cpu_count() or 1
+    workers = max(1, min(count, cpus // 8 or 1))
+    available = None
+    try:
+        with open("/proc/meminfo", encoding="ascii", errors="replace") as stream:
+            for line in stream:
+                if line.startswith("MemAvailable:"):
+                    available = int(line.split()[1]) * 1024
+                    break
+    except (OSError, ValueError, IndexError):
+        available = None
+    size = 0
+    for item in histories or []:
+        try:
+            size = max(size, Path(item).stat().st_size)
+        except OSError:
+            pass
+    if available is not None and size > 0:
+        workers = max(1, min(workers, int(0.5 * available // (3 * size))))
+    return workers, max(1, int(frame_jobs) // workers)
+
+
+#: carry_georef reads, merges and rewrites one file per view; tile passes run side by side.
+_GEOREF_LOCK = threading.Lock()
+
+
 #: The model this door renders.  Every history it reads was written by
 #: gpuwm-hex, so its plots say ``hex`` where the wrfout-shaped frames would
 #: otherwise import as ``WRF``.
 DEFAULT_MODEL_LABEL = "hex"
+
+#: The longest model name the converter writes into a frame, in characters
+#: (rw_mpas_convert --model-label; rustwx-products MODEL_LABEL_MAX_CHARS):
+#: the metadata row also carries the init time, lead, valid time and grid
+#: spacing.  A longer name is refused by the converter, so the door fits it.
+MODEL_LABEL_MAX_CHARS = 32
+
+
+def fitted_model_label(label: str | None) -> str | None:
+    """The model name as the metadata row draws it: runs of whitespace made
+    one space, and a name longer than :data:`MODEL_LABEL_MAX_CHARS` shortened
+    to its longest run of whole words that fits with ``...`` after it.
+
+    THE BREAKAGE THIS PREVENTS (hex 0.4.10 gate maps, 2026-10-29): the name
+    was sliced at 32 characters mid-word with no word said, so every map of a
+    run named 'hex 0.4.10 RC HB18 bec7ce68: RRFS ...' read '... bec7ce68: RRF'
+    and the MPAS-physics route's read 'MPAS physics (d'."""
+
+    if label is None:
+        return None
+    text = " ".join(str(label).split())
+    if len(text) <= MODEL_LABEL_MAX_CHARS:
+        return text
+    room = MODEL_LABEL_MAX_CHARS - 3
+    head = ""
+    for word in text.split(" "):
+        candidate = f"{head} {word}" if head else word
+        if len(candidate) > room:
+            break
+        head = candidate
+    # A first word longer than the row is cut inside itself; a kept run ends
+    # on its last whole word, without a dangling separator before the dots.
+    head = (head or text[:room]).rstrip(" :;,-/(")
+    return f"{head or text[:room]}..."
+
 
 #: A view name: the layout's domain folder and the filename's second token.
 _VIEW = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
@@ -336,6 +562,63 @@ def resolve_basemap_dir(renderer_exe: Path,
         f"tools/rustwx/assets/basemap -- or install gpuwm-data, which "
         f"carries them."
     )
+
+
+#: The credit the start data's licence asks for on every map, named by the host: WOOF sets it for ECMWF's CC BY 4.0
+#: open data ("© 2026 ECMWF, CC BY 4.0, modified") and ECCC's Datamart. Each map's source line ends with it, composed
+#: here per map so the map keeps its own line (an ensemble member's number) and fitted to the canvas so nothing is
+#: cut. Unset (every run whose data asks for no credit), no theme is written and every map is drawn as before.
+#: THE BREAKAGE THIS PREVENTS (WOOF, 2026-10-29): a host could print the credit only through one render theme for the
+#: whole run, whose source line replaced every map's own, so each hex ensemble member's maps lost their member number;
+#: and a line longer than the renderer's source slot (at most half the subtitle row) was cut with "...".
+SOURCE_CREDIT_ENV = "GPUWM_HEX_SOURCE_CREDIT"
+
+#: The longest source line, in characters, that leaves both halves of the subtitle row whole on a fixed canvas of this
+#: size (rw_wrfbatch 2.9.9, measured 2026-10-29 with the ECMWF and ECCC credit lines; at 1200 x 900 a 42-character
+#: line already cuts the left half, the run's own provenance). Any other size takes width / 30.
+SOURCE_LINE_FITS = {(1800, 1000): 69, (1400, 1000): 56, (1200, 900): 40}
+
+
+def source_line_budget(width: int, height: int) -> int:
+    """How many characters of source line a ``width`` x ``height`` map draws whole (SOURCE_LINE_FITS)."""
+
+    return SOURCE_LINE_FITS.get((int(width), int(height)), max(16, int(width) // 30))
+
+
+def credited_source_line(label: str | None, credit: str, width: int, height: int) -> str:
+    """The map's own source line with the credit after it, in the longest form the canvas draws whole: the whole line
+    (``source: Hex forecast, member mem003 of 36 · <credit>``), then shorter forms of the map's own part (``source: Hex
+    mem003 of 36``, ``Hex mem003 of 36``, ``mem003``), then the credit alone. The credit, a licence's words, is never
+    shortened."""
+
+    own = " ".join(str(label or "Hex forecast").split())
+    member = re.fullmatch(r"(?P<model>.*?)(?: forecast)?,? member (?P<id>\S+)(?P<of> of \d+)?", own)
+    if member:
+        short = " ".join(x for x in (member["model"], member["id"]) if x) + (member["of"] or "")
+        heads = (f"source: {own}", f"source: {short}", short, member["id"])
+    else:
+        short = re.sub(r" forecast\b", "", own).strip() or own
+        heads = (f"source: {own}", f"source: {short}", short)
+    budget = source_line_budget(width, height)
+    for head in dict.fromkeys(heads):
+        line = f"{head} · {credit}"
+        if len(line) <= budget:
+            return line
+    return credit
+
+
+def source_credit_theme(scratch: Path, label: str | None, width: int, height: int) -> str | None:
+    """The render theme carrying this map's credited source line (credited_source_line), written in ``scratch``; None
+    when the host names no credit (``$GPUWM_HEX_SOURCE_CREDIT``) or names a theme of its own (``$RUSTWX_THEME``). The
+    theme names no ``extends``: the renderer keeps its plain look and only the source line changes."""
+
+    credit = " ".join(os.environ.get(SOURCE_CREDIT_ENV, "").split())
+    if not credit or os.environ.get("RUSTWX_THEME"):
+        return None
+    path = Path(scratch) / "source-credit-theme.json"
+    path.write_text(json.dumps({"text": {"source_label": credited_source_line(label, credit, width, height)}})
+                    + "\n", encoding="utf-8")
+    return str(path)
 
 
 def renderer_environment(basemap_dir: Path) -> dict[str, str]:
@@ -578,13 +861,16 @@ def carry_georef(raw_out: Path, moved: dict[str, str], folder: Path) -> int:
 
 
 def place_path(out_root: Path, domain: str, product: str, day: str,
-               filename: str) -> Path:
+               filename: str, tile: str | None = None) -> Path:
     """``<out>/<domain>/<product>/<valid-day>/<filename>`` -- the ruled
     layout, and the only one this door writes.  Nothing may invert it back
-    to flat."""
+    to flat.  A tiled render (``--tiles``) files each picture one segment
+    deeper, under its tile: ``<out>/<domain>/<product>/<tile>/<valid-day>/``."""
 
-    return (Path(out_root) / (domain or NATIVE_GRID)
-            / (product or UNCLASSIFIED) / (day or UNDATED) / filename)
+    product_dir = Path(out_root) / (domain or NATIVE_GRID) / (product or UNCLASSIFIED)
+    if tile:
+        product_dir = product_dir / tile
+    return product_dir / (day or UNDATED) / filename
 
 
 def default_scratch(out_root: Path) -> Path:
@@ -646,7 +932,8 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
                    diagnostics: Path | None = None,
                    model_label: str | None = None,
                    remap: str = "nearest",
-                   jobs: int = 1) -> tuple[dict, list[str]]:
+                   jobs: int = 1,
+                   explicit_jobs: bool = False) -> tuple[dict, list[str]]:
     """Run ``rw_mpas_convert`` once over the whole series.
 
     Returns ``(report, invocation)`` where ``report`` is the converter's own
@@ -660,8 +947,28 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
     one flag being unavailable, so the converter refuses the pair and this
     door does not construct it."""
 
-    if diagnostics is not None and (compose is not None or init is None or len(histories or []) != 1):
-        raise RenderDoorError("--diagnostics requires one history, --init, and no --compose")
+    pairing = None
+    legacy_diagnostics = False
+    if diagnostics is not None:
+        if compose is not None or len(histories or []) != 1:
+            raise RenderDoorError("--diagnostics requires one history and no --compose: it names the "
+                                  "diag stream file of that one history's valid time")
+        # A converter that names --diagnostics-sha256 in its usage reads the file through that flag
+        # (the 2026-10-14 split-history reader); the converter gpuwm ships reads a history's diag
+        # stream file of the same time from beside the history (history.T.nc -> diag.T.nc) and has no
+        # such flag.  THE BREAKAGE THIS PREVENTS: the door passed --diagnostics to that converter and
+        # every `gpuwm-hex render --diagnostics` exited 2 ("unknown flag --diagnostics", RRFS bigmesh
+        # maps, 2026-10-28).  The named file is now paired with the history under the names the
+        # converter pairs on, and the converter's receipt must name it back (checked below).
+        legacy_diagnostics = engine_accepts(convert_exe, "--diagnostics-sha256")
+        if legacy_diagnostics:
+            if init is None:
+                raise RenderDoorError(
+                    "--diagnostics requires one history, --init, and no --compose: this converter "
+                    "reads a named diagnostics file only beside a pinned --init")
+        else:
+            pairing = pair_diagnostics(Path(histories[0]), Path(diagnostics), Path(scratch))
+            histories = [pairing["history"]]
     frames_dir = Path(scratch) / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
     report_path = Path(scratch) / "convert-report.json"
@@ -679,7 +986,7 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
             # this every pressure-level product (500 hPa height and winds,
             # 850 hPa) is refused as missing-fields on every run.
             command.extend(("--init", str(init)))
-        if diagnostics is not None:
+        if diagnostics is not None and legacy_diagnostics:
             command.extend(("--diagnostics", str(diagnostics),
                             "--diagnostics-sha256", sha256_file(diagnostics),
                             "--init-sha256", sha256_file(init)))
@@ -693,18 +1000,26 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
     ))
     if simulation_start:
         command.extend(("--simulation-start", simulation_start))
-    if model_label:
+    drawn_label = fitted_model_label(model_label)
+    if drawn_label:
         # The plot's metadata row names this model instead of the generic
-        # WRF identity every wrfout-shaped frame imports under.
-        command.extend(("--model-label", model_label[:32]))
+        # WRF identity every wrfout-shaped frame imports under, fitted to
+        # the converter's limit (fitted_model_label) and said so when cut.
+        if drawn_label != " ".join(str(model_label).split()):
+            print(f"LABEL model label shortened to the metadata row's {MODEL_LABEL_MAX_CHARS} "
+                  f"characters: {model_label!r} -> {drawn_label!r}", flush=True)
+        command.extend(("--model-label", drawn_label))
     if remap != "nearest":
         # Linear state, conservative accumulations, nearest categories
         # (rw_mpas_convert --help).  Passed only when asked so an older
         # converter that predates the flag still runs a nearest render.
         command.extend(("--remap", remap))
-    if jobs > 1 and compose is None:
+    if (jobs > 1 or explicit_jobs) and compose is None:
         # Frames are independent, so the converter takes several at a time;
-        # passed only when asked, so an older converter still runs.
+        # passed only when asked, so an older converter still runs.  A tile
+        # pass passes it even at 1: left to itself the converter sizes its
+        # frames in flight against the host's whole free memory, which the
+        # tile passes beside it are using too.
         command.extend(("--jobs", str(jobs)))
     result = _run(command, log_prefix="CONVERT")
     for line in (result.stdout or "").splitlines():
@@ -733,7 +1048,103 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
             f"{report_path} is unreadable ({error}); the receipt is the "
             f"digest evidence, so the render does not proceed without it."
         ) from error
+    if pairing is not None:
+        report["diagnostics"] = checked_diagnostics_pairing(report, pairing)
     return report, [str(part) for part in command]
+
+
+#: The valid-time stamp MPAS stream file names carry (``history.2023-03-31_18.00.00.nc``).
+_STREAM_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}[.:]\d{2}[.:]\d{2}")
+
+
+def pair_diagnostics(history: Path, diagnostics: Path, scratch: Path) -> dict:
+    """Put ``diagnostics`` where the converter reads a history's diag stream file.
+
+    ``rw_mpas_convert`` completes a history from the file whose name is the history's with its last
+    ``history`` token replaced by ``diag``, in the same directory (``history.T.nc`` ->
+    ``diag.T.nc``, the template MPAS-A and the RRFS fork both write).  When the named file already
+    is that file the history is converted where it is; otherwise both are linked (hard link, else
+    symbolic link, else copied) into ``<scratch>/diagnostics-pair/`` under those names.  Returns
+    ``{history, diag, given, sha256, how}``."""
+
+    name = history.name
+    at = name.rfind("history")
+    if at < 0:
+        raise RenderDoorError(
+            f"--diagnostics pairs the diag file with its history by name (history.T.nc beside "
+            f"diag.T.nc), and {name} carries no 'history' token to pair on, so the converter "
+            f"could not find it; rename the history file to the MPAS template or drop --diagnostics")
+    companion = name[:at] + "diag" + name[at + len("history"):]
+    # The converter checks a diag file's cells and levels, not its time: the pairing by name is
+    # what makes it the same valid time.  A named file whose own name carries another time is
+    # refused, so the maps never mix two times.
+    stamps = [_STREAM_STAMP.search(text) for text in (name, Path(diagnostics).name)]
+    if all(stamps) and stamps[0].group(0) != stamps[1].group(0):
+        raise RenderDoorError(
+            f"--diagnostics {Path(diagnostics).name} is the diag stream of {stamps[1].group(0)}, and "
+            f"--history {name} is {stamps[0].group(0)}; a frame completed from it would draw two "
+            f"valid times as one")
+    record = {"given": str(diagnostics), "sha256": sha256_file(diagnostics)}
+    beside = history.with_name(companion)
+    try:
+        if beside.exists() and os.path.samefile(beside, diagnostics):
+            return {**record, "history": history, "diag": beside, "how": "beside"}
+    except OSError:
+        pass
+    pair = Path(scratch) / "diagnostics-pair"
+    pair.mkdir(parents=True, exist_ok=True)
+    hows = []
+    for source, target in ((history, pair / name), (diagnostics, pair / companion)):
+        if target.is_symlink() or target.exists():
+            target.unlink()
+        try:
+            os.link(source, target)
+            hows.append("hard link")
+        except OSError:
+            try:
+                os.symlink(Path(source).resolve(), target)
+                hows.append("symbolic link")
+            except OSError:
+                shutil.copyfile(source, target)
+                hows.append("copy")
+    print(f"DIAGNOSTICS paired {diagnostics} with {history.name} as {companion} "
+          f"({', '.join(sorted(set(hows)))})", flush=True)
+    return {**record, "history": pair / name, "diag": pair / companion, "how": ", ".join(hows)}
+
+
+def checked_diagnostics_pairing(report: dict, pairing: dict) -> dict:
+    """The converter's receipt must name the paired diag file (by path, and by digest where it
+    records one); a frame it completed from another file is refused, never drawn."""
+
+    frames = report.get("frames") or []
+    meta = frames[0] if frames else {}
+    named = None
+    named_sha = None
+    fields: list = []
+    for key in ("split_streams", "diag_stream"):
+        block = meta.get(key) if isinstance(meta, dict) else None
+        if isinstance(block, dict) and block.get("diag"):
+            named = block.get("diag")
+            named_sha = block.get("diag_sha256")
+            fields = list(block.get("diag_fields") or [])
+            break
+    record = {"file": pairing["given"], "sha256": pairing["sha256"], "paired_as": str(pairing["diag"]),
+              "how": pairing["how"], "history": str(pairing["history"]), "read": named is not None,
+              "fields": fields}
+    if named is None:
+        print("DIAGNOSTICS not read: the history carries every field the converter maps", flush=True)
+        return record
+    try:
+        same = os.path.samefile(named, pairing["diag"])
+    except OSError:
+        same = Path(named) == Path(pairing["diag"])
+    if not same or (named_sha and named_sha != pairing["sha256"]):
+        raise RenderDoorError(
+            f"rw_mpas_convert completed {pairing['history']} from {named} (sha256 {named_sha}), not "
+            f"the --diagnostics file {pairing['given']} (sha256 {pairing['sha256']}); the frame is "
+            f"not drawn from fields of another file")
+    print(f"DIAGNOSTICS read {len(fields)} field(s) from {pairing['given']}: {', '.join(fields)}", flush=True)
+    return record
 
 
 def list_catalog(renderer_exe: Path, wrfout: Path | list[Path], *, scratch: Path,
@@ -835,6 +1246,16 @@ def refuse_uncovered_products(products: str, rows: dict, history: Path,
         if status != "renderable":
             hint = (f" (fields absent from the source history: "
                     f"{', '.join(absent)})" if absent else "")
+            if kind == "windowed":
+                # The absent-field list alone read as the cause of a window
+                # refusal (RRFS hrrrv5 qpf_1h, 2026-10-28: "RAINC" named,
+                # while one frame per store was the cause); say what a
+                # window needs first.
+                hint = (" (a window is the difference of stored frames of "
+                        "one run: give --history two or more frames with "
+                        "distinct leads, every hour for an hourly window"
+                        + (f"; fields absent from the source history: "
+                           f"{', '.join(absent)}" if absent else "") + ")")
             raise RenderDoorError(
                 f"product '{token}' is not renderable from {history}: "
                 f"{status} -- {detail}{hint}. The render stops before "
@@ -1112,6 +1533,58 @@ def checked_frame_jobs(value) -> int:
 def run_render(args) -> int:
     """The ``mpas-port render`` handler.  Returns the process exit code."""
 
+    return _run_render(args)[0]
+
+
+def _run_tiles(args, plan: list[dict], *, view: str, scratch: Path, histories: list[Path] | None,
+               frame_jobs: int, why: str) -> dict:
+    """Draw every cut of ``plan`` (see :func:`plan_tiles`), side by side, each its own pass."""
+
+    import argparse
+
+    workers, per_tile = tile_workers(len(plan), histories, frame_jobs)
+    print(f"TILES {len(plan)} cuts ({why}); {workers} at a time, {per_tile} frame(s) each", flush=True)
+    started = time.monotonic()
+
+    def one(cut: dict) -> dict:
+        tile_args = argparse.Namespace(**vars(args))
+        tile_args.frame_jobs = per_tile
+        tile_args.scratch = str(Path(scratch) / f"tile-{cut['name']}")
+        tile_args.keep_scratch = bool(getattr(args, "keep_scratch", False))
+        if histories is not None:
+            tile_args.history = [str(item) for item in histories]
+        # The full pass already paired and checked the diagnostics file; the cut converts the paired
+        # history, whose diag file the converter finds beside it.
+        tile_args.diagnostics = None
+        cut_started = time.monotonic()
+        record = {"name": cut["name"], "window": cut["window"], "i": cut["i"], "j": cut["j"]}
+        try:
+            rc, manifest = _run_render(tile_args, tile={**cut, "view": view})
+        except (MpasPortError, OSError, ValueError) as error:
+            print(f"TILE {cut['name']} refused: {error}", flush=True)
+            record.update(rc=2, refusal=str(error), counts={"rendered": 0, "skipped": 0, "failed": 1})
+        else:
+            record.update(rc=rc, counts=manifest.get("counts"),
+                          window_description=(manifest.get("convert") or {}).get("window_description"),
+                          products_drawn=manifest.get("products_drawn"),
+                          products_unavailable=manifest.get("products_unavailable"),
+                          frames=manifest.get("frames"), invocations=manifest.get("invocations"))
+        record["elapsed_seconds"] = round(time.monotonic() - cut_started, 3)
+        return record
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="tile") as pool:
+        cuts = list(pool.map(one, plan))
+    return {"why": why, "workers": workers, "frame_jobs_each": per_tile, "cuts": cuts,
+            "elapsed_seconds": round(time.monotonic() - started, 3)}
+
+
+def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
+    """One render pass: ``(exit code, manifest)``.
+
+    ``tile`` (internal) is one cut of a tiled render, ``{name, window, view, ...}``: the pass
+    converts the cut's own window, files its pictures under the tile folder, and leaves the
+    manifest file, the column store and the further cuts to the full pass that called it."""
+
     started = time.monotonic()
     out_root = Path(args.out)
     scratch = Path(args.scratch) if args.scratch else default_scratch(out_root)
@@ -1153,6 +1626,14 @@ def run_render(args) -> int:
 
     remap = resolve_remap(getattr(args, "remap", REMAP_AUTO), compose is not None)
     frame_jobs = checked_frame_jobs(getattr(args, "frame_jobs", 1) or 1)
+    tiles_mode = str(getattr(args, "tiles", None) or "none")
+    if tiles_mode not in TILE_MODES:
+        raise RenderDoorError(f"--tiles {tiles_mode!r} is not one of {', '.join(TILE_MODES)}")
+    if compose is not None and tiles_mode == "regional":
+        raise RenderDoorError(
+            "--tiles regional cuts tiles out of one run's converted window, and a --compose frame "
+            "takes its window from the source list, which the converter frames itself, so there is "
+            "no window grid the cuts could be placed on; draw the composite with --tiles none")
 
     convert_exe = resolve_convert_exe(args.convert_exe)
     renderer_exe = resolve_renderer_exe(args.renderer_exe)
@@ -1229,9 +1710,11 @@ def run_render(args) -> int:
             f"--label {label!r} must be letters, digits, '.', '_' or '-' so it "
             "can lead a filename on every platform the tree is copied to")
     window = str(getattr(args, "window", "mesh") or "mesh")
-    convert_window = converter_window(window)
-    view = checked_view(getattr(args, "view", None) or default_view(window))
-    model_label = getattr(args, "label", None) or getattr(args, "model_label", DEFAULT_MODEL_LABEL)
+    convert_window = tile["window"] if tile else converter_window(window)
+    view = checked_view(tile["view"] if tile else (getattr(args, "view", None) or default_view(window)))
+    # The plot names the model from --model-label alone: --label is the
+    # filenames' leading token (hex_x1.2621442), not a model name.
+    model_label = getattr(args, "model_label", None) or DEFAULT_MODEL_LABEL
 
     try:
         width_text, height_text = str(args.size).lower().split("x", 1)
@@ -1244,15 +1727,31 @@ def run_render(args) -> int:
     scratch.mkdir(parents=True, exist_ok=True)
     out_root.mkdir(parents=True, exist_ok=True)
     invocations: list[list[str]] = []
+    # The start data's credit after this map's own source line, fitted to this canvas (SOURCE_CREDIT_ENV).
+    credit_theme = source_credit_theme(scratch, source_label, width, height)
+    if credit_theme is not None:
+        renderer_env = {**renderer_env, "RUSTWX_THEME": credit_theme}
 
     report, convert_invocation = convert_frames(
         convert_exe, histories=histories, mesh=mesh, scratch=scratch,
         window=convert_window, field_set=args.field_set,
         simulation_start=args.simulation_start, nc_format=args.nc_format,
         compose=compose, compose_base_only=compose_base_only, init=init, diagnostics=diagnostics,
-        model_label=model_label, remap=remap, jobs=convert_jobs)
+        model_label=model_label, remap=remap, jobs=convert_jobs,
+        explicit_jobs=tile is not None and engine_accepts(convert_exe, "--jobs"))
     grid_label = report.get("grid_label")
     invocations.append(convert_invocation)
+    # Regional tiles: decided on the window the converter actually laid down (a derived window's
+    # size is known only now), so a render files whole or tiled from its first picture on.
+    tile_plan: list[dict] = []
+    tile_why = ""
+    if tile is None:
+        tile_plan, tile_why = plan_tiles(report.get("window_spec"),
+                                         "none" if compose is not None else tiles_mode, width, height)
+        if tiles_mode != "none":
+            print(f"TILES {','.join(cut['name'] for cut in tile_plan) or 'none'} ({tile_why})", flush=True)
+    tile_folder = tile["name"] if tile else (TILE_FULL if tile_plan else None)
+    file_view = view if tile is None else f"{view}-{tile['name']}"
 
     frames_meta = report.get("frames", [])
     if compose is not None:
@@ -1295,6 +1794,38 @@ def run_render(args) -> int:
             print("SERIES off: the frames do not carry distinct leads (or "
                   "there is one frame); one store per frame, so no windowed "
                   "product", flush=True)
+    elif compose is None and not getattr(args, "standard_set", False):
+        # A windowed product NAMED in --products turns the series store on
+        # by itself when the frames can close a window (two or more frames,
+        # distinct leads); the renderer catalog's own kind column says which
+        # products are windowed (49 today, qpf_1h among them).
+        # THE BREAKAGE THIS PREVENTS (RRFS hrrrv5 conus3km, 2026-10-28):
+        # `gpuwm-hex render --history <three hours> --products qpf_1h`
+        # refused every run with "excluded -- windowed accumulations need
+        # more than one stored whole-hour frame (fields absent from the
+        # source history: ... RAINC ...)", because without --series each
+        # frame had its own store; the absent-field hint read as the cause,
+        # the conus3km gallery's 1 h QPF was drawn by hand without a
+        # basemap, and the box kit's QPF pass exited 2 on every run.
+        named = [token.strip() for token in (args.products or "").split(",")
+                 if token.strip() and token.strip() not in _GROUP_KEYWORDS]
+        possible = series_leads(frames_meta) if named else None
+        if possible is not None:
+            first = frames_meta[0]
+            signature = tuple(first.get("absent_wrf_fields", []))
+            rows, catalog_summary, catalog_invocation = list_catalog(
+                renderer_exe, Path(first["output"]), scratch=scratch,
+                heavy=args.heavy, store=Path(scratch) / "store-000",
+                products=args.products, env=renderer_env)
+            catalogs[signature] = rows
+            invocations.append(catalog_invocation)
+            windowed = [token for token in named
+                        if rows.get(token, ("",))[0] == "windowed"]
+            if windowed:
+                leads = possible
+                print(f"SERIES on: {', '.join(windowed)} named; a window is "
+                      f"the difference of stored frames, so the "
+                      f"{len(frames_meta)} frames share one store", flush=True)
     series_outputs = [Path(meta["output"]) for meta in frames_meta]
     # Every map carries a labelled latitude/longitude graticule (see
     # graticule_overlays).  One window per render, so the first frame's
@@ -1422,10 +1953,10 @@ def run_render(args) -> int:
         for slug, png in rendered:
             domain, product = split_engine_name(png.name, slug)
             lead = lead_token(meta.get("lead_seconds"), png.name)
-            name = product_file_name((getattr(args, "label", None) or grid_token(grid_label, domain)), view,
+            name = product_file_name((getattr(args, "label", None) or grid_token(grid_label, domain)), file_view,
                                      product, lead)
             destination = place_path(out_root, view, product,
-                                     frame.valid_day, name)
+                                     frame.valid_day, name, tile=tile_folder)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(png), str(destination))
             placed = str(destination.relative_to(out_root)).replace(os.sep, "/")
@@ -1436,7 +1967,8 @@ def run_render(args) -> int:
                 moved[png.name] = in_view
             frame.rendered.append(slug)
             frame.placed.append(placed)
-        carry_georef(raw_out, moved, out_root / view)
+        with _GEOREF_LOCK:
+            carry_georef(raw_out, moved, out_root / view)
         results.append(frame)
         total_rendered += len(frame.rendered)
         total_skipped += len(skipped)
@@ -1462,6 +1994,7 @@ def run_render(args) -> int:
         "view": view,
         "window": window,
         "model_label": model_label,
+        "model_label_drawn": fitted_model_label(model_label),
         "source_label": source_label,
         "grid_label": grid_label,
         "graticule": graticule,
@@ -1488,7 +2021,9 @@ def run_render(args) -> int:
             "compose_spec": str(compose) if compose is not None else None,
             "compose_base_only": compose_base_only,
             "composite": report.get("composite"),
+            "diagnostics": report.get("diagnostics"),
         },
+        "tile": tile_folder,
         "catalog_summary": catalog_summary,
         "label": label,
         "products_requested": args.products,
@@ -1507,6 +2042,27 @@ def run_render(args) -> int:
     }
     # The any-point column store, every output hour (column_store.py), from the converted frames before the
     # scratch they sit in is cleared. A composite blends several runs, so it is no run's own column: none.
+    if tile is not None:
+        # A cut of a tiled render: its pictures are filed; the full pass keeps the receipt, the
+        # column store (the full window's) and the scratch it sits in.
+        ok = total_failed == 0 and total_rendered > 0
+        if ok and not args.keep_scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
+        print(f"TILE {tile['name']} rendered={total_rendered} skipped={total_skipped} "
+              f"failed={total_failed}", flush=True)
+        return (0 if ok else 1), manifest
+    if tile_plan:
+        tiles = _run_tiles(args, tile_plan, view=view, scratch=scratch, histories=(
+            [Path((report.get("diagnostics") or {}).get("history"))] if report.get("diagnostics")
+            else histories if compose is None else None), frame_jobs=frame_jobs, why=tile_why)
+        manifest["tiles"] = tiles
+        for cut in tiles["cuts"]:
+            for key in ("rendered", "skipped", "failed"):
+                manifest["counts"][key] += int((cut.get("counts") or {}).get(key) or 0)
+        total_rendered = manifest["counts"]["rendered"]
+        total_skipped = manifest["counts"]["skipped"]
+        total_failed = manifest["counts"]["failed"]
+        manifest["elapsed_seconds"] = round(time.monotonic() - started, 3)
     if compose is None:
         from .column_store import write as write_columns
         manifest["columns"] = write_columns(sorted((scratch / "frames").glob("wrfout_*")),
@@ -1539,8 +2095,8 @@ def run_render(args) -> int:
         print("DOOR nothing rendered: every requested product was skipped "
               "or failed; see the manifest's frames[] for each reason",
               flush=True)
-        return 1
-    return 0 if total_failed == 0 else 1
+        return 1, manifest
+    return (0 if total_failed == 0 else 1), manifest
 
 
 def add_render_arguments(parser) -> None:
@@ -1562,8 +2118,18 @@ def add_render_arguments(parser) -> None:
              "850mb_temperature_height_winds) render only when it is given")
     parser.add_argument(
         "--diagnostics", default=None, metavar="FILE",
-        help="native MPAS diagnostics accompanying exactly one --history; requires --init. "
-             "Both inputs are SHA-256 pinned for the Rust split-history reader.")
+        help="the diag stream file (diag.T.nc) of exactly one --history's valid time, when it is "
+             "not already beside the history under that name: the door pairs the two where the "
+             "converter reads a history's diag stream, and refuses a frame the converter completed "
+             "from any other file (its SHA-256 is in the manifest)")
+    parser.add_argument(
+        "--tiles", default="none", choices=TILE_MODES,
+        help="regional tiles: the whole window plus six cuts of it (nw, nc, ne, sw, sc, se: three "
+             "columns by two rows, overlapping), each an exact sub-grid of the window, filed as "
+             "<view>/<product>/<tile>/<valid-day>/ with 'full' for the whole window. 'regional' "
+             "always draws them; 'auto' draws them when a Lambert window has more grid points "
+             "across than the picture has pixels (a 3 km CONUS domain), and the window whole "
+             "otherwise; 'none' (default) draws the window whole, unfiled by tile")
     parser.add_argument(
         "--compose", default=None, metavar="FILE",
         help="compose SEVERAL runs of the same hours into one frame: the "
@@ -1628,7 +2194,9 @@ def add_render_arguments(parser) -> None:
     parser.add_argument(
         "--model-label", default=DEFAULT_MODEL_LABEL, metavar="NAME",
         help="the model the plots name (metadata row and headline grid "
-             "label, e.g. 'hex 15 km'); default: hex")
+             "label, e.g. 'hex 15 km'), at most 32 characters, the metadata "
+             "row's limit; a longer name is shortened to its whole words "
+             "that fit, with '...', and the door says so; default: hex")
     parser.add_argument(
         "--source-label", default=None, metavar="TEXT",
         help="source credit printed on each picture (1-160 printable ASCII "
@@ -1670,7 +2238,7 @@ def add_render_arguments(parser) -> None:
         help="leading token of every delivered filename, which reads "
              "<label>_<YYYYMMDD>_<HH>z_f<lead>_<product>.png (default: hex_ "
              "plus the mesh file's name without its role tokens, e.g. "
-             "hex_x1.2621442)")
+             "hex_x1.2621442); the plots name the model from --model-label")
     parser.add_argument(
         "--simulation-start", default=None, metavar="YYYY-MM-DD_HH:MM:SS",
         help="run start, for true lead hours in filenames")

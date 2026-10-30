@@ -131,19 +131,19 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_carrier(path) -> dict[str, Any]:
-    """Read this route's own carrier after its sealed receipt matches (never an untrusted download)."""
-    path = Path(path)
-    receipt = json.loads(path.with_suffix(path.suffix + ".json").read_text())
-    if path.stat().st_size != receipt["bytes"]:
-        raise ValueError("moving carrier does not match its sealed receipt")
-    # One read of the file: each block is hashed on a second thread while the next is read, and the
-    # bytes are unpickled from memory only after the whole-file hash matches. THE COST THIS REMOVES:
-    # a full hash pass and then a full pickle read of the ~3 GB carrier, one after the other, on one
-    # core at the start of every resumed segment (box-aws2x 2026-10-24).
+def _read_verified(path: Path, size: int, sha256: str, what: str = "moving carrier"):
+    """The file's bytes in memory after their SHA256 matches ``sha256`` (one read; the hash on a second thread).
+
+    Returns the uint8 buffer; the caller unpickles from it.  THE COST THIS REMOVES: a full hash pass and then a full
+    pickle read of the ~3 GB carrier, one after the other, on one core at the start of every resumed segment
+    (box-aws2x 2026-10-24).
+    """
     import numpy as np
     from concurrent.futures import ThreadPoolExecutor
-    data = np.empty(receipt["bytes"], dtype=np.uint8)
+    mismatch = f"{what} does not match its sealed receipt"
+    if path.stat().st_size != size:
+        raise ValueError(mismatch)
+    data = np.empty(size, dtype=np.uint8)
     view = memoryview(data)
     digest = hashlib.sha256()
     block = 64 << 20
@@ -155,7 +155,7 @@ def load_carrier(path) -> dict[str, Any]:
             while filled < len(chunk):
                 got = stream.readinto(chunk[filled:])
                 if not got:
-                    raise ValueError("moving carrier does not match its sealed receipt")
+                    raise ValueError(mismatch)
                 filled += got
             if pending is not None:
                 pending.result()
@@ -163,11 +163,27 @@ def load_carrier(path) -> dict[str, Any]:
         if pending is not None:
             pending.result()
         if stream.read(1):
-            raise ValueError("moving carrier does not match its sealed receipt")
-    if digest.hexdigest() != receipt["sha256"]:
-        raise ValueError("moving carrier does not match its sealed receipt")
-    payload = pickle.loads(view)
-    del view, data
+            raise ValueError(mismatch)
+    if digest.hexdigest() != sha256:
+        raise ValueError(mismatch)
+    return data
+
+
+def load_carrier(path) -> dict[str, Any]:
+    """Read this route's own carrier after its sealed receipt matches (never an untrusted download).
+
+    A carrier sealed on same-host ranks is a manifest plus one shard per rank (checkpoint_shards_v842): the shards
+    are read and verified in parallel and assembled into the payload one card seals, so a reader never sees the
+    difference.
+    """
+    path = Path(path)
+    receipt = json.loads(path.with_suffix(path.suffix + ".json").read_text())
+    data = _read_verified(path, int(receipt["bytes"]), receipt["sha256"])
+    payload = pickle.loads(memoryview(data))
+    del data
+    from .checkpoint_shards_v842 import SCHEMA as SHARDED, assemble_sharded
+    if payload.get("schema") == SHARDED:
+        payload = assemble_sharded(path, payload)
     if payload.get("schema") != SCHEMA:
         raise ValueError("this moving carrier was sealed on the ArWen route; a moving run keeps one physics "
                          "route from its first segment to its last (the case's physics_args select it)")
@@ -602,13 +618,45 @@ class MovingRoute:
         """Moving remaps keep target geography; same-mesh checkpoints may carry it."""
         return carried_rows(layout)
 
+    def continuation_state(self, session) -> dict[str, Any]:
+        """Carrier words a same-mesh checkpoint continuation adds (``CheckpointRoute``); a move adds none."""
+        return {}
+
+    def physics_clock_offset(self, dt):
+        """(steps, seconds) the physics clock starts at: a move starts its own clock (``CheckpointRoute``)."""
+        return 0, 0.0
+
     def export(self, path, *, session, dycore, mesh, vertical, names, layout, step, dt) -> dict[str, Any]:
         """Seal the dycore state and the carried native physics state at this step."""
+        payload, summary = self.carrier_payload(session=session, dycore=dycore, mesh=mesh, vertical=vertical,
+                                                names=names, layout=layout, step=step, dt=dt)
+        return _write_sealed(Path(path), payload, summary)
+
+    def carrier_payload(self, *, session, dycore, mesh, vertical, names, layout, step, dt):
+        """The carrier ``export`` seals, and its receipt summary.
+
+        Same-host ranks seal each rank's words in its own shard (checkpoint_shards_v842); ``load_carrier``
+        assembles the shards and builds this same payload from them, so every reader gets the words one card's
+        carrier holds.
+        """
         native, cp = session.native, dycore.cp
         atmosphere = dycore.atmosphere
         model_seconds = self.offset_seconds + step * dt
         state = {name: cp.asnumpy(getattr(atmosphere.state, name)) for name in STATE_FIELDS}
         state.update({name: cp.asnumpy(getattr(atmosphere.saved, name)) for name in SAVED_FIELDS})
+        if getattr(dycore, "regional_v841", None) is not None:
+            # A limited-area dycore holds native's garbage element as the last cell/edge of every state array
+            # (cuda_regional_forecast_v841._PaddedState/_PaddedSaved); the carrier holds the solve extent, the
+            # shape the regional dycore pads again when it opens on a resume.  THE BREAKAGE THIS FIXES
+            # (fix/hex-lam-da-v842): a limited-area checkpoint resumed with the garbage element padded twice.
+            n_cells, n_edges = int(mesh.dimensions["nCells"]), int(mesh.dimensions["nEdges"])
+            extent = {name: n_edges if name in ("rho_u", "normal_velocity") else n_cells
+                      for name in (*STATE_FIELDS, *SAVED_FIELDS)}
+            for name, value in state.items():
+                if value.shape[-1] != extent[name] + 1:
+                    raise ValueError(f"limited-area carrier: {name} is not the padded solve extent "
+                                     f"({value.shape[-1]} against {extent[name]} + 1)")
+                state[name] = np.ascontiguousarray(value[..., :extent[name]])
         rows = self.carried_rows(layout)
         pools = {_key(row, level): native.get_field(row["pool"], row["pool_name"], level=level)
                  for row in rows for level in range(1, row["nlevels"] + 1)}
@@ -623,8 +671,12 @@ class MovingRoute:
                        window=None if window is None else window.snapshot(),
                        surface_service=None if service is None else service.restart_state(),
                        # The physics alarms' phase (radiation, convection, buckets) on this segment's elapsed
-                       # clock, and that clock at the seal (restore_alarm_phase rebases it).
-                       manager=_manager_state(session), manager_elapsed=str(Fraction(str(step)) * Fraction(str(dt))))
+                       # clock, and that clock at the seal (restore_alarm_phase rebases it).  A checkpoint
+                       # continuation's clock starts at its offset (CheckpointRoute.physics_clock_offset).
+                       manager=_manager_state(session),
+                       manager_elapsed=str(Fraction(str(self.physics_clock_offset(dt)[1]))
+                                           + Fraction(str(step)) * Fraction(str(dt))))
+        physics.update(self.continuation_state(session))
         valid = (datetime.strptime(self.origin_time, TIME_FORMAT) + timedelta(seconds=model_seconds)).strftime(TIME_FORMAT)
         payload = dict(schema=SCHEMA, route="mpas-suite", time_seconds=float(model_seconds),
                        origin_time=self.origin_time, valid_time=valid, state=state, mesh=mesh, vertical=vertical,
@@ -633,9 +685,9 @@ class MovingRoute:
                                    dycore.stochastic.process.snapshot()),
                        chemistry=(None if getattr(dycore, 'chemistry', None) is None else
                                   dycore.chemistry.restart_state()))
-        return _write_sealed(Path(path), payload, dict(
+        return payload, dict(
             physics_fields=len(rows), physics_words=int(sum(np.asarray(v).size for v in pools.values())),
-            state={k: list(v.shape) for k, v in state.items()}))
+            state={k: list(v.shape) for k, v in state.items()})
 
     # ----------------------------------------------------------------- per step: shock series, frames, stop
     def after_step(self, step, *, steps, dt, columns, session, dycore, mesh, vertical, names, layout, out) -> bool:

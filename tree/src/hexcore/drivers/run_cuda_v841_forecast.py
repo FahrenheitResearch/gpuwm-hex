@@ -3141,16 +3141,21 @@ def _arm_nest_trigger(*, host: Mapping[str, Any], schedule: Mapping[str, Any], o
     the physics backend forms on the card; a table naming another is refused
     here, before the first step, by :class:`hexcore.nest_triggers.LoopTrigger`.
     The arming itself is :func:`hexcore.nest_triggers.arm_loop`, shared with
-    the MPAS-physics route.
+    the MPAS-physics route.  Beside ``refl10cm`` (when the backend forms it)
+    the route forms the dycore's own sources (``w``, ``cape``,
+    ``updraft_helicity_max``: :mod:`hexcore.nest_look_dycore`); until
+    2026-10-29 it named ``refl10cm`` only, so a ``wmax``/``mucape``/``uh25``
+    test was refused after its box was rented (owner canary
+    run_9948508bd7cfdee3).  The trigger carries them as ``dycore_sources``.
     """
 
     table_path = host.get("nest_triggers") or os.environ.get(NEST_TRIGGERS_ENV)
     if not table_path:
         return None
-    from hexcore import nest_triggers
+    from hexcore import nest_look_dycore, nest_triggers
 
     mesh = host["prepared"].mesh
-    return nest_triggers.arm_loop(
+    trigger = nest_triggers.arm_loop(
         table_path, run_dir=output_root, start_text=str(schedule["start_time"]), start_step=start_step,
         dt_s=float(DT_SECONDS),
         # The parent's end is always known: the schedule's own step count (a
@@ -3160,7 +3165,12 @@ def _arm_nest_trigger(*, host: Mapping[str, Any], schedule: Mapping[str, Any], o
                         if schedule.get("forecast_hours") is not None
                         else float(schedule["steps"]) * float(DT_SECONDS)),
         mesh=mesh, owned_cells=int(mesh.n_cells),
-        available_sources=["refl10cm"] if backend.computes_reflectivity() else [], cp=cp)
+        available_sources=(["refl10cm"] if backend.computes_reflectivity() else []) + list(nest_look_dycore.SOURCES),
+        cp=cp)
+    names = list(host.get("scalar_names") or ())
+    trigger.dycore_sources = nest_look_dycore.for_trigger(
+        trigger, cp, owned_cells=int(mesh.n_cells), qv_index=names.index("qv") if "qv" in names else None, mesh=mesh)
+    return trigger
 
 
 def execute_forecast(
@@ -3883,7 +3893,8 @@ def execute_forecast(
                     # WRF/native diagflag: the step ENDING at a history frame
                     # computes refl10cm inside its own microphysics call.
                     refl_10cm_due=(step in capture_steps or
-                                   (nest_trigger is not None and nest_trigger.due(step))),
+                                   (nest_trigger is not None and nest_trigger.due(step)
+                                    and "refl10cm" in nest_trigger.needed_sources())),
                     **({} if iau_forcing is None else {"held_forcing": (
                         lambda held, start, length, **context:
                         iau_forcing.add(0, held, start, length, **context))}),
@@ -3959,10 +3970,14 @@ def execute_forecast(
             receipt_writer.submit(step, elapsed, result, surface_execution)
             if nest_trigger is not None:
                 if nest_trigger.due(step):
-                    refl = stack["backend"].peek_history_refl10cm()
-                    if refl is not None:
-                        nest_trigger.look(step, {"refl10cm": refl})
-                    if step not in capture_steps:
+                    from hexcore.nest_look_dycore import look_arrays
+                    needed = nest_trigger.needed_sources()
+                    arrays = look_arrays(
+                        refl=stack["backend"].peek_history_refl10cm() if "refl10cm" in needed else None,
+                        needed=needed, dycore=nest_trigger.dycore_sources, driver=stack["driver"])
+                    if arrays is not None:
+                        nest_trigger.look(step, arrays)
+                    if "refl10cm" in needed and step not in capture_steps:
                         # Formed only for the look: clear it so no later
                         # capture is handed this step's reflectivity.
                         stack["backend"].take_history_refl10cm()

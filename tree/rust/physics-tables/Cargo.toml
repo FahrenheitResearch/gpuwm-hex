@@ -16,6 +16,13 @@
 #   src/rrtmg_sw_tables.rs          the RRTMG SW port's decoder module
 #   src/bin/rw_mpas_rrtmg_sw_tables.rs   its entry point, minus the engine's
 #                                   build-stamp static (this crate is not the engine's)
+#   src/bin/ruc_table_decode.rs     the RRFS fork's RUC VEGPARM/SOILPARM/GENPARM reader
+#                                   (RUCLSM_SOILVEGPARM), for the RRFS route's ported framework
+#   src/bin/tempo_table_compute.rs  the tables TEMPO's tempo_init computes (efficiencies, drop
+#                                   evaporation, ice autoconversion), on every core
+#   src/bin/tempo_table_init.rs     tempo_init's parameters and bins from its constant words
+#   src/own_gamma.rs                the project's own correctly rounded binary32 gamma (gfk_tgamma) that both
+#                                   TEMPO programs call instead of the host C library's tgammaf
 # Standard library only: the build needs no registry and runs offline.
 [package]
 name = "hex-physics-tables"
@@ -41,3 +48,15 @@ path = "src/bin/rw_mpas_rrtmg_lw_tables.rs"
 [[bin]]
 name = "rw_mpas_rrtmg_sw_tables"
 path = "src/bin/rw_mpas_rrtmg_sw_tables.rs"
+
+[[bin]]
+name = "ruc_table_decode"
+path = "src/bin/ruc_table_decode.rs"
+
+[[bin]]
+name = "tempo_table_compute"
+path = "src/bin/tempo_table_compute.rs"
+
+[[bin]]
+name = "tempo_table_init"
+path = "src/bin/tempo_table_init.rs"

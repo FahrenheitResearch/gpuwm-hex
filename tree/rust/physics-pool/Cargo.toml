@@ -7,12 +7,15 @@
 # a lane scratch binary and the gpuwm integrate branch, which no released
 # engine carries, so `--native-pool-reader` had to name a file on one host.
 #
-# Source (SHA-256 e885e2a3752947ab1b226c89e9d3f7ed6c109f87f2ab6ad55a88a9a8e9d8633a,
+# Source (SHA-256 1a42521cdcaa87bf8931b3ce5b5869bfe16f61c7519d9463903580a295886e83,
 # held by tests/test_physics_route_resources.py):
 #   src/bin/rw_mpas_physics_pool.rs   gpuwm 24b6f08c48db3199051280f5a874ef33b41a5762
 #                                     tools/rustwx/crates/rw-mpas/src/bin/rw_mpas_physics_pool.rs
 #                                     plus hex fix/U-H3: fields transported on a worker pool (only the
-#                                     netCDF-C call is serialised), the same bytes per field at any count.
+#                                     netCDF-C call is serialised), the same bytes per field at any count;
+#                                     plus hex fix/rrfs-c3km-startup-split: one field split over threads
+#                                     (classic-file words read in row chunks, payload write beside its
+#                                     SHA-256), the same bytes.
 # Dependencies are the versions gpuwm's Cargo.lock pins at that commit, with the
 # rw-mpas crate's serde_json feature set.  It links netCDF-C (libnetcdf); the
 # manylinux build links the pinned static classic library through LIBRARY_PATH,

@@ -35,7 +35,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .errors import MpasPortError
 
@@ -212,6 +212,8 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
     from .mesh_point import add_point_arguments
 
     add_point_arguments(parser)
+    from gpuwm.output_formats import add_arguments
+    add_arguments(parser)
     global_group = parser.add_argument_group("generated global variable-resolution forecast")
     from .products_door import add_label_arguments
 
@@ -224,6 +226,11 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
                                    "no static, no run")
     global_group.add_argument("--run", action="store_true",
                               help="with --global-mesh --generate: init-source, forecast and Rust products")
+    global_group.add_argument("--cards", type=int, default=None, metavar="N",
+                              help="same-host cards the forecast runs on, one rank per card (default: the "
+                                   "--forecast-arg=--samehost-devices count, else 1); the plan prices one card's "
+                                   "share and lists every count up to 8; with --run it passes --samehost-devices "
+                                   "0..N-1 when --forecast-arg names none")
     global_group.add_argument("--source", default=None, help="an init-source table row")
     global_group.add_argument("--cycle", default=None, help="YYYY-MM-DDTHH")
     global_group.add_argument("--lead-hours", type=int, default=0, metavar="H",
@@ -284,6 +291,44 @@ def rotation_template_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
     return template
 
 
+def samehost_cards(flags: list[str]) -> int | None:
+    """The card count a forecast-flag list's ``--samehost-devices D0,D1,...`` names (the last one wins), or None."""
+    count = None
+    for index, item in enumerate(flags):
+        name, equals, value = str(item).partition("=")
+        if name == "--samehost-devices":
+            if not equals:
+                value = str(flags[index + 1]) if index + 1 < len(flags) else ""
+            count = len([device for device in value.split(",") if device.strip()])
+    return count
+
+
+def plan_cards(arguments: argparse.Namespace, flags: list[str]) -> int:
+    """The cards a globe plan prices and runs on: ``--cards``, else the forecast's ``--samehost-devices``, else 1."""
+    asked = getattr(arguments, "cards", None)
+    named = samehost_cards(flags)
+    if asked is not None and int(asked) < 1:
+        raise MpasPortError(f"--cards is one or more cards, got {asked}")
+    if asked is not None and named is not None and int(asked) != named:
+        raise MpasPortError(f"--cards {asked} and --forecast-arg=--samehost-devices ({named} cards) disagree; "
+                            "the plan prices the cards the forecast runs on, so give one")
+    return int(asked if asked is not None else named or 1)
+
+
+def _recipe_context(arguments: argparse.Namespace, regions: Sequence[Any]) -> dict[str, Any]:
+    """The context physics_default.ensure picks the forecast's default recipe on (geometry, source row id, cold
+    start), shared by the plan's price and the run's forecast flags so both name the same physics."""
+    source = getattr(arguments, "source", None)
+    if source:
+        from .init_sources import InitSourceRefusal, load_table as source_rows, resolve_source as source_row
+
+        try:
+            source = source_row(source_rows(getattr(arguments, "source_table", None)), source)["id"]
+        except InitSourceRefusal:
+            pass  # --run refuses it by name; a plan alone keeps the name as given (no recipe row matches it)
+    return {"geometry": "zoom-globe" if regions else "global", "source": source, "start": "cold"}
+
+
 def run_global_mesh(arguments: argparse.Namespace) -> int:
     """A generated spec to a bound global forecast through existing doors.
 
@@ -328,6 +373,25 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
     levels = VerticalSpec.from_file(vertical).n_vert_levels
     from .mpas_defaults import default_dt_seconds
     dt = float(default_dt_seconds(finest)["dt_seconds"])
+    # The physics and the card count the forecast will run, priced before anything is built (a plan priced on
+    # another route's runs, with no card count, said a 417,810-cell globe fit two 32 GB cards: card_fit).
+    from .global_door import forecast_arg_physics as planned_physics
+    from .multi_member import argv_physics_route
+    from .physics_default import ensure as with_default_physics
+    # No physics named: the hex default the forecast will take (hexcore.physics_default), on the same recipe context
+    # the run passes it, so a GFS cold-start zoom globe is priced on convection_permitting + hrrr-like-aerosol (the
+    # recipe_rules row), not on plain convection_permitting (hex 0.4.10 review: the plan said 28,715 MiB of plain
+    # convection_permitting per card for a forecast that ran the aerosol profile).
+    recipe_context = _recipe_context(arguments, regions)
+    plan_flags = with_default_physics([str(item) for item in getattr(arguments, "forecast_arg", None) or ()], finest,
+                                      context=recipe_context)
+    planned = planned_physics(plan_flags)
+    physics = {"route": argv_physics_route(plan_flags), "suite": planned.get("suite"),
+               "profile": planned.get("profile")}
+    cards = plan_cards(arguments, plan_flags)
+    # The forecast runs on the cards priced: --cards N with no --samehost-devices of the caller's passes 0..N-1.
+    samehost = ([] if cards == 1 or samehost_cards(plan_flags) is not None else
+                ["--samehost-devices=" + ",".join(str(index) for index in range(cards))])
     if getattr(arguments, "template_only", False):
         if arguments.run or not arguments.generate or arguments.out_dir is None:
             raise MpasPortError("--template-only takes --generate --out-dir and no --run")
@@ -358,6 +422,11 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
         issued_label = f"{arguments.cycle} f{lead:03d}" if lead else arguments.cycle
         source_table = load_table(arguments.source_table)
         source = resolve_source(source_table, arguments.source)
+        from .init_sources import admit_cycle
+
+        # Refused before minutes of mesh and static: a cycle the source never posted or posted without what
+        # the init needs (the row's cycles block).
+        admit_cycle(source, issued)
         resolve_writer(None)
         resolve_vtable(source)
         from .source_horizon import beyond_source, label as horizon_label
@@ -380,9 +449,11 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
             raise MpasPortError("history cadence must divide the positive run length in whole timesteps")
     engine = resolve(MESH, arguments.mesh_exe)
     sizing = dry_run(spec, engine=engine)
-    fit = card_fit.predict(
-        sizing["predicted_cells"], card=card, levels=levels, dt_seconds=dt, hours=arguments.hours,
-        budget_mib=None if arguments.vram_gib is None else arguments.vram_gib * 1024)
+    pricing = dict(card=card, levels=levels, dt_seconds=dt, hours=arguments.hours,
+                   budget_mib=None if arguments.vram_gib is None else arguments.vram_gib * 1024,
+                   suite=physics["suite"], route=physics["route"], profile=physics["profile"])
+    fit = card_fit.predict(sizing["predicted_cells"], cards=cards, **pricing)
+    fit.update(card_fit.by_card_count(sizing["predicted_cells"], **pricing))
     receipt: dict[str, Any] = {
         "schema": "gpuwm-hex.global-vr/v1", "status": "planned", "spec": spec,
         "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -392,19 +463,29 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
     if arguments.json:
         print(json.dumps(receipt, indent=2, sort_keys=True))
     else:
-        print(f"global mesh: {fit['cells']:,} predicted cells, "
-              f"{fit['predicted_peak_mib']:,.1f} MiB peak, "
+        named_profile = fit["physics"].get("profile")
+        runtime_seconds = fit["runtime"]["seconds"]
+        print(f"global mesh: {fit['cells']:,} predicted cells, {fit['physics']['suite']}"
+              f"{' + ' + named_profile if named_profile else ''} "
+              f"({fit['physics']['route']} route) on {cards} card{'s' if cards > 1 else ''}: "
+              f"{fit['predicted_peak_mib']:,.1f} MiB peak per card, "
               f"{fit['required_free_mib']:,.1f} MiB required, fits={fit['fits']}; "
-              f"forecast runtime {fit['runtime']['seconds']} s (extrapolated)", flush=True)
+              f"fewest cards that fit: {fit['fewest_cards_that_fit'] or 'more than ' + str(card_fit.CARD_COUNTS[-1])}; "
+              + (f"forecast runtime {runtime_seconds:,.1f} s (extrapolated from a measured run of this route, card "
+                 f"and card count)" if runtime_seconds is not None else
+                 "forecast runtime: no measured rate for this route/card"), flush=True)
     if arguments.out is not None:
         arguments.out.parent.mkdir(parents=True, exist_ok=True)
         arguments.out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     if not arguments.generate:
         return 0
     if not fit["fits"]:
+        fewest = fit["fewest_cards_that_fit"]
         raise MpasPortError(
-            f"whole global mesh requires {fit['required_free_mib']:,.1f} MiB; "
-            f"budget {fit['budget_mib']:,.1f} MiB. Coarsen or shrink the refinement region")
+            f"whole global mesh requires {fit['required_free_mib']:,.1f} MiB per card on {cards} card(s); "
+            f"budget {fit['budget_mib']:,.1f} MiB. "
+            + (f"It fits {fewest} cards: pass --cards {fewest}. " if fewest else "")
+            + "Or coarsen or shrink the refinement region")
     if arguments.out_dir is None:
         raise MpasPortError("--global-mesh --generate requires --out-dir")
     root = arguments.out_dir.expanduser().absolute()
@@ -455,6 +536,9 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
             raise MpasPortError(f"{name} exited {result['returncode']}; log {result['log']}")
         return result
 
+    from .physics_default import ensure, init_flags
+    extra = ensure([str(item) for item in getattr(arguments, "forecast_arg", None) or ()], finest,
+                   context=recipe_context)
     prefix = [sys.executable, "-m", "hexcore.cli"]
     prefetch = None
     try:
@@ -482,7 +566,7 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
         if arguments.run:
             init_common = ["init-source", "--source", arguments.source, "--cycle", arguments.cycle,
                            *(["--lead-hours", lead] if lead else []), "--out-dir", root / "init",
-                           "--jobs", arguments.jobs]
+                           "--jobs", arguments.jobs, *init_flags(extra)]
             for path in arguments.staged:
                 init_common += ["--staged", path]
             if arguments.source_table:
@@ -576,9 +660,7 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
             n_levels=levels, admission=admission)
         mesh_rows.write_rows(rows_file, [row])
         receipt["mesh_row"] = row.as_dict()
-        measured_fit = card_fit.predict(
-            row.n_cells, card=card, levels=levels, dt_seconds=dt, hours=arguments.hours,
-            budget_mib=None if arguments.vram_gib is None else arguments.vram_gib * 1024)
+        measured_fit = card_fit.predict(row.n_cells, cards=cards, **dict(pricing, dt_seconds=dt))
         receipt["prediction_on_generated_mesh"] = measured_fit
         save()
         if not measured_fit["fits"]:
@@ -613,26 +695,31 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
             # A named suite (--forecast-arg=--physics-suite=NAME) takes the forecast door's own step for it,
             # as the global door does; the caller's flags come last and win.
             from .global_door import forecast_arg_physics
-            from .physics_default import ensure
-            # No physics named: the hex default MPAS suite by mesh (hexcore.physics_default).
-            extra = ensure([str(item) for item in getattr(arguments, "forecast_arg", None) or ()])
             named = forecast_arg_physics(extra)
             # The receipt names the physics the forecast ran, as the global door's does (the zoom-globe receipt
-            # named none: both-routes gate, rg1).
+            # named none: both-routes gate, rg1).  A run that names no mode runs the forecast door's default mode
+            # (correct, on both routes), so that is what the receipt says.  THE BREAKAGE THIS PREVENTS (hex-meshes-
+            # sources review, 2026-10-29): '--forecast-arg=--physics-suite=convection_permitting' ran correct mode
+            # but the receipt said "exact", and the one-card shapes table was read as exact-mode numbers.
+            from .correct_mode import DEFAULT_PHYSICS_MODE
             receipt["physics"] = {"suite": named.get("suite") or "arwen",
-                                  "mode": named.get("mode") or "exact",
+                                  "mode": named.get("mode") or DEFAULT_PHYSICS_MODE,
+                                  **({"profile": named["profile"]} if named.get("profile") else {}),
                                   **({"namelist": named["namelist"]} if named.get("namelist") else {})}
-            from .physics_default import suite_takes_door_step
+            from .physics_default import door_step
             # Full-step LTS: the forecast door picks the step, so its default moves onto the class clock
             # (mpas_defaults.lts_class_clock_dt); an explicit --dt here would be refused by that clock instead.
             lts = any(str(item).split("=", 1)[0] == "--fullstep-local-timestep" for item in extra)
-            step = [] if (suite_takes_door_step(named) or lts) else ["--dt", dt]
+            # A named suite takes the forecast door's step, unless this mesh's measured admission step is shorter.
+            step = [] if lts else door_step(named, dt, finest)
+            from gpuwm.output_formats import argument_values
+            extra += argument_values(arguments)
             measured = stage("forecast", [*prefix, "forecast", "--mesh", row.name,
                 "--grid", grid, "--static", static, "--init", root / "init" / "init.nc",
                 "--init-source", f"{arguments.source} {issued_label}; spec {receipt['spec_sha256']}",
                 "--start-time", cycle.start_time, "--hours", arguments.hours,
                 *step, "--history-every-minutes", arguments.history_every_minutes,
-                "--out", run, "--scratch", root / "scratch", "--no-products", *extra])
+                "--out", run, "--scratch", root / "scratch", "--no-products", *extra, *samehost])
             receipt["first_look"] = look.finish()
             # The forecast was the run's last GPU work; the products are CPU work in Rust binaries, so a card
             # queue gets its card back now instead of after the maps (hexcore.card_lease).

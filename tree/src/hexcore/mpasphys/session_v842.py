@@ -118,15 +118,19 @@ class NativePhysicsSession:
                 or (getattr(native, 'framework_only', False) and cuda_device is not None)):
             if cuda_device is None:
                 raise RuntimeError("surface CUDA service requires its resident device binding")
-            from .surface_update_v842 import NativeSurfaceService
+            # The suite row's service (the RRFS fork adds dust and lai12m -> lai), route_table.
+            from .route_table import service_type
+            NativeSurfaceService = service_type(config, 'surface_update',
+                                                'hexcore.mpasphys.surface_update_v842:NativeSurfaceService')
             self.surface_service = NativeSurfaceService(self, cuda_device,
                 read_surface_record=surface_record_reader)
             self.hooks.external.update(self.surface_service.callbacks())
         self.driver = PhysicsDriver(config, PhysicsManager(config, dt,
                                      streams=stream_intervals), slots, self.hooks)
         if getattr(native, 'framework_only', False):
-            from .framework_init_v842 import FrameworkInitialization
-            self.framework_init = FrameworkInitialization(self)
+            # The suite row's ported scheme initialization (v8.4.2 or the RRFS fork), route_table.
+            from .route_table import framework_entry
+            self.framework_init = framework_entry(config, 'initialization')(self)
             self.hooks.external.update(self.framework_init.operations())
         self._initialized = False
 
@@ -204,7 +208,8 @@ class NativePhysicsSession:
             policy.argtypes = [ct.POINTER(ct.c_int)]
             policy.restype = None
             policy(ct.byref(ct.c_int(1001)))
-        self.driver.initialize(self)
+        from hexcore.cycle.land_state import initialize_preserving_land
+        initialize_preserving_land(self)
         self._initialized = True
 
     def begin_step(self, itimestep: int, time_seconds: float) -> Any:

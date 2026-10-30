@@ -375,7 +375,7 @@ def test_restart_struct_retains_native_variable_array_order(tmp_path, direct):
     rows = [dict(name=name, pool='state', components=[])
             for name in ('u_init', 'v_init', 't_init', 'qv_init')]
     rows.insert(2, dict(name='scalars', pool='state', components=['qv', 'qc']))
-    layout = SimpleNamespace(root=root, fields=rows, enabled=lambda node: True)
+    layout = SimpleNamespace(root=root, fields=rows, enabled=lambda node: True, packages=set())
     path = tmp_path/'streams.atmosphere'
     path.write_text('<streams><immutable_stream name="restart" type="output" '
                     'filename_template="restart.nc"/></streams>')
@@ -668,3 +668,49 @@ def test_acoustic_restart_words_are_retained_only_for_due_frames(tmp_path, bridg
             np.testing.assert_array_equal(actual[1].view(np.uint32),
                                           expected[name].T.view(np.uint32))
     assert reads == [('diag', 'ru_p'), ('diag', 'rw_p')]
+
+
+def test_a_route_declared_omission_leaves_the_hex_written_default_stream(tmp_path):
+    """hrrrv5 hex region (2026-10-29): the RRFS fork's Registry lists the PV diagnostics in its default output stream,
+    the RRFS route computes none, and every suite-named run with no deck refused at its first write.  The route row's
+    default_streams_omit drops them from the streams hex writes; the row says why, and a deck is still held to them."""
+    import json
+    from pathlib import Path
+    import xml.etree.ElementTree as ET
+
+    from hexcore.mpasphys.forecast_v842 import write_default_streams
+
+    registry = ET.fromstring(
+        '<registry><streams><stream name="output" type="output" filename_template="history.nc" '
+        'output_interval="6:00:00" runtime_format="separate_file"><var name="theta"/><var name="ertel_pv"/>'
+        '</stream></streams></registry>')
+    layout = SimpleNamespace(root=registry, fields=[])
+    write_default_streams(layout, tmp_path / 'plain' / 'streams.atmosphere')
+    assert (tmp_path / 'plain' / 'stream_list.atmosphere.output').read_text().split() == ['theta', 'ertel_pv']
+    table = json.loads((Path(__file__).resolve().parents[1] / 'src/hexcore/data/profiles/'
+                        'mpas-physics-suites.v1.json').read_text(encoding='utf-8'))
+    omit = table['mpasphys_rrfs']['default_streams_omit']
+    write_default_streams(layout, tmp_path / 'rrfs' / 'streams.atmosphere', omit=omit)
+    assert (tmp_path / 'rrfs' / 'stream_list.atmosphere.output').read_text().split() == ['theta']
+    assert table['mpasphys_rrfs_44c0849']['default_streams_omit'] == omit
+
+
+def test_a_default_stream_member_with_a_zero_length_dimension_is_left_out(tmp_path):
+    """hrrrv5 hex region (2026-10-29): the fork's chemistry Registry puts ddvel (nChem x nCells, no package) in the
+    default output stream; nChem is num_chem = 0 without smoke and the first write refused.  Only the unlimited
+    dimension may be zero-length in a NetCDF file, so the default streams hex writes leave such a member out."""
+    import xml.etree.ElementTree as ET
+
+    from hexcore.mpasphys.forecast_v842 import write_default_streams
+
+    registry = ET.fromstring(
+        '<registry><streams><stream name="output" type="output" filename_template="history.nc" '
+        'output_interval="6:00:00" runtime_format="separate_file"><var name="theta"/><var name="ddvel"/>'
+        '</stream></streams></registry>')
+    fields = [{'name': 'theta', 'dimensions': ['nVertLevels', 'nCells']},
+              {'name': 'ddvel', 'dimensions': ['nChem', 'nCells']}]
+    for chem, expected in ((0, ['theta']), (2, ['theta', 'ddvel'])):
+        layout = SimpleNamespace(root=registry, fields=fields,
+                                 dimensions={'nVertLevels': 59, 'nCells': 10, 'nChem': chem})
+        write_default_streams(layout, tmp_path / str(chem) / 'streams.atmosphere')
+        assert (tmp_path / str(chem) / 'stream_list.atmosphere.output').read_text().split() == expected

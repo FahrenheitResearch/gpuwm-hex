@@ -279,7 +279,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # 2026-10-18: consumer-specific post-RK preparation. H60 owner replay
     # and separate device timeline are in the hex-diagnostics lane receipt.
     "src/hexcore/cuda_physics_prep_v841.py": (
-        "cfa57a7c014e22df930457637c9de975d111925753bef15133c21d9f4b0fccdf"
+        "a8f2087fd8186f793ccbeb92806b867d1ac5b6a82eb26fc985285d506a75f091"
     ),
     "src/hexcore/cuda_gwdo_v841.py": (
         "af22e7a450d1bbdf1a1dc9dcdf2a7a9d0da13f7d230751941cdf0a3418f0f00b"
@@ -463,7 +463,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # person).  No code line differs from the copy the H1 identities above
     # ran on.  No card run for this merge.
     "src/hexcore/cuda_driver.py": (
-        "9034951ee871ace985ccc7eacfa8559d1798d653cb0a7c64a1e353dcce5b22ef"
+        "22d0953bcf84b1e98338bdc553942bb574fd64c3c7eb99cb8e4225166dcc481e"
     ),
     # THE BREAKAGE THIS PREVENTS: cuda_driver.py now executes host
     # preparation through hexcore.prep_cache.  Unpinned, an edit to the key
@@ -486,7 +486,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # functions of the code object and package, so every key is the same; no
     # array computation moved.  Re-ran: tests/test_prep_cache.py.
     "src/hexcore/prep_cache.py": (
-        "891dd40787ac41848b4ecc36d337aabf139009402fbb7099cf6c395394c5d797"
+        "720080c8ddf32f5b75726cdfe85dd4f5daaa87b526cef958bd9071e7ce645332"
     ),
     # THE BREAKAGE THIS PREVENTS: the same lane that re-froze cuda_driver.py
     # also changed ``recover_state`` -- it gained ``include_pressure`` and
@@ -849,7 +849,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # are current-tree evidence. The archived x4 and regional mints did not
     # re-run and retain their original scope.
     "src/hexcore/mixing_v841.py": (
-        "9d65837c5b42516865150193d647534f8acfd429612cd22a3899146ebd8b319b"
+        "03f494f165ffbb6423a328ce07a41e4ce49b817c070496bce00e812330016cd4"
     ),
     "src/hexcore/cuda_horizontal.py": (
         "d4e4face383eab6f19f21598613b7bd58e37eb75e067b7b9e817060a2ec015cd"
@@ -878,7 +878,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # This is the current execution identity, not a re-mint of archived x4
     # or regional forecast evidence. Device requalification remains pending.
     "src/hexcore/cuda_transport_v841.py": (
-        "8342d4fc5fd4bb03aaaed11a2f3c7ba96ed85d70f766efa11d4aa4bf4a3ff7f3"
+        "60ac6f03292ed1114b9ea8ea291a34e633268da2f157523ff3b7e1c0d53bb76f"
     ),
     # THE BREAKAGE THESE TWO PREVENT, found by the NVRTC reciprocal-rewrite
     # lane (the NVRTC reciprocal-rewrite defect): a pinned translation unit does not compile its own file.
@@ -945,7 +945,7 @@ KNOWN_CONTRACT_PINS = MappingProxyType(
             "a9436205305c4127dc38399288ad47839dc797d0c786e1118e9e800cc7223c1d"
         ),
         "prep_kernel_sha256": (
-            "a3dfefc8d4c80f2be88e3158f692f17c7b5c9427eae3e263d5ec555439c7b017"
+            "b4caecc0c915bb72b3c677ac9199efe1d41dd6ca70481051217bdbf147a43ae4"
         ),
         "gwdo_contract_sha256": (
             "f3c92686b2b0f86b7076e10bd261a7897ef42b3ebd7f7a60789e2b8ee95e96ef"
@@ -3068,9 +3068,10 @@ def execute_composite_step(
         dict(backend.step_receipt())
     )
     # Device memory a physics phase does not use is given back at its two
-    # boundaries (hexcore.device_memory_release; knobs GPUWM_HEX_POOL_RELEASE,
-    # GPUWM_HEX_LMEM_RELEASE): radiation blocks and the WSM6 frame store are
-    # not held through the dycore half of the step.
+    # boundaries when the card is short of memory (hexcore.device_memory_release;
+    # knobs GPUWM_HEX_POOL_RELEASE, GPUWM_HEX_LMEM_RELEASE,
+    # GPUWM_HEX_RELEASE_HEADROOM): then radiation blocks and the WSM6 frame
+    # store are not held through the dycore half of the step.
     from hexcore.device_memory_release import phase_release
 
     try:

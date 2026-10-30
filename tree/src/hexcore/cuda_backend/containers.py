@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import lru_cache
+from operator import attrgetter, is_
 import time
 from typing import Any, Mapping
 
@@ -183,6 +184,19 @@ class TransferStats:
         }
 
 
+#: Every resident array DeviceMesh.validate checks, in its check order.
+_MESH_ARRAY_NAMES = (
+    "cells_on_edge", "edges_on_cell", "n_edges_on_cell", "cells_on_cell",
+    "vertices_on_edge", "edges_on_edge", "n_edges_on_edge", "vertices_on_cell",
+    "edges_on_vertex", "cells_on_vertex", "edge_sign_on_cell", "weights_on_edge",
+    "dc_edge", "dv_edge", "area_cell", "area_triangle", "kite_areas_on_vertex",
+    "lat_cell", "lon_cell", "lat_edge", "lon_edge", "angle_edge", "mesh_density",
+    "defc_a", "defc_b", "f_vertex", "f_edge", "spec_zone_mask_edge",
+)
+_MESH_ARRAYS = attrgetter(*_MESH_ARRAY_NAMES)
+_SHAPE = attrgetter("shape")
+
+
 @dataclass(slots=True)
 class DeviceMesh:
     cells_on_edge: Any
@@ -233,6 +247,10 @@ class DeviceMesh:
     #: Compacted ``edgesOnCell``/``edgesOnCell_sign`` per slot stride, built
     #: on first request by :meth:`slot_tables` (the terrain metrics use them).
     _slot_tables: dict = field(default_factory=dict, repr=False, compare=False)
+    #: What :meth:`validate` last admitted: the layout scalars, the very
+    #: arrays it checked (held, so a reused address can never match) and
+    #: their shapes.  See :meth:`validate`.
+    _validated: Any = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def file_max_edges2(self) -> int:
@@ -448,8 +466,35 @@ class DeviceMesh:
         )
 
     def validate(self) -> None:
-        """Validate the committed packed topology used by raw CUDA indexing."""
+        """Validate the committed packed topology used by raw CUDA indexing.
 
+        The full check runs once per mesh; afterwards a call only confirms
+        that the mesh still holds the very arrays it admitted, with the same
+        shapes and layout scalars, and returns.  CuPy arrays cannot change
+        type or dtype in place, and their contiguity can change only through
+        a shape change, so an identical array with an identical shape still
+        passes every check below; anything else is checked again in full.
+        THE BREAKAGE THIS PREVENTS: the dycore calls this on every theta, w
+        and momentum launch and the acoustic and horizontal paths do too,
+        re-checking 28 resident arrays each time; on 8 same-host ranks
+        (r700, 36k cells per card) that host work was about a third of each
+        rank thread's samples (VRFS vrfs-8card-diag, 2026-10-28), while the
+        cards sat 22-34 % busy.
+        """
+
+        arrays = _MESH_ARRAYS(self)
+        layout = (
+            self.n_cells, self.n_edges, self.n_vertices, self.max_edges,
+            self.max_edges2, self.vertex_degree, self.dtype, self.index_dtype,
+        )
+        seen = self._validated
+        if (
+            seen is not None
+            and seen[0] == layout
+            and all(map(is_, arrays, seen[1]))
+            and seen[2] == tuple(map(_SHAPE, arrays))
+        ):
+            return
         index_shapes = {
             "cells_on_edge": (self.n_edges, 2),
             "edges_on_cell": (self.n_cells, self.max_edges),
@@ -490,6 +535,7 @@ class DeviceMesh:
             require_resident_array(
                 f"mesh.{name}", getattr(self, name), dtype=self.dtype, shape=shape
             )
+        self._validated = (layout, arrays, tuple(map(_SHAPE, arrays)))
 
     def to_host(self) -> dict[str, np.ndarray | float | int]:
         cp = _cp()

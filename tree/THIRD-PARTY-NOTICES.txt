@@ -96,6 +96,10 @@ listed. Upstream paths are relative to src/core_atmosphere/physics/.
   wsm6_v842.py           physics_mmm/mp_wsm6.F90, mp_wsm6_effectRad.F90,
                          mp_radar.F90 (MMM; its GAMMLN also NR);
                          physics_wrf/module_mp_wsm6.F (WRF)
+  ugwp_oro_v842.py       physics_noaa/UGWP/bl_ugwp.F (USGOV),
+                         physics_wrf/module_bl_ugwp_gwdo.F (WRF) -- NOTICE section 8
+  ugwp_ngw_v842.py       physics_noaa/UGWP/bl_ugwpv1_ngw.F, cires_ugwpv1_*.F,
+                         cires_tauamf_data.F (USGOV) -- NOTICE section 8
   ysu_gwdo_v842.py       physics_mmm/bl_gwdo.F90 (MMM); physics_wrf/module_bl_gwdo.F (WRF)
   ysu_v842.py            physics_mmm/bl_ysu.F90 (MMM); physics_wrf/module_bl_ysu.F (WRF)
   compile_v842.py, config_v842.py, device_pools_v842.py, diagnostics_v842.py,
@@ -135,13 +139,10 @@ listed. Upstream paths are relative to src/core_atmosphere/physics/.
   (cited MPAS Registry lines)                  MPAS
   verification/source-namelists/               rrfs-workflow configuration
                                                (NOTICE section 9)
+  tests/test_mpas_ugwp_oro_v842.py, tests/test_ugwp_ngw_v842.py,
+  tests/ugwp_ngw_native/, tests/ugwp_oro_oracle/   USGOV (NOTICE section 8)
 
   Withheld from the public distribution (tools/licence_holds.json):
-  ugwp_oro_v842.py       physics_noaa/UGWP/bl_ugwp.F (USGOV),
-                         physics_wrf/module_bl_ugwp_gwdo.F (WRF) -- NOTICE section 8
-  ugwp_ngw_v842.py       physics_noaa/UGWP/bl_ugwpv1_ngw.F, cires_ugwpv1_*.F,
-                         cires_tauamf_data.F (USGOV) -- NOTICE section 8
-  UGWP tests and native oracles                 NOTICE section 8
   tests/noahmp_v842/, tests/urban_v842/            NOTICE section 4
 
 4. Read from the installed gpuwm distribution at run time
@@ -156,10 +157,11 @@ CORE and SUN notices in licenses/ apply (NOTICE section 7).
 
 5. Not in this distribution
 ---------------------------
-The Noah-MP v5 and UGWP implementations, tests, native oracles and licence
-files named in tools/licence_holds.json are withheld from public exports.
-Other RRFS physics ports in src/hexcore/mpasphys/rrfs/ carry the MPAS driver
-BSD notice and the NOAA GSL attribution and ruling in NOTICE section 9.
+The Noah-MP v5 implementations, tests, native oracles and licence files
+named in tools/licence_holds.json are withheld from public exports (UCAR
+terms, NOTICE section 4). The UGWP ports ship (NOTICE section 8). Other RRFS
+physics ports in src/hexcore/mpasphys/rrfs/ carry the MPAS driver BSD notice
+and the NOAA GSL attribution and ruling in NOTICE section 9.
 
 6. Compiled helpers in the wheel (hexcore/libexec)
 --------------------------------------------------
@@ -212,3 +214,37 @@ CUB/Thrust/libcu++ headers: Apache-2.0 with LLVM exception and BSD notices,
 licenses/LICENSE-CCCL.txt. NOTICE section 16 covers these compiled copies.
 The generated asset-release-NOTICE.txt names each asset and carries the
 full texts beside the release assets.
+
+
+Echo land and radiation integration (modified ports, 2026-10-28):
+- src/hexcore/mpasphys/framework_init_v842.py aerosol emissions and
+  tests/fixtures/aerosol_emissions_oracle.f90 derive from MPAS-Model v8.4.2,
+  framework/mpas_atmphys_driver.F. BSD-3-Clause, see
+  licenses/LICENSE-MPAS-BSD-3-Clause.txt and NOTICE section 1.
+- src/hexcore/mpasphys/radshared_v842.py cloud merge and
+  tests/fixtures/cloud_merge_oracle.f90 derive from WRF v4.6.1,
+  phys/module_radiation_driver.F. WRF public domain, see
+  licenses/LICENSE-WRF-public-domain.txt.
+- src/hexcore/cycle/land_state.py uses Noah STAS capacity constants;
+  src/hexcore/cycle/NOAH-TABLE-NOTICE.txt retains their source and notice.
+- src/hexcore/data/soil-hydraulics.v1.json includes constants and derived
+  anchors from NCAR/ccpp-physics v5.0.0 physics/set_soilveg.f and sflx.f,
+  under Apache-2.0. Copyright 2017, NOAA, UCAR/NCAR CU/CIRES.
+  See src/hexcore/data/LICENSE.soil-hydraulics and
+  src/hexcore/data/SOIL-HYDRAULICS-NOTICE.txt for terms and modifications.
+
+RRFS rrfs-44c0849 addition (NOTICE section 9 and final pin addendum):
+  rrfs/bl_mynnedmf_c6d08709.py   NCAR/MYNN-EDMF c6d08709, USGOV
+  data/mpasphys-framework-rrfs-44c0849 and
+  data/streams_rrfs_44c0849_registry.json   RRFSx/MPAS-Model 44c0849, MPAS
+
+RRFS NSSL native-free adapter
+----------------------------
+mpasphys/rrfs/nssl_rrfs.py and the existing mp_nssl2m.py derive from NOAA
+National Severe Storms Laboratory module_mp_nssl_2mom.F, RRFS fork
+1d6e370e7b43a332074809f170532a216c2212fb. The source is US government code.
+Its header identifies the National Severe Storms Laboratory and describes
+"Graupel & hail version of cloud microphysics" with "Two-moment with CCN".
+nssl_sunpro.cuh carries the Sun Microsystems freely distributable expm1/tanh
+notice in full. nssl_math.py reuses the existing Arm/CORE-MATH/Sun device math
+covered by the notices above.

@@ -23,7 +23,15 @@ def test_294_source_set_is_admitted_on_the_ordinary_route():
                        "gpuwm/core/rrtmg_legacy_prep.py", "gpuwm/ingest/wrf_ozone.py"}
 
 
+#: The admitted helper set each installation floor runs on. gpuwm 2.9.10's six helper sources
+#: (rrtmg_sw.cu, rrtmg_legacy_prep.py, rrtmg_lw.py, rrtmg_mcica.py, rrtmg_sw.py, wrf_ozone.py) hash
+#: to the engine-2.9.7-source row byte for byte (measured on the 2.9.10 candidate, 2026-10-29), so
+#: the 2.9.10 floor needs no new row.
+FLOOR_HELPER_SET = {"2.9.10": "engine-2.9.7-source"}
+
+
 def test_the_floor_engine_has_an_admitted_helper_set():
     floor = engine_pin.gpuwm_floor()
-    assert floor == "2.9.7"
-    assert any(f"engine-{floor}" in mode for mode in scope.ADMITTED_SOURCE_SETS)
+    assert floor == "2.9.10"
+    assert FLOOR_HELPER_SET[floor] in scope.ADMITTED_SOURCE_SETS
+    assert FLOOR_HELPER_SET[floor] in scope.PUBLISHED_MODES

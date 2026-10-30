@@ -123,10 +123,20 @@ def region_specification(row):
     if row["geometry"]["kind"] == "cap":
         return ladder_spec(tuple(row["geometry"]["center_deg"]), fine_dx_m=mesh["fine_dx_m"],
             radius_km=row["geometry"]["radius_km"], background_km=mesh["background_km"], name=row["id"])
-    ladder_rungs(mesh["background_km"], mesh["fine_dx_m"])
-    return {"name": row["id"], "background_km": mesh["background_km"],
-        "regions": [{"shape": row["geometry"], "spacing_km": mesh["fine_dx_m"]/1000,
-                     "transition_km": mesh["transition_km"]}]}
+    # A drawn region (--polygon) takes the regional door's grown halving ladder, rung for rung as a cap does.
+    # THE BREAKAGE THIS PREVENTS (hex-shapes-1card, V8X6000 2026-10-29 06:05-06:16Z, re-run on an RTX 4090 host 07:09Z with
+    # the hex 0.4.10 generator): `country --polygon CONUS --fine-dx-m 3000 --background-km 96` (and 120 -> 3.75 km)
+    # wrote ONE region with the table default's 540 km ramp (18 x its 30 km), whatever --fine-dx-m asked. The ramp is
+    # a tanh centred on the outline, so a polygon a couple of ramps deep never reads its spacing to 0.1 % anywhere:
+    # rw_mpas_mesh found no level-5 plateau (PLATEAU 5 0 0) and refused ("level 5 (h_l = 3.0 km) missed its
+    # delivery contract: ... median = 0.9589"), and a polygon small enough to pass got cells well above the asked
+    # spacing near its edge. shape_ladder_spec grows the outline by one fine ramp (18 x fine) and nests each
+    # coarser rung outside it, so the whole drawn area is at the asked spacing.
+    from .mesh_point import DEFAULT_RING_FACTOR, DEFAULT_TRANSITION_FACTOR
+    from .mesh_shape import shape_ladder_spec
+    return shape_ladder_spec(row["geometry"], rungs_km=ladder_rungs(mesh["background_km"], mesh["fine_dx_m"]),
+        background_km=mesh["background_km"], transition_factor=DEFAULT_TRANSITION_FACTOR,
+        ring_factor=DEFAULT_RING_FACTOR, name=row["id"])
 
 
 def _suite_parent_init(value, parent_init, mesh):
@@ -318,8 +328,8 @@ def plan(args):
     # step rule below and the region's init completion see the suite the forecast runs.
     extra = ensure([str(item) for item in getattr(args, "forecast_arg", None) or ()], mesh.get("fine_dx_m"))
     named = forecast_arg_physics(extra)
-    from .physics_default import suite_takes_door_step
-    step = [] if suite_takes_door_step(named) else ["--dt", str(mesh["dt_seconds"])]
+    from .physics_default import door_step
+    step = door_step(named, mesh["dt_seconds"], mesh.get("fine_dx_m"))
     forecast = ["forecast", "--mesh", mesh["id"], *common, "--init", str(init),
                 "--start-time", start, "--init-source", f"{row['init_source']} {issued_label}; country row {args.row}",
                 "--hours", str(args.hours), *step,
@@ -334,7 +344,8 @@ def plan(args):
         if getattr(args, key, None) is not None:
             forecast += ["--" + key.replace("_", "-"), str(getattr(args, key))]
     # The caller's forecast flags come last, so a --physics-suite (or a --dt) given here wins.
-    forecast += extra
+    from gpuwm.output_formats import argument_values
+    forecast += [*extra, *argument_values(args)]
     from .products_door import label_argv
 
     product_argv = ["products", str(root / "forecast"), "--out", str(root / "products"), *products,
@@ -356,7 +367,8 @@ def plan(args):
         from .lbc_producer import source_endpoint_commands
         endpoints = source_endpoint_commands(source=source["id"], cycle=args.cycle, hours=args.hours,
             out_dir=root / "boundary-source", staged=args.staged, member=getattr(args, "member", None),
-            table=getattr(args, "source_table", None), lead_hours=lead)
+            table=getattr(args, "source_table", None), lead_hours=lead,
+            boundary_interval_hours=getattr(args, "boundary_interval_hours", None))
         parent = root / "parent"
         endpoints[0]["argv"][endpoints[0]["argv"].index("--out-dir") + 1] = str(parent / "init")
         initialization[initialization.index("--grid") + 1] = str(parent / "mesh.grid.nc")
@@ -567,6 +579,8 @@ def run_country(args):
 
 def add_country_parser(commands):
     parser = commands.add_parser("country", help="compose operational doors from a country row")
+    from gpuwm.output_formats import add_arguments
+    add_arguments(parser)
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--row")
     selection.add_argument("--region", help="registered limited-area row")
@@ -587,6 +601,9 @@ def add_country_parser(commands):
     parser.add_argument("--lead-hours", type=int, default=0, metavar="H",
                         help="start from this forecast hour of --cycle (a forecast source's own cadence, e.g. GFS "
                              "2026-10-23T18 --lead-hours 348): the init is that hour and the boundaries follow it")
+    parser.add_argument("--boundary-interval-hours", type=int, default=None, metavar="H",
+                        help="boundary step of a table source on a geometry row. Default: the finest step the "
+                             "source posts over the run (GFS 1 h to 120 h, IFS and GEFS 3 h)")
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--stage", choices=("plan", "all", *STAGES), default="all",
                         help="run all stages (default), one named stage, or print the plan")

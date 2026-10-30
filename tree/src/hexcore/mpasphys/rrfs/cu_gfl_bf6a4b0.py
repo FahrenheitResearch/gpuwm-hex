@@ -43730,17 +43730,12 @@ def cuda_source():
 def _module(device):
     """CUDA build for MPAS-Model-rrfs/src/core_atmosphere/physics/mpas_atmphys_driver_convection.F:668-710."""
     import cupy as cp
-    from cupy_backends.cuda.libs import nvrtc
+    from ...cuda_backend.aot import raw_image
     with cp.cuda.Device(device):
         arch = cp.cuda.Device(device).compute_capability
-        program = nvrtc.createProgram(cuda_source(), 'cu_gfl_bf6a4b0.cu', (), ())
-        try:
-            nvrtc.compileProgram(program, _hex_numerics.options(COMPILER_OPTIONS) + (f'--gpu-architecture=sm_{arch}',))
-            binary = nvrtc.getCUBIN(program)
-        except Exception as error:
-            raise RuntimeError(nvrtc.getProgramLog(program)) from error
-        finally:
-            nvrtc.destroyProgram(program)
+        # The same raw NVRTC compile (program name, options, target), through the box's warm store, the
+        # pack and the kernel plan's pool: a cold start no longer compiles it on one core at the first call.
+        binary = raw_image(cuda_source(), _hex_numerics.options(COMPILER_OPTIONS), arch, filename='cu_gfl_bf6a4b0.cu')
         module = cp.cuda.function.Module()
         module.load(binary)
         return module
