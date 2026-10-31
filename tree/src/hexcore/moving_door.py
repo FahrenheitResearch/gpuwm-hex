@@ -297,6 +297,11 @@ def _run_arguments(r: argparse.ArgumentParser) -> None:
                         'members; retains their geometry but disables exact far-field carry')
     r.add_argument('--prelaunch', action=argparse.BooleanOptionalAction, default=True,
                    help="start the next member's forecast process while the current one runs")
+    r.add_argument('--resident', action=argparse.BooleanOptionalAction, default=True,
+                   help='the forecast process continues the next segment after a move, with its state handed '
+                        'over in memory and the next member prepared beside the running segment (the MPAS suite '
+                        'route on one card; another route keeps one process per segment); --no-resident starts '
+                        'a process for every segment')
     r.add_argument('--rotate-template', action=argparse.BooleanOptionalAction, default=None,
                    help='members prepared during the run rotate the premade family template (else the start '
                         "member's mesh) instead of generating their mesh; default: on for a concentric global "

@@ -37,8 +37,8 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.4.10", (
-        "0.4.10 is the fix release after 0.4.9 (2026-10-28: the patch that carries every fix proven since 0.4.9); "
+    assert declared == "0.4.11", (
+        "0.4.11 is the fix release after 0.4.10 (2026-10-30: the limited-area GFS boundary fix with every fold-ready row); "
         "moving it is a release decision, not an edit"
     )
 

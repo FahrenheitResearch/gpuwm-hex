@@ -960,3 +960,136 @@ def test_the_filename_label_does_not_rename_the_model_on_the_map(tmp_path, monke
     with pytest.raises(Stop):
         rd.run_render(args)
     assert asked["model_label"] == "WOOF Hex"
+
+
+def test_a_view_label_reaches_only_a_converter_that_takes_it(tmp_path, monkeypatch, capsys):
+    """THE BREAKAGE (2026-10-30): the site menu read 'Core zoom · 8 → 38 km' over a picture
+    headlined '(hex 133-6.9 km) ... Δx 8.063 km' (run_713c9e1913164e02).  The door passes the
+    view's headline as rw_mpas_convert --grid-label; a converter built before the flag refuses
+    unknown flags, so it keeps the mesh's headline, said once, and the view still draws."""
+    from types import SimpleNamespace
+
+    from hexcore import render_door as rd
+
+    monkeypatch.setattr(rd, "_GRID_LABEL_UNSUPPORTED", set())
+    monkeypatch.setattr(rd, "engine_accepts", lambda exe, flag: True)
+    assert rd.drawn_grid_label(Path("new/rw_mpas_convert"), "Core zoom {spacing}") == "Core zoom {spacing}"
+    assert rd.drawn_grid_label(Path("new/rw_mpas_convert"), None) is None
+    monkeypatch.setattr(rd, "engine_accepts", lambda exe, flag: flag != "--grid-label")
+    for _ in range(2):
+        assert rd.drawn_grid_label(Path("old/rw_mpas_convert"), "Core zoom {spacing}") is None
+    assert capsys.readouterr().out.count("predates --grid-label") == 1
+
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = [str(part) for part in command]
+        Path(command[command.index("--json") + 1]).write_text('{"frames": []}', encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(rd, "_run", fake_run)
+    common = dict(histories=[tmp_path / "history.nc"], mesh=tmp_path / "grid.nc", scratch=tmp_path / "scratch",
+                  window="mesh", field_set="full", simulation_start=None, nc_format="cdf2", model_label="hex")
+    rd.convert_frames(Path("rw_mpas_convert"), grid_label="Core zoom {spacing}", **common)
+    assert seen["command"][seen["command"].index("--grid-label") + 1] == "Core zoom {spacing}"
+    rd.convert_frames(Path("rw_mpas_convert"), **common)
+    assert "--grid-label" not in seen["command"]
+
+
+def test_a_composite_with_a_view_label_is_refused_by_name(tmp_path, monkeypatch):
+    """A --compose frame switches meshes point by point and the converter writes it no grid label,
+    so a label asked for there would be dropped without a word."""
+    import argparse
+
+    from hexcore import render_door as rd
+
+    monkeypatch.setattr(rd, "resolve_convert_exe", lambda explicit=None: Path("rw_mpas_convert"))
+    monkeypatch.setattr(rd, "resolve_renderer_exe", lambda explicit=None: Path("rw_wrfbatch"))
+    monkeypatch.setattr(rd, "engine_accepts", lambda exe, flag: True)
+    args = argparse.Namespace(
+        history=None, mesh=None, init=None, compose=str(tmp_path / "sources.json"), compose_base_only=False,
+        out=str(tmp_path / "png"), scratch=None, products="all", frames="all", window="composite",
+        field_set="full", simulation_start=None, size="1400x1000", heavy=False, nc_format="cdf2",
+        keep_scratch=False, convert_exe=None, renderer_exe=None, view=None, model_label="hex",
+        source_label=None, grid_label="Composite {spacing}")
+    with pytest.raises(RenderDoorError, match="--grid-label"):
+        rd.run_render(args)
+
+
+def test_a_later_pass_reuses_the_frames_the_live_draws_converted(monkeypatch, tmp_path):
+    """An Arizona zoom globe (gpuwm-hex 0.4.10, 2026-10-30) and its RTX 5090 replay: after the forecast every view
+    converted every frame again for its whole-run maps, the live-drawn ones included (70 of the pass's 110 s)."""
+    import shutil
+
+    from hexcore import render_door
+
+    histories = []
+    for hour in range(3):
+        path = tmp_path / f"history.2026-10-30_{hour:02d}.00.00.nc"
+        path.write_bytes(b"h" * (hour + 1))
+        histories.append(path)
+    converted: list[list[str]] = []
+
+    def fake_convert(exe, *, histories, scratch, **kwargs):
+        converted.append([Path(h).name for h in histories])
+        frames = Path(scratch) / "frames"
+        frames.mkdir(parents=True, exist_ok=True)
+        out = []
+        for h in histories:
+            wrfout = frames / ("wrfout_d01_" + Path(h).name[8:21])
+            wrfout.write_bytes(b"w")
+            out.append({"output": str(wrfout), "valid_time": Path(h).name[8:21]})
+        return {"window_spec": {"kind": "latlon"}, "grid_label": "g", "frames": out}, ["convert"]
+
+    monkeypatch.setattr(render_door, "convert_frames", fake_convert)
+    monkeypatch.setattr(render_door, "sha256_file", lambda path: "0" * 64)
+    # A roomy cache disk: the cache keeps 20 GB and 10 % of its disk free (FRAME_CACHE_FREE_*), which a test host's
+    # temporary disk may not have (a 16 GB tmpfs, or a big drive near 90 % full), and then nothing is cached.
+    from types import SimpleNamespace
+    monkeypatch.setattr(render_door.shutil, "disk_usage",
+                        lambda path: SimpleNamespace(total=1000 * 2**30, used=100 * 2**30, free=900 * 2**30))
+    cache = tmp_path / "cache" / "global"
+    common = dict(mesh=tmp_path / "m.nc", init=None, window="global-mesh", field_set="full", simulation_start="s",
+                  nc_format="cdf5", model_label="hex", remap="product", jobs=1, explicit_jobs=False)
+    # two live draws, one frame each, in their own scratch (removed after each draw)
+    for k in range(2):
+        report, _ = render_door.convert_frames_cached(cache, Path("conv"), histories=[histories[k]],
+                                                      scratch=tmp_path / f"live-{k}", **common)
+        assert len(report["frames"]) == 1
+        shutil.rmtree(tmp_path / f"live-{k}")
+    # the full pass: only the frame no live draw took is converted; the series is whole and in order
+    report, _ = render_door.convert_frames_cached(cache, Path("conv"), histories=histories,
+                                                  scratch=tmp_path / "full", **common)
+    assert converted == [[histories[0].name], [histories[1].name], [histories[2].name]]
+    assert [f["valid_time"] for f in report["frames"]] == [h.name[8:21] for h in histories]
+    assert all(Path(f["output"]).is_file() for f in report["frames"])
+    assert report["window_spec"] == {"kind": "latlon"}
+    # a frame the forecast rewrote is converted again, and another window is its own cache
+    histories[0].write_bytes(b"rewritten")
+    render_door.convert_frames_cached(cache, Path("conv"), histories=histories[:1], scratch=tmp_path / "again", **common)
+    assert converted[-1] == [histories[0].name]
+    render_door.convert_frames_cached(cache, Path("conv"), histories=histories[1:2], scratch=tmp_path / "other",
+                                      **{**common, "window": "latlon:-90,90,-180,179.8,0.2"})
+    assert converted[-1] == [histories[1].name]
+
+
+def test_the_global_window_has_no_more_columns_than_its_picture(monkeypatch):
+    """global_picture_window: owner canary run_b8d705f1f8db9c92 (48 h 96 -> 3 km zoom globe, 2026-10-30) rendered its
+    global view from the mesh's 3 km median spacing, 4240 x 2121 = 9.0 M points for an 1800-pixel picture, and the
+    renderer was killed for host memory at 85-96 GB. The picture's grid is one column per pixel; a mesh coarser than
+    that keeps its own spacing."""
+    from hexcore import render_door
+
+    spacing = {"m": 3_015.0}
+    monkeypatch.setattr(render_door, "mesh_median_spacing_m", lambda mesh: spacing["m"])
+    window, why = render_door.global_picture_window(Path("zoom.grid.nc"), 1800)
+    assert window == "latlon:-90,90,-180,179.8,0.2"
+    assert "1800 x 901" in why
+    # One column per pixel, never past the converter's explicit-window ceiling.
+    assert render_door.global_picture_window(Path("zoom.grid.nc"), 4000)[0] == "latlon:-90,90,-180,179.82,0.18"
+    spacing["m"] = 15_000.0  # a uniform 15 km globe: 2,668 columns asked of 1,800 pixels
+    assert render_door.global_picture_window(Path("g15.grid.nc"), 1800)[0] == "latlon:-90,90,-180,179.8,0.2"
+    spacing["m"] = 30_000.0  # 1,334 columns: the mesh's own spacing, as before
+    assert render_door.global_picture_window(Path("g30.grid.nc"), 1800) is None
+    spacing["m"] = None  # a mesh the decoder cannot read: the converter decides
+    assert render_door.global_picture_window(Path("x.grid.nc"), 1800) is None

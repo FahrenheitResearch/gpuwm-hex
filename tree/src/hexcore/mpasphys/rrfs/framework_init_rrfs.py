@@ -28,7 +28,8 @@ GAPS = {
     'ruc_tables': 'RUC RUCLSM_SOILVEGPARM (mpas_atmphys_lsm_rucinit.F:148-174) fills module_ruc_land tables '
                   '(VEGPARM.TBL/SOILPARM.TBL) that ruc_lsm_8c9f1a8 reads by name; ruclsminit and every RUC call '
                   'need them',
-    'convection_init': 'init_convection for GFL / Tiedtke schemes (driver_convection.F) has no ported path',
+    'convection_init': 'init_convection for a convection scheme the fork control (mpas_atmphys_control.F:205-215) '
+                       'does not list has no ported path',
     'microphysics_init': 'init_microphysics for Thompson/WSM6 on the RRFS route has no ported path',
 }
 
@@ -479,9 +480,11 @@ class FrameworkInitializationRRFS(FrameworkInitialization):
     def initialize_convection(self):
         c = self.configs
         scheme = c['config_convection_scheme'].strip()
-        if scheme in ('cu_ntiedtke', 'cu_grell_freitas'):
-            # Fork driver_convection.F:495-541: no initialization for this selector.
-            # The shared CUDA wrapper initializes its constants on the first call.
+        if scheme in ('cu_ntiedtke', 'cu_tiedtke', 'cu_grell_freitas', 'cu_grell_freitas_li'):
+            # Fork driver_convection.F:495-541 (1d6e370e) and 484-530 (44c0849): init_convection's select has a
+            # case for cu_kain_fritsch only, so these selectors initialize nothing. The CUDA wrappers bind their
+            # constants on the first call (GF-Li: rrfs.cu_gfl_bf6a4b0). THE BREAKAGE THIS RETIRES: hrrrv5 +
+            # cu_grell_freitas_li (zoom globe, 2026-10-31) refused here, a gap the fork source does not have.
             return
         if scheme == 'cu_kain_fritsch':
             if not c['config_do_restart']:

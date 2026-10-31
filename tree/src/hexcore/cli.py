@@ -439,6 +439,33 @@ def _select_numerics(arguments: argparse.Namespace) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    if _command_word(argv) != "forecast":
+        return _main_once(argv)
+    # A storm-following segment in a resident moving process (hexcore.mpasphys.moving_resident_v842): a stop that
+    # handed its carrier over in memory continues here with the next segment's own argv, in this process.
+    try:
+        from .mpasphys import moving_resident_v842 as resident
+    except ModuleNotFoundError as error:
+        if not _engine_missing(error):
+            raise
+        return _main_once(argv)     # the forecast door refuses by name without the engine
+    resident.begin_segment()
+    rc = _main_once(argv)
+    while rc == 0:
+        following = resident.next_segment()
+        if following is None:
+            break
+        try:
+            rc = _main_once(following)
+        except BaseException:
+            resident.seal_handed("the continued segment raised")
+            raise
+        if rc != 0:
+            resident.seal_handed(f"the continued segment returned {rc}")
+    return rc
+
+
+def _main_once(argv: Sequence[str]) -> int:
     try:
         parser = build_parser(_command_word(argv))
     except ModuleNotFoundError as error:

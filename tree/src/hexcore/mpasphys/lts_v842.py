@@ -286,6 +286,8 @@ class LtsClassExecution:
         self.stream_ordered = False           # one card, every thread on the legacy default stream (run_lts_classes)
         self.stochastic_shared = None         # the member's LtsStochasticPhysics (run_lts_classes), or None
         self.stochastic_lock = None           # shared by every class: the first carried restore applies
+        self.prepared_moving_class = None
+        self.moving_gpu_build = False
 
     # -- construction --------------------------------------------------------------------------------
     def receipt_path(self, out):
@@ -308,6 +310,22 @@ class LtsClassExecution:
 
     def bind_dycore(self, dycore):
         self.dycore = dycore
+
+    def build_dycore(self, factory, *args, **kwargs):
+        from .moving_class_gpu_v842 import restore_driver
+        return restore_driver(self.prepared_moving_class, factory, *args,
+                              gpu_coefficients=self.moving_gpu_build, **kwargs)
+
+    def build_physics_geometry(self, factory, mesh):
+        item = self.prepared_moving_class
+        geometry = None if item is None else item.pop('gpu_geometry', None)
+        return factory(mesh) if geometry is None else geometry
+
+    def take_physics_backend(self):
+        item = self.prepared_moving_class
+        if item is None or item.get('physics_backend') is None:
+            return None
+        return item.pop('physics_backend'), item.pop('physics_hydration')
 
     def stochastic_physics(self, config):
         """This class's view of the member's one LTS stochastic process (``runtime_v842`` builds it here).
@@ -1191,8 +1209,12 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
     wallclock = _Clock()
     began = wallclock.perf
     timeline: list[dict] = []     # the coordinator's rows (write_lts_timeline folds the classes' in)
-    inputs = runtime.load_native_dynamics_inputs(arguments, layout, payload,
-                                                 keep_initialized_deformation=runtime.keeps_initialized_deformation(row))
+    from . import moving_resident_v842 as resident
+    keep = runtime.keeps_initialized_deformation(row)
+    # A resident moving process read this member's inputs beside the previous segment (moving_resident_v842).
+    inputs, predicted = resident.class_inputs(arguments, layout, payload, keep, lambda: runtime.load_native_dynamics_inputs(
+        arguments, layout, payload, keep_initialized_deformation=keep))
+    stage_seconds = dict(inputs=time.perf_counter() - began)
     mesh, grid, profiles, state, reference, saved, names = inputs
     declarations = dict(getattr(mesh, 'variable_dimensions', {}) or {})
     for name in ('defc_a', 'defc_b'):
@@ -1225,6 +1247,11 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
             mesh, grid, profiles, state, reference, saved, names = inputs
             if not same_mesh_resume:
                 rate_state, rate_saved = state, saved
+    stage_seconds['moving_resume'] = time.perf_counter() - began - stage_seconds['inputs']
+    if moving is not None:
+        # What the next segment's preparation reads in a resident moving process: the mesh and vertical grid this
+        # segment's carrier will be sealed on (moving_resident_v842.prepare).
+        resident.running(mesh=mesh, vertical=grid.vertical_grid)
     inputs_done = time.perf_counter()
     base_dt = float(dt)
     # The ArWen route's full-physics top-rate default and its reason (drivers/fullstep_lts_forecast_v841).
@@ -1253,6 +1280,7 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
             return dispatch(fixed, config, layout, payload, streams, None, start, stop, dt, steps, out, moving=moving)
         return runtime.run_native_dynamics(arguments, config, layout, payload, streams, None,
                                            start, stop, dt, steps, out)
+    stage_seconds['rates'] = time.perf_counter() - began - sum(stage_seconds.values())
     top = int(rates.max())
     clock = require_class_clock(base_dt, [top], _event_seconds(layout, streams, steps, dt))
     if steps % top:
@@ -1266,6 +1294,7 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
         area_cell=np.asarray(mesh.area_cell, dtype=np.float64),
         dc_edge_m=metric_lengths(mesh)[0], base_dt=base_dt,
         edges_on_edge=mesh.arrays.get('edgesOnEdge'), n_edges_on_edge=mesh.arrays.get('nEdgesOnEdge'))
+    stage_seconds['class_plan'] = time.perf_counter() - began - sum(stage_seconds.values())
     bplan = None
     units = list(plan.classes)          # one unit per class on one card; one per block on several
     if devices is not None:
@@ -1338,20 +1367,82 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
     # restored carrier words in memory (moving_mpi_v842.project_restored_words): no per-class serial projection
     # and no pickle round trip through the class payload.
     class_partitions = [session_partition(partition) for partition in partitions]
-    local_layouts = project_payloads(layout, payload, class_partitions,
-                                     [job / f'pool.class{index}' for index in range(len(partitions))])
-    restored_words = [None] * len(partitions)
-    if moving_state is not None and class_resume is None:
-        from .moving_mpi_v842 import project_restored_words
-        restored_words = project_restored_words(moving_state, layout, class_partitions)
+    from .moving_lts_prepare_v842 import matching, carried_inputs
+    reused = matching(predicted, units, input_only=(moving is not None and resident.enabled()
+                        and devices is None and os.environ.get('GPUWM_HEX_MOVING_REUSE_CLASS_GEOMETRY','1') != '0'))
+    missing = [index for index, item in enumerate(reused) if item is None]
+    # Exact admission is already known. Build its changed classes' actual GPU
+    # drivers beside payload/carried-word projection, instead of waiting for
+    # every cold pool file before starting immutable dycore geometry.
+    early_pool = None
+    early = {}
+    if moving is not None:
+        resident._log(dict(class_pipeline=dict(source=__file__, resident=resident.enabled(),
+            single_device=devices is None, setting=os.environ.get('GPUWM_HEX_MOVING_PIPELINE_CLASSES', '1'),
+            changed=missing)))
+    if (moving is not None and resident.enabled() and devices is None
+            and os.environ.get('GPUWM_HEX_MOVING_PIPELINE_CLASSES','1') != '0' and missing):
+        from types import SimpleNamespace
+        from .moving_class_gpu_v842 import prepare_driver
+        early_pool = ThreadPoolExecutor(max_workers=len(missing), thread_name_prefix='hex-moving-class-build')
+        def build_early(index):
+            local = local_inputs(inputs, partitions[index])
+            item = dict(layout=SimpleNamespace(configs=dict(configs_before)))
+            # A predicted class was never stepped. Reuse its allocations even
+            # when admission changes its membership; every input word is
+            # checked and changed entries are transported as integer bits.
+            previous = next((p for p in predicted or () if p['rate'] == units[index].rate), None)
+            upload_cache = None if previous is None else previous.get('upload_cache')
+            if upload_cache is not None:
+                claimed = upload_cache.claim()
+                if claimed is not None:
+                    item['upload_cache'] = claimed
+            try:
+                prepare_driver(item, local, config, arguments, dt*units[index].rate)
+            except Exception as error:
+                item.setdefault('gpu_preparation', {})['error'] = f'{type(error).__name__}: {error}'
+            return local, item
+        early = {index:early_pool.submit(build_early, index) for index in missing}
+    try:
+        project_cold = project_payloads
+        if (moving is not None and resident.enabled() and devices is None
+                and str(layout.configs.get('config_IAU_option', 'off')).strip() == 'off'
+                and os.environ.get('GPUWM_HEX_MOVING_RESIDENT_POOLS','1') != '0'):
+            from .moving_pool_payload_v842 import project as project_cold
+        projected = project_cold(layout, payload, [class_partitions[i] for i in missing],
+                                     [job / f'pool.class{i}' for i in missing]) if missing else []
+        local_layouts = [item['layout'] if item is not None else None for item in reused]
+        local_payloads = [item['payload'] if item is not None else job / f'pool.class{i}'
+                          for i, item in enumerate(reused)]
+        for index, local in zip(missing, projected):
+            local_layouts[index] = local
+        if predicted is not None:
+            resident._log(dict(prepared='lts-classes', reused=[i for i in range(len(units)) if i not in missing],
+                               rebuilt=missing))
+        restored_words = [None] * len(partitions)
+        if moving_state is not None and class_resume is None:
+            from .moving_mpi_v842 import project_restored_words
+            restored_words = project_restored_words(moving_state, layout, class_partitions,
+                                                   gpu=resident.enabled() and devices is None)
 
-    def prepare(index):
-        local_layouts[index].configs = dict(configs_before)
-        return local_layouts[index], job / f'pool.class{index}', local_inputs(inputs, partitions[index])
+        def prepare(index):
+            local_layouts[index].configs = dict(configs_before)
+            if index in early:
+                local, item = early[index].result()
+                item['layout'], item['payload'] = local_layouts[index], local_payloads[index]
+                reused[index] = item
+            else:
+                local = (local_inputs(inputs, partitions[index]) if reused[index] is None else
+                         carried_inputs(inputs, partitions[index], reused[index]['inputs']))
+            return local_layouts[index], local_payloads[index], local
 
-    with ThreadPoolExecutor(max_workers=len(partitions)) as pool:
-        prepared = list(pool.map(prepare, range(len(partitions))))
+        with ThreadPoolExecutor(max_workers=len(partitions)) as pool:
+            prepared = list(pool.map(prepare, range(len(partitions))))
+    finally:
+        if early_pool is not None:
+            early_pool.shutdown(wait=True)
     preparation_seconds = time.perf_counter() - began
+    stage_seconds['class_projection'] = preparation_seconds - sum(stage_seconds.values())
     timeline += [
         wallclock.row('lts-inputs', began, inputs_done, {'device': 'CPU', 'host_threads': host_threads(),
                   'scope': 'global mesh, vertical grid and state (load_native_dynamics_inputs)'
@@ -1359,11 +1450,28 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
         wallclock.row('lts-class-plan', inputs_done, plan_done, {'device': 'CPU', 'host_threads': 1,
                   'scope': 'rate admission and class (block) plan, numpy'}),
         wallclock.row('lts-class-projection', plan_done, began + preparation_seconds,
-                  {'device': 'CPU', 'host_threads': len(partitions),
-                   'scope': 'class payloads (one worker per field) and class inputs, one thread per class'})]
+                  {'device': 'GPU plus CPU' if early else 'CPU', 'host_threads': len(partitions)+len(early),
+                   'scope': 'class payloads and carried words; actual admitted class GPU drivers overlap projection'
+                            if early else 'class payloads and class inputs, one thread per class'})]
     board = _Board(len(partitions))
     executions = [LtsClassExecution(board, index, units[index].rate, top, partitions, prepared[index][2],
                                     layout) for index in range(len(partitions))]
+    for execution, item in zip(executions, reused):
+        execution.prepared_moving_class = item
+        execution.moving_gpu_build = moving is not None and resident.enabled()
+    if predicted is not None:
+        selected = {id(item) for item in reused if item is not None}
+        for item in predicted:
+            if id(item) not in selected:
+                backend = item.pop('physics_backend', None)
+                if backend is not None:
+                    backend.close()
+                item.pop('physics_hydration', None)
+                item.pop('gpu_driver', None)
+                item.pop('gpu_geometry', None)
+                item.pop('upload_cache', None)
+        resident._log(dict(class_gpu_preparation=[None if item is None else item.get('gpu_preparation')
+                                                 for item in reused]))
     member_stochastic = None
     member_config = stochastic_config(arguments)
     if member_config.enabled:
@@ -1428,7 +1536,8 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
                for index in range(len(partitions))]
     receipt = dict(schema='mpas-lts-launch-v1', completed=False, classes=len(partitions),
                    rates=[int(tables.rate) for tables in plan.classes], rate_assignment=rate_info,
-                   clock=clock, preparation_seconds=preparation_seconds,
+                   clock=clock, preparation_seconds=preparation_seconds, preparation_stages=stage_seconds,
+                   resident=resident.receipt(),
                    preparation_parallelism=f'{len(partitions)} host projection threads; before class CUDA work',
                    owned_cells=[int(p.n_owned_cells) for p in partitions],
                    local_cells=[int(len(p.cell_l2g)) for p in partitions],

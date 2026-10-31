@@ -14,7 +14,7 @@ all cores); no Fortran runs.
 | Vertical grid | v8.3.1 terrain-following grid on the RRFS L60 levels (59 layers, top 25,878.712 m, 30 surface smoothing passes) |
 | Aerosols | TEMPO's `nwfa`/`nifa` from the first guess when it carries them, else the monthly `QNWFA_QNIFA_SIGMA_MONTHLY.dat` climatology |
 | Hydrometeors | interpolated from the first guess when present |
-| Static | MODIS 15 s land use, BNU soils (16 classes), `landusef`, `soilf`, `lai12m`, `nvegopt = 2` |
+| Static | MODIS 15 s land use, BNU soils (16 classes), `landusef`, `soilf`, `lai12m`, `nvegopt = 2`; deep-soil temperature from ERA5 (see below) |
 | Drag statistics | `ugwp_oro_data.nc` from the GSL generator (`rw_mpas_gsl_oro`), the file RRFS's `bl_ugwp_gwdo` reads; hex's own method stays selectable (`--ugwp-oro hex-ugwp-oro`) |
 | Boundaries | case 9 per hour with RRFS hydrometeors (`--lbc-met TIME=MET`, repeatable) |
 
@@ -37,6 +37,39 @@ static first (the geography needs `modis_landuse_20class_15s`, `bnu_soiltype_top
 `lai_modis_30s`). With `topo_ugwp_30s` and `topo_ugwp_2.5m` in the same geography the GSL drag
 statistics are written beside `init.nc`. The receipt `init.nc.provenance.json` records the
 producer, its recipe, every stage's time and the output hash.
+
+## Deep-soil temperature: ERA5, not NOAA's ISLSCP-I
+
+When the init builds the fork static (any region or mesh whose static lacks the suite's fields), its
+deep-soil temperature (`soiltemp`, the temperature RUC holds its lowest soil level toward) comes from
+`soiltemp_era5_1deg`: ERA5's 1990-2019 annual-mean 2 m temperature reduced to sea level at 0.0065 K/m,
+on the same 1-degree layout. `gpuwm fetch-geog` builds it from ERA5 (Licence to Use Copernicus
+Products: commercial use allowed, attribution required).
+
+NOAA's recipe reads `soiltemp_1deg` (ISLSCP-I) instead. Its licence is unclear (CEDA states
+"Permitted Use: Unstated"), so it is held out of the default geography. The two differ over land by:
+
+| | ERA5 minus ISLSCP-I |
+|---|---|
+| all land, mean (area-weighted) | +1.9 K (+1.8 K) |
+| 95 % of land cells | -0.6 to +4.8 K |
+| CONUS / Europe / East Asia, mean | +1.6 / +2.1 / +2.4 K |
+| largest | -6.7 K to +11.1 K (a few mountain and desert cells) |
+
+So a region built here starts its deep soil about 2 K warmer than NOAA's recipe would. NOAA's own
+static (the conus3km preset reads NOAA's published file) is not rebuilt, so that preset keeps NOAA's
+field exactly. `--deep-soil-temperature islscp-i` selects NOAA's dataset by name (it prints its licence
+note); the receipt's `deep_soil_temperature` block records which one a run used.
+
+## Regions of any shape (country and regional doors)
+
+`gpuwm-hex country` and `gpuwm-hex regional` with `--forecast-arg=--physics-suite=hrrrv5` take the
+producer end to end on the region they cut: case 7 on the cut (its fork static built from the
+geography) and case 9 boundaries from the source's hourly (GFS) or 3-hourly (IFS) leads. Both doors
+take the same shapes: `--point LAT,LON --radius-km R`, `--ellipse LAT,LON,A_KM,B_KM[,AZIMUTH]` and
+`--shape FILE` (a polygon, lat-lon box or cap Shape row, or GeoJSON; `country --polygon` as before).
+A region larger than one card runs on several with `--samehost-devices 0,1,2,3` (one rank per card;
+the region's partition is built from its own grid).
 
 ## Source pin selection
 

@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from ..host_parallel import all_finite, contiguous_copy
+from ..moving_upload_cache import ACTIVE as _UPLOAD_CACHE, upload as _upload
 
 from .compaction import (
     compact_host,
@@ -122,7 +123,7 @@ def _device_float_fields(cp, owner, names, dtype, *, exact_dtype=False, finite=T
             raise TypeError(f"{name} must have dtype {dtype}, got {source.dtype}")
         if source.dtype != dtype or not (source.flags.c_contiguous or source.flags.f_contiguous):
             source = contiguous_copy(source, dtype=dtype)
-        uploaded = cp.asarray(source, order="K")
+        uploaded = _upload(cp, source, name)
         value = cp.ascontiguousarray(uploaded, dtype=dtype)
         device[name] = value
         if word_flags is not None and value.size:
@@ -427,8 +428,8 @@ class DeviceMesh:
                     eoe_fill = int(eoe_tail)
                     woe_fill = float(woe_tail)
         started = time.perf_counter()
-        device_index = {name: cp.asarray(value) for name, value in host_index.items()}
-        device_float = {name: cp.asarray(value) for name, value in host_float.items()}
+        device_index = {name: _upload(cp, value, name) for name, value in host_index.items()}
+        device_float = {name: _upload(cp, value, name) for name, value in host_float.items()}
         device_signs = _device_edge_signs(cp, device_index["edgesOnCell"],
                                           device_index["cellsOnEdge"],
                                           device_index["nEdgesOnCell"], float_dtype)
@@ -1029,8 +1030,8 @@ class DeviceTerrainMetrics:
                 host_zb3 = compact_host(host_zb3, keep, axis=2)
                 stride = keep
                 fill = float(zb_tail)
-        zb = cp.asarray(host_zb)
-        zb3 = cp.asarray(host_zb3)
+        zb = _upload(cp, host_zb, 'zb')
+        zb3 = _upload(cp, host_zb3, 'zb3')
         cp.cuda.get_current_stream().synchronize()
         elapsed = time.perf_counter() - started
         return cls(
@@ -1115,6 +1116,7 @@ class DeviceAtmosphere:
         *,
         dtype: Any | None = None,
         index_dtype: Any = np.int32,
+        upload_cache: Any = None,
     ) -> "DeviceAtmosphere":
         require_cuda()
         started = time.perf_counter()
@@ -1128,6 +1130,8 @@ class DeviceAtmosphere:
             # Three workers overlap host preparation with independent transfers
             # without unbounded conversion buffers or one stream per field.
             with cp.cuda.Device(device_id), cp.cuda.Stream(non_blocking=True) as stream:
+                token = _UPLOAD_CACHE.set(None if upload_cache is None else
+                                          (upload_cache, function.__qualname__))
                 try:
                     return function(*args, **kwargs)
                 except BaseException:
@@ -1135,6 +1139,8 @@ class DeviceAtmosphere:
                     # Finish that stream before discarding its temporaries.
                     stream.synchronize()
                     raise
+                finally:
+                    _UPLOAD_CACHE.reset(token)
 
         with ThreadPoolExecutor(max_workers=3, thread_name_prefix="hex-upload") as pool:
             mesh_future = pool.submit(upload, DeviceMesh.from_host, mesh,

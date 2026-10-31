@@ -329,6 +329,88 @@ def _recipe_context(arguments: argparse.Namespace, regions: Sequence[Any]) -> di
     return {"geometry": "zoom-globe" if regions else "global", "source": source, "start": "cold"}
 
 
+def _producer_suite(forecast_flags: Sequence[str]) -> str | None:
+    """The suite the init names when it initializes through its own producer (hrrrv5, rrfs_*), else None."""
+    from .physics_default import init_flags, init_producer
+    flags = init_flags(forecast_flags)
+    if "--physics-suite" not in flags:
+        return None
+    suite = flags[flags.index("--physics-suite") + 1]
+    return suite if init_producer(suite) else None
+
+
+def producer_init_geog(forecast_flags: Sequence[str], geog: Any) -> list[str]:
+    """``--geog`` for init-source when the planned suite builds its own static (init_sources.producer_geog_flags).
+
+    THE BREAKAGE THIS PREVENTS (zoom globe + hrrrv5 from IFS, 2026-10-31): the door's init-source passed no
+    geography, so the RRFS producer refused at the init ("mesh.static.nc lacks landusef, soilf, lai12m ... Pass
+    --grid and --geog"). Every other suite's init argv is unchanged.
+    """
+    return ["--geog", str(geog)] if _producer_suite(forecast_flags) is not None and geog is not None else []
+
+
+def _producer_makes_drag_file(forecast_flags: Sequence[str], geog: Any) -> bool:
+    """Whether the suite's init producer writes ugwp_oro_data.nc itself (its GSL generator, which needs GSL's
+    topo_ugwp_30s and topo_ugwp_2.5m in the geography; cold_start_rrfs._gsl_orography)."""
+    suite = _producer_suite(forecast_flags)
+    if suite is None or geog is None:
+        return False
+    from .mpasphys.rrfs.cold_start_rrfs import producer_for_suite
+    found = producer_for_suite(suite)
+    if found is None:
+        return False
+    gwd = found[1].get("gwd") or {}
+    return gwd.get("default") == "gsl-oro" and all((Path(geog) / name).exists() for name in gwd.get("geog", ()))
+
+
+def orographic_statistics_job(forecast_flags: Sequence[str], mesh: str, grid: Path, geog: Any, root: Path):
+    """Start hex's own drag statistics (hexcore.ugwp_oro, Rust on every core) beside the init, or None.
+
+    THE BREAKAGE THIS PREVENTS (zoom globe + hrrrv5, 2026-10-31): the zoom-globe door had no drag-statistics step,
+    which the global, country and regional doors have; hrrrv5's GSL drag (bl_ugwp_gwdo) reads the twenty per-cell
+    statistics, so the forecast door built them on the card's clock. None when the run's physics reads none, when
+    the caller names its own --orographic-statistics, or when the producer's GSL generator makes the file (it wins,
+    as on the regional door).
+    """
+    from .ugwp_oro import forecast_args_read_ugwp
+    flags = [str(item) for item in forecast_flags]
+    if (not forecast_args_read_ugwp(flags)
+            or any(item.split("=", 1)[0] == "--orographic-statistics" for item in flags)
+            or _producer_makes_drag_file(flags, geog)):
+        return None
+    from concurrent.futures import ThreadPoolExecutor
+    from .ugwp_oro import prepare_for_forecast
+    log = root / "logs" / "orographic-statistics.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    def note(message: Any) -> None:
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write(f"{message}\n")
+
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ugwp-oro")
+    future = pool.submit(prepare_for_forecast, ["--mesh", mesh, *flags], grid, geog, log=note)
+    pool.shutdown(wait=False)
+    return future
+
+
+def finish_orographic_statistics(job, forecast_flags: Sequence[str], root: Path) -> dict[str, Any] | None:
+    """The drag statistics file the forecast reads: the producer's (init/ugwp_oro_data.nc), else hex's own."""
+    from .ugwp_oro import UgwpOroError, forecast_args_read_ugwp
+    if job is not None:
+        try:
+            record = job.result()
+        except UgwpOroError as error:
+            raise MpasPortError(f"the GSL drag's orographic statistics could not be built: {error}") from None
+        return None if record is None else {"path": str(record["out"]), "method": "hex-ugwp-oro",
+                                            **{k: record[k] for k in ("sha256", "source", "seconds") if k in record}}
+    flags = [str(item) for item in forecast_flags]
+    made = root / "init" / "ugwp_oro_data.nc"
+    if (forecast_args_read_ugwp(flags) and made.is_file()
+            and not any(item.split("=", 1)[0] == "--orographic-statistics" for item in flags)):
+        return {"path": str(made), "method": "gsl-oro"}
+    return None
+
+
 def run_global_mesh(arguments: argparse.Namespace) -> int:
     """A generated spec to a bound global forecast through existing doors.
 
@@ -541,6 +623,7 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                    context=recipe_context)
     prefix = [sys.executable, "-m", "hexcore.cli"]
     prefetch = None
+    live_export = None
     try:
         static_engine = resolve(STATIC, arguments.static_exe)
         geog = mesh_point.resolve_geog(arguments.geog)
@@ -573,6 +656,9 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                 init_common += ["--table", arguments.source_table]
             if arguments.member is not None:
                 init_common += ["--member", arguments.member]
+            # A suite whose init has its own producer (hrrrv5, rrfs_*) builds its own static from the geography
+            # (init_sources.producer_geog_flags): the zoom globe hands the init the geography its static was built from.
+            init_common += producer_init_geog(extra, geog)
             # The source fetch and decode need no mesh: they run beside the mesh and static (U-H6: 13.4 s that
             # started only after a 57.9 s static on the production zoom globe), and init-source --from-decoded
             # builds the init from them once the static exists.
@@ -676,8 +762,16 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
             save()
             if decoded["returncode"]:
                 raise MpasPortError(f"init-source-decode exited {decoded['returncode']}; log {decoded['log']}")
+            # The GSL drag's orographic statistics (hrrrv5's bl_ugwp_gwdo), built beside the init on all cores so
+            # the forecast never waits on them (orographic_statistics_job).
+            oro_job = orographic_statistics_job(extra, row.name, grid, geog, root)
             stage("init-source", [*prefix, *init_common, "--from-decoded",
                                   "--grid", grid, "--static", static, "--vertical-spec", vertical])
+            oro = finish_orographic_statistics(oro_job, extra, root)
+            if oro is not None:
+                receipt["orographic_statistics"] = oro
+                extra += ["--orographic-statistics", oro["path"]]
+                save()
             init_receipt = root / "init" / "init-source-receipt.json"
             receipt["source_binding"] = json.loads(init_receipt.read_text())
             run = root / "forecast"
@@ -692,6 +786,13 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                                     *label_argv(arguments)],
                              log=root / "logs" / "first-look.log")
             look.start()
+            # The run's export beside the forecast, each frame as it is closed, when the host names one
+            # (GPUWM_HEX_EXPORT_LIVE, export_door.live_export_command): the export step after the door then takes
+            # those frames instead of converting the whole run on the CPU while the cards sit idle.
+            from .export_door import LiveExport
+            frames = int(round(float(arguments.hours) * 60 / float(arguments.history_every_minutes))) + 1
+            live_export = LiveExport(run, grid=grid, init=root / "init" / "init.nc", start_time=cycle.start_time,
+                                     frames=frames, log=root / "logs" / "live-export.log").start()
             # A named suite (--forecast-arg=--physics-suite=NAME) takes the forecast door's own step for it,
             # as the global door does; the caller's flags come last and win.
             from .global_door import forecast_arg_physics
@@ -706,6 +807,15 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                                   "mode": named.get("mode") or DEFAULT_PHYSICS_MODE,
                                   **({"profile": named["profile"]} if named.get("profile") else {}),
                                   **({"namelist": named["namelist"]} if named.get("namelist") else {})}
+            # A suite run with the selector changes of one of its named variants is labelled as that variant
+            # ("hrrrv5 + storm scheme"), with what differs from the suite, never as the suite alone.
+            from .mpasphys.route_table import forecast_arg_overrides, named_variant
+            variant = named_variant(named.get("suite"), forecast_arg_overrides(extra))
+            if variant is not None:
+                receipt["physics"]["variant"] = variant[0]
+                receipt["physics"]["differences_from_suite"] = list(variant[1].get("differences_from_suite", ()))
+                print(f"physics: {variant[0]} ({named.get('suite')} with "
+                      + ", ".join(f"{k}={v}" for k, v in variant[1]["selectors"].items()) + ")", flush=True)
             from .physics_default import door_step
             # Full-step LTS: the forecast door picks the step, so its default moves onto the class clock
             # (mpas_defaults.lts_class_clock_dt); an explicit --dt here would be refused by that clock instead.
@@ -734,12 +844,16 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                 products += ["--live-frames", look.receipt()]
             stage("products", products)
             receipt["products_manifest"] = str(root / "products")
+            receipt["live_export"] = live_export.finish(forecast_ok=True)
+            live_export = None
         receipt["status"] = "complete" if arguments.run else "generated"
         receipt.pop("active_stage", None)
         save()
     except BaseException as error:
         if prefetch is not None:
             prefetch.cancel()  # the door failed before the init needed it
+        if live_export is not None:
+            receipt["live_export"] = live_export.finish(forecast_ok=False)
         if not isinstance(error, Exception):
             raise
         receipt["status"] = "failed"

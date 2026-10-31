@@ -840,8 +840,13 @@ def add_init_parser(commands: Any) -> None:
     rrfs.add_argument("--lbc-dir", type=Path, default=None, help="where lbc.*.nc go (default: beside --out)")
     rrfs.add_argument("--ugwp-oro", choices=("gsl-oro", "hex-ugwp-oro"), default=None,
                       help="who makes ugwp_oro_data.nc (default: the producer row's, the GSL generator)")
-    parser.add_argument("--soil-remap", choices=("auto", "off"), default="auto",
-                        help="table-selected cold soil hydraulic conversion (default auto)")
+    rrfs.add_argument("--deep-soil-temperature", choices=("era5", "islscp-i"), default=None,
+                      help="deep-soil temperature of a fork static built here (default era5: soiltemp_era5_1deg, "
+                           "permissive; islscp-i is NOAA's soiltemp_1deg, licence unclear, selected by name only)")
+    parser.add_argument("--soil-remap", choices=("auto", "on", "off"), default="auto",
+                        help="table-selected cold soil hydraulic conversion: auto (default) applies it where its "
+                             "contract holds and otherwise keeps the cold-start soil, naming why; on refuses instead; "
+                             "off never applies it")
     parser.add_argument("--soil-donor", type=Path, default=None,
                         help="co-located native soil analysis required by the hydraulic contract")
     parser.add_argument("--soil-contract", default=None, help="explicit packaged soil hydraulic table id")
@@ -887,6 +892,21 @@ def _validate_spec_switch_agreement(arguments: argparse.Namespace) -> None:
         )
 
 
+def _soil_remap_off(arguments, reason):
+    """The cold soil remap does not apply to this init: refuse under --soil-remap on, else keep the cold soil.
+
+    THE BREAKAGE THE AUTO BRANCH PREVENTS (WOOF gpuwm-hex 0.4.10 bake and switch candidate, 2026-10-30/31): each case
+    the remap cannot serve (a land model other than Noah, a forecast-hour start, an expired table date) refused the
+    whole init, three times in a day. The init without the remap is the cold start native MPAS-A's init_atmosphere
+    writes, and every hex init wrote before the remap, so a case the contract does not cover keeps it and the log
+    and receipt say why. --soil-remap on is the opt-in that refuses instead.
+    """
+    if getattr(arguments, "soil_remap", "auto") == "on":
+        _refuse(f"--soil-remap on: the cold soil remap does not apply: {reason}")
+    arguments.soil_remap_reason = reason
+    print(f"init: cold soil remap off: {reason}; the init keeps its cold-start soil", file=sys.stderr)
+
+
 def prepare_soil_remap(arguments, map_sources):
     from .cycle.soil_wetness import source_contract
     if getattr(arguments, "soil_remap", "auto") == "off":
@@ -896,13 +916,22 @@ def prepare_soil_remap(arguments, map_sources):
     except ValueError as error:
         _refuse(str(error))
     if contract is None:
+        if getattr(arguments, "soil_remap", "auto") == "on":
+            _refuse("--soil-remap on: no cold soil contract in the table covers this init's source "
+                    f"({', '.join(map_sources) or 'none named'})")
         return None
     if arguments.land_surface != "noah":
-        _refuse("cold soil hydraulic contract supports Noah; select a matching contract or --soil-remap off")
+        # The table's contract is Noah's hydraulics. Another land model (the ArWen route's Noah-MP, RUC) starts from
+        # the interpolated soil, as every init did before the remap. init-source names the table's contract and
+        # donor on every GFS init, so a named --soil-contract is no request to refuse (it stopped every ArWen-route
+        # zoom globe, VR globe and region from GFS at its init, WOOF gpuwm-hex 0.4.10 bake, 2026-10-30).
+        _soil_remap_off(arguments, f"the table's contract is Noah's, this init is {arguments.land_surface}")
+        return None
     donor = getattr(arguments, "soil_donor", None)
     if donor is None or not Path(donor).is_file():
-        _refuse("--soil-donor must name the co-located native soil analysis; interpolated categorical "
-                "soil classes cannot supply porosity. Use init-source to acquire the table's donor")
+        _soil_remap_off(arguments, "no co-located native soil analysis (--soil-donor) was given; interpolated "
+                                   "categorical soil classes cannot supply porosity (init-source acquires the donor)")
+        return None
     return contract
 
 
@@ -1055,16 +1084,27 @@ def run_init_command(arguments: argparse.Namespace) -> int:
             "geometry. Rebuild or re-stage rw_mpas_init from gpuwm 2.9.0 or later"
         )
     soil_receipt = {"mode": getattr(arguments, "soil_remap", "auto"), "applied": False}
+    if getattr(arguments, "soil_remap_reason", None):
+        soil_receipt["reason"] = arguments.soil_remap_reason
     if soil_contract is not None:
-        from .cycle.soil_wetness import remap_cold_init
+        from .cycle.soil_wetness import SoilRemapNotApplied, remap_cold_init
         try:
-            soil_receipt = {"applied": True, **remap_cold_init(
-                out, arguments.soil_donor, soil_contract, arguments.start_time)}
+            result = remap_cold_init(out, arguments.soil_donor, soil_contract, arguments.start_time)
+        except SoilRemapNotApplied as error:
+            # Nothing was written: the init is the complete cold start. Under on it is removed with the refusal.
+            if getattr(arguments, "soil_remap", "auto") == "on":
+                out.unlink(missing_ok=True)
+            _soil_remap_off(arguments, str(error))
+            soil_receipt = {**soil_receipt, "contract": soil_contract["id"], "reason": str(error)}
         except Exception as error:
-            # This owned output is incomplete. It must not be forecast as an
+            # The remap failed while writing the init: this owned output is incomplete. It must not be forecast as an
             # admitted cold init when its soil completion has failed.
             out.unlink(missing_ok=True)
-            _refuse(f"cold soil remap refused and incomplete init was removed: {error}")
+            _refuse(f"cold soil remap failed while writing and the incomplete init was removed: {error}")
+        else:
+            if not result.get("applied", True):
+                print(f"init: cold soil remap had nothing to change: {result.get('reason')}", file=sys.stderr)
+            soil_receipt = {**soil_receipt, "applied": True, **result}
     aerosol_receipt = None
     if selection["scalar_names"]:
         from .init_physics import initialize_species

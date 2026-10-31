@@ -177,6 +177,11 @@ def load_carrier(path) -> dict[str, Any]:
     difference.
     """
     path = Path(path)
+    from . import moving_resident_v842 as resident
+    carried = resident.take_carrier(path)
+    if carried is not None:
+        # Handed over in memory by the previous segment of this resident process (its file was never written).
+        return carried
     receipt = json.loads(path.with_suffix(path.suffix + ".json").read_text())
     data = _read_verified(path, int(receipt["bytes"]), receipt["sha256"])
     payload = pickle.loads(memoryview(data))
@@ -245,14 +250,26 @@ def coherent_donors(weights, source_roles, target_roles, source_xyz, target_xyz)
     matrix = weights.overlap.tocsr()
     donors = largest_donors(weights)
     mismatch = np.flatnonzero(np.any(source_roles[donors] != target_roles, axis=1))
+    labels = None
+    if (getattr(weights, 'backend', 'cpu') == 'cuda'
+            and os.environ.get('GPUWM_HEX_MOVING_SURFACE_GPU','1') != '0'
+            and np.isfinite(matrix.data).all()):
+        from ..moving_surface_cuda import overlap_donors
+        donors, labels = overlap_donors(weights, source_roles, target_roles, donors)
     relaxed: dict[str, int] = {}
     nearest, nearest_km = 0, 0.0
     trees: dict[tuple, Any] = {}
     for cell in mismatch:
+        if labels is not None and labels[cell] >= 0:
+            tier = ((0,1,2,3,4),(0,1,2,4),(0,1,3,4),(0,1,4))[int(labels[cell])]
+            if len(tier) < 5:
+                name = "+".join(("water", "ice", "soil", "vegetation", "glacier")[i] for i in tier)
+                relaxed[name] = relaxed.get(name, 0) + 1
+            continue
         start, stop = matrix.indptr[cell], matrix.indptr[cell + 1]
         candidates, areas = matrix.indices[start:stop], matrix.data[start:stop]
         found = False
-        for tier in ((0, 1, 2, 3, 4), (0, 1, 2, 4), (0, 1, 3, 4), (0, 1, 4)):
+        for tier in (() if labels is not None else ((0, 1, 2, 3, 4), (0, 1, 2, 4), (0, 1, 3, 4), (0, 1, 4))):
             match = np.all(source_roles[candidates][:, tier] == target_roles[cell, tier], axis=1)
             if match.any():
                 picks = np.flatnonzero(match)
@@ -283,6 +300,39 @@ def coherent_donors(weights, source_roles, target_roles, source_xyz, target_xyz)
 def _unit_xyz(mesh) -> np.ndarray:
     xyz = np.stack([np.asarray(mesh.arrays[k], dtype=np.float64) for k in ("xCell", "yCell", "zCell")], axis=-1)
     return xyz / np.linalg.norm(xyz, axis=-1, keepdims=True)
+
+
+def build_weights(*, source_mesh, source_vertical, operator, source_grid, target_grid, mesh, vertical):
+    """The move's remap map from the carrier's mesh (``source_mesh``, ``source_vertical``) onto this member's.
+
+    Reads only geometry (the two members' grids, the overlap operator, both meshes' areas and heights), never the
+    carried state, so a resident process builds it while the previous segment steps (moving_resident_v842).
+    """
+    from ..moving_remap import ConservativeMap, SphericalCells
+    source, target = SphericalCells.read(source_grid), SphericalCells.read(target_grid)
+    radius = float(mesh.attrs["sphere_radius"])
+    if float(source_mesh.attrs["sphere_radius"]) != radius:
+        raise ValueError("moving forecast earth radii differ")
+    scale = (radius / source.radius_m) ** 2
+    if (radius / target.radius_m) ** 2 != scale:
+        raise ValueError("source and target operator spheres use different area units")
+    if len(source.area) != len(source_mesh.arrays["areaCell"]) or len(target.area) != len(mesh.arrays["areaCell"]):
+        raise ValueError("the move's grids do not have the carrier's and this member's cell counts")
+    # The generator geometry binds the operator; the carrier's coordinates were read single precision
+    # (runtime_v842.load_native_dynamics_inputs), so they identify the source grid to FP32.
+    if not np.allclose(_unit_xyz(source_mesh), source.centers, rtol=0, atol=2e-6):
+        raise ValueError("source grid does not identify the stored moving carrier")
+    weights = ConservativeMap.load(operator, source=source, target=target)
+    weights = ConservativeMap(weights.overlap * scale, weights.source_area * scale, weights.target_area * scale,
+                              dict(weights.receipt, effective_area_radius_m=radius, generator_area_scale=scale))
+    weights = weights.with_physical_areas(source_mesh.arrays["areaCell"], mesh.arrays["areaCell"])
+    height = os.environ.get("GPUWM_HEX_MOVING_HEIGHT_REMAP")
+    if height in ("1", "absolute"):
+        from ..moving_vertical import HeightConservativeMap
+        weights = HeightConservativeMap(weights, source_vertical.zgrid, vertical.zgrid,
+                                        source_vertical.dzw, vertical.dzw,
+                                        endpoint_alignment=height != "absolute")
+    return weights
 
 
 def map_field(values, dims, weights, *, donors=None):
@@ -391,36 +441,26 @@ class MovingRoute:
 
     # ----------------------------------------------------------------- remapped resume (dycore)
     def _weights(self, mesh, vertical):
-        from ..moving_remap import ConservativeMap, SphericalCells
         carrier = self.carrier
-        source_mesh = carrier["mesh"]
-        source, target = SphericalCells.read(self.source_grid), SphericalCells.read(self.target_grid)
-        radius = float(mesh.attrs["sphere_radius"])
-        if float(source_mesh.attrs["sphere_radius"]) != radius:
-            raise ValueError("moving forecast earth radii differ")
-        scale = (radius / source.radius_m) ** 2
-        if (radius / target.radius_m) ** 2 != scale:
-            raise ValueError("source and target operator spheres use different area units")
-        if len(source.area) != len(source_mesh.arrays["areaCell"]) or len(target.area) != len(mesh.arrays["areaCell"]):
-            raise ValueError("the move's grids do not have the carrier's and this member's cell counts")
-        # The generator geometry binds the operator; the carrier's coordinates were read single precision
-        # (runtime_v842.load_native_dynamics_inputs), so they identify the source grid to FP32.
-        if not np.allclose(_unit_xyz(source_mesh), source.centers, rtol=0, atol=2e-6):
-            raise ValueError("source grid does not identify the stored moving carrier")
-        weights = ConservativeMap.load(self.operator, source=source, target=target)
-        weights = ConservativeMap(weights.overlap * scale, weights.source_area * scale, weights.target_area * scale,
-                                  dict(weights.receipt, effective_area_radius_m=radius, generator_area_scale=scale))
-        weights = weights.with_physical_areas(source_mesh.arrays["areaCell"], mesh.arrays["areaCell"])
-        height = os.environ.get("GPUWM_HEX_MOVING_HEIGHT_REMAP")
-        if height in ("1", "absolute"):
-            from ..moving_vertical import HeightConservativeMap
-            weights = HeightConservativeMap(weights, carrier["vertical"].zgrid, vertical.zgrid,
-                                            carrier["vertical"].dzw, vertical.dzw,
-                                            endpoint_alignment=height != "absolute")
-        return weights
+        build = lambda: build_weights(source_mesh=carrier["mesh"], source_vertical=carrier["vertical"],
+                                      operator=self.operator, source_grid=self.source_grid,
+                                      target_grid=self.target_grid, mesh=mesh, vertical=vertical)
+        # A resident moving process prepared this map beside the previous segment (moving_resident_v842).
+        from . import moving_resident_v842 as resident
+        return resident.weights(self, mesh, vertical, build)
 
-    def resume_dycore(self, *, mesh, grid, reference, state, saved, names, target_grid):
-        """The carrier's atmosphere on this member: (state, saved, weights or None for the same mesh)."""
+    def move_weights(self, *, mesh, grid, target_grid):
+        """This move's remap map before the atmosphere is remapped (None on the same mesh), so the physics
+        restore can run beside the atmosphere remap (moving_mpi_v842.prepare_moving)."""
+        if self.carrier is None or not self.operator:
+            return None
+        self.target_grid = target_grid
+        return self._weights(mesh, grid.vertical_grid)
+
+    def resume_dycore(self, *, mesh, grid, reference, state, saved, names, target_grid, weights=None):
+        """The carrier's atmosphere on this member: (state, saved, weights or None for the same mesh).
+
+        ``weights``: this move's map when the caller already built it (``move_weights``)."""
         from ..driver import DrySavedDiagnostics
         from ..state import PrognosticState
         carrier = self.carrier
@@ -440,7 +480,8 @@ class MovingRoute:
             return state, saved, None
         began = time.perf_counter()
         self.target_grid = target_grid
-        weights = self._weights(mesh, grid.vertical_grid)
+        if weights is None:
+            weights = self._weights(mesh, grid.vertical_grid)
         from ..moving_state import remap_atmosphere
         prepared = SimpleNamespace(mesh=mesh, vertical=grid.vertical_grid, reference=reference,
                                    terrain_metrics=grid.terrain_metrics)
@@ -474,6 +515,8 @@ class MovingRoute:
                              f"{getattr(session.config, 'suite', None)}")
         n_target = layout.dimensions["nCells"]
         receipt = dict(fields=0, methods={})
+        stages = {}
+        stage_began = time.perf_counter()
         donors = surface = None
         if weights is not None:
             threshold = 0.02 if layout.configs.get("config_frac_seaice") else 0.5
@@ -485,6 +528,7 @@ class MovingRoute:
             donors, surface = coherent_donors(weights, source_roles, target_roles,
                                               _unit_xyz(carrier["mesh"]), _unit_xyz(mesh))
             receipt["surface_donors"] = surface
+        stages['surface_donors'] = time.perf_counter()-stage_began
         mapped_vectors = {}
         computed = {}
         if weights is not None:
@@ -526,6 +570,20 @@ class MovingRoute:
             # one thread, 7.9 s of a resumed MPAS-route storm-following segment (box-aws2x 2026-10-24, sampled).
             # The maps are independent calls; they run on all cores, and the native pool writes stay in order.
             largest_donors(weights)  # cached on the map before any task needs it
+            jobs = [(_key(row, level), row['dimensions']) for row in rows for level in range(1, row['nlevels']+1)]
+            if (getattr(weights, 'backend', 'cpu') == 'cuda'
+                    and hasattr(weights, 'source_dzw')
+                    and os.environ.get('GPUWM_HEX_MOVING_PHYSICS_BATCH','1') != '0'):
+                from .moving_rates_batch_v842 import remap
+                stage_began = time.perf_counter()
+                scalar_keys = [key for key, dims in jobs if len(dims) == 2 and dims[0] == LAYER_AXIS]
+                batched, detail = remap(weights, physics['pools'], scalar_keys, vector_tasks,
+                                        carrier['mesh'], mesh)
+                computed.update(batched)
+                vector_tasks = [pair for pair in vector_tasks if pair[0] not in computed]
+                receipt['rate_batches'] = detail
+                stages['rate_batches'] = time.perf_counter()-stage_began
+            stage_began = time.perf_counter()
             if vector_tasks:
                 first, rest = vector_tasks[0], vector_tasks[1:]
                 results = [carry_vector(*first)]  # builds the map's device geometry once
@@ -533,11 +591,26 @@ class MovingRoute:
                 for (u_key, v_key), (mu, mv) in zip(vector_tasks, results):
                     mapped_vectors[u_key] = mu
                     mapped_vectors[v_key] = mv
-            jobs = [(_key(row, level), row["dimensions"]) for row in rows for level in range(1, row["nlevels"] + 1)]
+            jobs = [(key, dims) for key, dims in jobs if key not in computed]
             for (key, _), result in zip(jobs, run_tasks([lambda key=key, dims=dims: map_one(key, dims)
                                                          for key, dims in jobs])):
                 computed[key] = result
+            stages['remaining_maps'] = time.perf_counter()-stage_began
+        stage_began = time.perf_counter()
+        install = getattr(native, 'restore_mapped_fields', None) if weights is not None else None
+        if install is not None:
+            jobs = []
+            for row in rows:
+                for level in range(1, row['nlevels']+1):
+                    key = _key(row, level)
+                    finite, mapped, method = computed.pop(key)
+                    jobs.append((row, level, finite, mapped))
+                    receipt['fields'] += 1
+                    receipt['methods'].setdefault(method, []).append(key)
+            install(jobs, n_target)
         for row in rows:
+            if install is not None:
+                break
             dims = row["dimensions"]
             for level in range(1, row["nlevels"] + 1):
                 key = _key(row, level)
@@ -556,7 +629,11 @@ class MovingRoute:
                 native.put_field(row["pool"], row["pool_name"], mapped, level=level, nlevels=row["nlevels"])
                 receipt["fields"] += 1
                 receipt["methods"].setdefault(method, []).append(key)
+        stages['pool_writes'] = time.perf_counter()-stage_began
+        stage_began = time.perf_counter()
         self._restore_windows(session, weights, donors)
+        stages['windows'] = time.perf_counter()-stage_began
+        receipt['stages_seconds'] = stages
         receipt["seconds"] = time.perf_counter() - began
         if self.remap_receipt is not None:
             self.remap_receipt["physics"] = receipt
@@ -626,10 +703,14 @@ class MovingRoute:
         """(steps, seconds) the physics clock starts at: a move starts its own clock (``CheckpointRoute``)."""
         return 0, 0.0
 
-    def export(self, path, *, session, dycore, mesh, vertical, names, layout, step, dt) -> dict[str, Any]:
+    def export(self, path, *, session, dycore, mesh, vertical, names, layout, step, dt, handoff=None) -> dict[str, Any]:
         """Seal the dycore state and the carried native physics state at this step."""
         payload, summary = self.carrier_payload(session=session, dycore=dycore, mesh=mesh, vertical=vertical,
                                                 names=names, layout=layout, step=step, dt=dt)
+        if handoff is not None:
+            # A move whose next segment runs in this resident process: the carrier stays in memory.
+            from . import moving_resident_v842 as resident
+            return resident.store_carrier(Path(path), payload, summary, handoff)
         return _write_sealed(Path(path), payload, summary)
 
     def carrier_payload(self, *, session, dycore, mesh, vertical, names, layout, step, dt):
@@ -727,8 +808,12 @@ class MovingRoute:
 
     def finish(self, *, step, session, dycore, mesh, vertical, names, layout, dt) -> None:
         if self.export_path:
+            # A move whose next segment runs in this resident process hands the carrier over in memory
+            # (moving_resident_v842); every other stop seals it to its file as before.
+            from . import moving_resident_v842 as resident
             self.export_receipt = self.export(self.export_path, session=session, dycore=dycore, mesh=mesh,
-                                              vertical=vertical, names=names, layout=layout, step=step, dt=dt)
+                                              vertical=vertical, names=names, layout=layout, step=step, dt=dt,
+                                              handoff=resident.hands_off(self.control))
 
     def receipt(self) -> dict[str, Any]:
         return {"moving_boundary_export": self.export_receipt, "moving_remap": self.remap_receipt,

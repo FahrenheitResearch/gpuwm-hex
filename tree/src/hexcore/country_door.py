@@ -45,7 +45,13 @@ def region_request(args):
     region = getattr(args, "region", None)
     point = getattr(args, "point", None)
     polygon = getattr(args, "polygon", None)
-    if not (region or point or polygon):
+    drawn = _drawn_region(args)
+    if drawn is not None and drawn["kind"] == "cap":
+        # A drawn circle is the --point cap: the same geometry, the same identity and prepared mesh.
+        point = f"{drawn['center_deg'][0]},{drawn['center_deg'][1]}"
+        args.radius_km = float(drawn["radius_km"])
+        drawn = None
+    if not (region or point or polygon or drawn):
         return load_row(args.row, args.table)
     table = REGIONS if args.table == TABLE else args.table
     if region:
@@ -72,7 +78,7 @@ def region_request(args):
                   "south": south, "north": north}
         view = [lat, lon, radius*2, radius*2]
     else:
-        geometry = json.loads(polygon.read_text())
+        geometry = drawn if drawn is not None else json.loads(polygon.read_text())
         points = geometry.get("vertices_deg", [])
         if geometry.get("kind") != "polygon" or len(points) < 3 or any(len(p) != 2 or not (-90 <= p[0] <= 90 and -180 <= p[1] <= 180) for p in points):
             raise MpasPortError("polygon needs at least three finite LAT,LON vertices")
@@ -114,6 +120,52 @@ def region_request(args):
     args.row = identity
     products = ["--no-global", "--no-mesh-view", "--region", "region=region:" + ",".join(map(str, view)), "--jobs", "2", "--frame-jobs", "1"]
     return row, products, Path(table).parent
+
+
+def _drawn_region(args):
+    """The region ``--ellipse`` or ``--shape`` draws (a polygon row; a drawn circle stays a cap), or None.
+
+    THE BREAKAGE THIS PREVENTS (hrrrv5 everywhere, 2026-10-31): the site offers circle, ellipse and drawn-polygon
+    regions, and the country door took only a cap (--point) or a polygon file, while ``regional`` took --ellipse and
+    --shape (GeoJSON, lat_lon_box). Both doors now read the same shapes through hexcore.mesh_shape, so an ellipse or a
+    GeoJSON outline is a region on either door, on every physics suite."""
+    ellipse, shape = getattr(args, "ellipse", None), getattr(args, "shape", None)
+    if ellipse is None and shape is None:
+        return None
+    from . import mesh_shape
+    try:
+        return mesh_shape.parse_ellipse(ellipse) if ellipse is not None else mesh_shape.load_shape(Path(shape))
+    except mesh_shape.ShapeRefusal as error:
+        raise MpasPortError(str(error)) from error
+
+
+def producer_suite(named):
+    """The forecast's suite when it initializes through its own producer row (hrrrv5, the rrfs_* suites), else None."""
+    suite = named.get("suite")
+    if not suite:
+        return None
+    from .physics_default import init_producer
+    return suite if init_producer(suite) else None
+
+
+def _producer_init_argv(args, value):
+    """The producer's case-7 init on the cut, with the geography and the first guess's soil and surface inputs.
+
+    The start state is the producer's own (its L60 vertical grid, RUC's nine soil levels, its static built from the
+    geography with the fields the suite reads), from the start time's decoded intermediate (boundary endpoint 0), as
+    ``regional`` does (regional_door._stage_init_state)."""
+    argv = list(value["commands"]["producer_init"])
+    from .mesh_point import resolve_geog
+    argv += ["--geog", str(resolve_geog(args.geog).expanduser().absolute())]
+    from .init_sources import cold_soil_init_flags, load_table, resolve_source, surface_input_init_flags
+    source = resolve_source(load_table(getattr(args, "source_table", None)), value["row"]["init_source"])
+    if source.get("cold_soil") or source.get("surface_input"):
+        first = value["boundary_endpoints"][0]["argv"]
+        decoded = json.loads((Path(first[first.index("--out-dir") + 1]) / "init-source-receipt.json").read_text())
+        if source.get("cold_soil"):
+            argv += cold_soil_init_flags(decoded["products"], source["cold_soil"])
+        argv += surface_input_init_flags(decoded.get("surface_input"))
+    return argv
 
 
 def region_specification(row):
@@ -249,15 +301,19 @@ def _prepare_region(args, value, status):
         measured("static", lambda: run_or_fetch([engine("rw_mpas_static"), "--grid", str(grid),
                           *(["--geog", str(args.geog)] if args.geog else []), "--out", str(static),
                           "--receipt", str(parent / "static-receipt.json"), "--clobber"]))
-    status.note("initializing the global parent from the selected source")
-    rc = measured("init", lambda: main(value["commands"]["init"]))
-    if rc:
-        return rc
-    suite_init = measured("suite-init", lambda: _suite_parent_init(value, parent / "init" / "init.nc", mesh))
-    if suite_init is not None:
-        cull = list(value["commands"]["cull"])
-        cull[cull.index("--parent-init") + 1] = str(suite_init)
-        value["commands"]["cull"] = cull
+    producer = "producer_init" in value["commands"]
+    if not producer:
+        # A producer suite (hrrrv5) starts from its own case 7 on the cut below, so the parent's v8.4.2 init is
+        # neither built nor cut: the start time's intermediate comes from boundary endpoint 0's decode.
+        status.note("initializing the global parent from the selected source")
+        rc = measured("init", lambda: main(value["commands"]["init"]))
+        if rc:
+            return rc
+        suite_init = measured("suite-init", lambda: _suite_parent_init(value, parent / "init" / "init.nc", mesh))
+        if suite_init is not None:
+            cull = list(value["commands"]["cull"])
+            cull[cull.index("--parent-init") + 1] = str(suite_init)
+            value["commands"]["cull"] = cull
     rc = measured("cull", lambda: main(value["commands"]["cull"]))
     if rc:
         return rc
@@ -277,6 +333,17 @@ def _prepare_region(args, value, status):
     mesh_rows.write_rows(root / "mesh-rows.json", [registered, cut])
     measured("boundary-endpoints", lambda: produce_source_endpoints(
         value["boundary_endpoints"], root / "boundary-met", workers=args.endpoint_workers))
+    if producer:
+        # THE BREAKAGE THIS PREVENTS (hrrrv5 physics on regular regions, 2026-10-31): the door built hex's own
+        # 55-level v8.4.2 start state, completed RUC's nine soil levels with the ArWen seam, and wrote v8.4.2
+        # boundaries, so the RRFS route found none of the fields NOAA's registry declares and every
+        # `country --forecast-arg=--physics-suite=hrrrv5` region died as its forecast started (KeyError 'nscat' in
+        # pool_v842, from GFS and from IFS). The producer's case 7 on the cut and its case 9 boundaries, as
+        # `regional` does, are the state the suite's route reads.
+        Path(value["paths"]["init"]).parent.mkdir(parents=True, exist_ok=True)
+        rc = measured("producer-init", lambda: main(_producer_init_argv(args, value)))
+        if rc:
+            return rc
     return measured("lbc", lambda: main(value["commands"]["lbc"]))
 
 def plan(args):
@@ -340,9 +407,8 @@ def plan(args):
         # records it by version and RECORD digest, so a pip install reaches
         # this door too.
         forecast += ["--gpuwm-checkout", str(args.gpuwm_checkout)]
-    for key in ("samehost_devices", "samehost_layouts", "samehost_part"):
-        if getattr(args, key, None) is not None:
-            forecast += ["--" + key.replace("_", "-"), str(getattr(args, key))]
+    from .regional_door import samehost_argv
+    forecast += samehost_argv(args)
     # The caller's forecast flags come last, so a --physics-suite (or a --dt) given here wins.
     from gpuwm.output_formats import argument_values
     forecast += [*extra, *argument_values(args)]
@@ -387,6 +453,24 @@ def plan(args):
         forecast[forecast.index("--init") + 1] = str(root / "mesh.init.nc")
         init = root / "mesh.init.nc"
         extra = {"cull": cut, "lbc": boundary}
+        producer = producer_suite(named)
+        if producer:
+            # A producer suite (hrrrv5): the cut carries grid and static only, the start state is the producer's
+            # case 7 on it (its own static from the geography, the decoded start intermediate) and the boundaries
+            # are its case 9 on that init (_prepare_region).
+            init = root / "rrfs-init" / "init.nc"
+            cut[cut.index("--parent-init"):cut.index("--parent-init") + 2] = []
+            boundary[boundary.index("--grid") + 1] = str(init)
+            boundary += ["--physics-suite", producer]
+            forecast[forecast.index("--init") + 1] = str(init)
+            producer_init = ["init", "--met", str(root / "boundary-met" / ("MET:" + start[:13])),
+                             "--static", str(root / "mesh.static.nc"), "--grid", str(root / "mesh.grid.nc"),
+                             "--out", str(init), "--start-time", start,
+                             "--nfglevels", str(fg["nfglevels"]), "--nfgsoillevels", str(fg["nfgsoillevels"]),
+                             "--physics-suite", producer]
+            if getattr(args, "deep_soil_temperature", None):
+                producer_init += ["--deep-soil-temperature", args.deep_soil_temperature]
+            extra["producer_init"] = producer_init
     # The case named, not read from the forecast's receipt afterwards: the first look draws into it while the
     # forecast runs, before that receipt exists (the same name the receipt gives, the mesh row and the cycle).
     from .products_door import case_token
@@ -490,6 +574,12 @@ def _run_stage(name, args, value, status, stages=(), state=None):
             print(json.dumps(joined), flush=True)
             return {**joined, "returncode": 0}
     command = list(value["commands"][name])
+    if name == "forecast" and "producer_init" in value["commands"] and "--orographic-statistics" not in command:
+        # The producer's GSL drag statistics win when it made them (the RRFS default, geography with topo_ugwp);
+        # otherwise the forecast reads hex's own beside the cut's grid, built at the prepare stage.
+        made = Path(value["paths"]["init"]).with_name("ugwp_oro_data.nc")
+        if made.is_file():
+            command += ["--orographic-statistics", str(made)]
     if name == "products" and state.get("live_receipt") is not None:
         command += ["--live-frames", str(state["live_receipt"])]  # the hours drawn live keep their maps
     status.note("gpuwm-hex " + " ".join(command))
@@ -586,6 +676,11 @@ def add_country_parser(commands):
     selection.add_argument("--region", help="registered limited-area row")
     selection.add_argument("--point", help="LAT,LON for an arbitrary limited-area cap")
     selection.add_argument("--polygon", type=Path, help="Shape polygon JSON, vertices in latitude,longitude order")
+    selection.add_argument("--ellipse", metavar="LAT,LON,SEMI_MAJOR_KM,SEMI_MINOR_KM[,AZIMUTH_DEG]",
+                           help="an elliptical region (azimuth of the major axis from north)")
+    selection.add_argument("--shape", type=Path, metavar="FILE",
+                           help="a drawn region: a Shape row (polygon with [lat, lon] vertices, lat_lon_box or cap) "
+                                "or GeoJSON, read as `regional --shape` reads it")
     parser.add_argument("--radius-km", type=float)
     parser.add_argument("--fine-dx-m", type=float, default=None,
                         help="with --point or --polygon: the region's spacing, a rung of the halving ladder "
@@ -624,9 +719,11 @@ def add_country_parser(commands):
     from .products_door import add_label_arguments
 
     add_label_arguments(parser)
-    parser.add_argument("--samehost-devices")
-    parser.add_argument("--samehost-layouts", type=Path)
-    parser.add_argument("--samehost-part", type=Path)
+    from .regional_door import add_samehost_arguments
+    add_samehost_arguments(parser)
+    parser.add_argument("--deep-soil-temperature", choices=("era5", "islscp-i"), default=None,
+                        help="a producer suite (hrrrv5): the deep-soil temperature its static is built with "
+                             "(default era5; islscp-i is NOAA's soiltemp_1deg, licence unclear)")
     parser.add_argument("--forecast-arg", action="append", default=[], metavar="ARG",
                         help="a flag for the forecast door, e.g. --forecast-arg=--physics-suite=rrfs_v2_dev "
                              "(`gpuwm-hex physics list`); repeat for several")

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.11
+
+Requires gpuwm>=2.9.11,<2.10.
+
+New:
+- `hrrrv5` on the 96 -> 3 km zoom globe: `gpuwm-hex mesh-plan --global-mesh ... --run --geog ROOT --forecast-arg=--physics-suite=hrrrv5` builds NOAA's RRFS start state and the GSL drag statistics itself. `--forecast-arg=--physics=config_convection_scheme=cu_grell_freitas_li` adds NOAA GSL's scale-aware Grell-Freitas on the GPU as the labelled variant "hrrrv5 + storm scheme", so the coarse cells keep their convective rain (hrrrv5 itself has no cumulus scheme); it fades out on the 3 km cells.
+- `gpuwm-hex forecast|global --wind-farms uswtdb|PATH` runs Fitch wind-farm drag and turbine TKE inside MYNN on globes and zoom globes, with per-turbine and per-farm power and hub wind in history (opt-in).
+- `hrrrv5` on any region: `gpuwm-hex country` and `gpuwm-hex regional` with `--forecast-arg=--physics-suite=hrrrv5` start from NOAA's RRFS init (case 7 on the region, case 9 boundaries) from GFS or IFS, on a circle, an ellipse (`--ellipse`) or a drawn outline (`--shape`, Shape row or GeoJSON), on one card or several (`--samehost-devices 0,1,2,3`).
+
+Changed:
+- A static built for hrrrv5 reads ERA5's deep-soil temperature (`soiltemp_era5_1deg`) instead of NOAA's ISLSCP-I `soiltemp_1deg`, whose licence is unclear: about 2 K warmer over land on average (docs/rrfs-init.md). `--deep-soil-temperature islscp-i` selects NOAA's by name. NOAA's own conus3km static is unchanged.
+- Simulated radar during a hex forecast reads its radar columns from each committed state, and its backpressure waits follow the radar consumer's real progress, so radar keeps pace with the run.
+- Hex products keep pace with a fast forecast: live frames are drawn side by side and converted once, a zoom globe's whole-globe view and its context view are converted at their pictures' pixels (no context tiles unless asked), and the frame cache leaves 10 % of its disk free. A whole globe finer than its picture is drawn on the picture's grid, so its renderer's memory no longer grows with the mesh.
+- A zoom globe's `export --window global` is a stack, each region at the detail the model has there (the sphere at the outer spacing, a lat-lon box per ring, the core on its own box with the usual coordinates), and `export --follow` writes it beside the forecast. `gpuwm-hex regional` draws each frame as it lands.
+- Storm-following regions on the MPAS-physics route move about four times faster: the forecast process stays on the card across moves, prepares the next region while the current one runs and hands the state over in memory (about 45 s to about 11 s per move on one RTX 5090). Output is unchanged; `--no-resident` keeps one process per segment.
+
+Fixed:
+- GFS starts on the Noah land model (the MPAS-physics default) from cycles after 2026-10-28 no longer stop at init ('soil contract does not cover this analysis date'): the cold-soil contract is keyed on the GFS analysis itself (its model, soil layers and land model, read off the donor file) instead of an end date, so an unchanged GFS keeps the soil remap.
+- No case the cold-soil remap cannot serve stops an init any more: a GFS start from a later forecast hour (init-source, regions and moving cases), a land model other than Noah (the ArWen route's Noah-MP, RUC), a missing or late donor, a cycle before GFS v16, a GFS analysis from another land setup, an all-water region and the rest start from the source's interpolated soil, as before 0.4.10, and the init's log and receipt say why. `--soil-remap on` refuses instead.
+- A limited-area region started from GFS (country and region doors, hourly boundaries) no longer stops at its first boundary hour ('this cold-soil donor row is analysis-only'): only the run's start takes GFS's cold-soil donor, as the regional door already did.
+- RRFS v2 `hrrrv5` forecasts take `--stream-input invariant=FILE`: a registered input stream the run binds is read once at the start instead of being refused as inactive.
+- RRFS v2 `hrrrv5` history draws maps again: its aerosol optical depth (`aod550`) declares CF units '1', so the converter no longer refuses it.
+- `gpuwm-hex country --forecast-arg=--physics-suite=hrrrv5` no longer dies as its forecast starts (KeyError 'nscat'), from GFS or IFS.
+- A physics-resource cache that lost RRFS or MPAS tables (a cleaned disk) fetches them again instead of failing on a missing table file.
+- Map titles name the view and the spacing its picture shows ('Core zoom 1-4.1 km', 'Whole globe 1-129 km') instead of the whole mesh's range; `--view-label VIEW=TEXT` passes a caller's own words.
+- RRFS Grell-Freitas-Li (`cu_grell_freitas_li`) runs on the GPU-resident route with no native library: it no longer stops at start ('init_convection for GFL / Tiedtke schemes has no ported path'), at its first step ('cached extent conflict for diag_physics.vcpool') or on its momentum carriers ('sub3d_rucuten_p is not allocated'), and its columns run in wide launches instead of 64 at a time.
+
 ## 0.4.10
 
 Requires gpuwm>=2.9.10,<2.10.

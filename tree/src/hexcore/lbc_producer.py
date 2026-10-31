@@ -154,6 +154,12 @@ def source_endpoint_commands(*, source, cycle, hours, out_dir, staged=(), member
         argv = ["init-source", "--source", row["id"], "--cycle", source_cycle.when.strftime("%Y-%m-%dT%H"),
                 "--lead-hours", str(source_lead), "--stop-after", "decode",
                 "--out-dir", str(Path(out_dir) / f"endpoint-{lead:04d}")]
+        # Only the first endpoint is the run's initial state (country_door points it at the init's own decode),
+        # so only it takes the cold land donor. Later endpoints are boundary meteorology: GFS's donor row is
+        # analysis-only and refused every one of them, so each GFS limited-area region stopped at its 1 h
+        # endpoint (the WOOF 0.4.10 bake's region warm, 2026-10-30; regional_door already did this).
+        if lead:
+            argv += ["--soil-remap", "off"]
         if table.get("_path"):
             argv += ["--table", table["_path"]]
         if member is not None:

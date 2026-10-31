@@ -45,7 +45,7 @@ from __future__ import annotations
 from .stochastic import resolve_options as resolve_stochastic_options
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import datetime as _dt
 import importlib.util
 import json
@@ -799,6 +799,7 @@ class ForecastRequest:
     #: is no release; a row that carries no point source refuses one.
     source_table: Path | None = None
     chemistry_config: Path | None = None
+    wind_farms: str | None = field(default=None, kw_only=True)
     #: Input problems collected rather than raised, preflight only.  Always
     #: empty on a real run, because there the same conditions refuse.
     input_problems: tuple[str, ...] = ()
@@ -2273,6 +2274,7 @@ def resolve_request(
         physics_backend=backend_row.name,
         source_table=source_table,
         chemistry_config=getattr(arguments, "chemistry_config", None),
+        wind_farms=getattr(arguments, "wind_farms", None),
         input_problems=tuple(collected or ()),
         preset=preset.name,
         pbl_cadence_source=pbl_cadence_source,
@@ -2740,6 +2742,8 @@ def build_driver_argv(request: ForecastRequest) -> list[str]:
         argv += ["--orographic-statistics", str(request.orographic_statistics)]
     if request.chemistry_config is not None:
         argv += ["--chemistry-config", str(request.chemistry_config)]
+    if request.wind_farms is not None:
+        argv += ["--wind-farms", request.wind_farms]
     if request.source_table is not None:
         argv += ["--source-table", str(request.source_table)]
     if request.start_time:
@@ -4471,6 +4475,8 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "(default: the file of that name beside --grid)")
     parser.add_argument("--chemistry-config", type=Path, default=None,
                         help="N aerosol species and GPU mixing/deposition/settling inputs (chemistry/v1 JSON)")
+    parser.add_argument("--wind-farms", default=None, metavar="uswtdb|TABLE|off",
+                        help="opt-in Fitch turbine drag and TKE from the shared turbine tables")
     parser.add_argument(
         "--source-table", type=Path, default=None, metavar="FILE",
         help="a point-source table the selected row's seam releases from "

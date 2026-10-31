@@ -155,9 +155,15 @@ def test_regional_init_binds_profile_and_verified_native_donor(tmp_path, monkeyp
     argv=seen[0]
     assert argv[argv.index('--physics-profile')+1]=='hrrr-like-aerosol'
     assert argv[argv.index('--soil-donor')+1]==str(donor)
+    # A donor whose bytes changed after acquisition is never used: the init starts from the source's own soil
+    # (--soil-remap off, as before the remap) instead of being refused (WOOF 0.4.10 switch candidate, 2026-10-31).
     donor.write_bytes(b'changed')
+    seen.clear()
+    assert door._stage_init(args,value,SimpleNamespace())['returncode']==0
+    argv=seen[0]
+    assert '--soil-donor' not in argv and argv[argv.index('--soil-remap')+1]=='off'
     with pytest.raises(MpasPortError, match='differs'):
-        door._stage_init(args,value,SimpleNamespace())
+        init_sources.cold_soil_init_flags(json.loads(decoded.read_text())['products'],policy,'on')
 
 
 def test_cached_cold_init_needs_verified_profile_receipt(tmp_path):

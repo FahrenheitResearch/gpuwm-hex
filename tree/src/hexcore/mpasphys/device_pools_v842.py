@@ -500,8 +500,17 @@ def register_cuda_slots(registry,config,provider,resources=None):
                 raise RuntimeError(f'MPAS CUDA slot {slot}/{scheme}: physics-resources packet {resources} has no '
                                    f'{scheme} entry (gpuwm-hex physics-resources build names what it does not build)')
             loader=importlib.import_module('.'+resource['module'],__package__)
-            setattr(provider,resource['attribute'],getattr(loader,resource['call'])(packets[packet_key],provider.cp,
-                **resource.get("arguments", {})))
+            from . import moving_resident_v842
+            import os
+            if (moving_resident_v842.enabled()
+                    and os.environ.get('GPUWM_HEX_MOVING_RESIDENT_TABLES','1') != '0'):
+                from .moving_tables_v842 import load
+                loaded = load(loader, resource['call'], packets[packet_key], provider.cp,
+                              arguments=resource.get('arguments', {}))
+            else:
+                loaded = getattr(loader,resource['call'])(packets[packet_key],provider.cp,
+                                                         **resource.get('arguments', {}))
+            setattr(provider,resource['attribute'],loaded)
         def invoke(call,callback=callback,descriptor=descriptor,slot=slot):
             """Slot copy transaction; mpas_atmphys_driver.F:209-384."""
             # Device memory the slot does not use is given back at its two

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from functools import partial
 import json
+import os
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -30,8 +32,57 @@ def _name(value):
     return value
 
 
+def _zero_storage(shape, dtype):
+    """Fresh zero pages for repeated moving-class allocations on Linux.
+
+    calloc can clear a recycled multi-MB heap block at each move. A private
+    anonymous mapping always starts with kernel-owned zero pages and owns
+    the same writable F-order words when a physics field first uses them.
+    """
+    count = int(np.prod(shape, dtype=np.int64))
+    if (os.name == 'posix' and os.environ.get('GPUWM_HEX_MOVING_RESIDENT') == '1'
+            and os.environ.get('GPUWM_HEX_MOVING_ZERO_MMAP', '1') != '0'
+            and count*np.dtype(dtype).itemsize >= 64*1024):
+        import mmap
+        pages = mmap.mmap(-1, count*np.dtype(dtype).itemsize,
+                          flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS,
+                          prot=mmap.PROT_READ | mmap.PROT_WRITE)
+        return np.ndarray(shape, dtype=dtype, order='F', buffer=pages)
+    return np.zeros(shape, dtype=dtype, order='F')
+
+
 def _host(value):
     return np.asarray(value.get() if hasattr(value, 'get') else value)
+
+
+class _DeferredLevels(list):
+    """Private cold words on first access, replaceable without reading them."""
+    def __init__(self, levels, loader):
+        super().__init__([None]*levels)
+        self.loader = loader
+        self.lock = threading.RLock()
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self)))]
+        with self.lock:
+            value = super().__getitem__(index)
+            if value is None:
+                value = self.loader()
+                self[index] = value
+            return value
+
+    def __setitem__(self, index, value):
+        with self.lock:
+            super().__setitem__(index, value)
+            if all(v is not None for v in super().__iter__()):
+                self.loader = None
+
+    def __iter__(self):
+        return (self[i] for i in range(len(self)))
+
+    def peek(self, index):
+        return super().__getitem__(index)
 
 
 class FrameworkPhysics:
@@ -135,8 +186,11 @@ class FrameworkPhysics:
         if key in self._fields and self._fields[key] != metadata:
             raise ValueError('MPAS field dtype, shape and time levels cannot change')
         if key not in self._fields:
-            self._storage[key] = [np.zeros(a.shape, dtype=a.dtype, order='F') for _ in range(nlevels)]
+            self._storage[key] = [_zero_storage(a.shape, a.dtype) for _ in range(nlevels)]
         self._fields[key] = metadata
+        if isinstance(self._storage[key], _DeferredLevels) and self._storage[key].peek(level-1) is None:
+            self._storage[key][level-1] = copied(a, order='F')
+            return
         target = self._storage[key][level-1]
         if a is not target:
             # The device views write the live storage in place (field_storage); handing it back is a no-op.
@@ -170,6 +224,25 @@ class FrameworkPhysics:
         self._storage[key] = [a] + [copied(a, order='F') for _ in range(nlevels - 1)]
         self._fields[key] = (a.dtype, a.shape, nlevels)
 
+    def adopt_restored_field(self, pool, name, value, *, level=1, nlevels=1):
+        """Consume private projected words only when no live cold view exists.
+
+        The moving class relinquishes this buffer after restoration. A field
+        whose storage was already observed keeps its original allocation and
+        all outstanding views, through the ordinary put_field copy.
+        """
+        self._check()
+        key = pool,name
+        storage = self._storage.get(key)
+        if (isinstance(value,np.ndarray) and value.flags.f_contiguous
+                and value.flags.writeable and value.flags.aligned and value.dtype.isnative
+                and self._fields.get(key) == (value.dtype,value.shape,nlevels)
+                and 1 <= level <= nlevels and isinstance(storage,_DeferredLevels)
+                and storage.peek(level-1) is None):
+            storage[level-1] = value
+            return
+        self.put_field(pool,name,value,level=level,nlevels=nlevels)
+
     def put_zero_field(self, pool, name, shape, dtype, *, nlevels=1):
         """Every time level of a field whose words are the Registry initial zero, allocated and not written.
 
@@ -193,11 +266,42 @@ class FrameworkPhysics:
         if key in self._fields and self._fields[key] != metadata:
             raise ValueError('MPAS field dtype, shape and time levels cannot change')
         if key in self._fields:
-            for level in self._storage[key]:
-                level.fill(0)
+            storage = self._storage[key]
+            for index in range(nlevels):
+                value = storage.peek(index) if isinstance(storage, _DeferredLevels) else storage[index]
+                if value is None:
+                    storage[index] = _zero_storage(shape, dtype)
+                else:
+                    value.fill(0)
         else:
-            self._storage[key] = [np.zeros(shape, dtype=dtype, order='F') for _ in range(nlevels)]
+            self._storage[key] = [_zero_storage(shape, dtype) for _ in range(nlevels)]
         self._fields[key] = metadata
+
+    def put_deferred_field(self, pool, name, shape, dtype, loader, *, nlevels=1):
+        """A validated resident cold projection, evaluated only if a reader needs it.
+
+        A moved class overwrites its carried pools before physics init. Lazy
+        storage avoids projecting those discarded cold words. Reads and live
+        storage still materialize independent native time levels as before.
+        """
+        self.pool(pool)
+        _name(name)
+        dtype, shape = np.dtype(dtype), tuple(int(v) for v in shape)
+        if not ((dtype == np.float32 and len(shape) <= 5) or (dtype == np.int32 and len(shape) <= 3)):
+            raise TypeError('MPAS field requires RKIND rank <= 5 or integer rank <= 3')
+        if nlevels < 1:
+            raise ValueError('invalid MPAS field time level')
+        key = pool, name
+        if key in self._fields or key in self._text_fields:
+            raise ValueError('deferred MPAS field must be new')
+        def read():
+            value = loader()
+            if (not isinstance(value, np.ndarray) or value.shape != shape or value.dtype != dtype
+                    or not value.flags.f_contiguous or not value.flags.writeable):
+                raise ValueError('deferred MPAS field shape, dtype or storage differs')
+            return value
+        self._storage[key] = _DeferredLevels(nlevels, read)
+        self._fields[key] = dtype, shape, nlevels
 
     def field_storage(self, pool, name, *, level=1):
         """The live storage of one time level (no copy), for the device pool views.

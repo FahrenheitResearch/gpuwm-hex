@@ -28,18 +28,18 @@ WHAT IT COVERS
 --------------
   gpuwm commit             aaec6b4be30ddc8f416f44cbc0fecf9244459f5e
   tools/rustwx/Cargo.lock  sha256 124aeed826f08c404df231e049442d5a15656dde6451ea98c63ea9852f9f2c78
-  engine-bridges.json      sha256 6c06b40a004e6325b34d2ed20d91d0356aee03bdf0dd74bc08b2cc17819e2d87
+  engine-bridges.json      sha256 cc7cb6af84aa9c6c5a95938c89a00f808609e0c0841a4bf227fcd3734bd4694d
   source notice            licenses/THIRD-PARTY-LICENSES-bridge-binaries.txt at that commit,
                            sha256 efd582033a1db42135d0a837384ef9c332a785ffcdd781e9109ea59822d33063
 
 The source identity above is the resolved build workspace. The hashed bridge
 manifest retains each binary's own source identity and lock override;
 its top-level identity is the fallback for entries without an override.
-  scorer resolved against  gpuwm commit 4a9a5596c63aa80d33e003e3f70f51e11398df6c,
+  scorer resolved against  gpuwm commit 82e16d580ae436003d3598a8127baef8b7498519,
                            Cargo.lock sha256 4c0c6e43d75c94347d1225b91b148c385f9741de4302c067510295779e91ec87
-  [B] also resolved against gpuwm commit 393f543ca32811f0a9994bdd7212847c3b9e51eb,
+  [B] also resolved against gpuwm commit 5599a17b919c12cdaf98ebad8d0b08c8e8532e78,
                            Cargo.lock sha256 4c0c6e43d75c94347d1225b91b148c385f9741de4302c067510295779e91ec87
-  [W][C] resolved against   gpuwm commit 393f543ca32811f0a9994bdd7212847c3b9e51eb,
+  [W][C] resolved against   gpuwm commit 5599a17b919c12cdaf98ebad8d0b08c8e8532e78,
                            Cargo.lock sha256 4c0c6e43d75c94347d1225b91b148c385f9741de4302c067510295779e91ec87
 
 The crate lists use cargo tree -e normal,no-proc-macro, with all targets

@@ -87,12 +87,25 @@
           "greenfrac": "greenfrac_fpar_modis",
           "albedo": "albedo_modis",
           "snow_albedo": "maxsnowalb_modis",
-          "soil_temperature": "soiltemp_1deg",
+          "soil_temperature": "soiltemp_era5_1deg",
           "soilcomp": "soilgrids/soilcomp",
           "soilcl1": "soilgrids/texture_layer1",
           "soilcl2": "soilgrids/texture_layer2",
           "soilcl3": "soilgrids/texture_layer3",
           "soilcl4": "soilgrids/texture_layer4"
+        },
+        "soil_temperature_default": "era5",
+        "soil_temperature_choices": {
+          "era5": {
+            "dataset": "soiltemp_era5_1deg",
+            "about": "ERA5 1990-2019 annual-mean 2 m temperature reduced to sea level (0.0065 K/m), on the same 1-degree WPS layout as soiltemp_1deg; built by gpuwm fetch-geog from WeatherBench 2. Over land it averages 1.9 K warmer than NOAA's ISLSCP-I field (area-weighted 1.8 K; 95 % of land cells within -0.6 to +4.8 K; CONUS +1.6 K, Europe +2.1 K, East Asia +2.4 K). It is the deep-soil temperature RUC holds its lowest level toward, so the deep soil starts about 2 K warmer than NOAA's recipe where the static is built here.",
+            "licence": "Licence to Use Copernicus Products: free, worldwide, commercial use allowed, attribution required"
+          },
+          "islscp-i": {
+            "dataset": "soiltemp_1deg",
+            "about": "NOAA RRFS's own choice (mpas_init_atm_static.F reads soiltemp_1deg, ISLSCP-I). Selected by name only.",
+            "licence_hold": "ISLSCP-I deep soil temperature: CEDA states Permitted Use Unstated and NCAR states none, so its licence is unclear and it is held out of the default geography (gpuwm geog_assets)"
+          }
         },
         "supersample": 3,
         "supersample_landuse": 1,
@@ -217,12 +230,25 @@
           "greenfrac": "greenfrac_fpar_modis",
           "albedo": "albedo_modis",
           "snow_albedo": "maxsnowalb_modis",
-          "soil_temperature": "soiltemp_1deg",
+          "soil_temperature": "soiltemp_era5_1deg",
           "soilcomp": "soilgrids/soilcomp",
           "soilcl1": "soilgrids/texture_layer1",
           "soilcl2": "soilgrids/texture_layer2",
           "soilcl3": "soilgrids/texture_layer3",
           "soilcl4": "soilgrids/texture_layer4"
+        },
+        "soil_temperature_default": "era5",
+        "soil_temperature_choices": {
+          "era5": {
+            "dataset": "soiltemp_era5_1deg",
+            "about": "ERA5 1990-2019 annual-mean 2 m temperature reduced to sea level (0.0065 K/m), on the same 1-degree WPS layout as soiltemp_1deg; built by gpuwm fetch-geog from WeatherBench 2. Over land it averages 1.9 K warmer than NOAA's ISLSCP-I field (area-weighted 1.8 K; 95 % of land cells within -0.6 to +4.8 K; CONUS +1.6 K, Europe +2.1 K, East Asia +2.4 K). It is the deep-soil temperature RUC holds its lowest level toward, so the deep soil starts about 2 K warmer than NOAA's recipe where the static is built here.",
+            "licence": "Licence to Use Copernicus Products: free, worldwide, commercial use allowed, attribution required"
+          },
+          "islscp-i": {
+            "dataset": "soiltemp_1deg",
+            "about": "NOAA RRFS's own choice (mpas_init_atm_static.F reads soiltemp_1deg, ISLSCP-I). Selected by name only.",
+            "licence_hold": "ISLSCP-I deep soil temperature: CEDA states Permitted Use Unstated and NCAR states none, so its licence is unclear and it is held out of the default geography (gpuwm geog_assets)"
+          }
         },
         "supersample": 3,
         "supersample_landuse": 1,

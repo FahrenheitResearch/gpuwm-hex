@@ -38,6 +38,7 @@ inside ``--out`` is refused by name.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 import datetime as _dt
 import hashlib
@@ -135,8 +136,10 @@ WINDOW_TO_CONVERTER = {
 }
 
 #: Window specifications passed to the converter as written: ``region:``
-#: (ground extent, dx from the mesh) and ``lambert:`` (an explicit grid).
-WINDOW_SPEC_PREFIXES = ("region:", "region-latlon:", "lambert:")
+#: (ground extent, dx from the mesh), ``lambert:`` (an explicit grid) and
+#: ``latlon:`` (an explicit lat-lon grid: the products door's globe of a
+#: variable-resolution mesh, at its picture's pixels).
+WINDOW_SPEC_PREFIXES = ("region:", "region-latlon:", "lambert:", "latlon:")
 
 #: ``--remap`` vocabulary (see :func:`resolve_remap`).
 REMAP_AUTO = "auto"
@@ -367,6 +370,42 @@ DEFAULT_MODEL_LABEL = "hex"
 #: the metadata row also carries the init time, lead, valid time and grid
 #: spacing.  A longer name is refused by the converter, so the door fits it.
 MODEL_LABEL_MAX_CHARS = 32
+
+#: The longest headline grid name the converter writes (rw_mpas_convert
+#: --grid-label; rw_wrfbatch ignores a longer GPUWM_GRID_LABEL).
+GRID_LABEL_MAX_CHARS = 32
+
+#: The token the converter replaces with the spacing of the mesh cells a
+#: picture samples (rw_mpas_convert --grid-label 'Core zoom {spacing}').
+GRID_LABEL_SPACING_TOKEN = "{spacing}"
+
+#: Converters already said to predate --grid-label, so the door says it once.
+_GRID_LABEL_UNSUPPORTED: set[str] = set()
+_GRID_LABEL_LOCK = threading.Lock()
+
+
+def drawn_grid_label(convert_exe: Path, label: str | None) -> str | None:
+    """The view label this converter can draw (``--grid-label``), or ``None``.
+
+    THE BREAKAGE THIS PREVENTS (2026-10-30): every hex picture was
+    headlined by the WHOLE mesh's range and the picture grid's spacing, so
+    the core picture of run_713c9e1913164e02 read ``(hex 133-6.9 km) ...
+    Δx 8.063 km`` under the site's ``Core zoom · 8 → 38 km``, and the view
+    around the core of run_c108e049fecb4bd0 ``Δx 6.08 km`` under ``Around the
+    core · 6 → 96 km``.  A converter built before ``--grid-label`` refuses
+    the flag, so it is asked first; such a build keeps the mesh's headline,
+    said once per converter rather than failing the view."""
+
+    if not label:
+        return None
+    if engine_accepts(convert_exe, "--grid-label"):
+        return label
+    with _GRID_LABEL_LOCK:
+        if str(convert_exe) not in _GRID_LABEL_UNSUPPORTED:
+            _GRID_LABEL_UNSUPPORTED.add(str(convert_exe))
+            print(f"GRID-LABEL {convert_exe} predates --grid-label; its maps keep the mesh's "
+                  f"own headline instead of {label!r}", flush=True)
+    return None
 
 
 def fitted_model_label(label: str | None) -> str | None:
@@ -749,6 +788,73 @@ def converter_window(window: str) -> str:
             f"spec.") from None
 
 
+#: The most grid columns the ``global`` window's picture grid carries: the converter's own ceiling for an explicit
+#: lat-lon window (rw_mpas_convert refuses more: "explicit latlon exceeds 2000 points per side").
+PICTURE_GRID_MAX_COLUMNS = 2000
+#: MPAS's sphere: rw_mpas_convert's per-cell spacing is sqrt(2 * areaCell / sqrt(3)) on the unit sphere times this.
+_MPAS_EARTH_RADIUS_M = 6_371_229.0
+#: The lat-lon window's sphere (rw-mpas WRF_EARTH_RADIUS_M): global-mesh's columns are pi * this / spacing, times 2.
+#: Its own name, not the tile planner's _WRF_EARTH_RADIUS_M, so this block stands in a render door without tiles
+#: (gpuwm-hex 0.4.9 carries it as a hotfix row; its render door has no such name: NameError on canary
+#: run_35e9999842049ddb).
+_GLOBAL_WINDOW_RADIUS_M = 6_370_000.0
+
+
+def mesh_median_spacing_m(mesh: Path) -> float | None:
+    """The median per-cell spacing of a mesh in metres, the figure ``global-mesh`` is sized from (rw-mpas
+    ``read_mesh_cell_spacing``: ``sqrt(2 * areaCell / sqrt(3))`` on the unit sphere, MPAS's radius), read through gpuwm's
+    Rust NetCDF decoder. None when the mesh states no ``areaCell`` or ``sphere_radius``: the converter then decides."""
+
+    try:
+        import numpy as np
+        from gpuwm.netcdf_bridge import open_dataset
+
+        grid = open_dataset(Path(mesh))
+        radius = float(grid.getncattr("sphere_radius"))
+        area = np.asarray(grid.variables["areaCell"][:], dtype=np.float64).ravel()
+    except Exception as error:  # noqa: BLE001 - an unreadable mesh is the converter's to name
+        print(f"GLOBAL mesh spacing not read ({type(error).__name__}: {error}); the converter's global-mesh window",
+              flush=True)
+        return None
+    if not (radius > 0.0) or area.size == 0 or not np.all(np.isfinite(area)) or np.any(area <= 0.0):
+        return None
+    spacing = np.sqrt(2.0 * (area / (radius * radius)) / math.sqrt(3.0)) * _MPAS_EARTH_RADIUS_M
+    return float(np.median(spacing))
+
+
+def global_picture_window(mesh: Path | None, width: int) -> tuple[str, str] | None:
+    """The converter window of the ``global`` door window when the mesh is finer than its picture can show, with the
+    reason, or None (the mesh's own spacing, ``global-mesh``, as before).
+
+    The picture's grid is the whole sphere on a lat-lon grid with one column per pixel of the picture's width, at
+    most :data:`PICTURE_GRID_MAX_COLUMNS`: an 1800-pixel picture is 0.2 degrees (22.2 km), 1800 x 901 = 1.62 M points,
+    whatever the mesh and however long the run. A mesh coarser than that (60 and 120 km globes) keeps its own spacing,
+    and its picture is unchanged; its subtitle names the render grid either way.
+
+    THE BREAKAGE THIS PREVENTS, MEASURED (owner canary run_b8d705f1f8db9c92, 48 h 96 -> 3 km Arizona zoom globe on
+    one RTX PRO 6000 box, 2026-10-30): ``global-mesh`` takes the mesh's MEDIAN cell spacing, three cells in four of that
+    mesh are its 3 km core, so the global view was the whole sphere at 9.4 km, 4240 x 2121 = 9.0 M points, for a
+    picture 1800 pixels across. The renderer's import holds about 10 KB per grid point per frame (RTX 5090 host, real hex
+    frames: 15-17 GB for one 1.62 M-point frame, rising and falling frame by frame, not with the run's length), so
+    the global view's renderer needed 85-96 GB, was killed for host memory 21 times, and the products stage exited 1
+    after a 3 h forecast (its live passes listed failed_views=global too). The same rule asked 3.6 M points of a
+    uniform 15 km globe for the same picture."""
+
+    if mesh is None or width <= 0:
+        return None
+    columns = min(int(width), PICTURE_GRID_MAX_COLUMNS) // 2 * 2
+    median = mesh_median_spacing_m(mesh) if columns >= 4 else None
+    if median is None or median <= 0.0:
+        return None
+    mesh_columns = 2 * math.ceil(math.pi * _GLOBAL_WINDOW_RADIUS_M / median)
+    if mesh_columns <= columns:
+        return None
+    step = 180.0 / (columns // 2)
+    why = (f"the mesh's median spacing {median / 1000.0:.3f} km asks {mesh_columns} columns for a picture "
+           f"{width} pixels across; drawn at {step:g} degrees ({columns} x {columns // 2 + 1})")
+    return f"latlon:-90,90,-180,{180.0 - step!r},{step!r}", why
+
+
 def default_view(window: str) -> str:
     """The view name a window files under when ``--view`` is not given."""
 
@@ -813,6 +919,71 @@ def product_file_name(token: str, view: str, product: str, lead: str | None = No
     return f"{token}_{view}_{product}_{lead}.png"
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write ``path`` whole or not at all: a temporary file beside it, then a rename over it.
+
+    Live draws run as several door processes at once into one tree (first_look.py), and a host (the WOOF
+    worker) reads these files while they draw; a reader never sees half a JSON file or half a page."""
+
+    path = Path(path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+@contextlib.contextmanager
+def folder_lock(folder: Path, name: str):
+    """An exclusive lock between door processes on one file of a view folder (POSIX ``flock``; on a host
+    without it, the in-process lock only). Held only around a read-merge-write."""
+
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    with _GEOREF_LOCK:
+        try:
+            import fcntl
+        except ImportError:  # Windows: live draws run on the Linux run boxes; tests run in one process
+            yield
+            return
+        with open(folder / f".{name}.lock", "a+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def write_new_json(folder: Path, stem: str, doc: dict) -> Path:
+    """``<folder>/<stem>.json``, or ``<stem>-<UTC stamp>.json`` when that name is taken, created exclusively.
+
+    A second render into the same tree keeps the first one's receipt; two door processes drawing one view
+    at once (live draws) can no longer both find the plain name free and write over each other."""
+
+    folder = Path(folder)
+    text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+    temporary = folder / f".{stem}.{os.getpid()}.{threading.get_ident()}.tmp"
+    temporary.write_text(text, encoding="utf-8")
+    try:
+        candidates = [folder / f"{stem}.json"]
+        while True:
+            for target in candidates:
+                try:
+                    os.link(temporary, target)  # atomic and exclusive: fails when the name exists
+                    return target
+                except FileExistsError:
+                    continue
+                except OSError:  # a filesystem without hard links: an exclusive create, then the write
+                    try:
+                        with open(target, "x", encoding="utf-8") as stream:
+                            stream.write(text)
+                        return target
+                    except FileExistsError:
+                        continue
+            stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            candidates = [folder / f"{stem}-{stamp}.json"]
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def carry_georef(raw_out: Path, moved: dict[str, str], folder: Path) -> int:
     """Re-key the renderer's ``render-georef.json`` to the filed names.
 
@@ -832,31 +1003,33 @@ def carry_georef(raw_out: Path, moved: dict[str, str], folder: Path) -> int:
     except (OSError, ValueError):
         return 0
     target = Path(folder) / "render-georef.json"
-    try:
-        merged = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        merged = {key: value for key, value in held.items()
-                  if key not in ("panels", "without_georeference")}
-        merged["panels"] = {}
-        merged["without_georeference"] = []
-    merged.setdefault("panels", {})
-    merged.setdefault("without_georeference", [])
-    carried = 0
-    for key, record in (held.get("panels") or {}).items():
-        new = moved.get(Path(key).as_posix())
-        if new is not None:
-            merged["panels"][new] = record
-            carried += 1
-    for absence in held.get("without_georeference") or []:
-        new = moved.get(Path(str(absence.get("path", ""))).as_posix())
-        if new is not None:
-            merged["without_georeference"].append(dict(absence, path=new))
-            carried += 1
-    for key in ("generated_utc", "schema"):
-        if key in held:
-            merged[key] = held[key]
-    target.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n",
-                      encoding="utf-8")
+    # Read, merge and write under one lock: tile passes run side by side in this process, and live draws
+    # (first_look.py) run as several door processes into the same view folder.
+    with folder_lock(folder, "render-georef"):
+        try:
+            merged = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            merged = {key: value for key, value in held.items()
+                      if key not in ("panels", "without_georeference")}
+            merged["panels"] = {}
+            merged["without_georeference"] = []
+        merged.setdefault("panels", {})
+        merged.setdefault("without_georeference", [])
+        carried = 0
+        for key, record in (held.get("panels") or {}).items():
+            new = moved.get(Path(key).as_posix())
+            if new is not None:
+                merged["panels"][new] = record
+                carried += 1
+        for absence in held.get("without_georeference") or []:
+            new = moved.get(Path(str(absence.get("path", ""))).as_posix())
+            if new is not None:
+                merged["without_georeference"].append(dict(absence, path=new))
+                carried += 1
+        for key in ("generated_utc", "schema"):
+            if key in held:
+                merged[key] = held[key]
+        atomic_write_text(target, json.dumps(merged, indent=2, sort_keys=True) + "\n")
     return carried
 
 
@@ -933,7 +1106,8 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
                    model_label: str | None = None,
                    remap: str = "nearest",
                    jobs: int = 1,
-                   explicit_jobs: bool = False) -> tuple[dict, list[str]]:
+                   explicit_jobs: bool = False,
+                   grid_label: str | None = None) -> tuple[dict, list[str]]:
     """Run ``rw_mpas_convert`` once over the whole series.
 
     Returns ``(report, invocation)`` where ``report`` is the converter's own
@@ -1009,6 +1183,11 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
             print(f"LABEL model label shortened to the metadata row's {MODEL_LABEL_MAX_CHARS} "
                   f"characters: {model_label!r} -> {drawn_label!r}", flush=True)
         command.extend(("--model-label", drawn_label))
+    if grid_label:
+        # The picture's own headline name (drawn_grid_label): passed only to a
+        # converter that takes it, which also keeps the mesh's label in its
+        # receipt as mesh_grid_label for the delivered file names.
+        command.extend(("--grid-label", grid_label))
     if remap != "nearest":
         # Linear state, conservative accumulations, nearest categories
         # (rw_mpas_convert --help).  Passed only when asked so an older
@@ -1051,6 +1230,117 @@ def convert_frames(convert_exe: Path, *, histories: list[Path] | None,
     if pairing is not None:
         report["diagnostics"] = checked_diagnostics_pairing(report, pairing)
     return report, [str(part) for part in command]
+
+
+#: Free space a frame cache leaves on its disk: at least this much and this share of the disk, so the forecast still
+#: writing its frames beside it never runs short (a frame the cache does not keep is converted again, never lost).
+FRAME_CACHE_FREE_MARGIN = 20 * 1024 ** 3
+FRAME_CACHE_FREE_SHARE = 0.10
+
+
+def _frame_cache_key(convert_exe: Path, **inputs) -> str:
+    """The cache folder of one converter setting: the converter's bytes and every input that shapes its frames."""
+
+    parts = [sha256_file(convert_exe)]
+    for name in sorted(inputs):
+        value = inputs[name]
+        if isinstance(value, Path):
+            try:
+                st = value.stat()
+                value = f"{value.resolve()}:{st.st_size}:{st.st_mtime_ns}"
+            except OSError:
+                value = str(value)
+        parts.append(f"{name}={value}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
+
+
+def _history_token(history: Path) -> str | None:
+    try:
+        st = Path(history).stat()
+    except OSError:
+        return None
+    return f"{Path(history).name}.{st.st_size}.{st.st_mtime_ns}"
+
+
+def convert_frames_cached(cache: Path | None, convert_exe: Path, *, histories: list[Path], **kwargs) -> tuple[dict, list[str]]:
+    """:func:`convert_frames`, reusing the frames this run's live draws already converted for the same view.
+
+    THE BREAKAGE THIS PREVENTS (an Arizona zoom globe, 8 x RTX PRO 6000, gpuwm-hex 0.4.10, 2026-10-30, and the
+    RTX 5090 replay of the same door): the whole-run maps (qpf_1h, the run's maximum wind, ...) need every frame in one
+    renderer store, so after the forecast each view converted every frame again, the ones its live draws had just
+    converted included; on an RTX 5090 that second conversion was 70 of the pass's 110 s. A live draw links each frame it
+    converts into ``cache`` (``<products>.frame-cache-scratch/<case>/<view>/<key>/``, the key being the converter's bytes and
+    every input that shapes a frame), and a later pass of the same view converts only the frames not there. The bytes
+    are the converter's own from the same inputs, so the pictures are the same. The full pass removes the cache."""
+
+    window = kwargs.get("window")
+    if cache is None or not histories or kwargs.get("compose") is not None or kwargs.get("diagnostics") is not None:
+        return convert_frames(convert_exe, histories=histories, **kwargs)
+    key = _frame_cache_key(convert_exe, mesh=kwargs.get("mesh"), init=kwargs.get("init"), window=window,
+                           field_set=kwargs.get("field_set"), simulation_start=kwargs.get("simulation_start"),
+                           nc_format=kwargs.get("nc_format"), model_label=kwargs.get("model_label"),
+                           remap=kwargs.get("remap"), grid_label=kwargs.get("grid_label"))
+    folder = Path(cache) / key
+    found: list[dict | None] = []
+    for history in histories:
+        token = _history_token(history)
+        record = None
+        if token is not None:
+            try:
+                record = json.loads((folder / token / "frame.json").read_text(encoding="utf-8"))
+                if not Path(record["output"]).is_file():
+                    record = None
+            except (OSError, ValueError, KeyError, TypeError):
+                record = None
+        found.append(record)
+    head = None
+    try:
+        head = json.loads((folder / "report.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        head = None
+    missing = [h for h, r in zip(histories, found) if r is None]
+    invocation: list[str] = ["frame-cache", str(folder)]
+    if missing or head is None:
+        if head is None:
+            missing, found = list(histories), [None] * len(histories)
+        report, invocation = convert_frames(convert_exe, histories=missing, **kwargs)
+        new = list(report.get("frames") or [])
+        if len(new) != len(missing):
+            return report if len(missing) == len(histories) else convert_frames(
+                convert_exe, histories=histories, **kwargs)
+        head = {k: v for k, v in report.items() if k != "frames"}
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(folder / "report.json", json.dumps(head, sort_keys=True) + "\n")
+        except OSError:
+            pass
+        made = iter(new)
+        for index, (history, record) in enumerate(zip(histories, found)):
+            if record is not None:
+                continue
+            meta = dict(next(made))
+            found[index] = meta
+            token = _history_token(history)
+            output = Path(meta.get("output", ""))
+            try:
+                size = output.stat().st_size
+                disk = shutil.disk_usage(folder)
+                if token is None or disk.free - size < max(FRAME_CACHE_FREE_MARGIN, FRAME_CACHE_FREE_SHARE * disk.total):
+                    continue
+                target = folder / token / output.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.link(output, target)
+                except FileExistsError:
+                    pass
+                atomic_write_text(folder / token / "frame.json", json.dumps({**meta, "output": str(target)}) + "\n")
+            except OSError:
+                continue  # a disk that takes no hard link (or is short of room): this frame is converted again
+    reused = len(histories) - len(missing)
+    if reused:
+        print(f"FRAME-CACHE {reused} of {len(histories)} frames reused from this run's earlier draws "
+              f"({folder.name}); {len(missing)} converted now", flush=True)
+    return {**head, "frames": found}, invocation
 
 
 #: The valid-time stamp MPAS stream file names carry (``history.2023-03-31_18.00.00.nc``).
@@ -1651,6 +1941,13 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
             raise RenderDoorError("--source-label needs 1-160 printable ASCII characters")
         if not engine_accepts(renderer_exe, "--source-label"):
             raise RenderDoorError(f"{renderer_exe} does not support --source-label")
+    grid_label_asked = getattr(args, "grid_label", None)
+    if grid_label_asked and compose is not None:
+        raise RenderDoorError(
+            "--grid-label names one run's picture, and a --compose frame switches between "
+            "several meshes point by point, so the converter writes it no grid label; draw "
+            "the composite without --grid-label")
+    convert_grid_label = drawn_grid_label(convert_exe, grid_label_asked)
     convert_jobs = import_jobs = 1
     if frame_jobs > 1:
         if engine_accepts(convert_exe, "--jobs"):
@@ -1661,8 +1958,13 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
         if engine_accepts(renderer_exe, "--import-jobs"):
             import_jobs = frame_jobs
         else:
-            print(f"FRAME-JOBS {renderer_exe} predates --import-jobs; it "
-                  f"imports one frame at a time", flush=True)
+            # rw_wrfbatch takes no --import-jobs: since gpuwm 18506efc96 (2.9.4; this package needs 2.9.10) it
+            # imports a series' frames on lanes it sizes itself from the host's threads and memory. THE BREAKAGE
+            # THIS PREVENTS (an Arizona zoom globe, 8 x RTX PRO 6000, gpuwm-hex 0.4.10, 2026-10-30): the door
+            # printed "predates --import-jobs; it imports one frame at a time" on every view, which named a stale
+            # renderer as the cause of a slow products tail when the renderer was current and parallel.
+            print(f"FRAME-JOBS {renderer_exe} takes no --import-jobs; it sets its own import lanes from the "
+                  f"host's threads and memory", flush=True)
     # Before the converter runs: a render with no map geometry is refused
     # here, by name, not discovered after minutes of resampling.
     basemap_dir = resolve_basemap_dir(
@@ -1723,6 +2025,12 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
         raise RenderDoorError(
             f"--size must be WIDTHxHEIGHT (e.g. 1200x900), got {args.size!r}"
         ) from None
+    if tile is None and window == "global" and compose is None:
+        # The whole sphere at no more grid columns than its picture has pixels (global_picture_window).
+        picture = global_picture_window(mesh, width)
+        if picture is not None:
+            convert_window = picture[0]
+            print(f"GLOBAL picture grid {convert_window}: {picture[1]}", flush=True)
 
     scratch.mkdir(parents=True, exist_ok=True)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -1732,14 +2040,22 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
     if credit_theme is not None:
         renderer_env = {**renderer_env, "RUSTWX_THEME": credit_theme}
 
-    report, convert_invocation = convert_frames(
+    frame_cache = getattr(args, "frame_cache", None) if tile is None else None
+    report, convert_invocation = convert_frames_cached(
+        Path(frame_cache) / view if frame_cache else None,
         convert_exe, histories=histories, mesh=mesh, scratch=scratch,
         window=convert_window, field_set=args.field_set,
         simulation_start=args.simulation_start, nc_format=args.nc_format,
         compose=compose, compose_base_only=compose_base_only, init=init, diagnostics=diagnostics,
         model_label=model_label, remap=remap, jobs=convert_jobs,
-        explicit_jobs=tile is not None and engine_accepts(convert_exe, "--jobs"))
+        explicit_jobs=tile is not None and engine_accepts(convert_exe, "--jobs"),
+        grid_label=convert_grid_label)
     grid_label = report.get("grid_label")
+    # The delivered file names keep the MESH's token (hex128-8km) whatever the
+    # headline says: the WOOF worker and every tree already delivered file
+    # pictures by it.  A converter given --grid-label reports the mesh's own
+    # label as mesh_grid_label; without it the two are the same label.
+    file_grid_label = report["mesh_grid_label"] if "mesh_grid_label" in report else grid_label
     invocations.append(convert_invocation)
     # Regional tiles: decided on the window the converter actually laid down (a derived window's
     # size is known only now), so a render files whole or tiled from its first picture on.
@@ -1953,7 +2269,7 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
         for slug, png in rendered:
             domain, product = split_engine_name(png.name, slug)
             lead = lead_token(meta.get("lead_seconds"), png.name)
-            name = product_file_name((getattr(args, "label", None) or grid_token(grid_label, domain)), file_view,
+            name = product_file_name((getattr(args, "label", None) or grid_token(file_grid_label, domain)), file_view,
                                      product, lead)
             destination = place_path(out_root, view, product,
                                      frame.valid_day, name, tile=tile_folder)
@@ -1967,8 +2283,7 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
                 moved[png.name] = in_view
             frame.rendered.append(slug)
             frame.placed.append(placed)
-        with _GEOREF_LOCK:
-            carry_georef(raw_out, moved, out_root / view)
+        carry_georef(raw_out, moved, out_root / view)
         results.append(frame)
         total_rendered += len(frame.rendered)
         total_skipped += len(skipped)
@@ -1997,6 +2312,7 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
         "model_label_drawn": fitted_model_label(model_label),
         "source_label": source_label,
         "grid_label": grid_label,
+        "mesh_grid_label": file_grid_label,
         "graticule": graticule,
         "convert": {
             "schema": report.get("schema"),
@@ -2065,7 +2381,9 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
         manifest["elapsed_seconds"] = round(time.monotonic() - started, 3)
     if compose is None:
         from .column_store import write as write_columns
-        manifest["columns"] = write_columns(sorted((scratch / "frames").glob("wrfout_*")),
+        # The converted frames this pass rendered, wherever they are (its scratch, or the run's frame cache).
+        manifest["columns"] = write_columns(sorted({Path(meta["output"]) for meta in frames_meta},
+                                                   key=lambda path: path.name),
                                             out_root / view / "columns", field_set=args.field_set)
     # A second run into the same delivered tree is legitimate (one full
     # catalog pass plus a restricted pass is the proof shape); its receipt
@@ -2074,13 +2392,7 @@ def _run_render(args, tile: dict | None = None) -> tuple[int, dict]:
     # for one file.
     receipt_dir = out_root / view
     receipt_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = receipt_dir / "render-manifest.json"
-    if manifest_path.exists():
-        stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        manifest_path = receipt_dir / f"render-manifest-{stamp}.json"
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8")
+    manifest_path = write_new_json(receipt_dir, "render-manifest", manifest)
     print(f"MANIFEST {manifest_path}", flush=True)
 
     ok = total_failed == 0 and total_rendered > 0
@@ -2201,6 +2513,14 @@ def add_render_arguments(parser) -> None:
         "--source-label", default=None, metavar="TEXT",
         help="source credit printed on each picture (1-160 printable ASCII "
              "characters); default: Hex forecast where the renderer supports it")
+    parser.add_argument(
+        "--grid-label", default=None, metavar="TEXT",
+        help="the picture's headline grid name in place of the mesh's (e.g. "
+             "'Core zoom {spacing}'; '{spacing}' becomes the spacing of the mesh "
+             "cells the picture samples, finest first: 'Core zoom 8-38 km'), at "
+             "most 32 characters. Needs a converter that takes rw_mpas_convert "
+             "--grid-label; an older one keeps the mesh's headline and the door "
+             "says so. File names keep the mesh's token. Not with --compose")
     parser.add_argument(
         "--field-set", default="full", choices=("full", "surface"),
         help="converter field set (default: full)")

@@ -13909,7 +13909,7 @@
         "Time"
       ],
       "attrs": {
-        "units": "-",
+        "units": "1",
         "long_name": "aerosol optical depth (2D) from all aerosols"
       },
       "gates": []

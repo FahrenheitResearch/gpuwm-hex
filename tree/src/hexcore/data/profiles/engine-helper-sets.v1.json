@@ -125,6 +125,19 @@
         "gpuwm/core/rrtmg_sw.py": "4b39c6bb656918978f511293c5cf635d871455656958a81ad5830bd8383ceb3d",
         "gpuwm/ingest/wrf_ozone.py": "c05c30d1ce7f193354cd7c4dbde68dfaf61a9b7d7834440d4691c33f11259947"
       }
+    },
+    {
+      "id": "engine-2.9.11-source",
+      "engine_commit": "82e16d580ae436003d3598a8127baef8b7498519",
+      "description": "Exact gpuwm 2.9.11 radiation helpers, measured by the engine repin at 82e16d580. Admission establishes source identity only; it does not claim unchanged forecast numerics.",
+      "sources": {
+        "gpuwm/core/kernels/rrtmg_sw.cu": "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+        "gpuwm/core/rrtmg_legacy_prep.py": "ae3aa96f7edf7658ffb538190d45a9f93f05aaecf1da3e8d5a3b3599b0b21e9f",
+        "gpuwm/core/rrtmg_lw.py": "ab2a44d4735a760789e1624b3a0d1182a0041423be5efd78864439ca0e2d1c21",
+        "gpuwm/core/rrtmg_mcica.py": "82b183eca3f89e2b32b4053900347a5e36b664c1a4f4e3694a1c5c10e9ca0833",
+        "gpuwm/core/rrtmg_sw.py": "b80bfbb7708d5bc560bd1d74329833f21e127d7ebbec63d588718eababdba92f",
+        "gpuwm/ingest/wrf_ozone.py": "420d91b5603acc6eb96ec72e22b0a328fc4c0934460cee7b4f1e1b1792932350"
+      }
     }
   ]
 }

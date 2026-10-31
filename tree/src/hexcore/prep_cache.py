@@ -1042,7 +1042,12 @@ def cached(label: str, salt: Callable[[], str] | None = None,
                 with _lock:
                     _memory[key] = {"structure": structure, "disk": True}
                     protect = set(_memory)
-                evict(root, protect)
+                if (os.environ.get('GPUWM_HEX_MOVING_RESIDENT') == '1'
+                        and os.environ.get('GPUWM_HEX_MOVING_CACHE_MAINTENANCE','1') != '0'):
+                    from .moving_prep_maintenance import request
+                    request(root, protect)
+                else:
+                    evict(root, protect)
             except OSError as error:
                 stored = False
                 kept = [np.array(array, copy=True, order="K") for array in arrays]

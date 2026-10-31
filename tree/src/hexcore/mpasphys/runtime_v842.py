@@ -1695,7 +1695,11 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
             fullstep_shadow=attach_shadow(arguments,dycore,out)
     # The regional dycore's arrays carry native's garbage column (nCells+1, nEdges+1); the preparation geometry must
     # be the same padded view (cuda_regional_forecast_v842 does the same).
-    geometry=CudaMpasToPhysGeometryV841.from_host(dycore.regional_v841.padded if limited_area else mesh)
+    geometry_factory = getattr(execution, 'build_physics_geometry', CudaMpasToPhysGeometryV841.from_host)
+    geometry_mesh = dycore.regional_v841.padded if limited_area else mesh
+    geometry = (geometry_factory(CudaMpasToPhysGeometryV841.from_host, geometry_mesh)
+                if execution is not None and hasattr(execution, 'build_physics_geometry')
+                else geometry_factory(geometry_mesh))
     receipt=dict(schema='mpas-native-forecast-v1',identity_checked=False,completed=False,
                  physics=config.receipt(),steps_requested=steps,steps_completed=0,
                  native_library_sha256=None if ported_framework else hashlib.sha256(library.read_bytes()).hexdigest(),
@@ -1774,8 +1778,14 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
     if (ported_framework and getattr(arguments, 'native_physics_tables', None)
             and 'tables' in inspect.signature(backend_type).parameters):
         ported_options['tables'] = [Path(t).resolve() for t in arguments.native_physics_tables]
-    backend = (backend_type(layout=layout, resources=cuda_resources, **ported_options)
-               if ported_framework else backend_type(library,test_only=True,**native_options))
+    take_backend = getattr(execution, 'take_physics_backend', None)
+    ahead = take_backend() if ported_framework and take_backend is not None else None
+    prehydrated = None
+    if ahead is not None:
+        backend, prehydrated = ahead
+    else:
+        backend = (backend_type(layout=layout, resources=cuda_resources, **ported_options)
+                   if ported_framework else backend_type(library,test_only=True,**native_options))
     with backend as native, ExitStack() as output_lifetime:
         coupling=None
         core_operations={}
@@ -1787,13 +1797,20 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
             core_initialize=core_provider.initialize_native_core
             core_operations['atm_reset_diagnostics']=lambda call:core_provider.reset_native_diagnostics(native,session=call.pools)
         with timed_stage(timings, 'physics-session', parallelism={'device':'CPU','host_threads':1}, timeline='prep.native.physics_session'):
+            pool_options = {}
+            if getattr(execution, 'moving_gpu_build', False):
+                from .moving_class_gpu_v842 import private_pool_mapping
+                pool_options['pool_copy_on_write'] = private_pool_mapping()
             session=NativePhysicsSession(native,layout,payload,config,dt=dt,start=start,stop=stop,
                 core_operations=core_operations,
                 stream_intervals={s.name:(s.input_interval if s.name=='surface' else s.output_interval) for s in streams},
                 post_transport=lambda call:coupling.prepare_transport(call),cuda_device=dycore.cp,
                 cuda_resources=cuda_resources,
-                surface_record_reader=surface_record_reader)
+                surface_record_reader=surface_record_reader,
+                **({'prehydrated': prehydrated} if prehydrated is not None else {}), **pool_options)
         session.output_config_snapshot=output_config_snapshot
+        if os.environ.get('GPUWM_HEX_MOVING_RESIDENT') == '1':
+            receipt['physics_session_preparation'] = session.preparation_timings
         # A rank's scheme initialisation takes global extrema across ranks, as native's mpas_dmpar_min/max_real
         # (RRFS TEMPO aerosols, framework_init_rrfs); None on one card.
         session.rank_reduce=getattr(execution,'reduce',None)
@@ -1964,6 +1981,10 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                     ResidentPhysicsGlue(session, coupling, mesh)
                 else:
                     ResidentPhysicsGlue(session, coupling, mesh, halo=halo)
+            if getattr(arguments, 'wind_farms', None) not in (None, '', 'off'):
+                from ..wind_farm import attach_native
+                wind = attach_native(arguments, session, mesh, output, dt=dt, resident=resident, coupling=coupling, halo=halo)
+                receipt['wind_farms'] = json.loads(wind.metadata())
             receipt['resident_physics'] = dict(enabled=resident,
                 scope=(f"{config.options.get('config_physics_suite') or 'selected'} suite on a limited-area cull "
                        '(regional dycore)' if limited_area

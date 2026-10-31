@@ -317,6 +317,14 @@ def portable_packet(packet: dict[str, Any], cache: Path) -> dict[str, Any]:
 
 def load_packet(path: Path) -> dict[str, Any]:
     """Resolve portable packets and rebase older cache packets after a move."""
+    if (os.environ.get('GPUWM_HEX_MOVING_RESIDENT') == '1'
+            and os.environ.get('GPUWM_HEX_MOVING_RESIDENT_TABLES','1') != '0'):
+        from .moving_tables_v842 import packet
+        return packet(path, _read_packet)
+    return _read_packet(path)
+
+
+def _read_packet(path: Path) -> dict[str, Any]:
     path = Path(path).resolve()
     recorded = None
     receipt = path.with_suffix(".receipt.json")
@@ -1200,6 +1208,33 @@ def assemble_framework_resources(directory: Path, *, log: Callable[[str], None] 
             'pool-reader': stage_pool_reader(directory, log)}
 
 
+def source_tables_missing(path: Path, pin_set: str = "v8.4.2") -> list[str]:
+    """The pinned physics tables an installed MPAS or RRFS source tree links that are gone (or the wrong size).
+
+    THE BREAKAGE THIS PREVENTS (hrrrv5 anywhere, RTX 5090, 2026-10-30): a cleaned cache had lost the three big TEMPO v3
+    tables its rrfs-source tree links, while installed.json still recorded the tree as installed; the route trusted
+    the record, never fetched again, and the forecast died 12 s in on
+    ``[Errno 2] No such file or directory: .../physics_wrf/files/freeze_water_data_tempo_v3``. The size check reads
+    no file contents, so it costs a stat per table on every run; the refetch hashes what it places.
+    """
+    from .native_library_build import source_manifest
+    try:
+        manifest = source_manifest(pin_set)
+    except Exception:  # an unknown pin set is refused where its route is resolved, not here
+        return []
+    files = Path(path) / _PHYSICS_FILES
+    gone = []
+    for name, row in manifest.get("tables", {}).items():
+        try:
+            size = (files / name).stat().st_size  # follows the link into the table store
+        except OSError:
+            gone.append(name)
+            continue
+        if row.get("bytes") and size != int(row["bytes"]):
+            gone.append(name)
+    return gone
+
+
 def ensure_route_resources(keys: tuple[str, ...], *, cache: Path | None = None,
                            log: Callable[[str], None] = _log, pin_set: str = "v8.4.2") -> dict[str, Path]:
     """Resolve installed keys, fetching the pinned release if any are missing."""
@@ -1220,13 +1255,31 @@ def ensure_route_resources(keys: tuple[str, ...], *, cache: Path | None = None,
             root = Path(cache if cache is not None else default_cache()).resolve()
             record_installed(root, {'pool-reader': stage_pool_reader(root, log)})
             return {'pool-reader': resolve_resource('pool-reader', root)}
+    broken = set()
     for key in keys:
         try:
             out[key] = resolve_resource(key, cache)
         except PhysicsResourceError:
             missing.append(key)
+            continue
+        if key.startswith('mpas-source'):
+            gone = source_tables_missing(out[key], pin_set)
+            if gone:
+                log(f"physics resource {key}: {len(gone)} pinned table file(s) it links are gone from the cache "
+                    f"({', '.join(gone[:3])}{', ...' if len(gone) > 3 else ''}); fetching them again")
+                del out[key]
+                missing.append(key)
+                broken.add(key)
     if not missing:
         return out
+    if 'mpas-source' in broken and not pin_set.startswith('rrfs'):
+        # The v8.4.2 tree is installed and only its MPAS-Data tables went: place them again by SHA-256.
+        root = Path(cache if cache is not None else default_cache()).resolve()
+        record_installed(root, {'mpas-source': assemble_mpas_source(root, log=log)})
+        out['mpas-source'] = resolve_resource('mpas-source', root)
+        missing.remove('mpas-source')
+        if not missing:
+            return out
     source_key = 'mpas-source-' + pin_set
     if pin_set.startswith('rrfs') and source_key in missing:
         # The fork's DATA (Registry and tables, fetched by SHA-256): no compiler, no native library.

@@ -714,3 +714,30 @@ def test_a_default_stream_member_with_a_zero_length_dimension_is_left_out(tmp_pa
                                  dimensions={'nVertLevels': 59, 'nCells': 10, 'nChem': chem})
         write_default_streams(layout, tmp_path / str(chem) / 'streams.atmosphere')
         assert (tmp_path / str(chem) / 'stream_list.atmosphere.output').read_text().split() == expected
+
+
+def test_an_explicitly_bound_registry_input_stream_is_read_once_at_the_start(tmp_path):
+    """RRFS v2 hrrrv5 on WOOF (RTX 5090 worker proof, 2026-10-30): the suite-named forecast refused
+    --stream-input invariant=FILE as not an active input stream, because the RRFS fork's Registry declares
+    invariant immutable, in_defaults=false and input_interval=none, so the default streams left it out.
+    A registered input stream the run binds is now written at initial_only; unbound it stays out as before
+    (WOOF row rrfs-explicit-input-streams-v1 retires on this release)."""
+    import xml.etree.ElementTree as ET
+
+    from hexcore.mpasphys.forecast_v842 import write_default_streams
+
+    registry = ET.fromstring(
+        '<registry><streams><stream name="input" type="input" filename_template="init.nc" input_interval="initial_only"'
+        ' immutable="true"/><stream name="invariant" type="input" filename_template="invariant.nc" '
+        'input_interval="none" immutable="true" in_defaults="false"/></streams></registry>')
+    layout = SimpleNamespace(root=registry, fields=[])
+
+    def streams(path, **kwargs):
+        write_default_streams(layout, path, **kwargs)
+        return {e.get('name'): e for e in ET.parse(path).getroot()}
+
+    unbound = streams(tmp_path / 'plain' / 'streams.atmosphere')
+    assert 'invariant' not in unbound and 'input' in unbound
+    bound = streams(tmp_path / 'bound' / 'streams.atmosphere', bound_inputs={'invariant': 'invariant.nc'})
+    assert bound['invariant'].get('input_interval') == 'initial_only'
+    assert bound['input'].get('input_interval') == 'initial_only'

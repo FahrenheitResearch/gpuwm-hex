@@ -3,8 +3,9 @@ Current public pin: gpuwm 2.9.7 at public engine commit
 4726b689c6db142577eca3968a1f74256e3c057f, tag v2.9.7. The measurement
 repin-297-20261025.json verifies all published platform wheels, the complete
 sixteen-path seam, composed glacier digest, contract surface and helper set.
-The dependency is gpuwm>=2.9.10,<2.10 (release installation minimum: 2.9.10 is the first engine with
-gpuwm.output_formats, which every forecast door's parser imports for --output-format). The sealed 2.9.3 public packet has
+The dependency is gpuwm>=2.9.11,<2.10 (release installation minimum: 2.9.11 carries the wind-farm
+forcing the hex wind-farm door drives and the rw_mpas_convert --grid-label the view titles use; 2.9.10 was the
+first engine with gpuwm.output_formats, which every forecast door's parser imports for --output-format). The sealed 2.9.3 public packet has
 its own complete measured PACKET_ENGINES row, recorded separately in
 verification/engine-verdicts/prepared-engines.json. Historical pin records
 below remain measurements of their original inputs.
@@ -1329,7 +1330,7 @@ def engine(version: str) -> PublishedEngine | None:
     return None
 
 
-GPUWM_INSTALL_MINIMUM = "2.9.10"
+GPUWM_INSTALL_MINIMUM = "2.9.11"
 
 
 def measured_gpuwm_floor() -> str:

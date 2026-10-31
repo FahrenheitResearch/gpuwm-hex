@@ -573,7 +573,7 @@ the Rust standard library under Apache-2.0 OR MIT, taken under Apache-2.0
 
 The engine bridge source identity and the binary hashes are pinned in
 hexcore/data/engine-bridges.json. The current build uses engine source
-revision 393f543ca32811f0a9994bdd7212847c3b9e51eb; rw_sfc_series keeps
+revision 5599a17b919c12cdaf98ebad8d0b08c8e8532e78; rw_sfc_series keeps
 its build from revision aaec6b4be30ddc8f416f44cbc0fecf9244459f5e.
 
 licenses/THIRD-PARTY-LICENSES-helper-binaries.txt contains the complete

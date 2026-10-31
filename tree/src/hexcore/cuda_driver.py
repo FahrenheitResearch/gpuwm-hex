@@ -2827,6 +2827,7 @@ class CudaDryDycoreDriver:
         authority_ruler: CudaAuthorityRulerBinder | None = None,
         reference_wind_profiles: V841ReferenceWindProfiles | None = None,
         les_dissipation: Any | None = None,
+        upload_cache: Any | None = None,
     ) -> "CudaDryDycoreDriver":
         """Upload every state/mesh/metric field once at the API boundary."""
 
@@ -2978,6 +2979,7 @@ class CudaDryDycoreDriver:
             terrain_metrics,
             dtype=np.float32,
             index_dtype=np.int32,
+            **({'upload_cache': upload_cache} if upload_cache is not None else {}),
         )
         device_coefficients = CudaAdvectionCoefficients.from_host(coefficients)
         diagnostics_source = (

@@ -235,3 +235,12 @@ def test_point_products_follow_registered_region_instead_of_global_cities(tmp_pa
     path = tmp_path/'regions.json'; path.write_text(json.dumps(table))
     products = plan(args(tmp_path, '--region', 'east-africa', '--table', str(path)))['commands']['products']
     assert products[products.index('--points')+1] == 'regional station@1,38'
+
+
+def test_only_the_initial_endpoint_takes_the_cold_land_donor(tmp_path):
+    """WOOF 0.4.10 bake, 2026-10-30: GFS's cold-soil donor row is analysis-only, and the 1 h boundary endpoint of
+    every GFS limited-area region asked for it and was refused ('boundary source endpoint ... exited 2')."""
+    commands = source_endpoint_commands(source='gfs', cycle='2023-03-31T12', hours=3, out_dir=tmp_path)
+    flags = [c['argv'][c['argv'].index('--soil-remap') + 1] if '--soil-remap' in c['argv'] else 'auto'
+             for c in commands]
+    assert flags == ['auto', 'off', 'off', 'off']

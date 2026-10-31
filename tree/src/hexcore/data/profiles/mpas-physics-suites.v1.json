@@ -10108,8 +10108,32 @@
           "gwdo": "bl_ugwp_gwdo",
           "radiation_lw": "rrtmg_lw",
           "radiation_sw": "rrtmg_sw"
+        },
+        {
+          "microphysics": "mp_tempo",
+          "convection": "cu_grell_freitas_li",
+          "pbl": "bl_mynnedmf",
+          "surface_layer": "sf_mynnsfclay",
+          "land_surface": "sf_ruc",
+          "gwdo": "bl_ugwp_gwdo",
+          "radiation_lw": "rrtmg_lw",
+          "radiation_sw": "rrtmg_sw"
         }
       ]
+    },
+    "variants": {
+      "hrrrv5 + storm scheme": {
+        "suite": "hrrrv5",
+        "selectors": {
+          "config_convection_scheme": "cu_grell_freitas_li"
+        },
+        "for": "meshes with cells coarser than about 5 km (the 96 -> 3 km zoom globe, a uniform globe), where NOAA's hrrrv5, built for 3 km, has no deep-convection scheme and the coarse cells lose their convective rain",
+        "differences_from_suite": [
+          "convection: NOAA GSL's scale-aware Grell-Freitas (GF-Li, GFL bf6a4b0, the RRFS fork's own scheme on the GPU) on every cell; hrrrv5 runs none. Its scale awareness (the updraft fraction from each cell's spacing, len_disp / meshDensity**0.25) fades it out on the 3 km cells, so the core runs close to plain hrrrv5",
+          "this pairing is not NOAA's hrrrv5, which runs no cumulus scheme (the fork's hrrrv5 suite, mpas_atmphys_control.F); the fork's own suites put a cumulus scheme only in mesoscale_reference (New Tiedtke) and convection_permitting (Grell-Freitas)"
+        ],
+        "source": "RRFSx/MPAS-Model@44c0849 src/core_atmosphere/physics/mpas_atmphys_driver_convection.F (cu_grell_freitas_li), GFL submodule bf6a4b0"
+      }
     },
     "streams_parser": "hexcore.mpasphys.rrfs.stream_xml_rrfs:stream_tree",
     "stream_contract": {

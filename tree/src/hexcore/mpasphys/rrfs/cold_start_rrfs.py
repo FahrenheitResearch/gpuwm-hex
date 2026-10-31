@@ -165,19 +165,46 @@ def mesh_is_regional(path: Path) -> bool:
         return bool(dataset.variables["bdyMaskCell"][:].max() > 0)
 
 
-def static_job(row: Mapping[str, Any], *, grid: Path, geog: Path, out: Path, valid_time: str,
-               tile_workers: int | None = None) -> dict[str, Any]:
+#: The init door's flag that picks the deep-soil temperature the fork static is built with.
+DEEP_SOIL_FLAG = "--deep-soil-temperature"
+
+
+def deep_soil_choice(row: Mapping[str, Any], choice: str | None = None) -> tuple[str | None, dict[str, Any]]:
+    """The deep-soil temperature dataset a fork static built here reads: the row's default (ERA5), or ``choice``.
+
+    THE DECISION THIS CARRIES (the project owner, 2026-10-31): NOAA's recipe reads ISLSCP-I's soiltemp_1deg, whose licence is
+    unclear and which gpuwm holds out of the default geography; a static built here from world-wide geography takes
+    the permissive ERA5 field instead, and the receipt says so.  NOAA's own static (the conus3km preset) is not
+    rebuilt, so that preset keeps NOAA's field exactly.  ISLSCP-I stays selectable by name, with its licence note.
+    """
+
     recipe = row["static"]
-    missing = [name for name in recipe["geog"].values() if not (geog / name).is_dir()]
+    choices = recipe.get("soil_temperature_choices") or {}
+    if not choices:
+        if choice is not None:
+            raise RrfsInitError(f"{DEEP_SOIL_FLAG} {choice}: this producer row names no deep-soil choices")
+        return None, {"dataset": recipe["geog"]["soil_temperature"]}
+    name = choice or recipe.get("soil_temperature_default")
+    if name not in choices:
+        raise RrfsInitError(f"{DEEP_SOIL_FLAG} {name!r} is not one of {', '.join(sorted(choices))}")
+    return name, dict(choices[name])
+
+
+def static_job(row: Mapping[str, Any], *, grid: Path, geog: Path, out: Path, valid_time: str,
+               tile_workers: int | None = None, deep_soil: str | None = None) -> dict[str, Any]:
+    recipe = row["static"]
+    _, chosen = deep_soil_choice(row, deep_soil)
+    datasets = dict(recipe["geog"], soil_temperature=chosen["dataset"])
+    missing = [name for name in datasets.values() if not (geog / name).is_dir()]
     if missing:
         raise RrfsInitError(
             f"the WPS geography at {geog} lacks {', '.join(missing)}, which the fork static reads "
-            "(MODIS 15 s land use, BNU soils, MODIS LAI); stage them with gpuwm fetch-geog or point "
-            "--geog at a root that has them")
+            "(MODIS 15 s land use, BNU soils, MODIS LAI, the deep-soil temperature); stage them with gpuwm "
+            "fetch-geog (its default set builds soiltemp_era5_1deg from ERA5) or point --geog at a root that has them")
     return {"stage": "static", "config": {
         "nvegopt": recipe["nvegopt"], "gwd_topo_shift": recipe["gwd_topo_shift"],
         "gwd_cell_scaling": recipe["gwd_cell_scaling"], "grid_path": str(grid), "out_path": str(out),
-        "geog": {key: str(geog / name) for key, name in recipe["geog"].items()},
+        "geog": {key: str(geog / name) for key, name in datasets.items()},
         "stages": {"vegetation_ncep": False, "albedo_ncep": False, "snow_ncep": False,
                    "noahmp": recipe["noahmp"], "gwd": recipe["gwd"],
                    "landuse_label": recipe["landuse_label"], "native_init": True},
@@ -370,8 +397,19 @@ def run_rrfs_init(arguments: Any, producer: tuple[str, Mapping[str, Any]]) -> in
                 "Pass --grid and --geog (a WPS geography root with MODIS 15 s land use, BNU soils and MODIS LAI) "
                 "and the init builds the fork static first, or pass a static the fork's init_atmosphere made")
         rrfs_static = out.with_name(out.name + ".rrfs-static.nc")
-        jobs.append(static_job(row, grid=grid, geog=geog, out=rrfs_static, valid_time=arguments.start_time))
+        choice, chosen = deep_soil_choice(row, getattr(arguments, "deep_soil_temperature", None))
+        if chosen.get("licence_hold"):
+            import sys
+            print(f"init: deep-soil temperature {chosen['dataset']} selected by name: {chosen['licence_hold']}",
+                  file=sys.stderr)
+        deep_soil = {"choice": choice, "built_here": True, **chosen}
+        jobs.append(static_job(row, grid=grid, geog=geog, out=rrfs_static, valid_time=arguments.start_time,
+                               deep_soil=choice))
         static = rrfs_static
+    else:
+        deep_soil = {"built_here": False,
+                     "about": f"the given static {static.name} carries its own deep-soil temperature (soiltemp); "
+                              "no fork static was built, so none was chosen here"}
     levels = work / "ZETA_LEVELS.txt"
     levels.write_text(specified_levels_text(row))
     aerosols = resolve_aerosol_table(getattr(arguments, "wif_climatology", None))
@@ -412,6 +450,7 @@ def run_rrfs_init(arguments: Any, producer: tuple[str, Mapping[str, Any]]) -> in
         "recipe": {name: row[name] for name in ("soil", "vertical", "case7", "aerosols", "hydrometeors", "lbc")},
         "inputs": {"met": str(met), "met_sha256": _sha256(met), "static": str(static),
                    "aerosol_climatology": str(aerosols), "aerosol_climatology_sha256": _sha256(aerosols)},
+        "deep_soil_temperature": deep_soil,
         "stages": receipts,
         "output": {"path": str(out), "bytes": out.stat().st_size, "sha256": _sha256(out)},
         "lbc": lbc_files,

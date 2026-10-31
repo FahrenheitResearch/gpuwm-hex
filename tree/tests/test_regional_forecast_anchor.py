@@ -94,7 +94,7 @@ def test_the_named_forecast_pair_is_masked_digest_identical(receipts):
 SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     "src/hexcore/cuda_driver.py": {
         "recorded": "cb6477ef2fd02ad551e9b6c8af0724c94fc4d90bdc712fff1378d218662f5d04",
-        "current": "22d0953bcf84b1e98338bdc553942bb574fd64c3c7eb99cb8e4225166dcc481e",
+        "current": "01cbb4323d71febcb450256e110a5bb2f6321dc773ca153efd3ae141420a3d81",
         "why": (
             "convection ruling, 2026-08-26: _v841_physics_cadences reports "
             "convection: None when no cumulus scheme is selected instead of "
@@ -213,7 +213,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_backend/runtime.py": {
         "recorded": "4deab4b3a37467491a531750e8618705c6884c19c0395891bc426fce2ea6ba5a",
-        "current": "3e7d74fab6511355edcf17dd46812eee7b297cbed73e4b8ab59e32e96f900bef",
+        "current": "fb47541b7b27e51a129a85b3a519295f2f0562d1fd87a08c6689fc21ff787cbd",
         "why": (
             "2026-10-15: require_cuda's default runtime floor 13000 -> 12000 "
             "(CUDA 12 support) and one docstring paragraph; host Python "
@@ -294,7 +294,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_backend/containers.py": {
         "recorded": "02b7b2bee1779a5072df1c3f79fa82ff0d71ccc047e9edd05c09ffc6f0967ec1",
-        "current": "ca642c249282b9cd0acedf0288e3b10ccbf351c1ca2f7b9de11edceb3d1a964d",
+        "current": "10128e34aef47507362cb104a0068e7b3be6e941d481db44e57bd6c2e7c29eb0",
         "why": (
             "Package rename and compact host copies were followed by the "
             "2026-10-17 startup fix: finite checks use bounded host blocks; "

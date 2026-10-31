@@ -236,3 +236,60 @@ def test_a_suite_without_the_gsl_drag_names_no_orographic_statistics(tmp_path, m
     value = door.plan(args)
     monkeypatch.setattr(door, "_generated", lambda value: pytest.fail("no statistics are needed"))
     assert door._orographic_statistics(args, value, status=None) is None
+
+
+def test_the_region_is_drawn_while_its_forecast_runs_and_the_full_pass_keeps_those_hours(tmp_path, monkeypatch):
+    """The independent check of the map-speed fix (2026-10-30): `gpuwm-hex regional` rendered its maps only in its
+    products stage after the forecast, so a region run showed no map until its whole forecast had run. A first look
+    now follows the forecast (one frame per draw, several at once) into the case the full pass names, and the full
+    pass takes its receipt."""
+    args = arguments(tmp_path)
+    mesh = {"row": "generated-cull", "grid": "grid.nc", "static": "static.nc"}
+    monkeypatch.setattr(door, "_generated", lambda value: {"cull": mesh})
+    looks = []
+
+    class Look:
+        def __init__(self, forecast, **kwargs):
+            self.forecast, self.kwargs, self.started, self.finished = forecast, kwargs, False, False
+            looks.append(self)
+
+        def start(self):
+            self.started = True
+
+        def finish(self):
+            self.finished = True
+            return {"status": "drawn", "live": {"drawn": 3}}
+
+        def receipt(self):
+            return Path(self.forecast).parent / "live-frames.json"
+
+    import hexcore.first_look as first_look
+    monkeypatch.setattr(first_look, "FirstLook", Look)
+    seen = {}
+
+    def cli(argv, status):
+        seen["products"] = [str(a) for a in argv]
+        case = Path(argv[argv.index("--out") + 1]) / argv[argv.index("--case") + 1]
+        case.mkdir(parents=True)
+        (case / "products-manifest.json").write_text(json.dumps({"views": []}))
+        return 0
+
+    def runner(name):
+        def run(args, value, status):
+            if name == "forecast":
+                assert looks and looks[0].started and not looks[0].finished   # drawing beside the forecast
+            return {"returncode": 0}
+        return run
+
+    monkeypatch.setattr(door, "_cli", cli)
+    monkeypatch.setattr(door, "_RUNNERS", {**{name: runner(name) for name in door.STAGES},
+                                           "products": door._stage_products})
+    assert door.run_regional(args) == 0
+    (look,) = looks
+    assert look.finished and look.kwargs["case"] == "generated-cull-2024050618"
+    assert Path(look.kwargs["out"]) == Path(look.forecast) / "products"
+    products = seen["products"]
+    assert products[products.index("--case") + 1] == "generated-cull-2024050618"   # the case the live draws used
+    assert products[products.index("--live-frames") + 1] == str(Path(look.forecast).parent / "live-frames.json")
+    receipt = json.loads((args.work_dir / "regional-receipt.json").read_text())
+    assert receipt["stages"]["forecast"]["first_look"]["status"] == "drawn"

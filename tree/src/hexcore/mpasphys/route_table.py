@@ -97,6 +97,45 @@ def resident_glue_type(config: Any) -> Any:
     return resolve(row['glue'])
 
 
+def forecast_arg_overrides(forecast_args: Any) -> dict[str, str]:
+    """The ``--physics KEY=VALUE`` overrides a door's forecast flags carry (``--forecast-arg=`` unwrapped; last wins)."""
+    items = [str(item)[len('--forecast-arg='):] if str(item).startswith('--forecast-arg=') else str(item)
+             for item in forecast_args or ()]
+    found: dict[str, str] = {}
+    index = 0
+    while index < len(items):
+        flag, equals, value = items[index].partition('=')
+        if flag == '--physics':
+            if not equals:
+                index += 1
+                value = items[index] if index < len(items) else ''
+            key, _, setting = value.partition('=')
+            if key:
+                found[key.strip()] = setting.strip()
+        index += 1
+    return found
+
+
+def named_variant(suite: str | None, overrides: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]] | None:
+    """The named variant (a route row's ``variants`` entry) a suite plus selector overrides is, or None.
+
+    A variant is a suite with the selector changes its row declares (``hrrrv5 + storm scheme``: hrrrv5 with
+    GF-Li on the coarse cells); its name and its differences from the suite go on the run's receipt, so a run
+    that is not the suite as its authors run it never carries the suite's name alone.
+    """
+    if not suite:
+        return None
+    from ..physics_suites import load_table
+    given = {str(k): str(v).strip() for k, v in (overrides or {}).items()}
+    for row in load_table().values():
+        if not isinstance(row, Mapping):
+            continue
+        for name, variant in (row.get('variants') or {}).items():
+            if variant.get('suite') == suite and all(given.get(k) == v for k, v in variant['selectors'].items()):
+                return name, variant
+    return None
+
+
 def resident_scope(config: Any) -> str:
     row = resident_row(config) or {}
     return str(row.get('scope', ''))

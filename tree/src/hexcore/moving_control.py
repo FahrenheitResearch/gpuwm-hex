@@ -39,6 +39,22 @@ PROGRESS_NAME = "progress.jsonl"
 SEALS_NAME = "seals.jsonl"
 AWAIT_NAME = "await-verdict.json"
 
+# A resident moving process (hexcore.mpasphys.moving_resident_v842) continues the next segment after a move.
+RESIDENT_ENV = "GPUWM_HEX_MOVING_RESIDENT"
+#: In the running segment's control folder: the next segment's launch record (the controller writes it).
+RESIDENT_NEXT = "resident-next.json"
+#: In the running segment's control folder: its route can continue a move in this process (the process writes it).
+RESIDENT_READY = "resident-ready.json"
+#: In a segment folder: the resident process closed this segment and continues the next one.
+RESIDENT_CLOSED = "resident-closed.json"
+RESIDENT_SPEC_SCHEMA = "gpuwm-hex.moving-resident-next/v1"
+#: The switches a segment's environment carries (moving_run.Controller.segment_env); a continuation applies the
+#: next segment's values and clears the ones it does not name, as a fresh process's environment would.
+RESIDENT_SEGMENT_VARIABLES = ("GPUWM_HEX_MOVING_CHECKPOINT_IN", "GPUWM_HEX_MOVING_CHECKPOINT_OUT",
+                              "GPUWM_HEX_MOVING_CHECKPOINT_WAIT", "GPUWM_HEX_MOVING_CONTROL",
+                              "GPUWM_HEX_MOVING_OPERATOR", "GPUWM_HEX_MOVING_SOURCE_GRID", "GPUWM_HEX_MOVING_ZONE",
+                              "GPUWM_HEX_MOVING_SHOCK_ZONE", "GPUWM_HEX_MESH_ROWS")
+
 
 def wait_for_carrier(path, timeout_seconds: float) -> float:
     """Block until a moving carrier and its sealed receipt exist (pre-launched move segment).

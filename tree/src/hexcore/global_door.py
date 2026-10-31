@@ -585,6 +585,8 @@ def plan(args: argparse.Namespace, table: Mapping[str, Any] | None = None) -> di
         forecast_argv += ["--icechunk-store", str(output_store)]
     if getattr(args, "chemistry_config", None) is not None:
         forecast_argv += ["--chemistry-config", str(args.chemistry_config)]
+    if getattr(args, "wind_farms", None) is not None:
+        forecast_argv += ["--wind-farms", str(args.wind_farms)]
     for key, value in physics["overrides"].items():
         forecast_argv += ["--physics", f"{key}={value}"]
     if route_suite is not None:
@@ -1141,6 +1143,8 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
                         help="N-species chemistry transport configuration, forwarded to forecast")
     parser.add_argument("--forecast-arg", action="append", default=[], metavar="ARG",
                         help="one extra forecast-door argument, repeatable (e.g. --forecast-arg=--checkpoint-hours=6)")
+    parser.add_argument("--wind-farms", default=None, metavar="uswtdb|TABLE|off",
+                        help="opt-in Fitch turbine drag and TKE")
     parser.add_argument("--table", type=Path, default=None, help="alternative table (tests)")
     from .products_door import add_label_arguments
 

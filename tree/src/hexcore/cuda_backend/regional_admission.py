@@ -772,8 +772,13 @@ class RegionalContract:
 #: later, before any output), as cuda_driver_rrfs has since cb2ae586; elsewhere it is read at once as before. Host
 #: read timing only, no CUDA source string or arithmetic changed. The only changed member of this set since (34).
 #: Re-derived by tools/repin_source_tables.py; not a new mint.
+#: (36) 2026-10-30 (gpuwm-hex 0.4.11 fold HB2, feat/hex-moving-resident 78111207): cuda_driver.py's from-host
+#: constructor passes an optional upload_cache through to the advection-coefficient upload (None keeps the old call),
+#: and cuda_backend/runtime.py + containers.py reuse unstepped predicted-class arrays with exact incremental uploads;
+#: host upload bookkeeping only, no CUDA source string or arithmetic changed (the row's whole run: 0 of 1,240,994,505
+#: words vs A2). Re-derived by tools/repin_source_tables.py; not a new mint.
 MINTED_KERNEL_SET_SHA256 = (
-    "9605f695fb32f522ecbd63945d91152b04ebcd5ab662b43357eb7180359a6865"
+    "0fafa87ef8a55837619aa1b85b191466fde7e2d2afb0a2da2d7076fcef08cbbb"
 )
 
 _DRY_MINT_CAVEAT = (

@@ -1482,6 +1482,9 @@ def run_slot(call):
     fields = packet["arguments"]
     errors = driver.run(fields, packet["constants"], options=MynnOptions.from_namelist(call.options),
                         corrections=getattr(call, "corrections", frozenset()))
+    if getattr(provider, 'wind_farm', None) is not None:
+        from ..wind_farm import apply_native
+        apply_native(provider, fields)
     commit_native_outputs(provider, driver, fields)
     # Native driver_pbl.F:969-975 always copies output; it never aborts on errflg.
     return errors

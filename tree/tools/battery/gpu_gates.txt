@@ -243,3 +243,22 @@ tests/test_rrfs_convective_inplace.py
 
 # RRFS RUC staging and coalesced glue transposes keep every word (rs-glue-copies 8170c316); needs cupy and a device.
 tests/test_rrfs_glue_copies.py
+
+# The resident moving step's device members (feat/hex-moving-resident 78111207, gpuwm-hex 0.4.11): advection,
+# balance, horizontal, math, momentum, phase, pool projection, saturation, surface and velocity kernels and the kernel
+# prep, each against its host oracle (skips without HEX_TEST_CUDA=1 or cupy); the host members of kernel modules,
+# rate batches and the upload cache are tier 1.
+tests/test_moving_advection_cuda.py
+tests/test_moving_balance_cuda.py
+tests/test_moving_horizontal_cuda.py
+tests/test_moving_kernel_modules.py
+tests/test_moving_kernel_prep.py
+tests/test_moving_math_cuda.py
+tests/test_moving_momentum_cuda.py
+tests/test_moving_phase_cuda.py
+tests/test_moving_pool_projection_cuda.py
+tests/test_moving_rates_batch.py
+tests/test_moving_saturation_cuda.py
+tests/test_moving_surface_cuda.py
+tests/test_moving_upload_cache.py
+tests/test_moving_velocity_cuda.py

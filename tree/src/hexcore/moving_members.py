@@ -152,8 +152,15 @@ def stage_case(case_path: Path, casedir: Path, *, source: str | None = None, sta
     # A case started from the source's forecast at a lead (moving case --lead-hours / --from-last-hour): the
     # products are the source cycle's at that lead, the init clock is the case start (cycle + lead).
     lead = int(case.get("init_lead_hours") or 0)
-    if lead and (row.get("cold_soil") or {}).get("analysis_only"):
-        raise MovingCaseError("this cold-soil donor row is analysis-only; a forecast-time native donor needs its own table row")
+    # An analysis-only cold-soil donor has no soil for a forecast hour: a case started from a later hour stages
+    # without the donor and initializes from the source's own interpolated soil (--soil-remap off at init, from
+    # init_sources.cold_soil_init_flags), as every case did before the remap, instead of refusing. THE BREAKAGE THIS
+    # PREVENTS (WOOF gpuwm-hex 0.4.10 candidate canary, 2026-10-31, setup-following run_5f2a4e9019516a11): every GFS
+    # moving case from a later hour stopped here.
+    soil = row.get("cold_soil")
+    if lead and (soil or {}).get("analysis_only"):
+        log(f"stage: cold soil remap off at f{lead:03d}: the {row['id']} donor is analysis-only")
+        soil = None
     from datetime import timedelta
     source_cycle = init_sources.Cycle(cycle.when - timedelta(hours=lead))
     source_member = case.get("init_member")
@@ -161,6 +168,8 @@ def stage_case(case_path: Path, casedir: Path, *, source: str | None = None, sta
         raise MovingCaseError("init_member must be a nonnegative integer source-member number")
     # Validate against the source table before either fetching or reusing a stage.
     plans = init_sources.plan_products(row, source_cycle, source_member, lead)
+    if row.get("cold_soil") and soil is None:
+        plans = [p for p in plans if p.role != row["cold_soil"]["product_role"]]
     out_dir = casedir / "source"
     previous = casedir / STAGE_FILE
     if previous.is_file():
@@ -184,9 +193,11 @@ def stage_case(case_path: Path, casedir: Path, *, source: str | None = None, sta
     init_sources.resolve_surface_input_vtable(row)
     began = time.monotonic()
     log(f"stage: acquiring {row['id']} for {cycle.start_time}")
-    products = init_sources.acquire(plans, out_dir / "products", cycle,
-                                    staged=[Path(p).expanduser().absolute() for p in staged], jobs=jobs)
-    donors = init_sources.cold_soil_products(products, row.get("cold_soil"))
+    products, missing = init_sources.acquire_with_cold_soil(
+        plans, soil, out_dir / "products", cycle, staged=[Path(p).expanduser().absolute() for p in staged], jobs=jobs)
+    if missing:
+        log(f"stage: cold soil remap off: {missing}")
+    donors = init_sources.cold_soil_products(products, soil)
     companions = init_sources.surface_input_products(products, row)
     inputs = [product["file"] for product in products if product not in donors and product not in companions]
     remap = None

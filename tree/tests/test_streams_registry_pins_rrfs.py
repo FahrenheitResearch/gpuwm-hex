@@ -7,12 +7,22 @@ import pytest
 
 from hexcore import streams_rrfs as streams
 from test_streams_native_registry_rrfs import _native_fields
+from stream_registry_source_rrfs import DECLARED_UNITS
 
 
 @pytest.fixture
 def contract():
     return streams.RegistryContract(Path(streams.__file__).with_name('streams_rrfs_44c0849_registry.json'),
                                     timelevel_options={'reject_step_after_stop': True})
+
+
+def test_aod550_declares_the_cf_dimensionless_unit_the_converter_requires(contract):
+    # The fork's Registry says '-'; rw_mpas_convert requires '1' of an AOD product (stream_registry_source_rrfs
+    # DECLARED_UNITS). Everything else about the field is the fork's.
+    aod = contract.field_definition('aod550')
+    assert aod['attrs']['units'] == '1'
+    assert aod['dimensions'] == ['nCells', 'Time']
+    assert aod['attrs']['long_name'] == 'aerosol optical depth (2D) from all aerosols'
 
 
 def test_old_and_new_streams_keep_their_own_metadata(contract, tmp_path):
@@ -43,6 +53,8 @@ def test_new_pin_native_registry(contract, physics):
     assert set(native) == set(contract.data['fields' if physics else 'dry_fields'])
     for name, definition in native.items():
         ours = contract.field_definition(name, physics=physics)
+        if physics and name in DECLARED_UNITS:
+            definition = {**definition, 'attrs': {**definition['attrs'], 'units': DECLARED_UNITS[name]}}
         assert definition == {k: ours[k] for k in ('type', 'dimensions', 'attrs')}, name
 
     # Compare the stream membership emitted by MPAS's C tool, including every

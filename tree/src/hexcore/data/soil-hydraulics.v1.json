@@ -4,8 +4,33 @@
     {
       "schema": "hex.soil-hydraulics/v1",
       "id": "gfs16-noah-to-mpas842-stas",
-      "valid_from": "2021-03-22",
-      "valid_through": "2026-10-28",
+      "source_model": {
+        "about": "What defines this contract, read off the donor file itself at init: GFS v16's NetCDF surface analysis (FV3GFS, gaussian grid) from its Noah land model, four soil layers 0-10/10-40/40-100/100-200 cm, STATSGO soil and IGBP vegetation classes. A donor that does not show every one of these is another GFS land setup (a GFS upgrade to another land model, soil layering or class set): the init keeps its cold-start soil (native MPAS-A) and its receipt and log name what differed; --soil-remap on refuses instead. There is no end date, so an unchanged GFS keeps the contract. THE BREAKAGE THIS PREVENTS: GFS v16 Noah's hydraulics applied to another land model's soil. It replaces valid_through 2026-10-28, the day this table was written, which refused every GFS init after that date on the Noah land model (the WOOF gpuwm 2.9.10 / gpuwm-hex 0.4.10 switch candidate, 2026-10-31).",
+        "first_cycle": "2021-03-22T12",
+        "first_cycle_reason": "GFS v16's first cycle. Earlier GFS (v15) wrote its surface analysis as nemsio, so no NetCDF donor exists for those cycles: init-source does not ask for one and the init keeps its cold-start soil.",
+        "global_attributes": {
+          "source": "FV3GFS",
+          "grid": "gaussian",
+          "nsoil": 4
+        },
+        "layer_families": [
+          "soilw",
+          "soill",
+          "soilt"
+        ],
+        "layer_depth_long_names": [
+          "soilw",
+          "soilt"
+        ],
+        "class_limits": {
+          "sotyp": 19,
+          "vtype": 20
+        },
+        "other_land_model_variables": {
+          "noahmp": "xy[0-9]*$|^smoiseq[0-9]*$",
+          "ruc": "^(wetness|clw_surf_land|qwv_surf_land|tsnow_land|snowfall_acc_land)$"
+        }
+      },
       "source": {
         "url": "https://raw.githubusercontent.com/NCAR/ccpp-physics/v5.0.0/physics/set_soilveg.f",
         "sha256": "9dc492599d90a56d184fa850df32f88376f5ebb1cc9b516ff0aca0d8505f2a26",

@@ -705,7 +705,7 @@ def _in_defaults(element: Any) -> int:
 
 def write_default_streams(layout: Any, path: Path, *, history_minutes: float | None = None,
                           checkpoint_hours: Any = None, surface_interval: str | None = None,
-                          omit: Mapping[str, Any] | None = None) -> Path:
+                          omit: Mapping[str, Any] | None = None, bound_inputs=()) -> Path:
     """MPAS's own default streams.atmosphere and stream_list.atmosphere.* files, from the Registry this run decoded.
 
     THE BREAKAGE THIS PREVENTS: the MPAS suite route refused every run that named no streams.atmosphere
@@ -739,6 +739,7 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
     length 0").
     """
     root = ET.Element('streams')
+    bound = set(bound_inputs)
     dropped = {name: set((spec or {}).get('fields') or ()) for name, spec in (omit or {}).items()}
     sizes = getattr(layout, 'dimensions', None) or {}
     empty = {f['name'] for f in layout.fields if any(sizes.get(d) == 0 for d in f.get('dimensions') or ())}
@@ -752,7 +753,8 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
     for declared in layout.root.findall('./streams/stream'):
         name = declared.get('name')
         immutable = declared.get('immutable') == 'true'
-        writable = _in_defaults(declared) != 0
+        bound_input = name in bound and 'input' in declared.get('type', '').split(';')
+        writable = _in_defaults(declared) != 0 or bound_input
         if immutable:
             if not writable:
                 continue
@@ -768,6 +770,8 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
             if declared.get(key) is not None:
                 element.set(key, declared.get(key))
         types = declared.get('type', '').split(';')
+        if bound_input and element.get('input_interval', 'none') == 'none':
+            element.set('input_interval', 'initial_only')
         if name in ('output', 'diagnostics') and history:
             element.set('output_interval', history)
         if name == 'restart':
@@ -1084,12 +1088,18 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
                                             'thread (waited for at the end of this stage)')
         with stage(timings, 'native-pool-decode', parallelism=decode_parallelism,
                    timeline='prep.native.pool_decode'):
-            layout = decode_registry_pools(Path(reader).resolve(),Path(source).resolve(),config,text,sources,
-                                           scratch/'native-pools',
-                                           initial_state=(initial_stream, streams_path,
-                                                          getattr(arguments, "stream_list_directory", None))
-                                           if initial_stream != 'input' else None,
-                                           beside_transport=beside_transport)
+            call = dict(reader=Path(reader).resolve(), source=Path(source).resolve(), config=config, text=text,
+                        sources=sources, output=scratch/'native-pools',
+                        initial_state=(initial_stream, streams_path,
+                                       getattr(arguments, "stream_list_directory", None))
+                        if initial_stream != 'input' else None)
+            decode = lambda: decode_registry_pools(call['reader'], call['source'], config, text, sources,
+                                                   call['output'], initial_state=call['initial_state'],
+                                                   beside_transport=beside_transport)
+            # A resident moving process (moving_resident_v842) decoded this member's pools beside the previous
+            # segment; the prepared layout is taken only when its call is this one, word for word.
+            from . import moving_resident_v842 as resident
+            layout = resident.decode(call, arguments, decode) if beside_transport is None else decode()
     finally:
         save_timings()
     if moving is not None:
@@ -1100,13 +1110,15 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
         streams_path = write_default_streams(layout, scratch/'streams.atmosphere',
                                              history_minutes=getattr(arguments,'history_every_minutes',None),
                                              checkpoint_hours=None, omit=row.get('default_streams_omit'),
-                                             **timed)
+                                             bound_inputs=bindings, **timed)
     parser=load_table()[getattr(config,'table_key','mpasphys_v842')].get('streams_parser')
     tree=None
     if parser is not None:
         module,callable_name=parser.split(':')
         tree=getattr(import_module(module),callable_name)(streams_path,library)
     streams=read_streams(streams_path,layout,getattr(arguments,'stream_list_directory',None),tree=tree)
+    from ..forecast_start import radar_streams
+    streams = radar_streams(streams, layout, out, Stream)
     defaults = {initial_stream: initial_file}
     if getattr(arguments,'orographic_statistics',None):
         defaults['ugwp_oro_data_in'] = Path(arguments.orographic_statistics).resolve()

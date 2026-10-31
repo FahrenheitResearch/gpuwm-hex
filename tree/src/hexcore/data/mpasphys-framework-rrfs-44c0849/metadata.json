@@ -705,6 +705,34 @@
      "jme"
     ]
    ],
+   "sub3d_rucuten_p": [
+    [
+     "ims",
+     "ime"
+    ],
+    [
+     "kms",
+     "kme"
+    ],
+    [
+     "jms",
+     "jme"
+    ]
+   ],
+   "sub3d_rvcuten_p": [
+    [
+     "ims",
+     "ime"
+    ],
+    [
+     "kms",
+     "kme"
+    ],
+    [
+     "jms",
+     "jme"
+    ]
+   ],
    "vcpool_p": [
     [
      "ims",

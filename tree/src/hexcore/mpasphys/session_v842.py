@@ -49,7 +49,16 @@ class NativePhysicsSession:
                  cuda_device: Any | None = None,
                  cuda_resources: Path | None = None,
                  core_operations: Mapping[str, Callable] | None = None,
-                 surface_record_reader: Callable | None = None):
+                 surface_record_reader: Callable | None = None, prehydrated=None,
+                 pool_copy_on_write=False):
+        import time
+        clock = time.perf_counter()
+        self.preparation_timings = {}
+        def mark(name):
+            nonlocal clock
+            now = time.perf_counter()
+            self.preparation_timings[name] = now-clock
+            clock = now
         self.native, self.layout = native, layout
         self.config = config
         prepare = getattr(config, 'native_layout_prepare', None)
@@ -65,12 +74,38 @@ class NativePhysicsSession:
         PhysicsDriver, PhysicsManager = provider.PhysicsDriver, provider.PhysicsManager
         SlotRegistry = provider.SlotRegistry
         self.gwdo_before = {}
-        self.hydration = NativePoolHydration(native, layout, payload)
-        self.hydration.populate()
+        mark('driver-metadata')
+        if prehydrated is None:
+            self.hydration = NativePoolHydration(native, layout, payload)
+            self.hydration.copy_on_write = bool(pool_copy_on_write)
+            self.hydration.populate()
+        else:
+            if (prehydrated.native is not native or prehydrated.layout is not layout
+                    or prehydrated.payload.resolve() != Path(payload).resolve()):
+                raise ValueError('prepared physics pools belong to another moving class')
+            self.hydration = prehydrated
+            for row in layout.fields:
+                record = prehydrated.records[row['pool'], row['name']]
+                if any(record[key] != row[key] for key in ('kind','shape','dimensions')):
+                    raise ValueError('prepared physics field extent/type differs from admitted class')
+            # The carrier determines the actual restart clock after preparation.
+            # Field words and dimensions are already this member's; refresh the
+            # runtime config values in the original Registry order.
+            for name, value in layout.configs.items():
+                native.config(name, value)
+            # Class input construction restores the original output configs,
+            # including an unresolved length. Replay populate's final metadata
+            # assignment after that reset, before physics reads runtime configs.
+            if ('mesh', 'nominalMinDc') in self.hydration.records:
+                nominal = self.hydration.horizontal_length()
+                native.config('config_len_disp', layout.configs['config_len_disp'])
+                native.put_field('mesh', 'nominalMinDc', nominal)
+        mark('pool-hydration')
         native.clock(start=start, stop=stop, dt=dt,
                      calendar=layout.configs['config_calendar_type'])
         native.streams()
         self.hydration.register()
+        mark('clock-and-registration')
         dims = layout.dimensions
         native.mpas_atm_set_dims(nvertlevels_val=dims['nVertLevels'],
                                 maxedges_val=dims['maxEdges'],
@@ -105,10 +140,12 @@ class NativePhysicsSession:
             save_fields=self.snapshot, restore_fields=self.restore)
         slots = registry or SlotRegistry()
         self.hooks.register_slots(slots, config)
+        mark('sources-and-hooks')
         if cuda_device is not None:
             from .device_pools_v842 import NativeDevicePoolViews, register_cuda_slots
             self.device_pools=NativeDevicePoolViews(self,cuda_device)
             register_cuda_slots(slots,config,self.device_pools,cuda_resources)
+        mark('cuda-slot-bindings')
         self.surface_service = None
         # The owned framework has no Fortran surface entry points. Bind the
         # existing CUDA service before resident-suite admission, including
@@ -125,6 +162,7 @@ class NativePhysicsSession:
             self.surface_service = NativeSurfaceService(self, cuda_device,
                 read_surface_record=surface_record_reader)
             self.hooks.external.update(self.surface_service.callbacks())
+        mark('surface-service')
         self.driver = PhysicsDriver(config, PhysicsManager(config, dt,
                                      streams=stream_intervals), slots, self.hooks)
         if getattr(native, 'framework_only', False):
@@ -132,6 +170,7 @@ class NativePhysicsSession:
             from .route_table import framework_entry
             self.framework_init = framework_entry(config, 'initialization')(self)
             self.hooks.external.update(self.framework_init.operations())
+        mark('driver-initialization')
         self._initialized = False
 
     def snapshot_gwdo(self, call) -> None:

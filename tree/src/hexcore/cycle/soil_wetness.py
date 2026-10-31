@@ -77,6 +77,68 @@ def donor_quality(moisture, liquid, capacity):
                       source_accepted_columns=int(good.sum()))
 
 
+class SoilRemapNotApplied(ValueError):
+    """The contract does not hold for this init or its donor, or cannot be completed for it.
+
+    Raised only before the init file is opened for writing, so nothing was written: the init keeps its cold-start
+    soil, as native MPAS-A's init_atmosphere starts it. Under ``--soil-remap auto`` the init door logs the reason and
+    goes on; ``--soil-remap on`` refuses with it. A failure while writing is any other exception, and the door
+    removes that half-written init.
+    """
+
+
+def donor_setup_mismatch(ds, contract):
+    """Why the open donor DS is not the analysis CONTRACT describes, read off the file; None when it is.
+
+    The contract's ``source_model`` names what defines it (the producing model and grid, its soil layering and the
+    land model whose state it carries), so a source upgrade that changes any of them is seen in the file itself.
+    """
+    import re
+    model, spec = contract['source_model'], contract['source']
+    names = set(ds.variables)
+    attributes = set(ds.ncattrs())
+    for key, want in model['global_attributes'].items():
+        if key not in attributes:
+            return f"the donor has no global attribute {key} (the contract's analysis writes {key} = {want!r})"
+        have = np.asarray(ds.getncattr(key)).tolist()
+        have = have[0] if isinstance(have, list) and len(have) == 1 else have
+        if have != want:
+            return f"the donor's global attribute {key} is {have!r}, not {want!r}"
+    fields = spec['fields']
+    needed = [fields[k] for k in ('land', 'vegetation_class', 'soil_class', 'vegetation_fraction',
+                                  'latitude', 'longitude')] + list(fields['moisture']) + list(fields['liquid'])
+    missing = [n for n in needed if n not in names]
+    if missing:
+        return f"the donor lacks {', '.join(missing)}"
+    depths = np.cumsum([0.0] + list(spec['soil_layer_depths_m']))
+    for family in model['layer_families']:
+        found = sorted(int(m.group(1)) for n in names if (m := re.fullmatch(re.escape(family) + r'(\d+)', n)))
+        if found != list(range(1, len(depths))):
+            return f"the donor's {family} layers are {found}, not the contract's 1..{len(depths) - 1}"
+    for family in model['layer_depth_long_names']:
+        for layer in range(1, len(depths)):
+            text = str(getattr(ds[f'{family}{layer}'], 'long_name', ''))
+            found = re.search(r'(\d+)\s*-\s*(\d+)\s*cm', text)
+            want = [int(round(depths[layer - 1] * 100)), int(round(depths[layer] * 100))]
+            if not found or [int(found.group(1)), int(found.group(2))] != want:
+                return f"the donor's {family}{layer} is {text!r}, not the contract's {want[0]}-{want[1]} cm layer"
+    for land_model, pattern in model['other_land_model_variables'].items():
+        other = sorted(n for n in names if re.search(pattern, n))
+        if other:
+            return f"the donor carries {land_model} land-model state ({', '.join(other[:6])})"
+    return None
+
+
+def first_cycle_mismatch(contract, when):
+    """Why a source cycle at WHEN (datetime) predates the contract's donor; None when it does not."""
+    from datetime import datetime
+    model = contract.get('source_model') or {}
+    first = model.get('first_cycle')
+    if first and when.replace(tzinfo=None) < datetime.strptime(first, '%Y-%m-%dT%H'):
+        return f"the cycle predates the contract's first {first}Z: {model.get('first_cycle_reason', '')}".rstrip(': ')
+    return None
+
+
 def source_contract(map_sources, name=None):
     """Select policy by table metadata, with no source-specific execution path."""
     import json
@@ -95,50 +157,108 @@ def remap_cold_init(path, donor, contract, start_time):
     The source pgrb2 categorical field can be spatially interpolated. Use the
     native surface NetCDF with categorical classes, co-located total/liquid
     moisture and a declared hydraulic table. A rejected donor is excluded from
-    the spatial query and counted. Every target soil cell must find a valid
-    donor within the table's distance bound. No state is clipped.
+    the spatial query and counted. Each target soil cell takes a valid donor
+    within the table's distance bound; a cell beyond it keeps its cold soil. No
+    state is clipped.
+
+    Returns the receipt. ``applied`` is False, with a ``reason`` and nothing
+    written, when there is nothing to remap (no land soil cell, no admitted
+    donor in reach, a carried warm land state). Raises SoilRemapNotApplied,
+    with nothing written, when the contract does not hold for this init or
+    donor or the remap cannot be completed; any other exception comes from the
+    write itself.
     """
+    try:
+        plan = _cold_remap_plan(path, donor, contract, start_time)
+    except SoilRemapNotApplied:
+        raise
+    except Exception as error:  # noqa: BLE001 - before any write: the cold init is untouched
+        # THE BREAKAGE THIS PREVENTS (WOOF gpuwm-hex 0.4.10 switch candidate, 2026-10-31): every check below raised
+        # into the init door, which removed the init and refused the run, so one stale table date stopped every GFS
+        # hex init on Noah. A check that fails here means the remap does not apply; the init keeps the cold-start
+        # soil every init carried before the remap (native MPAS-A), and the door names why.
+        raise SoilRemapNotApplied(str(error) if isinstance(error, ValueError)
+                                  else f"{type(error).__name__}: {error}") from error
+    if not plan['receipt']['applied']:
+        return plan['receipt']
+    new_sm, new_sw, receipt = plan['smois'], plan['sh2o'], plan['receipt']
+    import json
+    from pathlib import Path
+    from netCDF4 import Dataset
+    with Dataset(path, 'r+') as target:
+        for name, values in [('smois', new_sm), ('sh2o', new_sw)]:
+            var = target[name]
+            if var.dimensions[:1] == ('Time',): var[0] = values
+            else: var[:] = values
+    # A sidecar avoids rewriting a multi-GB classic NetCDF just to extend its
+    # header. The init provenance also embeds this receipt before hashing output.
+    receipt_path = Path(str(path) + '.soil-remap.json')
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+    return receipt
+
+
+def _cold_remap_plan(path, donor, contract, start_time):
+    """Everything remap_cold_init decides, reading only: the new soil and its receipt, or a clean pass."""
     import hashlib
-    from datetime import datetime
     from pathlib import Path
     from netCDF4 import Dataset, num2date
     from scipy.spatial import cKDTree
     from .land_state import context, read, porosity, validate_land, LAND_ATTRIBUTE
     from hexcore.mpasphys.noah_v842 import LANDUSE_URBAN_INDEX
     spec = contract['source']; names = spec['fields']
-    stamp = datetime.strptime(start_time, '%Y-%m-%d_%H:%M:%S')
-    if not contract['valid_from'] <= stamp.strftime('%Y-%m-%d') <= contract['valid_through']:
-        raise ValueError('soil contract does not cover this analysis date')
+
+    def clean_pass(reason, **counts):
+        return {'receipt': {'applied': False, 'reason': reason, 'contract': contract['id'], **counts}}
+    # No calendar window: what defines the contract is read off the donor below (donor_setup_mismatch), so an
+    # unchanged GFS keeps it. THE BREAKAGE THIS PREVENTS: 437ae5ec's valid_through 2026-10-28 (the day it was
+    # written) refused every GFS init after that date (WOOF gpuwm-hex 0.4.10 switch candidate, 2026-10-31).
     with Dataset(path) as target:
         if LAND_ATTRIBUTE in target.ncattrs():
-            raise ValueError('cold soil remap refuses a carried warm background')
+            # A carried warm land state is already the target model's soil; converting it again would double it.
+            return clean_pass("the init carries a warm land state; its soil is already the target land model's")
         ctx = context(target)
         sm = read(target['smois']); sw = read(target['sh2o']); st = read(target['tslb'])
         if sm.shape[1] != len(contract['target']['soil_layer_depths_m']):
-            raise ValueError('soil remap target layer geometry mismatch')
+            raise SoilRemapNotApplied(f"the init has {sm.shape[1]} soil layers, the contract's target has "
+                                      f"{len(contract['target']['soil_layer_depths_m'])}")
         if not np.allclose(read(target['dzs']), contract['target']['soil_layer_depths_m'], rtol=0, atol=1e-7):
-            raise ValueError('soil remap target layer depths mismatch')
+            raise SoilRemapNotApplied("the init's soil layer depths are not the contract's target layers")
         cap = porosity(ctx, len(sm)); target_ids = np.flatnonzero(cap < 1)
         lat = read(target['latCell']); lon = read(target['lonCell'])
         before_violations = int(np.count_nonzero((sm > cap[:, None]) | (sw > sm) | (sw < 0)))
+    if target_ids.size == 0:
+        # An all-water mesh (an open-ocean region or storm-following box) has no soil to remap. Before, the empty
+        # donor query reached km.max() of nothing and the init was refused.
+        return clean_pass('no land soil cell on this mesh: nothing to remap',
+                          cold_before_bound_violations=before_violations)
     soil = np.asarray(ctx['isltyp'], dtype=int).copy()
     soil[(soil == 14) & (np.asarray(ctx['xice']) == 0)] = 7
     target_knots = knots_from_classes(soil[target_ids], np.array(contract['target']['soil_knots'], dtype='f4'))
     lu = np.asarray(ctx['mminlu']).tobytes().decode().strip(' \x00')
+    if lu not in LANDUSE_URBAN_INDEX:
+        raise SoilRemapNotApplied(f"the static's land-use table {lu!r} has no urban class in the contract's target")
     urban = np.asarray(ctx['ivgtyp'])[target_ids] == LANDUSE_URBAN_INDEX[lu]
     target_knots[urban] = np.asarray(contract['target']['urban_knots'], dtype='f4')
     if not np.array_equal(target_knots[:, -1], cap[target_ids]):
-        raise ValueError('target hydraulic table disagrees with live Noah porosity')
+        raise SoilRemapNotApplied('target hydraulic table disagrees with live Noah porosity')
     with Dataset(donor) as ds:
         ds.set_auto_mask(False)
+        mismatch = donor_setup_mismatch(ds, contract)
+        if mismatch:
+            raise SoilRemapNotApplied(f"the soil donor is not the analysis this contract describes: {mismatch}")
         t = ds['time']; dt = num2date(t[0], t.units, only_use_cftime_datetimes=False)
         if dt.strftime('%Y-%m-%d_%H:%M:%S') != start_time:
-            raise ValueError('soil donor time differs from initialization')
+            raise SoilRemapNotApplied('soil donor time differs from initialization')
         land = np.asarray(ds[names['land']][0])
         veg = np.asarray(ds[names['vegetation_class']][0])
         eligible = (land == spec['land_value']) & (veg != spec['ice_vegetation_class'])
         ij = np.argwhere(eligible)
         classes = np.asarray(ds[names['soil_class']][0])[eligible]
+        limits = contract['source_model'].get('class_limits', {})
+        for field, values in ((names['soil_class'], classes), (names['vegetation_class'], veg[eligible])):
+            if field in limits and values.size and np.nanmax(values) > limits[field]:
+                raise SoilRemapNotApplied(f"the soil donor's {field} reaches class {np.nanmax(values):g}, beyond the "
+                                          f"contract's {limits[field]} (another class set)")
         knots = knots_from_classes(classes, np.array(spec['soil_knots'], dtype='f4'))
         gv = np.asarray(ds[names['vegetation_fraction']][0])[eligible] * spec['vegetation_fraction_scale']
         if not np.isfinite(gv).all() or np.any((gv < 0) | (gv > 1)):
@@ -169,7 +289,12 @@ def remap_cold_init(path, donor, contract, start_time):
     # before this remap), the receipt counts and places it, and the land gate below still checks it.
     reached = np.isfinite(km) & (km <= contract['max_donor_distance_km'])
     if not reached.any():
-        raise ValueError(f'no admitted soil donor within {contract["max_donor_distance_km"]} km; max={km.max()}')
+        # Every land cell is beyond the bound (a small island region GFS's land mask does not resolve): each keeps its
+        # cold-start soil, as the cells beyond the bound do below. Before, this refused the whole init.
+        return clean_pass(f"no land cell has an admitted soil donor within {contract['max_donor_distance_km']:g} km; "
+                          'every land cell keeps its cold-start soil',
+                          cells_beyond_donor_bound={'cells': int(target_ids.size),
+                                                    'max_donor_distance_km': float(km.max(initial=0))})
     converted, result = remap_relative_wetness(source_sm[nearest[reached]], knots[nearest[reached]],
                                                target_knots[reached])
     fraction = np.divide(source_sw[nearest[reached]], source_sm[nearest[reached]], out=np.zeros_like(converted),
@@ -213,13 +338,4 @@ def remap_cold_init(path, donor, contract, start_time):
                'target_changed_moisture_values': int(np.count_nonzero(new_sm != sm)),
                'target_changed_liquid_values': int(np.count_nonzero(new_sw != sw)),
                'water_ice_columns_unchanged': int(len(sm)-len(target_ids))}
-    with Dataset(path, 'r+') as target:
-        for name, values in [('smois', new_sm), ('sh2o', new_sw)]:
-            var = target[name]
-            if var.dimensions[:1] == ('Time',): var[0] = values
-            else: var[:] = values
-    # A sidecar avoids rewriting a multi-GB classic NetCDF just to extend its
-    # header. The init provenance also embeds this receipt before hashing output.
-    receipt_path = Path(str(path) + '.soil-remap.json')
-    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
-    return receipt
+    return {'smois': new_sm, 'sh2o': new_sw, 'receipt': {'applied': True, **receipt}}

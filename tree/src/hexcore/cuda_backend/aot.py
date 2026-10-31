@@ -313,6 +313,7 @@ class Pack:
             pack_digest = _pack_digest(path, stat)
             memo = (str(path), stat.st_size, stat.st_mtime_ns, pack_digest,
                     json.dumps(measured, sort_keys=True))
+            self.resident_identity = memo
             rows = _PACKS.get(memo)
             if rows is None:
                 rows = read(path, measured)

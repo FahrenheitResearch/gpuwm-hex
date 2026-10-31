@@ -30,7 +30,10 @@ from .cuda_courant_fullstep_lts import CudaColumnTransportMonitor
 # Re-audited 2026-10-29 (fix/rrfs-shared-dycore-8card): the change adds one branch at the step's validation read
 # (deferred_checks_v842 inside an MPAS-physics forecast loop; the LTS list branch still comes first); both transport
 # calls keep the same argument positions and neither is touched.
-NATIVE_DRIVER_SHA256 = '22d0953bcf84b1e98338bdc553942bb574fd64c3c7eb99cb8e4225166dcc481e'
+# Re-audited 2026-10-30 (gpuwm-hex 0.4.11 fold HB2, feat/hex-moving-resident 78111207): the change adds an optional
+# upload_cache passthrough to the from-host constructor only; the LTS list branch still comes first and both transport
+# calls keep the same argument positions, neither touched.
+NATIVE_DRIVER_SHA256 = '01cbb4323d71febcb450256e110a5bb2f6321dc773ca153efd3ae141420a3d81'
 
 
 class FullStepShadow:

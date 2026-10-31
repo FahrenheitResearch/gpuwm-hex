@@ -46,6 +46,37 @@ class PoolWords:
         self.data[pool, name, level] = np.array(value, copy=True, order='F')
         self.written.add((pool, name, level))
 
+    def restore_mapped_fields(self, jobs, n_target):
+        """Install independent remapped fields without copying discarded cold columns.
+
+        A new move replaces all real columns. Only padding retains the member's
+        cold words. Each worker owns a new F-order array; publishing the arrays
+        afterwards preserves put_field's private-storage contract.
+        """
+        from ..host_parallel import run_tasks
+        rows = {(row['pool'], row['pool_name']): row for row in self.layout.fields}
+
+        def restore(job):
+            row, level, finite, mapped = job
+            pool, name = row['pool'], row['pool_name']
+            dtype, shape, _ = self._fields[pool, name]
+            if finite and not np.isfinite(mapped).all():
+                raise ValueError(f'moving physics remap produced a non-finite value in {mv._key(row, level)}')
+            out = np.empty(shape, dtype=dtype, order='F')
+            out[..., :n_target] = mapped
+            if shape[-1] > n_target:
+                key = (pool, name, level)
+                cold = self.data.get(key)
+                if cold is None:
+                    cold = self.hydration.field_buffer(pool, rows[pool, name]['name'])
+                out[..., n_target:] = cold[..., n_target:]
+            return (pool, name, level), out
+
+        # Four workers bound concurrent host traffic beside the atmosphere.
+        for key, words in run_tasks([lambda job=job: restore(job) for job in jobs], workers=4):
+            self.data[key] = words
+            self.written.add(key)
+
     def written_words(self):
         """Only the words put_field wrote, never a field get_field merely read from the member's own inputs.
 
@@ -117,15 +148,34 @@ def prepare_moving(route, inputs, config, layout, payload, arguments):
                               surface_service=None)
     restored = None
     if route.carrier is not None:
-        state, saved, weights = route.resume_dycore(mesh=mesh, grid=grid,
-            reference=reference, state=state, saved=saved, names=names,
-            target_grid=getattr(arguments, 'grid', None) or arguments.init)
+        target_grid = getattr(arguments, 'grid', None) or arguments.init
         physics = route.carrier['physics']
         if physics.get('window') is not None:
             session.precipitation_window = WindowWords()
         if physics.get('surface_service') is not None:
             session.surface_service = ServiceWords()
-        restored = route.restore_physics(session, layout, weights, mesh)
+        early = getattr(route, 'move_weights', None)
+        if os.environ.get('GPUWM_HEX_MOVING_PHYSICS_BESIDE', '1') == '0':
+            early = None   # the comparison knob: the physics restore after the atmosphere remap, as before
+        weights = None if early is None else early(mesh=mesh, grid=grid, target_grid=target_grid)
+        if weights is None:
+            state, saved, weights = route.resume_dycore(mesh=mesh, grid=grid,
+                reference=reference, state=state, saved=saved, names=names, target_grid=target_grid)
+            restored = route.restore_physics(session, layout, weights, mesh)
+        else:
+            # The physics restore reads only the carrier's physics, this member's pools and the map (never the
+            # remapped atmosphere, and none of the map's per-remap words: the below-ground extension and the
+            # domain receipts belong to the density-weighted products alone), so it runs beside the atmosphere
+            # remap.  THE COST THIS REMOVES: 2.5-2.7 s of every storm-following move on a 90,320-cell region
+            # (RTX 5090, 2026-10-29), after the 8 s atmosphere remap.  Each is the same call on the same
+            # inputs, so every carried word is unchanged.
+            from ..host_parallel import run_tasks
+            (state, saved, weights), restored = run_tasks([
+                lambda: route.resume_dycore(mesh=mesh, grid=grid, reference=reference, state=state, saved=saved,
+                                            names=names, target_grid=target_grid, weights=weights),
+                lambda: route.restore_physics(session, layout, weights, mesh)])
+            if getattr(route, 'remap_receipt', None) is not None:
+                route.remap_receipt['physics'] = restored
     result = (mesh, grid, profiles, state, reference, saved, names)
     # MovingControl holds a thread lock. Recreate it in each worker rather
     # than pickling that lock, or retaining the complete source carrier.
@@ -143,7 +193,7 @@ def prepare_moving(route, inputs, config, layout, payload, arguments):
         surface_service=None if session.surface_service is None else session.surface_service.restart_state())
 
 
-def project_restored_words(moving, layout, partitions, *, workers=None):
+def project_restored_words(moving, layout, partitions, *, workers=None, gpu=False):
     """The restored carrier words of every partition, in memory, every field on its own worker.
 
     THE COST THIS REMOVES: the MPAS LTS class executor projected the restored pools class after class, field
@@ -155,12 +205,25 @@ def project_restored_words(moving, layout, partitions, *, workers=None):
     by_key = {(r['pool'], r['pool_name']): r for r in layout.fields}
     maps = [_maps(layout, partition) for partition in partitions]
     keys = list(moving['restored'])
+    device_projection = None
+    began = time.perf_counter()
+    if (gpu and os.environ.get('CUDA_VISIBLE_DEVICES') != ''
+            and os.environ.get('GPUWM_HEX_MOVING_CLASS_WORDS_GPU', '1') != '0'):
+        from .. import moving_pool_projection_cuda as device_projection
+        device_maps = device_projection.prepare(maps, layout)
 
     def project(key):
+        if device_projection is not None:
+            return device_projection.project(moving['restored'][key], by_key[key[:2]], layout, maps, device_maps)
         return [_project_buffer(moving['restored'][key], by_key[key[:2]], layout, mapping) for mapping in maps]
 
-    with ThreadPoolExecutor(max_workers=max(1, min(len(keys), workers or os.cpu_count() or 1))) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, min(len(keys), workers or
+                            (4 if device_projection is not None else os.cpu_count()) or 1))) as pool:
         projected = list(pool.map(project, keys))
+    if device_projection is not None and isinstance(moving.get('restore_receipt'), dict):
+        moving['restore_receipt']['class_word_projection'] = dict(
+            backend='CUDA uint32 gather', seconds=time.perf_counter()-began,
+            source_bytes=sum(v.nbytes for v in moving['restored'].values()))
     window = moving['window']
     accumulators = moving.get('accumulators')
     result = []
@@ -184,9 +247,11 @@ def project_restored_pools(moving, layout, partition, local_layout, payload):
 
 def apply_restored(session, restored):
     """Write a rank's projected carrier words into its session (DistributedMoving.restore_physics)."""
+    put = session.native.put_field
+    if os.environ.get('GPUWM_HEX_MOVING_RESIDENT') == '1':
+        put = getattr(session.native,'adopt_restored_field',put)
     for (pool, name, level), value in restored['pools'].items():
-        session.native.put_field(pool, name, value, level=level,
-                                 nlevels=session.native._fields[pool, name][2])
+        put(pool, name, value, level=level,nlevels=session.native._fields[pool,name][2])
     window = session.precipitation_window
     if (window is None) != (restored['window'] is None):
         raise ValueError('moving precipitation window differs on native rank')

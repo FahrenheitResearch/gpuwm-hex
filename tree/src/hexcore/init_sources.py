@@ -1683,6 +1683,27 @@ def init_argv(table: dict[str, Any], row: dict[str, Any], *, met: Path, grid: Pa
     ]
 
 
+def producer_geog_flags(arguments: Any) -> list[str]:
+    """``--geog`` for the init when the run's suite initializes through its own producer, else nothing.
+
+    THE BREAKAGE THIS PREVENTS (96 -> 3 km zoom globe + hrrrv5 from IFS, 2026-10-31): init-source took no
+    geography, so ``mesh-plan --global-mesh --run --forecast-arg=--physics-suite=hrrrv5`` refused at its init
+    ("mesh.static.nc lacks landusef, soilf, lai12m, which --physics-suite hrrrv5 reads ... Pass --grid and --geog"):
+    the RRFS producer builds the fork's own static from the geography, and nothing handed it one.  A geography
+    given for a suite with no producer would be accepted and never read, so it is refused by name.
+    """
+    geog = getattr(arguments, "geog", None)
+    if geog is None:
+        return []
+    from .physics_default import init_producer
+    suite = getattr(arguments, "physics_suite", None)
+    if not suite or not init_producer(suite):
+        _refuse(f"--geog {geog} is read only by a suite whose init has its own producer (hrrrv5, rrfs_*); "
+                f"{'--physics-suite ' + suite if suite else 'this init'} builds no static of its own, so the "
+                "geography would be accepted and never read")
+    return ["--geog", str(Path(geog).expanduser().absolute())]
+
+
 def run_init(argv: list[str]) -> int:
     from .cli import main as cli_main  # noqa: PLC0415 - the init door, unchanged
 
@@ -1748,8 +1769,10 @@ def add_init_source_parser(commands: Any) -> None:
     parser.add_argument("--source", help="source id or alias (see --list)")
     parser.add_argument("--physics-profile", help="profile initialization row, including verified monthly aerosols")
     parser.add_argument("--physics-suite", help="suite initialization row")
-    parser.add_argument("--soil-remap", choices=("auto", "off"), default="auto",
-                        help="table-selected cold soil conversion; off retains legacy raw soil")
+    parser.add_argument("--soil-remap", choices=("auto", "on", "off"), default="auto",
+                        help="table-selected cold soil conversion: auto (default) applies it where its contract "
+                             "holds and otherwise keeps the source's own soil, naming why; on refuses instead; off "
+                             "retains legacy raw soil")
     parser.add_argument("--accept-licence", action="append", default=[], metavar="LICENCE",
                         help="research-only opt-in naming each exact model code/weight licence")
     parser.add_argument("--cycle", help="YYYY-MM-DDTHH")
@@ -1759,6 +1782,9 @@ def add_init_source_parser(commands: Any) -> None:
     parser.add_argument("--grid", type=Path)
     parser.add_argument("--static", type=Path)
     parser.add_argument("--vertical-spec", type=Path)
+    parser.add_argument("--geog", type=Path, default=None,
+                        help="WPS geography root for a suite whose init has its own producer (hrrrv5, rrfs_*): "
+                             "that suite builds its own static from it when --static lacks the fields it reads")
     parser.add_argument("--staged", type=Path, action="append", default=[],
                         help="directory already holding product files by their table filename")
     parser.add_argument("--writer", type=Path, default=None, help="met_intermediate executable")
@@ -1783,22 +1809,53 @@ def add_init_source_parser(commands: Any) -> None:
 
 
 def cold_soil_products(products, policy):
-    """Select the native donor by role, including resumed decode receipts."""
+    """Select the native donor by role, including resumed decode receipts (none when it was not staged)."""
     donors = [p for p in products if policy and p['role'] == policy['product_role']]
-    if policy and len(donors) != 1:
-        _refuse("cold soil policy needs exactly one co-located donor product")
+    if policy and len(donors) > 1:
+        _refuse("cold soil policy names more than one co-located donor product")
     return donors
 
 
-def cold_soil_init_flags(products, policy):
-    """Bind the unchanged categorical remap to its acquired, hashed native donor."""
+def acquire_with_cold_soil(plans, policy, dest, cycle, *, staged=(), jobs=None, mode="auto"):
+    """acquire() for PLANS, the cold-soil donor last and on its own: (products, why the donor is absent or None).
+
+    The donor is an addition to the source's own soil, not the source. THE BREAKAGE THIS PREVENTS: a cycle whose
+    archive lacks the donor (gfs.tHHz.sfcanl.nc) failed the whole init; it now starts from the source's own soil, as
+    every init did before the cold-soil remap. ``mode`` "on" (--soil-remap on) keeps the refusal.
+    """
+    donor_plans = [p for p in plans if policy and p.role == policy["product_role"]]
+    products = acquire([p for p in plans if p not in donor_plans], dest, cycle, staged=staged, jobs=jobs)
+    if not donor_plans:
+        return products, None
+    try:
+        return products + acquire(donor_plans, dest, cycle, staged=staged, jobs=jobs), None
+    except InitSourceRefusal as error:
+        if mode == "on":
+            _refuse(f"--soil-remap on: the cold soil donor could not be acquired: {error}")
+        return products, f"the cold soil donor could not be acquired: {error}"
+
+
+def cold_soil_init_flags(products, policy, mode="auto"):
+    """Bind the unchanged categorical remap to its acquired, hashed native donor.
+
+    No usable donor (not staged: a forecast-hour start, a donor the archive lacks; or its bytes are gone or differ
+    from the acquisition receipt) turns the remap off for this init (``--soil-remap off``: the source's own soil, as
+    before the remap), with the reason on stderr, instead of refusing it; ``mode`` "on" refuses.
+    """
     donors = cold_soil_products(products, policy)
     if not policy:
         return []
-    donor = Path(donors[0]["file"])
-    if not donor.is_file() or _sha256_file(donor) != donors[0]["sha256"]:
-        _refuse("cold soil donor is missing or differs from the acquisition receipt")
-    return ["--soil-contract", policy["contract"], "--soil-donor", str(donor)]
+    why = None
+    if not donors:
+        why = "no cold soil donor was staged for this init"
+    elif not Path(donors[0]["file"]).is_file() or _sha256_file(Path(donors[0]["file"])) != donors[0]["sha256"]:
+        why = "the cold soil donor is missing or differs from the acquisition receipt"
+    if why:
+        if mode == "on":
+            _refuse(f"--soil-remap on: {why}")
+        print(f"init-source: cold soil remap off: {why}", file=sys.stderr)
+        return ["--soil-remap", "off"]
+    return ["--soil-contract", policy["contract"], "--soil-donor", str(Path(donors[0]["file"]))]
 
 
 def run_init_source_command(arguments: argparse.Namespace) -> int:
@@ -1837,9 +1894,29 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
     out_dir = arguments.out_dir.expanduser().absolute()
     out_dir.mkdir(parents=True, exist_ok=True)
     declared_soil_policy = row.get("cold_soil")
+    soil_off_reason = None
+
+    def soil_remap_off(reason: str) -> None:
+        # The remap cannot serve this init: it starts from the source's own interpolated soil, as every init did
+        # before the cold-soil remap, and the init door is told so (--soil-remap off). Refusing instead stopped every
+        # GFS hex run started from a later forecast hour and every GFS limited-area region at its first boundary
+        # hour (WOOF gpuwm-hex 0.4.10 bake, 2026-10-30). --soil-remap on is the opt-in that refuses.
+        nonlocal soil_off_reason
+        if getattr(arguments, "soil_remap", "auto") == "on":
+            _refuse(f"--soil-remap on: the cold soil remap does not apply: {reason}")
+        print(f"init-source: cold soil remap off: {reason}", file=sys.stderr)
+        soil_off_reason = reason
+        arguments.soil_remap = "off"
+
+    if declared_soil_policy and getattr(arguments, "soil_remap", "auto") != "off":
+        from .cycle.soil_wetness import first_cycle_mismatch, source_contract
+        if declared_soil_policy.get("analysis_only") and lead != 0:
+            soil_remap_off(f"the {row['id']} donor is analysis-only and this init is at f{lead:03d}")
+        else:
+            early = first_cycle_mismatch(source_contract((), declared_soil_policy["contract"]), source_cycle.when)
+            if early:
+                soil_remap_off(early)
     soil_policy = declared_soil_policy if getattr(arguments, "soil_remap", "auto") != "off" else None
-    if soil_policy and soil_policy.get("analysis_only") and lead != 0:
-        _refuse("this cold-soil donor row is analysis-only; a forecast-time native donor needs its own table row")
     plans = plan_products(row, source_cycle, arguments.member, lead) if not generation else []
     if declared_soil_policy and soil_policy is None:
         plans = [p for p in plans if p.role != declared_soil_policy["product_role"]]
@@ -1858,6 +1935,8 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
     stages: dict[str, float] = {}
 
     def write_receipt() -> None:
+        if soil_off_reason:
+            receipt["cold_soil_remap_off"] = soil_off_reason
         receipt["stage_seconds"] = stages
         receipt["seconds"] = round(time.time() - started, 3)
         (out_dir / "init-source-receipt.json").write_text(
@@ -1873,6 +1952,10 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
         for key in ("products", "generation", "remap", "decode", "surface_input", "effective_first_guess"):
             if key in prior:
                 receipt[key] = prior[key]
+        if soil_policy and not any(p["role"] == soil_policy["product_role"] for p in receipt.get("products", ())):
+            # The decode this init resumes kept no donor (its acquisition failed, and that run said why).
+            soil_remap_off(prior.get("cold_soil_remap_off") or "the decode this init resumes holds no cold soil donor")
+            soil_policy = None
         if "effective_first_guess" in prior:
             row = {**row, "first_guess": prior["effective_first_guess"]}
         stages.update({f"{name}_beside_mesh": seconds for name, seconds in (prior.get("stage_seconds") or {}).items()})
@@ -1894,9 +1977,13 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
                 raise
             receipt["products"] = receipt["generation"]["runner"]["files"]
         else:
-            receipt["products"] = acquire(plans, out_dir / "products", cycle,
-                                          staged=[p.expanduser().absolute() for p in arguments.staged],
-                                          jobs=arguments.jobs)
+            receipt["products"], missing = acquire_with_cold_soil(
+                plans, soil_policy, out_dir / "products", cycle,
+                staged=[p.expanduser().absolute() for p in arguments.staged], jobs=arguments.jobs,
+                mode=getattr(arguments, "soil_remap", "auto"))
+            if missing:
+                soil_remap_off(missing)
+                soil_policy = None
         stages["acquire"] = round(time.time() - t0, 3)
         if arguments.stop_after == "acquire":
             write_receipt()
@@ -1946,11 +2033,12 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
     init = out_dir / "init.nc"
     argv = init_argv(table, row, met=Path(receipt["decode"]["met"]), grid=arguments.grid,
                      static=arguments.static, vertical_spec=arguments.vertical_spec, out=init, cycle=cycle)
+    argv += producer_geog_flags(arguments)
     for name in ("physics_suite", "physics_profile"):
         if getattr(arguments, name, None):
             argv += ["--" + name.replace("_", "-"), getattr(arguments, name)]
     argv += ["--soil-remap", getattr(arguments, "soil_remap", "auto")]
-    argv += cold_soil_init_flags(receipt["products"], soil_policy)
+    argv += cold_soil_init_flags(receipt["products"], soil_policy, getattr(arguments, "soil_remap", "auto"))
     argv += surface_input_init_flags(receipt.get("surface_input"))
     receipt["init_argv"] = argv
     t0 = time.time()

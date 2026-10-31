@@ -198,6 +198,12 @@ DUAL_TIER_ALLOWED: dict[str, str] = {
     "tests/test_gfs_hydrometeors_f000.py":
         "tier 1 takes the GFS hydrometeor vtable rows, the .idx select and the scheme pick; tier 3 takes "
         "the start-state f000 echo and its column slabs word for word on the device",
+    "tests/test_moving_kernel_modules.py":
+        "tier 1 takes the moving kernel module inventory; tier 3 compiles and launches the modules on the device",
+    "tests/test_moving_rates_batch.py":
+        "tier 1 takes the batched rate plans on the host; tier 3 takes the batched device rates against them",
+    "tests/test_moving_upload_cache.py":
+        "tier 1 takes the upload cache's host bookkeeping; tier 3 takes the exact incremental device uploads",
 }
 
 

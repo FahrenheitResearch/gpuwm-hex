@@ -51,10 +51,20 @@ def extract(physics):
             else: streams[name]={'options':dict(stream.attrib),'members':members}
     return fields,{k:list(dict.fromkeys(v)) for k,v in groups.items()},streams,list(dict.fromkeys(n.attrib['name'] for n in tree.iter('var_array')))
 
+# Declared metadata differences from the fork's Registry, applied to the shipped JSON and checked against
+# MPAS's own C registry output (test_streams_registry_pins_rrfs.test_new_pin_native_registry):
+# aod550 is the dimensionless aerosol optical depth the fork labels '-', which is not a UDUNITS unit. hex writes
+# CF's '1', the unit its converter requires of an AOD product (engine-patches/chemistry-products.patch
+# chemistry_product_units). Breakage it prevents (2026-10-30, WOOF): every RRFS v2 hrrrv5 history was refused
+# by rw_mpas_convert ("chemistry field aod550 must declare units 1"), so a full conus3km run rendered no maps.
+DECLARED_UNITS={'aod550':'1'}
+
 def metadata(registry):
     global root,pins
     root=Path(registry).parent;pins={}
     full=extract(True);dry=extract(False)
+    for name,units in DECLARED_UNITS.items():
+        if name in full[0]: full[0][name]['attrs']['units']=units
     data={'fields':full[0],'groups':full[1],'streams':full[2],
             'dry_fields':list(dry[0]),'dry_groups':dry[1],'dry_streams':dry[2],
             'arrays':full[3],'dry_arrays':dry[3],'source_sha256':pins}

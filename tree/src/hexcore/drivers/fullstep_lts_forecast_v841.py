@@ -543,7 +543,9 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             "class builder constructs")
     steps = int(schedule["steps"])
     captures = set(int(step) for step in schedule["capture_steps"])
+    from hexcore.forecast_start import RadarSnapshots
     top = int(rates.max())
+    radar = RadarSnapshots(output_root, schedule, base_dt, stride=top)
     events = {"run length": steps * base_dt,
               "radiation interval": float(host["constructor_values"]["radiation_seconds"])}
     for step in sorted(captures - {0}):
@@ -824,7 +826,7 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                         driver=stack["driver"], backend=stack["backend"], scalar_names=host["scalar_names"],
                         physics_geometry=stack["physics_geometry"], kernel_cache=stack["driver"].cache,
                         dt=seconds, previous_surface_updates=previous[index],
-                        dynamics_tendencies=forcing[index], refl_10cm_due=(end_step in captures),
+                        dynamics_tendencies=forcing[index], refl_10cm_due=(end_step in captures or radar.due(end_step)),
                         before_phase_two=klass.exchanger.round_physics_candidate,
                         held_forcing=(member_forcing if stochastic is not None or iau_forcing is not None
                                       else None))
@@ -914,6 +916,18 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             row.pop("tracer_max", None)
             series.append(row)
 
+        def capture_radar(step):
+            def source():
+                if not active.registers_empty():
+                    raise RuntimeError('radar columns need a committed LTS macro boundary')
+                arrays = []
+                for index, stack in enumerate(stacks):
+                    with physics_scope.rank(index, int(cp.cuda.Device().id)):
+                        arrays.append(radar.columns(stack, host))
+                return assemble_owned_arrays(layouts, arrays,
+                    kinds={name: "cell" for name in arrays[0]}, native_pads=())
+            radar.capture_from(step, source, proof, static)
+
         def capture(step: int) -> None:
             nonlocal capture_seconds, write_seconds
             if not active.registers_empty():
@@ -977,6 +991,7 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
 
         def publish(step: int, snapshot, boundary_done: bool = False) -> None:
             nonlocal write_seconds
+            radar.note_history(step)
             if step == 0 and first_call is not None:
                 snapshot["receipt"]["f000_first_call_diagnostics"] = (
                     forecast.complete_f000_from_first_call(snapshot, first_call.take()))
@@ -1191,6 +1206,8 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                       flush=True)
                 if done % totals_every == 0 or done == steps:
                     totals(done)
+                if radar.due(done) and done not in captures:
+                    capture_radar(done)
                 if done in captures:
                     capture(done)
                     if moving_control is not None and moving_control.at_frame(
@@ -1203,6 +1220,7 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
         finally:
             if first_call is not None:
                 first_call.put(None)
+            radar.close()
             loop_seconds = time.perf_counter() - started
             try:
                 drain_writes()
@@ -1392,7 +1410,9 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
     mesh = prepared.mesh
     steps = int(schedule["steps"])
     captures = set(int(step) for step in schedule["capture_steps"])
+    from hexcore.forecast_start import RadarSnapshots
     top = int(rates.max())
+    radar = RadarSnapshots(output_root, schedule, base_dt, stride=top)
     arwen_pin = dict(forecast._pin_for_run(host, arwen_checkout, pin_arwen_physics_v841))
     declarations = dict(getattr(mesh, "variable_dimensions", {}) or {})
     for name in ("defc_a", "defc_b"):
@@ -1571,7 +1591,7 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                     driver=stack["driver"], backend=stack["backend"], scalar_names=host["scalar_names"],
                     physics_geometry=stack["physics_geometry"], kernel_cache=stack["driver"].cache,
                     dt=seconds, previous_surface_updates=previous[gid],
-                    dynamics_tendencies=forcing[gid], refl_10cm_due=(end_step in captures),
+                    dynamics_tendencies=forcing[gid], refl_10cm_due=(end_step in captures or radar.due(end_step)),
                     before_phase_two=block.exchanger.round_physics_candidate,
                     after_phase_one=block.exchanger.round_phase_one if raw_exchange else None)
             previous[gid] = committed.surface_updates
@@ -1674,6 +1694,21 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
             row.pop("tracer_max", None)
             series.append(row)
 
+        def capture_radar(step):
+            def source():
+                if not active.registers_empty():
+                    raise RuntimeError('radar columns need a committed LTS macro boundary')
+                arrays = [None] * len(stacks)
+                def gather(rank):
+                    for block in active.blocks:
+                        if block.rank == rank:
+                            with physics_scope.rank(block.gid, block.device):
+                                arrays[block.gid] = radar.columns(stacks[block.gid], host)
+                active.ranks.call(gather)
+                return assemble_owned_arrays(layouts, arrays,
+                    kinds={name: "cell" for name in arrays[0]}, native_pads=())
+            radar.capture_from(step, source, proof, static)
+
         def capture(step: int) -> None:
             nonlocal capture_seconds, write_seconds
             if not active.registers_empty():
@@ -1719,6 +1754,7 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
 
         def publish(step: int, snapshot, boundary_done: bool = False) -> None:
             nonlocal write_seconds
+            radar.note_history(step)
             if step == 0 and first_call is not None:
                 snapshot["receipt"]["f000_first_call_diagnostics"] = (
                     forecast.complete_f000_from_first_call(snapshot, first_call.take()))
@@ -1805,6 +1841,8 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                     if done % totals_every == 0 or done == steps:
                         totals(done)
                         sample_pool()
+                    if radar.due(done) and done not in captures:
+                        capture_radar(done)
                     if done in captures:
                         capture(done)
                         if moving_control is not None and moving_control.at_frame(
@@ -1819,6 +1857,7 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
             finally:
                 if first_call is not None:
                     first_call.put(None)
+                radar.close()
                 loop_seconds = time.perf_counter() - started
             if refusal is None and not active.registers_empty():
                 raise RuntimeError("an interface register is not empty at the end of the run")

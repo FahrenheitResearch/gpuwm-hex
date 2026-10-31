@@ -60,6 +60,24 @@ RUN_STATE_VARIABLES = ('GPUWM_HEX_MOVING_CHECKPOINT_IN', 'GPUWM_HEX_MOVING_CHECK
                        'GPUWM_HEX_MOVING_SOURCE_GRID', 'GPUWM_HEX_MOVING_ZONE', 'GPUWM_HEX_MOVING_SHOCK_ZONE')
 
 
+from .moving_control import (RESIDENT_CLOSED, RESIDENT_ENV, RESIDENT_NEXT, RESIDENT_READY,
+                             RESIDENT_SEGMENT_VARIABLES, RESIDENT_SPEC_SCHEMA)
+
+
+def carrier_sealed(boundary) -> bool:
+    """A segment's end carrier exists: its file, or (a resident move) its receipt for the in-memory hand-off."""
+    boundary = Path(boundary)
+    if boundary.is_file():
+        return True
+    receipt = boundary.with_suffix(boundary.suffix + '.json')
+    if not receipt.is_file():
+        return False
+    try:
+        return bool(json.loads(receipt.read_text()).get('resident'))
+    except ValueError:
+        return False
+
+
 def visible_devices_for(device, environ=None) -> str:
     """The CUDA_VISIBLE_DEVICES a segment gets for ``--device N``: the Nth card the caller can see.
 
@@ -426,6 +444,8 @@ class Controller:
         self.procs = {}          # name -> Popen (member prep or operator build)
         self.forecast_children = []
         self.prelaunched = None  # the next member's forecast, started before the move
+        # The running forecast process and its segment (run): a resident process continues there after a move.
+        self.current_proc = self.current_seg = None
         mesh = self.case['mesh']
         self.interior_km = interior_km(self.case)
         # A corridor case stitches every member from the same frame and template
@@ -1179,6 +1199,7 @@ class Controller:
             if target is not None:
                 frame['move_wanted']['name'] = target
                 verdict = {'stop': True, 'target': target, 'reason': decision.reason}
+                self.name_resident_move(target, seconds, control)
                 self.state['pending_move'] = dict(target=target, decided_at_seconds=seconds,
                                                   reason=decision.reason)
         if getattr(self, 'plan', None) is not None:
@@ -1208,6 +1229,48 @@ class Controller:
         self.save()
         return verdict
 
+    # ---------------------------------------------------------------- resident continuation
+    def resident_ready(self) -> bool:
+        """Whether the running forecast process can continue the next segment itself (moving_resident_v842).
+
+        It says so in its control folder once its route has built the moving hooks a continuation needs (the MPAS
+        suite route on one card); any other route, or a process that has not got that far, takes a pre-launched
+        process as before.
+        """
+        if (not getattr(self.a, 'resident', False) or getattr(self, 'current_seg', None) is None
+                or getattr(self, 'current_proc', None) is None):
+            return False
+        if self.current_proc.poll() is not None:
+            return False
+        return (Path(self.current_seg) / 'control' / RESIDENT_READY).is_file()
+
+    def name_resident_move(self, target, seconds, control):
+        """Before a stop verdict: the running process's launch record names the move's target member.
+
+        THE BREAKAGE THIS PREVENTS: a resident process continues only the member its record names; a move to a
+        member the record did not name (the policy chose another ready member) would seal its carrier to the
+        file and exit, and the next segment would start from a cold process after all.
+        """
+        if not getattr(self.a, 'resident', False):
+            return   # one process per segment (--no-resident): nothing to name
+        pre = getattr(self, 'prelaunched', None)
+        if pre is not None and pre['target'] == target:
+            return
+        if not self.resident_ready():
+            return   # the run adopts or drops a pre-launched process at the move, as before
+        if pre is not None:
+            self.drop_prelaunch(f'the move goes to {target}')
+            return
+        source = self.state['current']
+        proc, pseg, pcontrol, record = self.launch(
+            'move', member_name=target, begin=seconds, checkpoint_in=str(Path(control).parent / 'boundary.pkl'),
+            operator=str(self.operator_path(source, target)), source_grid=self.state['members'][source]['grid'],
+            prelaunch=True)
+        self.prelaunched = dict(proc=proc, seg=pseg, control=pcontrol, record=record, target=target,
+                                resident=bool(record.get('resident')))
+        self.event('prelaunch', target=target, segment=record['index'], resident=bool(record.get('resident')),
+                   at_move=True)
+
     # ---------------------------------------------------------------- segments
     def segment_env(self, member, control, out_boundary, checkpoint_in, operator, source_grid):
         # The run-state switches (carrier, operator, zone) are set here and only here: a
@@ -1220,6 +1283,10 @@ class Controller:
                    GPUWM_HEX_MOVING_CONTROL=str(control),
                    GPUWM_HEX_MOVING_SEAL_EVERY_SECONDS=str(int(self.a.seal_every_hours * 3600)),
                    GPUWM_HEX_MOVING_HEIGHT_REMAP='absolute')
+        if getattr(self.a, 'resident', False):
+            # The forecast process may continue the next segment after a move (moving_resident_v842); it does
+            # only when its route builds the moving hooks for it (resident_ready) and the controller names the move.
+            env[RESIDENT_ENV] = '1'
         if self.a.device is not None:
             env['CUDA_VISIBLE_DEVICES'] = visible_devices_for(self.a.device)
         if checkpoint_in:
@@ -1255,16 +1322,33 @@ class Controller:
                               extra=[*self.a.forecast_arg, *label_argv(self.a), *argument_values(self.a, relative=seg.name)],
                               cards=getattr(self.a, 'cards', 1), source_id=self.init_source)
         env = self.segment_env(member, control, seg / 'boundary.pkl', checkpoint_in, operator, source_grid)
-        if prelaunch:
+        resident = prelaunch and self.resident_ready()
+        if prelaunch and not resident:
             # Started before the move: the real begin is the (later) stop frame, so the
             # schedule runs past the end; a standing stop request ends it exactly there.
             env['GPUWM_HEX_MOVING_CHECKPOINT_WAIT'] = str(int(self.a.segment_timeout))
+        if prelaunch:
             (control / 'stop-request.json').write_text(json.dumps({'stop_at_seconds': self.duration,
                                                                    'reason': 'run end'}) + '\n')
         record = dict(index=index, path=str(seg), kind=kind, member=member['name'], center=member['center_deg'],
                       begin_seconds=begin, requested_hours=hours, checkpoint_in=checkpoint_in,
                       operator=operator, source_grid=source_grid, prelaunched=prelaunch,
                       command=cmd, launched_wall=time.time(), launched_utc=now_utc())
+        if resident:
+            # The running forecast process continues this segment after the move (moving_resident_v842): its
+            # launch record goes into the running segment's control folder, where that process prepares it.
+            record['resident'] = True
+            (seg / 'command.json').write_text(json.dumps(record, indent=2) + '\n')
+            spec = dict(schema=RESIDENT_SPEC_SCHEMA, member=member['name'], index=index, segment=str(seg),
+                        argv=[str(a) for a in cmd[3:]], begin_seconds=begin,
+                        env={k: env[k] for k in RESIDENT_SEGMENT_VARIABLES if k in env})
+            running = Path(self.current_seg) / 'control' / RESIDENT_NEXT
+            temporary = running.with_suffix('.partial')
+            temporary.write_text(json.dumps(spec, indent=2) + '\n')
+            temporary.replace(running)
+            self.log(f'resident next segment {index} ({kind}) member={member["name"]} begin={begin/3600:.2f} h '
+                     f'(prepared in the running forecast process)')
+            return self.current_proc, seg, control, record
         (seg / 'command.json').write_text(json.dumps(record, indent=2) + '\n')
         if not prelaunch:
             self.state['segments'].append(record)
@@ -1285,6 +1369,13 @@ class Controller:
         if not ready:
             return
         frames = [f for f in self.state['frames'] if f['segment'] == len(self.state['segments']) - 1]
+        if not frames and self.state['frames'] and self.resident_ready():
+            # A move segment writes no frame at its begin (the controller decided that frame on the previous
+            # member).  A resident process prepares the next segment beside this one, so its record is named from
+            # the move's frame now rather than at the next frame.  THE COST THIS REMOVES (RTX 5090, 2026-10-29): every
+            # move after the first named its member only at the move, so the next region's pool decode, inputs and
+            # remap map were built after the stop (4-6 s per move) instead of beside the running segment.
+            frames = [self.state['frames'][-1]]
         if not frames:
             return
         # the ready member the policy is most likely to choose: longest predicted dwell
@@ -1313,8 +1404,9 @@ class Controller:
             'move', member_name=target, begin=begin, checkpoint_in=str(seg / 'boundary.pkl'),
             operator=str(self.operator_path(source, target)), source_grid=self.state['members'][source]['grid'],
             prelaunch=True)
-        self.prelaunched = dict(proc=proc, seg=pseg, control=control, record=record, target=target)
-        self.event('prelaunch', target=target, segment=record['index'])
+        self.prelaunched = dict(proc=proc, seg=pseg, control=control, record=record, target=target,
+                                resident=bool(record.get('resident')))
+        self.event('prelaunch', target=target, segment=record['index'], resident=bool(record.get('resident')))
 
     def stop_child(self, proc):
         """End one of this controller's own children with its whole process tree.
@@ -1329,7 +1421,17 @@ class Controller:
         if self.prelaunched is None:
             return
         proc = self.prelaunched['proc']
-        if proc.poll() is None:
+        if self.prelaunched.get('resident'):
+            # The running forecast process itself: only its launch record goes (it prepares nothing for it then).
+            record = Path(self.current_seg) / 'control' / RESIDENT_NEXT if self.current_seg else None
+            if record is not None and record.is_file():
+                try:
+                    named = json.loads(record.read_text()).get('member')
+                except ValueError:
+                    named = None
+                if named == self.prelaunched['target']:
+                    record.unlink()
+        elif proc.poll() is None:
             self.stop_child(proc)
         seg = self.prelaunched['seg']
         self.event('prelaunch-dropped', target=self.prelaunched['target'], why=why)
@@ -1372,6 +1474,18 @@ class Controller:
                     self.on_frame(float(row['model_seconds']), row['history'], control)
             seen = len(rows)
             started = getattr(proc, 'hex_started', None)
+            closed = seg / RESIDENT_CLOSED
+            if proc.poll() is None and closed.is_file():
+                # A resident process closed this segment and continues the next one (moving_resident_v842).
+                rows = progress.read_text().splitlines() if progress.is_file() else []
+                for line in rows[seen:]:
+                    row = json.loads(line)
+                    if 'history' in row and 'model_seconds' in row:
+                        self.on_frame(float(row['model_seconds']), row['history'], control)
+                wall = json.loads(closed.read_text()).get('segment_wall_seconds')
+                if wall is not None:
+                    (seg / 'forecast-process-wall.txt').write_text(f'{float(wall):.2f}\n')
+                return 0
             if proc.poll() is None and started is not None \
                     and time.monotonic() - started > self.a.segment_timeout:
                 self.event('segment-timeout', segment=str(seg), seconds=time.monotonic() - started)
@@ -1548,13 +1662,17 @@ class Controller:
                 adopted = None
             else:
                 proc, seg, control, record = self.launch(kind)
+            if record.get('resident'):
+                # Timed from the move, not from the first segment's launch (the segment timeout reads this).
+                proc.hex_started = time.monotonic()
+            self.current_proc, self.current_seg = proc, seg
             rc = self.monitor(proc, seg, control)
             record.update(rc=rc, ended_wall=time.time(), wall_seconds=time.time() - record['launched_wall'],
                           **self.segment_receipt(seg))
             write_result(seg, record)
             stopped = (record.get('control') or {}).get('stopped_on_request')
             boundary = seg / 'boundary.pkl'
-            if rc == 0 and boundary.is_file():
+            if rc == 0 and carrier_sealed(boundary):
                 retries = 0
                 previous_in = self.state['boundary']
                 end = float(json.loads(boundary.with_suffix('.pkl.json').read_text())['time_seconds'])

@@ -550,8 +550,20 @@ class PhysicsStreams(NativePoolStreams):
                     if 'output' in s.options['type'].split(';') and
                     self.stream_fields(s) and
                     self.alarms.due(name, when)]
+        from ..forecast_start import radar_selected
+        selected = radar_selected(selected, self.alarms, when)
+        if any(s.name == 'radar' for s in selected):
+            from ..forecast_start import radar_slot
+            if not radar_slot(self.output):
+                selected = [s for s in selected if s.name != 'radar']
         if not selected:
             return False
+        from ..forecast_start import radar_minutes, radar_clock
+        minutes = radar_minutes(self.output)
+        if minutes:
+            radar_clock(self.output, step, dt,
+                self.start.strftime('%Y-%m-%d_%H:%M:%S'), minutes,
+                history=any(s.name == 'output' for s in selected))
         waiting = perf_counter()
         slot = self._free_slot()
         self._host_storage = self._host_sets[slot]
@@ -564,17 +576,29 @@ class PhysicsStreams(NativePoolStreams):
         # WRITER_THREAD_CAPTURE (its _assemble_captured then does that work).
         asynchronous = not held and (self.WRITER_THREAD_CAPTURE or
                                      type(self)._snapshot is PhysicsStreams._snapshot)
-        if asynchronous:
-            snapshot, ready = self._capture(selected)
-        else:
-            snapshot, ready = self._snapshot(selected), None
+        try:
+            if asynchronous:
+                snapshot, ready = self._capture(selected)
+            else:
+                snapshot, ready = self._snapshot(selected), None
+        except Exception as error:
+            if all(s.name == 'radar' for s in selected):
+                from ..forecast_start import radar_error
+                radar_error(self.output, error)
+                return False
+            raise
         # Variables outside the Registry for the history stream (the suite route's chemistry), captured now.
         extras = (None if getattr(self, 'extra_history', None) is None
                   or not any(s.name in ('output', 'history') for s in selected) else self.extra_history())
         if self.diagnostics is not None:
             # Reset only after immutable capture, while this event's stream
             # alarms still ring (mpas_atm_core.F:877-910).
-            self.diagnostics.after_snapshot()
+            if any(s.name != 'radar' for s in selected):
+                self.diagnostics.after_snapshot()
+            else:
+                # Radar reads instantaneous columns. Resetting the history's
+                # convective accumulators here would change its next frame.
+                self.diagnostics._end_event()
         jobs = []
         for stream in selected:
             target = (self.output / stream.filename(when, self.initial)).resolve()
@@ -623,7 +647,13 @@ class PhysicsStreams(NativePoolStreams):
         """Each new file's global attributes, its id drawn from the native sequence in frame order."""
         for stream, target, record in jobs:
             if target not in self._file_attributes:
-                self._file_attributes[target] = dict(self.attrs, file_id=self.file_ids.next(),
+                ids = self.file_ids
+                if stream.name == 'radar':
+                    # Scratch must not advance the native history's file-id RNG.
+                    if not hasattr(self, 'radar_file_ids'):
+                        self.radar_file_ids = NativeFileIds(seed=self.file_ids.seed)
+                    ids = self.radar_file_ids
+                self._file_attributes[target] = dict(self.attrs, file_id=ids.next(),
                                                      **self.contract.stream_file_attributes(stream))
                 if stream.name in ('output', 'history') and getattr(self, 'extra_history_attrs', None):
                     self._file_attributes[target].update(self.extra_history_attrs)
@@ -646,6 +676,12 @@ class PhysicsStreams(NativePoolStreams):
                     # rejected frame must never reach staging or the writer.
                     validate()
                 return function(*arguments)
+            except Exception as error:
+                if all(stream.name == 'radar' for stream, _, _ in jobs):
+                    from ..forecast_start import radar_error
+                    radar_error(self.output, error)
+                    return []
+                raise
             finally:
                 self._publish_after.pop(step, None)   # a rank that encodes nothing never publishes
                 done.set()
@@ -725,6 +761,10 @@ class PhysicsStreams(NativePoolStreams):
         if previous is not None:
             previous.wait()   # frames are published in frame order (ENCODE_WORKERS)
         for stream, target, record in jobs:
+            if stream.name == 'radar' and record == 0:
+                from ..forecast_start import radar_ready
+                radar_ready(self.output, target, step)
+                continue
             if stream.name != 'output' or record != 0 or not _one_frame_per_file(stream):
                 continue
             mark_closed_frame_durable(target)

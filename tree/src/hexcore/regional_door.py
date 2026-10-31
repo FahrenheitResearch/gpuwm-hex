@@ -690,6 +690,8 @@ def _stage_init_state(args, value, status) -> dict[str, Any]:
             argv += ["--grid", generated["cull"]["grid"]]
             if args.geog is not None:
                 argv += ["--geog", str(Path(args.geog).expanduser().absolute())]
+            if getattr(args, "deep_soil_temperature", None):
+                argv += ["--deep-soil-temperature", args.deep_soil_temperature]
     from .init_sources import cold_soil_init_flags, surface_input_init_flags
     _, source = resolve_regional_source(value["source"]["id"])
     if source.get("cold_soil") or source.get("surface_input"):
@@ -839,6 +841,7 @@ def _stage_forecast(args, value, status) -> dict[str, Any]:
     oro = _orographic_statistics(args, value, status)
     if oro is not None:
         argv += ["--orographic-statistics", str(oro)]
+    argv += samehost_argv(args)
     from gpuwm.output_formats import argument_values
     argv += argument_values(args)
     # The caller's forecast flags (--forecast-arg) come last, so a --physics-suite given here wins.  `--dt row` stays
@@ -855,6 +858,41 @@ def _stage_forecast(args, value, status) -> dict[str, Any]:
             _refuse_namelist_step(named["namelist"], float(generated["parent"]["dt_seconds"]))
         argv += extra
     return {"returncode": _cli(argv, status)}
+
+
+#: The forecast door's same-host flags a region door forwards as given (hexcore.forecast_door: one rank per card,
+#: METIS layouts built from the cull's grid when neither --samehost-layouts nor --samehost-part is given).
+SAMEHOST_FLAGS = ("samehost_devices", "samehost_layouts", "samehost_part", "samehost_ranks")
+
+
+def samehost_argv(args: argparse.Namespace) -> list[str]:
+    """The forecast door's multi-card flags from a region door's own arguments.
+
+    THE BREAKAGE THIS PREVENTS (hrrrv5 anywhere, 2026-10-31): ``regional`` had no card flags, so a region over
+    one card's memory (about 450,000 hrrrv5 cells on a 96 GB card, a square about 1,800 km on a side) could not
+    run at all; the forecast door's same-host ranks were reachable only by chaining its stages by hand.
+    """
+
+    argv: list[str] = []
+    for key in SAMEHOST_FLAGS:
+        value = getattr(args, key, None)
+        if value is not None:
+            argv += ["--" + key.replace("_", "-"), str(value)]
+    return argv
+
+
+def add_samehost_arguments(parser: argparse.ArgumentParser) -> None:
+    """The multi-card flags both region doors take and pass to the forecast door."""
+
+    cards = parser.add_argument_group(
+        "more than one card", "one rank per card on this host; the region's METIS layouts are built from its own "
+        "grid when neither --samehost-layouts nor --samehost-part is given")
+    cards.add_argument("--samehost-devices", default=None, metavar="D0,D1,...",
+                       help="cards the forecast runs on, one rank each (e.g. 0,1,2,3)")
+    cards.add_argument("--samehost-layouts", type=Path, default=None, help="prebuilt N-rank K=3 layouts")
+    cards.add_argument("--samehost-part", type=Path, default=None, help="the partition file those layouts carry")
+    cards.add_argument("--samehost-ranks", choices=("auto", "processes", "threads"), default=None,
+                       help="each card's rank as its own process (auto: the default on Linux) or as threads")
 
 
 def _refuse_namelist_step(namelist: str, row_dt_seconds: float) -> None:
@@ -879,6 +917,31 @@ def _refuse_namelist_step(namelist: str, row_dt_seconds: float) -> None:
             "would measure an unminted class and refuse. Drop config_dt from the namelist, or set it to the row step.")
 
 
+def _products_case(value) -> str:
+    """The products case both the live first look and the full pass draw into: the cull's row and the start."""
+    from .products_door import case_token
+
+    cull = _generated(value)["cull"]
+    return case_token(None, Path(cull["grid"]), value["start_time"], mesh_name=cull["row"])
+
+
+def _first_look(args, value):
+    """Every frame drawn the moment the forecast closes it, beside the forecast (first_look.py).
+
+    THE BREAKAGE THIS PREVENTS (the WOOF hex region door, 2026-10-30): ``gpuwm-hex regional`` (a region from a kept
+    hex run or a limited-area source) rendered its maps only in the products stage after the forecast, so a region run
+    showed no map until its whole forecast had run, while the zoom globe and the country door rendered every hour as it
+    closed. The live draws take the full pass's tree, case and labels, without point soundings (the full pass draws
+    those and the whole-run maps), and the full pass then draws only what no live draw took."""
+    from .first_look import FirstLook
+    from .products_door import label_argv
+
+    forecast = Path(value["paths"]["forecast"])
+    return FirstLook(forecast, grid=_generated(value)["cull"]["grid"], init=value["paths"]["init"],
+                     start_time=value["start_time"], out=forecast / "products", case=_products_case(value),
+                     extra=label_argv(args), log=Path(value["paths"]["work"]) / "first-look.log")
+
+
 def _stage_products(args, value, status) -> dict[str, Any]:
     from .forecast_door import (history_files, products_command_for_this_install,
                                 release_device_memory)
@@ -890,6 +953,9 @@ def _stage_products(args, value, status) -> dict[str, Any]:
     from .products_door import label_argv
 
     command = products_command_for_this_install(request, history_files(forecast), label_argv(args))
+    command += ["--case", _products_case(value)]
+    if value.get("_live_receipt"):  # the hours drawn while the forecast ran keep their maps
+        command += ["--live-frames", str(value["_live_receipt"])]
     released = release_device_memory()
     if released is not None:
         status.note(f"device memory before products: {released}")
@@ -964,6 +1030,9 @@ def run_regional(args: argparse.Namespace) -> int:
             status.stage(name)
             timing = receipt["stages"][name] = {"started_utc": utc_now(), "outcome": "running"}
             write_receipt()
+            look = _first_look(args, value) if name == "forecast" and "products" in stages else None
+            if look is not None:
+                look.start()
             try:
                 result = _RUNNERS[name](args, value, status)
                 timing.update(result)
@@ -972,6 +1041,9 @@ def run_regional(args: argparse.Namespace) -> int:
                 timing.update(outcome="failed", error=f"{type(error).__name__}: {error}")
                 raise
             finally:
+                if look is not None:
+                    timing["first_look"] = look.finish()
+                    value["_live_receipt"] = str(look.receipt()) if look.receipt() is not None else None
                 timing.update(seconds=round(time.monotonic() - stage_started, 2), finished_utc=utc_now())
                 write_receipt()
             if name == "mesh" and result["returncode"] == 0:
@@ -1062,6 +1134,10 @@ def add_regional_parser(commands: argparse._SubParsersAction) -> None:
     parser.add_argument("--grib-dir", type=Path, default=None,
                         help="already-fetched source files (default: <work-dir>/grib; missing hours are fetched)")
     parser.add_argument("--geog", type=Path, default=None, help="WPS_GEOG root for the static")
+    parser.add_argument("--deep-soil-temperature", choices=("era5", "islscp-i"), default=None,
+                        help="a producer suite (hrrrv5): the deep-soil temperature its static is built with "
+                             "(default era5; islscp-i is NOAA's soiltemp_1deg, licence unclear)")
+    add_samehost_arguments(parser)
     parser.add_argument("--workers", type=int, default=4, help="intermediate decoder workers")
     parser.add_argument("--gpuwm-checkout", type=Path, default=None,
                         help="gpuwm tree whose seam files the forecast runs (default: the installed engine)")

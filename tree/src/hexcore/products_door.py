@@ -312,6 +312,20 @@ def add_label_arguments(parser) -> None:
              "'WOOF Hex · Global 120 km · Init GFS 22 Oct 2026 00Z'); forwarded "
              "to the product stage. Default: composed from the run's own records "
              "(shape, finest spacing, init source and time)")
+    add_view_label_argument(parser, forwarded=True)
+
+
+def add_view_label_argument(parser, *, forwarded: bool = False) -> None:
+    """``--view-label VIEW=TEXT``: a view's map headline in a caller's words."""
+
+    parser.add_argument(
+        "--view-label", action="append", default=None, metavar="VIEW=TEXT",
+        help="the headline of one view's maps (repeatable), e.g. 'refined-core=Core zoom 8-38 km'; "
+             "'{spacing}' in TEXT becomes the spacing of the mesh cells the picture samples, "
+             "'·' and '→' are drawn as ' ' and '-', at most 32 characters"
+             + ("; forwarded to the product stage" if forwarded else "")
+             + ". Default: the view's name (Core zoom, Around the core, Whole globe, Region, "
+               "Moving core, or the view's own name) and the spacing the picture samples")
 
 
 def label_argv(args) -> list[str]:
@@ -322,7 +336,91 @@ def label_argv(args) -> list[str]:
         argv += ["--model-label", str(args.model_label)]
     if getattr(args, "brand", None):
         argv += ["--brand", str(args.brand)]
+    for item in getattr(args, "view_label", None) or ():
+        argv += ["--view-label", str(item)]
     return argv
+
+
+# ---------------------------------------------------------------------------
+# each view's headline name
+# ---------------------------------------------------------------------------
+#: What each view is called in its pictures' headline: the words the WOOF
+#: site's grid menu uses for it (the site grid menu names, gridName and
+#: messages productBrowser.grids), so the picture and the menu say one thing.
+#: Any other view (north-america, europe, a --region NAME) is called by its
+#: own name in title case, as the menu calls it (viewTitle).
+VIEW_TITLES = {
+    "refined-core": "Core zoom",
+    "refined-context": "Around the core",
+    "event": "Around the point",
+    "region": "Region",
+    "global": "Whole globe",
+}
+#: A storm-following run's core, which moves with what it follows.
+MOVING_CORE_TITLE = "Moving core"
+#: The widest text the converter puts in place of ``{spacing}`` ("12.5-128 km"):
+#: a view's name is cut to its whole words that leave this much room.
+SPACING_TEXT_ROOM = len("12.5-128 km")
+
+
+def view_title(view: str, *, moving: bool = False) -> str:
+    """The headline a view's pictures carry, for the converter to finish:
+    ``Core zoom {spacing}`` -> ``Core zoom 8-38 km``, where the converter
+    reads the spacing off the mesh cells that picture samples, finest first
+    (rw_mpas_convert --grid-label).
+
+    THE BREAKAGE THIS PREVENTS (2026-10-30): every view of a zoom globe
+    was headlined by the WHOLE mesh's range and the picture grid's spacing,
+    so the site's ``Core zoom · 8 → 38 km`` opened a picture titled ``(hex
+    133-6.9 km) ... Δx 8.063 km`` (run_713c9e1913164e02) and ``Around the core
+    · 6 → 96 km`` one saying ``Δx 6.08 km`` (run_c108e049fecb4bd0)."""
+
+    if moving and view == "refined-core":
+        name = MOVING_CORE_TITLE
+    else:
+        name = VIEW_TITLES.get(view) or " ".join(
+            word[:1].upper() + word[1:] for word in re.split(r"[-_\s]+", view) if word)
+    words = name.split()
+    token = render_door.GRID_LABEL_SPACING_TOKEN
+    while words and len(" ".join(words)) + 1 + SPACING_TEXT_ROOM > render_door.GRID_LABEL_MAX_CHARS:
+        words.pop()
+    return f"{' '.join(words)} {token}" if words else token
+
+
+def caller_view_label(text: str) -> str:
+    """A caller's headline for a view (``--view-label VIEW=TEXT``) as the
+    picture draws it: the menu's separators made plain (``Core zoom · 8 → 38
+    km`` -> ``Core zoom 8-38 km``: the map font draws ASCII), whitespace made
+    one space, and held to the headline's limits.  Refused by name rather
+    than dropped: rw_wrfbatch draws no label longer than 32 characters or
+    holding '|', and the converter refuses one."""
+
+    label = " ".join(str(text).replace("\u00b7", " ").split())
+    label = re.sub(r"\s*\u2192\s*", "-", label)
+    if not label:
+        raise ProductDoorError("--view-label needs text after VIEW=")
+    if (len(label.replace(render_door.GRID_LABEL_SPACING_TOKEN, "0-000 km"))
+            > render_door.GRID_LABEL_MAX_CHARS):
+        raise ProductDoorError(
+            f"--view-label {label!r} is longer than {render_door.GRID_LABEL_MAX_CHARS} characters, "
+            f"the map headline's limit")
+    if any(ord(ch) < 32 or ch == "|" for ch in label):
+        raise ProductDoorError(
+            f"--view-label {label!r} holds a control character or '|', the map metadata row's separator")
+    return label
+
+
+def view_labels(items) -> dict[str, str]:
+    """``--view-label VIEW=TEXT`` items as ``{view: headline}``; a view named
+    twice keeps its last text, as a repeated flag does."""
+
+    labels: dict[str, str] = {}
+    for item in items or ():
+        view, sep, text = str(item).partition("=")
+        if not sep:
+            raise ProductDoorError(f"--view-label {item!r} is not VIEW=TEXT (refined-core=Core zoom 8-38 km)")
+        labels[render_door.checked_view(view.strip())] = caller_view_label(text)
+    return labels
 
 
 def points_take_brand(points_exe: Path) -> bool:
@@ -966,6 +1064,123 @@ def parse_point_text(text: str) -> list[tuple[str, float, float]]:
     return out
 
 
+#: A mesh whose 95th-percentile cell spacing is more than this many times its 5th is variable-resolution (a zoom
+#: globe or any refined mesh); a quasi-uniform mesh is within about 1.5.
+VARIABLE_RESOLUTION_SPACING_RATIO = 2.0
+
+
+def mesh_cell_spacing_km(mesh) -> "list[float] | None":
+    """Each cell's spacing (km) from its area as a regular hexagon, or None when the grid cannot be read."""
+
+    if mesh is None:
+        return None
+    try:
+        from netCDF4 import Dataset
+
+        from .netcdf_lock import NETCDF
+        with NETCDF, Dataset(mesh) as grid:
+            area = grid["areaCell"][:]
+            radius = float(getattr(grid, "sphere_radius", 1.0) or 1.0)
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return None
+    scale = 6371.229 / radius if radius < 1000.0 else 0.001  # a unit sphere's areas, else metres
+    return [math.sqrt(2.0 * float(a) / math.sqrt(3.0)) * scale for a in area]
+
+
+def global_window(mesh, size: str) -> tuple[str, str | None]:
+    """The global view's window and, when it is not the mesh's own, why.
+
+    ``global`` (the whole sphere at the mesh's median spacing) is right for a quasi-uniform mesh: the globe is its
+    only view and the median is its spacing. A variable-resolution mesh's median is set by its refined cells, so its
+    whole sphere would be converted at the refined spacing to fill one picture. THE BREAKAGE THIS PREVENTS (an
+    Arizona 96 -> 3 km zoom globe, 800 km core, 36 h, 8 x RTX PRO 6000, gpuwm-hex 0.4.10, 2026-10-30): the median
+    is the refined cells' few km, so the converter laid the sphere down at its 9-million-point ceiling, a 4240 x 2121
+    grid at 9.4 km (11 GB of converted frame, 117 s of conversion a frame), drawn into an 1800 x 1000 picture of mostly
+    48-96 km cells, and the globe was still converting 38 min after the forecast ended. Such a mesh's globe is drawn on the lat-lon grid of its picture's pixels (0.2 degrees
+    across 1800 pixels); its refined region's own detail is the refined-core and refined-context views. Never finer
+    than the mesh: a mesh whose median is coarser than a pixel keeps ``global``."""
+
+    try:
+        width = int(str(size).lower().split("x", 1)[0])
+    except ValueError:
+        return "global", None
+    if width < 2 or width % 2:
+        return "global", None
+    spacing = mesh_cell_spacing_km(mesh)
+    if not spacing:
+        return "global", None
+    ordered = sorted(spacing)
+    low, high = ordered[len(ordered) // 20], ordered[(19 * len(ordered)) // 20]
+    if low <= 0.0 or high / low < VARIABLE_RESOLUTION_SPACING_RATIO:
+        return "global", None
+    pixel_degrees = 360.0 / width
+    median_degrees = ordered[len(ordered) // 2] / (math.pi * 6370.0 / 180.0)
+    if median_degrees >= pixel_degrees:
+        return "global", None
+    east = 180.0 - pixel_degrees
+    window = f"latlon:-90,90,-180,{east:.6g},{pixel_degrees:.6g}"
+    why = (f"variable-resolution mesh (cell spacing {low:.1f}-{high:.1f} km, median {ordered[len(ordered) // 2]:.1f} km):"
+           f" the globe drawn at its {width}-pixel picture's {pixel_degrees:.3g} degrees")
+    return window, why
+
+
+#: Below this |latitude| the converter frames a region on lat-lon, not Lambert (rw-mpas
+#: MESH_FOCUS_MIN_LAMBERT_LATITUDE_DEG); the context view there keeps the converter's own region window.
+REGION_MIN_LAMBERT_LATITUDE = 10.0
+
+
+def context_window(lat: float, lon: float, extent_km: float, size: str, core_dx_m: float | None) -> tuple[str, str | None]:
+    """The refined-context view's window and, when it is not the converter's own region window, why.
+
+    ``region:`` takes its dx from the median of the mesh cells inside it, which around a refined core is the core's
+    own spacing, so the converter lays the whole context box down at the core's spacing (or at its 2000-points-a-side
+    ceiling). THE BREAKAGE THIS PREVENTS (an Arizona 96 -> 3 km zoom globe, 800 km core, 36 h, 8 x RTX PRO 6000,
+    gpuwm-hex 0.4.10, 2026-10-30): the 6,850 x 4,795 km context box was a 2000 x 1401 grid at 3.4 km (3.3 GB of
+    converted frame, 40 s of conversion a frame) drawn into a 1400 x 1000 picture, 4.9 km a pixel, of a box that is
+    the 6-48 km rings outside its middle. The same box is converted on the Lambert grid the converter would lay down
+    with the picture's pixel as its dx (same centre, true latitudes and stand_lon), which is all one picture shows;
+    the core's own detail is the refined-core view. Never finer than the core's window, and the converter's own
+    window near the equator, where it frames regions on lat-lon."""
+
+    region = f"region:{lat:.3f},{lon:.3f},{extent_km:.0f},{0.7 * extent_km:.0f}"
+    try:
+        width = int(str(size).lower().split("x", 1)[0])
+    except ValueError:
+        return region, None
+    clat, clon = round(lat, 3), round(lon, 3)
+    if width < 2 or abs(clat) < REGION_MIN_LAMBERT_LATITUDE:
+        return region, None
+    width_m, height_m = round(extent_km) * 1000.0, round(0.7 * extent_km) * 1000.0
+    dx = width_m / (width - 1)
+    if core_dx_m is not None and dx <= core_dx_m:
+        return region, None
+    nx = math.ceil(width_m / dx - 1e-9) + 1
+    ny = math.ceil(height_m / dx - 1e-9) + 1
+    hemi = 1.0 if clat >= 0.0 else -1.0
+    half = min(5.0, 0.5 * abs(clat))
+    truelat1, truelat2 = hemi * (abs(clat) - half), hemi * min(abs(clat) + half, 89.0)
+    window = f"lambert:{clat!r},{clon!r},{dx!r},{nx},{ny},{truelat1!r},{truelat2!r},{clon!r}"
+    why = (f"the {extent_km:.0f} x {0.7 * extent_km:.0f} km context box on {nx} x {ny} points at {dx / 1000.0:.2f} km, "
+           f"the pixel of its {size} picture")
+    return window, why
+
+
+def live_view_manifest(out_case: Path, view: str) -> dict | None:
+    """The newest render receipt a view of this tree holds whose converter window is known, or None."""
+
+    newest = None
+    for path in Path(out_case, view).glob("render-manifest*.json"):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            stamp = path.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict) and ((doc.get("convert") or {}).get("window_spec")):
+            if newest is None or stamp > newest[0]:
+                newest = (stamp, doc)
+    return newest[1] if newest else None
+
+
 def window_centre(manifest: dict) -> tuple[float, float, float] | None:
     """(lat, lon, half-extent km) of a derived window, from the converter's
     own window spec as the render manifest recorded it (Lambert:
@@ -1002,7 +1217,11 @@ def window_centre(manifest: dict) -> tuple[float, float, float] | None:
 FRAME_MEMORY_FACTOR = 8.0
 #: The share of the host's available memory frames in flight may plan on.
 FRAME_MEMORY_SHARE = 0.5
-MAX_FRAME_JOBS = 8
+#: The converter's own ceiling (``rw_mpas_convert --jobs`` takes 1-64). Memory and cores bound it before that.
+#: THE BREAKAGE THIS PREVENTS (an Arizona zoom globe, 8 x RTX PRO 6000, 192 vCPU, 2 TB, gpuwm-hex 0.4.10,
+#: 2026-10-30): a fixed ceiling of 8 held each view to 8 frames at a time on a host whose memory and cores carry
+#: 28, so the whole-run maps' 37 conversions a view ran in five rounds after the forecast while most cores waited.
+MAX_FRAME_JOBS = 64
 
 
 def available_memory_bytes() -> int | None:
@@ -1120,7 +1339,7 @@ def _merge_views(parts: list[tuple[int, dict | None, str | None]]) -> tuple[int,
 def _render_view(*, histories, mesh, init, start, out_case, scratch_root, view,
                  window, products, size, model_label, remap, exes, basemap_dir,
                  keep_scratch, frame_jobs=1, source_label=None, part="",
-                 tiles="none") -> tuple[int, dict | None, str | None]:
+                 tiles="none", grid_label=None, frame_cache=None) -> tuple[int, dict | None, str | None]:
     """One view through the render door in standard-set mode."""
 
     args = argparse.Namespace(
@@ -1128,12 +1347,12 @@ def _render_view(*, histories, mesh, init, start, out_case, scratch_root, view,
         init=str(init) if init else None, compose=None, compose_base_only=False,
         out=str(out_case), products=",".join(products), frames="all",
         window=window, view=view, model_label=model_label, source_label=source_label,
-        field_set="full",
+        grid_label=grid_label, field_set="full",
         label=None, simulation_start=start, size=size, heavy=False,
         nc_format="cdf5", scratch=str(Path(scratch_root) / f"render-{view}{part}"),
         keep_scratch=keep_scratch, basemap_dir=basemap_dir,
         convert_exe=exes[0], renderer_exe=exes[1], remap=remap,
-        standard_set=True, series=True, frame_jobs=frame_jobs, tiles=tiles)
+        standard_set=True, series=True, frame_jobs=frame_jobs, tiles=tiles, frame_cache=frame_cache)
     print(f"PRODUCTS view={view} window={window}", flush=True)
     try:
         rc = render_door.run_render(args)
@@ -1372,8 +1591,8 @@ def write_columns_index(out_case: Path, views: list[dict]) -> Path | None:
     for rank, row in enumerate(rows):
         row["rank"] = rank
     path = Path(out_case) / COLUMNS_INDEX_NAME
-    path.write_text(json.dumps({"schema": COLUMNS_INDEX_SCHEMA, "order": "finest first", "views": rows},
-                               indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    render_door.atomic_write_text(path, json.dumps({"schema": COLUMNS_INDEX_SCHEMA, "order": "finest first",
+                                                    "views": rows}, indent=2, sort_keys=True) + "\n")
     return path
 
 
@@ -1408,7 +1627,7 @@ def write_index(out_case: Path, case: str, start: str, first: dict | None = None
             .replace("__FIRST__", json.dumps(opening).replace("</", "<\\/"))
             .replace("__DATA__", json.dumps(data).replace("</", "<\\/")))
     path = Path(out_case) / "index.html"
-    path.write_text(page, encoding="utf-8")
+    render_door.atomic_write_text(path, page)
     return path
 
 
@@ -1479,6 +1698,10 @@ def run_products(args) -> int:
     args.out = str(out_root)
     out_case = Path(args.out) / case
     scratch_root = Path(args.scratch) if args.scratch else Path(args.out).parent / (Path(args.out).name + ".products-scratch")
+    # Frames converted once a view and reused by later passes of this run (render_door.convert_frames_cached): the
+    # live draws fill it, the full pass reads it and removes it.
+    # ("scratch" in its name: hosts that file a run's frames, such as the WOOF worker, skip such folders.)
+    frame_cache = Path(args.out).parent / (Path(args.out).name + ".frame-cache-scratch") / case
     render_door.refuse_scratch_inside_out(scratch_root, Path(args.out))
     out_case.mkdir(parents=True, exist_ok=True)
     convert_exe = render_door.resolve_convert_exe(args.convert_exe)
@@ -1499,14 +1722,21 @@ def run_products(args) -> int:
     opening_scan.start()
 
     views: list[dict] = []
+    # Each view's map headline: the caller's words where given, else the view's
+    # own name and the spacing its pictures sample (view_title).
+    captions = view_labels(getattr(args, "view_label", None))
+    moving = moving_controller(forecast_dir) is not None
 
-    def view(name, window, products, size):
+    def view(name, window, products, size, tiles=None):
         view_started = time.monotonic()
+        if tiles is None:
+            tiles = getattr(args, "tiles", "auto") if window != "global" else "none"
         common = dict(mesh=mesh, init=init, start=start, out_case=out_case, scratch_root=scratch_root, view=name,
+                      grid_label=captions.get(name) or view_title(name, moving=moving),
                       window=window, size=size, model_label=args.model_label, remap=args.remap, exes=exes,
                       basemap_dir=args.basemap_dir, keep_scratch=args.keep_scratch, frame_jobs=frame_jobs,
-                      source_label=getattr(args, "source_label", None),
-                      tiles=getattr(args, "tiles", "auto") if window != "global" else "none")
+                      source_label=getattr(args, "source_label", None), tiles=tiles,
+                      frame_cache=frame_cache)
         if live is None:
             rc, manifest, refusal = _render_view(
                 histories=histories, products=tuple(products) + chemistry_products, **common)
@@ -1609,12 +1839,25 @@ def run_products(args) -> int:
         print("PRODUCTS limited-area run: the mesh view frames the whole domain; "
               "no global or context view", flush=True)
     if not args.no_global and not limited_area:
-        pending.append(pool.submit(view, "global", "global", global_products, args.global_size))
+        globe, globe_why = global_window(mesh, args.global_size)
+        if globe_why:
+            print(f"PRODUCTS global window {globe}: {globe_why}", flush=True)
+        pending.append(pool.submit(view, "global", globe, global_products, args.global_size, "none"))
     refined_centre = None
     mesh_uniform = None
     if not args.no_mesh_view:
-        rc, manifest, refusal = pool.submit(
-            view, "refined-core", "mesh", regional_products, args.regional_size).result()
+        core_future = pool.submit(view, "refined-core", "mesh", regional_products, args.regional_size)
+        # The context view is placed from the core's window. When the live draws of this run already rendered the core
+        # into this tree, its window is on disk, so the context starts beside the core's whole-run maps instead of
+        # after them. THE BREAKAGE THIS PREVENTS (an Arizona zoom globe, 8 x RTX PRO 6000, gpuwm-hex 0.4.10,
+        # 2026-10-30): after the forecast the context view, the slowest, waited for the core view's 37 conversions
+        # and its renders before its own first conversion began.
+        drawn_core = live_view_manifest(out_case, "refined-core") if live is not None else None
+        if drawn_core is not None:
+            pending.append(core_future)
+            rc, manifest, refusal = 0, drawn_core, None
+        else:
+            rc, manifest, refusal = core_future.result()
         if refusal is not None and "no refined region" in refusal:
             mesh_uniform = True
             # A uniform mesh has no refined region: the converter refuses
@@ -1632,12 +1875,28 @@ def run_products(args) -> int:
             if refined_centre is not None and not limited_area:
                 lat, lon, half = refined_centre
                 extent = max(1500.0, 8.0 * half)
-                regions["refined-context"] = f"region:{lat:.3f},{lon:.3f},{extent:.0f},{0.7 * extent:.0f}"
+                core_spec = (manifest.get("convert") or {}).get("window_spec") if manifest else None
+                core_dx = core_spec.get("dx_metres") if isinstance(core_spec, dict) else None
+                regions["refined-context"], context_why = context_window(
+                    lat, lon, extent, args.regional_size, float(core_dx) if core_dx else None)
+                if context_why:
+                    print(f"PRODUCTS context window {regions['refined-context']}: {context_why}", flush=True)
     else:
         regions = {}
     regions.update(extra_regions)
     for name, spec in regions.items():
-        pending.append(pool.submit(view, name, spec, regional_products, args.regional_size))
+        # The context view around a refined core is one picture, never tiles. THE BREAKAGE THIS PREVENTS (an
+        # Arizona 96 -> 3 km zoom globe, 800 km core, 36 h, 8 x RTX PRO 6000, gpuwm-hex 0.4.10, 2026-10-30): the
+        # 6,850 x 4,795 km context window takes its dx from the median of the cells inside it, which is the core's
+        # 3 km, so its 2000 x 1401 grid was "wider than its 1400 x 1000 picture" and --tiles auto cut it into six
+        # more passes: 2,996 maps where 0.4.9 rendered 477, still drawing 31 min after the core view was done. Outside
+        # the core that window holds the 6-48 km rings, which one 1400-pixel picture (4.9 km a pixel) already
+        # shows; the core's own 3 km detail is the refined-core view. The WOOF worker files <view>/<product>/<day>/
+        # and reads a tile segment as the day. Tiles stay on a view whose mesh is that fine throughout: the mesh
+        # view of a limited-area or uniform mesh (RRFS conus3km) and a named --region; --tiles regional still
+        # cuts every regional view, this one included.
+        tiles = "none" if name == "refined-context" and getattr(args, "tiles", "auto") == "auto" else None
+        pending.append(pool.submit(view, name, spec, regional_products, args.regional_size, tiles))
 
     def draw_points() -> dict:
         points_started = time.monotonic()
@@ -1750,6 +2009,12 @@ def run_products(args) -> int:
     views.sort(key=lambda v: order.index(v["view"]) if v["view"] in order else len(order))
     if not args.keep_scratch:
         shutil.rmtree(scratch_root, ignore_errors=True)
+        if not getattr(args, "keep_frame_cache", False):
+            shutil.rmtree(frame_cache, ignore_errors=True)
+            try:
+                frame_cache.parent.rmdir()  # the run's cache folder, once no case is left in it
+            except OSError:
+                pass
 
     rendered = sum((v.get("counts") or {}).get("rendered", 0) for v in views)
     opening_scan.join()
@@ -1794,7 +2059,7 @@ def run_products(args) -> int:
     if columns_index is not None:
         print(f"PRODUCTS columns index {columns_index}", flush=True)
     path = out_case / "products-manifest.json"
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    render_door.atomic_write_text(path, json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n")
     if index is not None:
         print(f"PRODUCTS index {index}", flush=True)
     soundings = len((points_record or {}).get("placed") or [])
@@ -1850,6 +2115,7 @@ def add_products_arguments(parser) -> None:
                         help="source credit printed on each map (1-160 printable ASCII "
                              "characters), e.g. which ensemble member it came from; default: "
                              "Hex forecast where the renderer supports it")
+    add_view_label_argument(parser)
     parser.add_argument("--global-size", default="1800x1000")
     parser.add_argument("--regional-size", default="1400x1000")
     parser.add_argument("--jobs", type=int, default=3, metavar="N",
@@ -1873,6 +2139,9 @@ def add_products_arguments(parser) -> None:
                              "this pass draws the whole-run maps, the other frames and the points (the doors pass it)")
     parser.add_argument("--scratch", default=None, metavar="DIR")
     parser.add_argument("--keep-scratch", action="store_true")
+    parser.add_argument("--keep-frame-cache", action="store_true",
+                        help="leave this run's converted frames for a later pass to reuse (the live draws pass it; "
+                             "the full pass reuses them and removes them)")
     parser.add_argument("--basemap-dir", default=None, metavar="DIR")
     parser.add_argument("--convert-exe", default=None, metavar="FILE")
     parser.add_argument("--renderer-exe", default=None, metavar="FILE")

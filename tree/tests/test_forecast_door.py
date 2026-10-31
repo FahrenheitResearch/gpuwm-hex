@@ -37,6 +37,26 @@ from hexcore.errors import ConfigurationRefusal
 X1_CELLS = 40_962
 
 
+def test_turbines_do_not_shift_existing_positional_request_arguments():
+    import inspect
+    signature = inspect.signature(door.ForecastRequest)
+    assert signature.parameters['wind_farms'].kind is inspect.Parameter.KEYWORD_ONLY
+    positional = [name for name, parameter in signature.parameters.items()
+                  if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD]
+    assert positional[positional.index('chemistry_config') + 1] == 'input_problems'
+
+
+@pytest.mark.parametrize('selection', [None, 'off', 'uswtdb', '/data/turbines/windturbines.txt'])
+def test_turbine_selection_reaches_the_driver_unchanged(tmp_path, selection):
+    request = door.resolve_request(_namespace(tmp_path, wind_farms=selection), registry=_registry())
+    argv = door.build_driver_argv(request)
+    assert request.wind_farms == selection
+    if selection is None:
+        assert '--wind-farms' not in argv
+    else:
+        assert argv[argv.index('--wind-farms') + 1] == selection
+
+
 @pytest.mark.parametrize('prefix', ['output', 'history', 'custom'])
 def test_native_success_products_use_mpas_frames_and_real_start(tmp_path, monkeypatch, prefix):
     frame = tmp_path / f"{prefix}.2023-03-31_12.00.00.nc"

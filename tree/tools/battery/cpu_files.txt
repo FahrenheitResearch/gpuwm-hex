@@ -1041,6 +1041,8 @@ tests/test_scorer_lease_release.py
 # 0.4.5 folds: CPU tests the folded branches added (stand-ins, no card; checked with GPUWM_HEX_NO_LOCAL_GPU=1).
 tests/test_column_store.py
 tests/test_export_follow.py
+tests/test_export_stack.py
+tests/test_hrrrv5_regions.py
 tests/test_extend_from_last_hour.py
 tests/test_handover_numbers.py
 tests/test_mesh_shape.py
@@ -1321,3 +1323,21 @@ tests/test_lbc_rank_rows.py
 # gpuwm-hex --help lists every door without the engine installed, and an engine door refuses by name
 # (the public CI packaging job installs the wheel --no-deps); host-only, the engine import is blocked.
 tests/test_cli_without_engine.py
+tests/test_moving_resident.py
+# The resident moving step's host members (feat/hex-moving-resident 78111207, gpuwm-hex 0.4.11): pool restore,
+# prep maintenance, table and rate batches, the upload cache's host bookkeeping and the zero-pool transport plan;
+# their device members are tier 3.
+tests/test_moving_kernel_modules.py
+tests/test_moving_pool_restore.py
+tests/test_moving_prep_maintenance.py
+tests/test_moving_rates_batch.py
+tests/test_moving_tables.py
+tests/test_moving_upload_cache.py
+tests/test_zero_pool_transport.py
+# Wind farms on hex globes (labs/windfarm-hex 6eda64bc): turbine inputs, farm assignment and history fields; host-only.
+tests/test_wind_farm.py
+# WOOF radar columns on committed hex states and backpressure on real consumer progress (fix/woof-simradar-hex
+# 6b3ddf7258); host-only.
+tests/test_woof_radar_stream.py
+# hrrrv5 on the 96 -> 3 km zoom globe and GF-Li on the GPU-resident route (fix/hrrrv5-zoomglobe); host-only.
+tests/test_hrrrv5_zoomglobe.py

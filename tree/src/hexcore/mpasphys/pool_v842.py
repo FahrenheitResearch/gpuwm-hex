@@ -293,7 +293,11 @@ class NativePoolHydration:
     # MPAS pool allocation: mpas_pool_routines.F:2110-3143.
     def __init__(self, native: Any, layout: RegistryLayout, payload: Path):
         self.native, self.layout, self.payload = native, layout, payload
-        manifest = json.loads((payload / "manifest.json").read_text())
+        import sys
+        resident = sys.modules.get('hexcore.mpasphys.moving_pool_payload_v842')
+        self.resident_payload = None if resident is None else resident.lookup(payload)
+        manifest = (self.resident_payload.manifest if self.resident_payload is not None
+                    else json.loads((payload / "manifest.json").read_text()))
         if manifest.get("schema") != "mpas-native-pool-payload-v1":
             raise ValueError("unsupported native pool transport")
         expected = {(r["pool"], r["name"]): r for r in layout.fields}
@@ -338,6 +342,10 @@ class NativePoolHydration:
             failure = next((f"Rust metadata differs at {key}.{name}" for name in ("kind", "dimensions", "shape")
                             if record[name] != row[name]), None)
             if failure is None and row["kind"] != "character" and record.get("fill") is None:
+                if self.resident_payload is not None:
+                    # The source transport was validated before registration;
+                    # field_buffer makes a private, shape-checked projection.
+                    continue
                 data = payload / record["payload"]
                 if data.parent.resolve() != payload.resolve():
                     failure = "native payload escapes transport directory"
@@ -367,6 +375,17 @@ class NativePoolHydration:
         if record.get('fill') is not None:
             # A Registry-initial zero field (decode_registry_pools): the words the Rust payload carried.
             return np.zeros(record['shape'], dtype=dtype, order='F')
+        if self.resident_payload is not None:
+            values = self.resident_payload.field(pool, name)
+            if values.shape != tuple(record['shape']) or values.dtype != np.dtype(dtype):
+                raise ValueError(f'resident projected pool shape/dtype differs at {(pool, name)}')
+            return values
+        if getattr(self, 'copy_on_write', False) and all(record['shape']):
+            # The transport remains immutable. The framework can adopt level
+            # one's private mapping; writes never change the payload or a later
+            # field_buffer read. Other time levels still own independent copies.
+            return np.memmap(self.payload / record['payload'], dtype=dtype,
+                             mode='c', shape=tuple(record['shape']), order='F')
         return np.fromfile(self.payload / record['payload'], dtype=dtype).reshape(
             record['shape'], order='F')
 
@@ -402,7 +421,14 @@ class NativePoolHydration:
         from collections import deque
         from concurrent.futures import ThreadPoolExecutor
 
-        numeric = [row for row in layout.fields if row["kind"] != "character"]
+        deferred = (self.resident_payload is not None and callable(getattr(n, 'put_deferred_field', None))
+                    and os.environ.get('GPUWM_HEX_MOVING_DEFER_COLD_FIELDS', '1') != '0')
+        def defer(row):
+            return deferred and row['kind'] != 'character' and self.records[row['pool'], row['name']].get('fill') is None
+        def zero(row):
+            return (row['kind'] != 'character' and callable(getattr(n, 'put_zero_field', None))
+                    and self.records[row['pool'], row['name']].get('fill') == 0)
+        numeric = [row for row in layout.fields if row["kind"] != "character" and not defer(row) and not zero(row)]
         upcoming = iter(numeric)
         pending: deque = deque()
         in_flight = 0
@@ -426,6 +452,19 @@ class NativePoolHydration:
                     for level in range(1, row["nlevels"] + 1):
                         n.put_text_field(pool, name, record["text"],
                                          level=level, nlevels=row["nlevels"])
+                    continue
+                if defer(row):
+                    n.put_deferred_field(pool, name, record['shape'],
+                        '<f4' if record['kind'] == 'real' else '<i4',
+                        lambda row=row: self.field_buffer(row['pool'], row['name']), nlevels=row['nlevels'])
+                    continue
+                if zero(row):
+                    # The validated transport declares the zero word. Hand its
+                    # shape/dtype directly to native zero storage, rather than
+                    # first materializing a second multi-GB zero buffer merely
+                    # to inspect its metadata and discard it.
+                    n.put_zero_field(pool, name, tuple(record['shape']),
+                        np.dtype('<f4' if record['kind'] == 'real' else '<i4'), nlevels=row['nlevels'])
                     continue
                 # Rust has already encoded Fortran ordering and native dummy storage.
                 fill()
