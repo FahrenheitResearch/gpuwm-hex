@@ -84,15 +84,23 @@ def identity_tokens(extra: Iterable[str], where: Path) -> list[str]:
             value = ""
         if value:
             tokens.add(value)
-    for value in (os.environ.get("USER"), os.environ.get("USERNAME"), Path.home().name):
+    for value in (os.environ.get("USER"), os.environ.get("USERNAME")):
         if value:
             tokens.add(value)
+    # THE BREAKAGE (hex 0.4.12 publish.yml dry run 42033510796, 2026-11-05): a GitHub container job runs with
+    # HOME=/github/home, so the home folder's NAME was "home" and the capitalised rule refused every "HOME"
+    # (os.environ["HOME"], $HOME, the Rust standard library's home_dir) as the owner's name: 14 wheel and
+    # 6 sdist false hits, none of them private.  Only a per-user home (/home/<name>, /Users/<name>,
+    # C:/Users/<name>) names a person.
+    home = Path.home()
+    if home.parent.name.lower() in {"home", "users"}:
+        tokens.add(home.name)
     try:
         tokens.add(getpass.getuser())
     except Exception:  # noqa: BLE001 - no login name is not a hit
         pass
     # A login such as "root" or a one-letter name is not an identity.
-    return sorted(t for t in tokens if len(t) >= 3 and t.lower() not in {"root", "runner", "user", "admin"})
+    return sorted(t for t in tokens if len(t) >= 3 and t.lower() not in {"root", "runner", "user", "admin", "home"})
 
 
 def identity_rules(tokens: Iterable[str]) -> list[tuple[str, re.Pattern[bytes]]]:

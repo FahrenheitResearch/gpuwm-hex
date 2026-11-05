@@ -194,3 +194,30 @@ def test_public_contract_allowlist_cannot_hide_private_tooling(hygiene, private)
         assert hygiene.scan([(path, (public + private).encode())], list(hygiene.RULES))
         if "private" not in private:
             assert hygiene.scan([("libexec/helper", b"\0" + private.encode())], list(hygiene.RULES))
+
+
+def test_github_container_home_is_not_an_owner_name(hygiene, tmp_path, monkeypatch):
+    """THE BREAKAGE (hex 0.4.12 publish.yml dry run 42033510796, 2026-11-05): GitHub runs a container job
+    with HOME=/github/home, so "home" became an identity token and every "HOME" ($HOME, os.environ["HOME"],
+    Rust's home_dir) was refused as the owner's name: 20 false hits in the wheel and sdist."""
+    monkeypatch.setattr(hygiene.Path, "home", classmethod(lambda cls: Path("/github/home")))
+    for key in ("USER", "USERNAME", "LOGNAME", "LNAME"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(hygiene.getpass, "getuser", lambda: "root")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "none"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    tokens = hygiene.identity_tokens([], tmp_path)
+    assert "home" not in [t.lower() for t in tokens]
+    rules = list(hygiene.RULES) + hygiene.identity_rules(tokens)
+    data = b'path = os.environ["HOME"]' + bytes([10]) + b'export PATH="$HOME/.cargo/bin:$PATH"'
+    assert [h for h in hygiene.scan([("hexcore/x.py", data)], rules) if h[1] == "owner-name"] == []
+
+
+def test_a_per_user_home_folder_still_names_the_owner(hygiene, tmp_path, monkeypatch):
+    monkeypatch.setattr(hygiene.Path, "home", classmethod(lambda cls: Path("/home") / "zebulon"))
+    for key in ("USER", "USERNAME", "LOGNAME", "LNAME"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(hygiene.getpass, "getuser", lambda: "root")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "none"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    assert "zebulon" in hygiene.identity_tokens([], tmp_path)
