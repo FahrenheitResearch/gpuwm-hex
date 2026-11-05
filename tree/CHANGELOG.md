@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.13
+
+Requires gpuwm>=2.9.12,<2.10.
+
+Fixed:
+- A fresh `gpuwm-hex[gpu-cu13]` install loads prebuilt kernels again instead of compiling them for about 100 s: the extra keeps NVRTC below 13.5, which has no pack yet. A 13.5 pack comes in a later release.
+- `gpuwm-hex doctor` warns when the loaded NVRTC has no prebuilt kernel pack.
+- Storm-following and setup-following runs write the 0-1/0-2/0-3 km updraft-helicity maxima on every segment.
+- The README, the PyPI page and the manual state this release's version, engine range and kernel packs, and the PyPI page's links work.
+
 ## 0.4.12
 
 Requires gpuwm>=2.9.12,<2.10.

@@ -242,28 +242,47 @@ def checkout_asset(name):
     return None
 
 
+def compatible_pack(identity, pins=None):
+    """The pinned kernel pack this exact compiler produced: ``(name, row, None)``, else ``(None, None, reason)``.
+
+    One rule for the runtime (``resolve_pack``) and for ``gpuwm-hex doctor``.  THE BREAKAGE (gpuwm-hex 0.4.12
+    post-publish check, 2026-11-05): ``cupy-cuda13x[ctk]`` began pulling NVRTC 13.5.37 the day after the gate,
+    no pack was pinned for it, a fresh ``[gpu-cu13]`` install compiled every kernel for about 100 s before its
+    first step, and ``doctor`` still printed "Every check passed" because it never asked this question.
+    """
+    pins = load_pins() if pins is None else pins
+    version = identity.get('nvrtc') or ()
+    major = version[0] if version else None
+    candidates = [(n, r) for n, r in pins['assets'].items()
+                  if r.get('kind') == 'kernel-pack' and r.get('select', {}).get('nvrtc_major') == major]
+    if not candidates:
+        return None, None, f'no kernel-pack pin for loaded NVRTC major {major}'
+    from hexcore.kernel_pack import same_compiler
+    compatible = [(n, r) for n, r in candidates if same_compiler(r.get('compiler'), identity)]
+    if not compatible:
+        loaded = '.'.join(str(part) for part in version)
+        return None, None, (f'loaded NVRTC {loaded} (library sha256 '
+                            f'{str(identity.get("nvrtc_library_sha256"))[:12]}) matches no NVRTC {major} pin '
+                            f'[{", ".join(pinned_compilers(candidates))}]; no compatible pack is downloaded')
+    name, row = compatible[0]
+    return name, row, None
+
+
+def pinned_compilers(candidates):
+    """'13.4 (nvidia-cuda-nvrtc==13.4.92)' for each pinned pack, newest NVRTC first."""
+    rows = {(tuple(r.get('compiler', {}).get('nvrtc', ())), str(r.get('compiler', {}).get('nvrtc_package')))
+            for _, r in candidates}
+    return ['.'.join(str(p) for p in version) + f' ({package})' for version, package in sorted(rows, reverse=True)]
+
+
 def resolve_pack(identity):
     """Return (verified path, None), or (None, a concrete compile-path reason)."""
     with _RUNTIME_LOCK:
         try:
             pins = load_pins()
-            version = identity.get('nvrtc') or ()
-            major = version[0] if version else None
-            candidates = [(n, r) for n, r in pins['assets'].items()
-                          if r.get('kind') == 'kernel-pack' and r.get('select', {}).get('nvrtc_major') == major]
-            if not candidates:
-                return None, f'no kernel-pack pin for loaded NVRTC major {major}'
-            from hexcore.kernel_pack import same_compiler
-            compatible = [(n, r) for n, r in candidates if same_compiler(r.get('compiler'), identity)]
-            if not compatible:
-                loaded = '.'.join(str(part) for part in version)
-                pinned = ', '.join(sorted({'.'.join(str(p) for p in r.get('compiler', {}).get('nvrtc', ()))
-                                           + ' (' + str(r.get('compiler', {}).get('nvrtc_package')) + ')'
-                                           for _, r in candidates}))
-                return None, (f'loaded NVRTC {loaded} (library sha256 '
-                              f'{str(identity.get("nvrtc_library_sha256"))[:12]}) matches no NVRTC {major} pin '
-                              f'[{pinned}]; no compatible pack is downloaded')
-            name, row = compatible[0]
+            name, row, mismatch = compatible_pack(identity, pins)
+            if name is None:
+                return None, mismatch
             reason = 'not staged'
             target = asset_path(name, row)
             if target.exists():

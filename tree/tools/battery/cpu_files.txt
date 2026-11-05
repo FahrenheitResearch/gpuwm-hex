@@ -55,6 +55,7 @@ tests/test_first_maps.py
 # doctor and the doors agree about a staged bridge that is present and not
 # executable: a gap with its chmod, never a find the door then refuses
 tests/test_doctor_bridge_mode.py
+tests/test_doctor_kernel_pack.py
 tests/test_obs_scorer_optional.py
 tests/test_land_surface_off_publication.py
 tests/test_tempo_tables_door.py
@@ -1115,6 +1116,7 @@ tests/test_mpas_samehost_parallel_assembly.py
 # MPAS LTS moving segments: admission of carrier resumes and plain moving routes, the one-real-cell edge geometry,
 # the one-collective moving frame gather (CPU).
 tests/test_mpas_lts_moving_and_assembly.py
+tests/test_lts_extra_history.py
 # MPAS LTS timeline: every class step in native-runtime-timings.json, the loop's measured rate (HEX-SHAPES-1CARD).
 tests/test_mpas_lts_timeline.py
 tests/test_mpas_frame_async_capture.py
@@ -1357,6 +1359,7 @@ tests/test_boundary_recipe.py
 
 # Release regression: deterministic metadata or CPU fixture checks.
 tests/test_doctor_geography.py
+tests/test_readme_facts.py
 
 # Release regression: deterministic metadata or CPU fixture checks.
 tests/test_mesh_refused_turned.py

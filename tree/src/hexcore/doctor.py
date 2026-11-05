@@ -79,6 +79,8 @@ VERIFIED = "verified"
 PRESENT = "present"
 MISSING = "missing"
 INFO = "info"
+#: Works, but slower than it should: never blocking, never "Every check passed".
+WARN = "warn"
 
 
 @dataclass
@@ -1072,6 +1074,75 @@ def check_on_demand_assets() -> list[Finding]:
                         detail=str(error), remedy='reinstall gpuwm-hex')]
 
 
+def _compiler_identity_probe() -> dict[str, object] | None:
+    """The loaded NVRTC's identity (``hexcore.cuda_backend.aot.compiler_identity``), in a short-lived process.
+
+    It loads NVRTC and reads its version and library digest; it compiles nothing and touches no device.
+    """
+
+    code = (
+        "import json, sys\n"
+        "try:\n"
+        "    from hexcore.cuda_backend.aot import compiler_identity\n"
+        "    out = {'identity': compiler_identity()}\n"
+        "except Exception as error:\n"
+        "    out = {'error': f'{type(error).__name__}: {error}'}\n"
+        "sys.stdout.write(json.dumps(out))\n"
+    )
+    try:
+        probe = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                               errors="replace", timeout=_PROBE_TIMEOUT_S)
+        document = json.loads((probe.stdout or "").strip() or "{}")
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def check_kernel_pack() -> list[Finding]:
+    """Whether the loaded NVRTC has a pinned prebuilt kernel pack.
+
+    THE BREAKAGE (gpuwm-hex 0.4.12 post-publish check, 2026-11-05): a fresh ``[gpu-cu13]`` install pulled NVRTC
+    13.5.37, published after the gate; no pack was pinned for it, so the first forecast compiled every kernel
+    through NVRTC for about 100 s before its first step, and doctor printed "Every check passed".  A mismatch is
+    a WARN: forecasts still run, only the first start of each kernel is slow.
+    """
+
+    subject = "prebuilt kernel pack"
+    probe = _compiler_identity_probe()
+    identity = (probe or {}).get("identity")
+    if not isinstance(identity, dict) or not identity.get("nvrtc"):
+        reason = (probe or {}).get("error") or "the compiler probe did not answer"
+        return [Finding(subject=subject, status=INFO,
+                        detail=f"no CUDA compiler loaded here ({reason}); packs apply once a CUDA extra is installed")]
+    from . import assets
+    try:
+        pins = assets.load_pins()
+        name, row, reason = assets.compatible_pack(identity, pins)
+    except (OSError, ValueError, KeyError) as error:
+        return [Finding(subject=subject, status=MISSING, required=False, detail=f"asset pins unavailable: {error}",
+                        remedy="reinstall gpuwm-hex")]
+    loaded = ".".join(str(part) for part in identity.get("nvrtc", ()))
+    evidence = {"loaded_nvrtc": loaded, "nvrtc_package": identity.get("nvrtc_package"),
+                "nvrtc_library_sha256": identity.get("nvrtc_library_sha256")}
+    if name is not None:
+        return [Finding(subject=subject, status=VERIFIED,
+                        detail=f"loaded NVRTC {loaded} ({identity.get('nvrtc_package')}) matches {name}",
+                        evidence={**evidence, "pack": name, "sha256": row["sha256"]})]
+    major = identity["nvrtc"][0]
+    same_major = [(n, r) for n, r in pins["assets"].items()
+                  if r.get("kind") == "kernel-pack" and r.get("select", {}).get("nvrtc_major") == major]
+    pinned = assets.pinned_compilers(same_major)
+    newest = max((r for _, r in same_major), key=lambda r: tuple(r.get("compiler", {}).get("nvrtc", ())),
+                 default=None)
+    package = (newest or {}).get("compiler", {}).get("nvrtc_package")
+    remedy = (f'pip install "{package}"\n# the NVRTC the newest pinned CUDA {major} pack was built with'
+              if package else f'pip install "gpuwm-hex[gpu-cu{12 if major == 12 else 13}]"')
+    return [Finding(subject=subject, status=WARN,
+                    detail=(f"{reason}.  Pinned: {', '.join(pinned) or 'none'}.  Forecasts still run; the first "
+                            "start of each kernel compiles through NVRTC (about 100 s on a fresh install)."),
+                    remedy=remedy, evidence={**evidence, "pinned": pinned})]
+
+
 def check_physics_resources() -> list[Finding]:
     """Report MPAS cache readiness without fetching, compiling or opening a GPU."""
     from .mpasphys import resources_build as resources
@@ -1138,6 +1209,7 @@ def collect() -> list[Finding]:
     findings.extend(check_assets())
     findings.extend(check_geography())
     findings.extend(check_on_demand_assets())
+    findings.extend(check_kernel_pack())
     findings.extend(check_physics_resources())
     return findings
 
@@ -1156,6 +1228,7 @@ _LABEL = {
     PRESENT: "PRESENT ",
     MISSING: "MISSING ",
     INFO: "INFO    ",
+    WARN: "WARN    ",
 }
 
 
@@ -1194,7 +1267,7 @@ def render(findings: list[Finding], *, explain: bool) -> str:
 def summarise(findings: list[Finding]) -> str:
     blocking = blocking_gaps(findings)
     if not blocking:
-        gaps = [f for f in findings if f.status == MISSING]
+        gaps = [f for f in findings if f.status in (MISSING, WARN)]
         if gaps:
             return (
                 f"\nEvery required check passed.  {len(gaps)} optional gap(s) "

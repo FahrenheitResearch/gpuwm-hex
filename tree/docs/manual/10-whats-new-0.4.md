@@ -190,11 +190,9 @@ those defects:
   command; rows at 120, 60, 30 and 15 km.
 - **Proven:** the 120 km row, 24 hours on a 16 GB card, in 7.5 minutes for the
   whole command. On that case its 500 hPa height error against the GFS
-  analysis was 10.0 m, against 14.9 and 13.5 m for gpuwm-global's T127 and
-  T255 runs. One case is not a skill claim.
-- **Hex global is the main global model; gpuwm-global remains available as a
-  second (spectral) global model.** gpuwm-global's public LETKF stays in
-  gpuwm-global. Hex global starts from an analysis you supply
+  analysis was 10.0 m, against 14.9 and 13.5 m for T127 and T255 runs of a
+  spectral global model. One case is not a skill claim.
+- Hex global starts from an analysis you supply
   (`gpuwm-hex forecast --analysis`).
 - Guide: [Hex global](../global-door.md).
 
@@ -470,7 +468,7 @@ soil geometry is refused by name at preparation.
   yet run (it needs a card with about 64 GB or more).
 - An ensemble analysis inside hex global: not part of this package. Hex
   global starts from an analysis you supply (`gpuwm-hex forecast
-  --analysis`); gpuwm-global keeps its LETKF.
+  --analysis`).
 - Graph replay for local time stepping: the class executor launches
   eagerly, so one-card LTS is slower than the fixed step. Several cards are
   an explicit opt-in (every rate class is now cut across the cards; two

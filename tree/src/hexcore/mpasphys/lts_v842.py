@@ -533,9 +533,13 @@ class LtsClassExecution:
                 return frame
 
             def _encode(self, jobs, snapshot, when, step, *extra, **options):
+                extras = extra[0] if extra else options.pop('extras', None)
+                if extras and any(stream.name in ('output', 'history') for stream, _, _ in jobs):
+                    # Every class deposits its own words of the extra history fields; class 0 writes them global.
+                    extras = gather_extra_history(execution, (str(when), 'extra-history'), extras)
                 if execution.index != 0:
                     return []
-                return super()._encode(jobs, snapshot, when, step, *extra, **options)
+                return super()._encode(jobs, snapshot, when, step, extras, **options)
 
             def _read_first_call(self, names):
                 """The first physics call's f000 fields on the global mesh: every class's owned words.
@@ -567,6 +571,53 @@ class LtsClassExecution:
                 return {name: assembled[name].values for name in names if name in assembled}
 
         return ClassPhysicsStreams
+
+
+def gather_extra_history(execution, key, extras):
+    """The extra history fields (``PhysicsStreams.extra_history``: the UH layers, wind farms) on the global mesh.
+
+    Each class's extras hold its local cells (owned cells first, as every class layout does); class 0 writes the
+    global frame.  Every class deposits its words here and class 0 scatters each class's owned rows to their
+    global cells (``cell_l2g``), the rule ``samehost_v842.assemble_snapshot`` applies to Registry fields.  Classes
+    other than 0 get ``{}`` back.  THE BREAKAGE THIS FIXES (WOOF canary on gpuwm-hex 0.4.12, 2026-11-05 19:01Z,
+    run_db17f6b76d9c7a74): every storm- and setup-following run (a moving member rides the class executor) stopped in
+    segment 1 with "updraft_helicity_max_01: nCells=75192 differs from authority 98108", because class 0 handed its
+    own local UH words to the global writer.
+    """
+    board = execution.board
+    words = {name: (np.array(array, copy=True), tuple(dims), units) for name, (array, dims, units) in extras.items()}
+    with board.lock:
+        board.deposits.setdefault(key, {})[execution.index] = words
+        board.lock.notify_all()
+    if execution.index != 0:
+        return {}
+    board.wait(lambda: len(board.deposits.get(key, {})) == board.classes, f'every class extra history at {key[0]}')
+    with board.lock:
+        slot = board.deposits.pop(key)
+    cells = int(execution.global_layout.dimensions['nCells'])
+    gathered = {}
+    for name, (_, dims, units) in slot[0].items():
+        if dims != ('nCells',):
+            raise ValueError(f'{name}: an extra history field on the class executor must be (nCells,), not {dims}')
+        out = np.zeros(cells, dtype=np.float32)
+        seen = np.zeros(cells, dtype=np.bool_)
+        for index in range(board.classes):
+            if name not in slot[index]:
+                raise ValueError(f'{name}: class {index} wrote no words of this extra history field')
+            part = execution.partitions[index]
+            owned = int(part.n_owned_cells)
+            values = np.asarray(slot[index][name][0], dtype=np.float32).reshape(-1)
+            if values.size < owned:
+                raise ValueError(f'{name}: class {index} holds {values.size} words for {owned} owned cells')
+            ids = np.asarray(part.cell_l2g)[:owned]
+            if np.any(seen[ids]):
+                raise ValueError(f'{name}: duplicate owners')
+            seen[ids] = True
+            out[ids] = values[:owned]
+        if not np.all(seen):
+            raise ValueError(f'{name}: the class owners do not cover the global nCells')
+        gathered[name] = (out, dims, units)
+    return gathered
 
 
 class _SharedProcess:

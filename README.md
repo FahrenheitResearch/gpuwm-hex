@@ -1,6 +1,6 @@
 # gpuwm-hex
 
-MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.10 ports the whole model to
+MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.13 ports the whole model to
 CUDA: the dynamical core, both MPAS physics suites and their scheme options,
 initialization and static fields, the incremental analysis update, limited-area
 runs, streams, restart and diagnostics (the scheme list and what is not yet in
@@ -17,11 +17,11 @@ capability contract: every claim with its scope) and the
 what it is matched against and how that is checked.
 
 **Install:** `pip install gpuwm-hex`. It requires the ArWen engine, gpuwm 2.9
-(`gpuwm>=2.9.7,<2.10`), and pip resolves it.
+(`gpuwm>=2.9.12,<2.10`), and pip resolves it.
 
 ---
 
-## What 0.4.10 claims, and how far
+## What 0.4.13 claims, and how far
 
 Each line is measured, and each carries its scope. Nothing outside the scope
 is claimed. [`tree/README.md`](tree/README.md) gives the detail.
@@ -36,7 +36,7 @@ Kernels compile with fast numerics by default (FMA contraction, flush-to-zero); 
 | Correct mode is the default on every route. On the MPAS suites it fixes 5 defects found in native MPAS-A v8.4.2; on the ArWen route it applies the corrections the engine carries (WB4, WB5); `--physics-mode exact` reproduces native bit for bit. | Each fix is checked against its own native referee build. No combined referee is claimed. |
 | Real-data initialization and the static builder match native field for field. IAU, limited-area boundaries, streams, restart and the diagnostics match native on real captured inputs. | Per unit, on the cases in `tree/README.md`. A few static words where native reads undefined memory are labelled declared residue, never identical. |
 | `gpuwm-hex forecast --analysis` starts a forecast from an MPAS analysis bundle (direct insertion, IAU, cycling restart, remap). | Measured on the ArWen physics route. IAU also runs across a restart, on the explicit MPAS suite route, on same-host multi-card ranks and in member rosters; IAU on multi-card local time stepping is refused by name. |
-| `gpuwm-hex global` runs a global forecast in one command. It is the main global model; gpuwm-global remains available as a second (spectral) global model. | Rows are defined at 120, 60, 30 and 15 km, on ArWen physics and on the gpuwm-global suite; the measured runs are the 120 km rows. |
+| `gpuwm-hex global` runs a global forecast in one command. | Rows are defined at 120, 60, 30 and 15 km, on ArWen physics and on the Morrison suite (Morrison, Grell-Freitas, YSU, revised MM5, Noah, RRTMGP); the measured runs are the 120 km rows. |
 | A storm-following 3 km region, experimental: `gpuwm-hex moving`. | ArWen physics, three 48-hour tropical cyclone runs; the balanced remap between moves is the default. |
 | RRFS-MPAS runs end to end from a pip install: the GSL fork's dycore and table-admitted physics run on the GPU by default. `hrrrv5`, `rrfs_convection_permitting`, `rrfs_mesoscale_reference`, and RRFS New Tiedtke use the ported framework without a native library. Native comparison backends remain explicit site builds. | With every physics slot on the native library (`--physics-default-backend native-cpu`), a one-hour `hrrrv5` run on `x1.2562`, one process, is bitwise to the native fork build in every field hex writes; each GPU port is bitwise as a module replay. RRFS initial conditions and hourly boundaries come from `gpuwm-hex init --physics-suite hrrrv5`, the fork's init ported to Rust ([RRFS init](tree/docs/rrfs-init.md)). |
 

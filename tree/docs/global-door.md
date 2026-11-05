@@ -30,7 +30,7 @@ cached grid and static.
 | `global-60km` | x1.163842 | 163,842 | MPAS: convection_permitting |
 | `global-30km` | x1.655362 | 655,362 | MPAS: convection_permitting |
 | `global-15km` | x1.2621442 | 2,621,442 | MPAS: convection_permitting |
-| `global-*-morrison` | as above | | the gpuwm-global suite: Morrison, Grell-Freitas, YSU, revised MM5, Noah, RRTMGP |
+| `global-*-morrison` | as above | | the Morrison suite: Morrison, Grell-Freitas, YSU, revised MM5, Noah, RRTMGP |
 
 The `mpas` arm is the hex default (0.4.6): MPAS-A's own suite for the mesh, from
 `src/hexcore/data/profiles/physics-default.v1.json`, at the forecast door's own
