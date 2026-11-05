@@ -9,6 +9,8 @@ retains the NVRTC compile path and prints its reason and staging remedy once.
 """
 from __future__ import annotations
 
+from gpuwm.backend import compilation_target as _compilation_target
+
 import base64
 from contextlib import contextmanager
 import hashlib
@@ -39,16 +41,29 @@ def _pack_digest(path, stat):
     file again, about 0.5 s per StrictPhysicsKernelCache with the NVRTC fingerprint, ~5 per rank start.  The key
     adds inode and ctime to the size and mtime the rows memo uses: a copy or an in-place edit gets a new ctime (the
     kernel sets it on every write and no copy tool can carry it over), so an edited pack is hashed again.
+
+    THE BREAKAGE THE RACY RULE PREVENTS (hex 0.5.0 sealing pass, 2026-11-02, test_envelope_corruption_and_compiler_change):
+    ctime comes from the kernel's coarse clock, so an in-place edit inside the same tick as the hash left device,
+    inode, size, mtime (set back with utime) and ctime all equal, and the remembered digest admitted an altered pack.
+    As in hexcore.file_digest, a version changed within RACY_SECONDS of the hash is never remembered, and neither is
+    a version that changed while it was read.
     """
-    key = (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    from hexcore.file_digest import RACY_SECONDS
+
+    def version(status):
+        return (str(path), status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+
+    key = version(stat)
     with _PACK_DIGEST_LOCK:
         known = _PACK_DIGESTS.get(key)
     if known is not None:
         return known
     with Path(path).open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    with _PACK_DIGEST_LOCK:
-        _PACK_DIGESTS[key] = digest
+    changed = max(stat.st_mtime_ns, stat.st_ctime_ns)
+    if time.time_ns() - changed >= RACY_SECONDS * 1e9 and version(Path(path).stat()) == key:
+        with _PACK_DIGEST_LOCK:
+            _PACK_DIGESTS[key] = digest
     return digest
 _WARNED: set = set()
 
@@ -85,6 +100,10 @@ def preserve_final_options():
         if error.name != "gpuwm.numerics":
             raise
         yield
+        return
+    if hasattr(engine_numerics, "preserve_final_options"):
+        with engine_numerics.preserve_final_options():
+            yield
         return
     previous = engine_numerics._mode
     engine_numerics._mode = "strict"
@@ -166,6 +185,9 @@ def _distribution(names):
 
 
 def compiler_identity():
+    from gpuwm.hip_backend import active, compiler_binding
+    if active():
+        return compiler_binding()
     import cupy
     from cupy.cuda import compiler
     from gpuwm.certify.compile_platform import nvrtc_library
@@ -281,6 +303,12 @@ class Pack:
         self.rows = []
         self.compiler = None
         self.reason = None
+        from gpuwm.hip_backend import active
+        if active():
+            self.reason = "hip_source_bound_images"
+            self._by_key = {}
+            self._architectures = set()
+            return
         self._by_key = {}
         self._architectures = set()
         if os.environ.get("GPUWM_HEX_AOT", "").lower() in ("off", "0", "false", "no"):
@@ -472,6 +500,10 @@ def install(cp, pack=None):
     source-bearing arguments the unchanged prewarm recorder already writes.
     It never changes CUDA source, launch operands or the step loop.
     """
+    from gpuwm.hip_backend import active, install as install_hip
+    if active():
+        install_hip()
+        return
     with _BRIDGE_LOCK:
         try:
             _bridge(cp, pack)
@@ -510,6 +542,9 @@ def raw_nvrtc(source, options, arch, filename):
     The one implementation the unit's call (:func:`raw_image`) and the kernel plan's pool workers
     (hexcore.kernel_compile_worker.raw_compile) both run, so a pool image is the caller's bytes.
     """
+    from gpuwm.hip_backend import active,compile_source
+    if active():
+        return compile_source(source,options,arch,filename=filename)[0]
     from cupy_backends.cuda.libs import nvrtc
     arch = str(arch).removeprefix("sm_")
     program = nvrtc.createProgram(source, filename, (), ())
@@ -580,7 +615,7 @@ def _bridge(cp, pack):
         options = effective_options(bound.get("options") or ())
         metadata = request_metadata(bound)
         key = "cupy.cache." + source_hash(source)
-        arch = bound.get("arch") or cp.cuda.Device().compute_capability
+        arch = bound.get("arch") or _compilation_target(xp=cp)
         sm = str(arch) if str(arch).startswith("sm_") else "sm_" + str(arch)
         started = time.perf_counter()
         module = None

@@ -151,6 +151,8 @@ def op_construct(ctx, *, local, attach, arwen_checkout, stop_on_refusal, compile
         elif isinstance(local, str) and local == "context":
             local = ctx.host   # a rank process's host is already its own slices (child_host)
         try:
+            from hexcore.cuda_suite_physics_v841 import bind_domain_ocean_ice
+            bind_domain_ocean_ice(ctx.host.get("domain_ocean_ice", False))
             stack = proof._construct_device_stack(host=local, cache=cache, arwen_checkout=arwen_checkout,
                                                    backend_builder=forecast._backend_builder(ctx.host, arwen_checkout),
                                                    physics_rollback_snapshot=bool(stop_on_refusal),
@@ -247,6 +249,12 @@ def op_capture(ctx, *, step, deferred):
     return _capture_rank(ctx.proof, ctx.host, ctx.stack, step, ctx.schedule["labels"][step], deferred=deferred)
 
 
+def op_release_preparation(ctx):
+    from hexcore.host_lifetime import release_preparation
+    release_preparation(ctx.host)
+    return None
+
+
 def op_first_call(ctx):
     from hexcore import f000_first_call
     return f000_first_call.read_arwen_first_call(ctx.stack["backend"], ctx.cp)
@@ -336,6 +344,7 @@ def op_final(ctx):
 
 
 OPS = {
+    "release_preparation": op_release_preparation,
     "construct": op_construct, "initial_surface": op_initial_surface, "describe": op_describe,
     "setup_exchange": op_setup_exchange, "iau": op_iau, "collect_owned": op_collect_owned,
     "capture": op_capture, "first_call": op_first_call, "advance": op_advance, "clock": op_clock,
@@ -610,7 +619,7 @@ class ProcessRankGroup:
 
     executor = "processes"
 
-    def __init__(self, contexts0, devices, tables, *, job, timeout):
+    def __init__(self, contexts0, devices, tables, *, job, timeout, owner_paths=()):
         from hexcore.rank_processes import RankProcesses
         self.ctx = contexts0
         self.contexts = [contexts0]
@@ -619,7 +628,8 @@ class ProcessRankGroup:
         self.timeout = float(timeout)
         neighbours = {rank: [int(peer.peer) for peer in tables[rank].peers] for rank in range(self.size)}
         self.neighbours = neighbours
-        self.group = RankProcesses(self.devices, neighbours, module=MODULE, timeout=self.timeout, job=str(job))
+        self.group = RankProcesses(self.devices, neighbours, module=MODULE, timeout=self.timeout,
+                                   job=str(job), owner_paths=owner_paths)
         self.failed = False
         self.failure = None
         self.time_seconds = None
@@ -633,20 +643,38 @@ class ProcessRankGroup:
 
     def start(self, requests):
         """Start the children and hand each its request (module replay, layouts, tables, its rank's inputs)."""
+        from hexcore.rank_processes import SharedObjects
+        sources = {}
+        for request in requests[1:]:
+            mesh = request["host"]["prepared"].mesh
+            source = getattr(mesh, "partition_source_mesh", None)
+            if source is not None and source is not mesh:
+                sources.setdefault(id(source), source)
+        # Each partition keeps its global mesh for mixing. Send those bytes once, as the MPAS route does,
+        # instead of retaining a complete private copy in every child for the whole forecast.
+        shared = (SharedObjects({f"partition-source-mesh-{index}": source
+                                 for index, source in enumerate(sources.values())},
+                                threads=max(1, min(os.cpu_count() or 1, 32))) if sources else None)
+        if shared is not None:
+            self.group.shared_fd = shared.fd
         self.group.on_failure(self._child_failed)
-        self.group.start()
-        self.started = True
-        self.halo_links = {peer: (self.group.halo_sockets[peer], self.group.halo_flags.pop(peer))
-                           for peer in self.neighbours[0]}
+        try:
+            self.group.start()
+            self.started = True
+            self.halo_links = {peer: (self.group.halo_sockets[peer], self.group.halo_flags.pop(peer))
+                               for peer in self.neighbours[0]}
 
-        def send(rank):
-            self.group.step_links[rank].send(requests[rank])
-            requests[rank] = None   # the child holds its own copy now
-        # Every child's request at once (Link.send copies with the GIL released), as run_process_ranks sends the
-        # MPAS route's: one after another, 8 ranks' host slices took seconds each before any child could build.
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=max(1, self.size - 1), thread_name_prefix="hex-rank-request") as pool:
-            list(pool.map(send, range(1, self.size)))
+            def send(rank):
+                self.group.step_links[rank].send(requests[rank], None if shared is None else shared.persistent_id)
+                requests[rank] = None
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=max(1, self.size - 1), thread_name_prefix="hex-rank-request") as pool:
+                list(pool.map(send, range(1, self.size)))
+        finally:
+            # Children inherited their own descriptors before request delivery. Keep the parent's object IDs
+            # alive until every sender has finished, then release both its descriptor and its references.
+            if shared is not None:
+                shared.close()
         return {"rank_processes": [dict(rank=rank, pid=process.pid) for rank, process in self.group.processes.items()],
                 "rank_process_parent_pid": os.getpid()}
 
@@ -665,7 +693,7 @@ class ProcessRankGroup:
 
     def abort(self, reason):
         """Rank 0's own abort point (the coordinator thread): a child's failure need not end this process."""
-        self.group.rank0_responded()
+        self.group.abort(reason)
         self.failed = True
         if self.failure is None:
             self.failure = str(reason)
@@ -815,6 +843,10 @@ class ProcessRankGroup:
                 self.group.step_links[rank].send(("close",))
             except Exception:
                 pass
+        # NCCL/RCCL communicator destruction may rendezvous with its peers.
+        # Join it before waiting for the children's close acknowledgements.
+        if transport is not None and getattr(transport, "collective_close", False):
+            transport.close()
         records = {}
         for rank in range(1, self.size):
             try:
@@ -873,7 +905,7 @@ class _StepScope:
 
 def worker(job, rank, spec_text):
     """A rank process: rebuild the module state, build this rank's context, then serve the coordinator."""
-    from hexcore.rank_processes import (Link, install_parent_kernel_store, process_cpu_record,
+    from hexcore.rank_processes import (Link, SharedObjectsView, install_parent_kernel_store, process_cpu_record,
                                         set_parent_death_signal)
     set_parent_death_signal()
     # Before the request arrives: the forecast process's warm kernel store (rank_processes).
@@ -890,7 +922,8 @@ def worker(job, rank, spec_text):
     ctx = None
     code = 0
     try:
-        request = link.recv()
+        shared = spec.get("shared")
+        request = link.recv(None if shared is None else SharedObjectsView(int(shared)).resolve)
         ctx = _child_context(rank, spec, request)
         while True:
             try:
@@ -904,6 +937,9 @@ def worker(job, rank, spec_text):
             try:
                 result = _child_call(ctx, name, kwargs)
                 link.send(("ok", result, (ctx.sync_seconds, ctx.sync_calls)))
+                # The coordinator owns the delivered frame now. Do not keep
+                # a second rank-sized history capture while waiting for RPC.
+                result = None
             except BaseException as error:
                 text = f"{type(error).__name__}: {error}"
                 trace = traceback.format_exc()
@@ -955,7 +991,7 @@ def _child_context(rank, spec, request):
     import cupy as cp
     from hexcore.drivers.samehost_forecast_v841 import _StepLoopGarbage
     from hexcore.drivers.samehost_physics_scope_v841 import scoped_physics_resources
-    from hexcore.partition_process_transport_v841 import ProcessHaloTransport
+    from hexcore.process_transport import process_halo_transport as ProcessHaloTransport
 
     cp.cuda.Device(0).use()
     stream = None

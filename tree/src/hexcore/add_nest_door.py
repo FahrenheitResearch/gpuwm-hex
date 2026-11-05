@@ -432,7 +432,7 @@ def nest_config(gpuwm: str, out: Path, name: str, *, lat: float, lon: float, dx_
     config = out / f"{name}.toml"
     profile = nest_physics_profile(dx_km, physics_profile)
     _run([gpuwm, "domain", "--source", "hex-global", "--cadence", f"{cadence_h:g}",
-          "--point", f"{lat},{lon}", "--root-dx", f"{dx_km:g}",
+          f"--point={lat},{lon}", "--root-dx", f"{dx_km:g}",
           "--point-extent-km", f"{size_km:g}", "--hours", str(hours), "--cycle", cycle,
           *(["--physics-profile", profile] if profile else []),
           "--name", name, "--out", config], out / "logs" / "domain.log")

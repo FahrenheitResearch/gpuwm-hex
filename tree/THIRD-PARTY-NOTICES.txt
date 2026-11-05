@@ -12,6 +12,8 @@ Pins
   MMM-physics    20250616-MPASv8.3   a4baf7f3243d1db0dbc5f63473f895bdbdc05c30
   MPAS-Data      v8.2     c57dbc7be629802c6e848770a9e44b9bc602be41 (not redistributed)
   NOAA-GSL UGWP  MPAS_20241223   c1c893edcf171af5639af60e3a3a528816f6cc2b
+                 (Apache-2.0 LICENSE added upstream on 2026-11-04 at
+                 4108d491470c2576a7c1e97cc6a38bf454590193)
   RRFSx MPAS-Model fork  1d6e370e7b43a332074809f170532a216c2212fb (dynamical core and
                  physics driver layer; MPAS terms)
   rrfs-workflow  08eee4ceee301898d3cb837e03699a8da0d1cb32 (one configuration file)
@@ -32,8 +34,10 @@ Licence key
                                          licenses/LICENSE-c-blosc-BSD-3-Clause.txt
            (rust/s2s-zarr loads c-blosc at run time from the host or the
            netCDF4 wheel to decode ERA5 Zarr chunks; it is not bundled)
+  UGWP     Apache-2.0, NOAA, UCAR/NCAR CU/CIRES 2026
+                                          licenses/LICENSE-UGWP-Apache-2.0.txt, NOTICE section 8
   USGOV    a work of the US Government (NOAA GSL), by the project's ruling
-           of 2026-10-14                  NOTICE sections 8 and 9
+           of 2026-10-14                  NOTICE section 9
   NR       Numerical Recipes notice as MMM-physics preserves it (a stated
            reliance, not a licence)   NOTICE section 2
   NETCDF   BSD-3-Clause, Unidata 2018     NOTICE section 13, and
@@ -96,10 +100,10 @@ listed. Upstream paths are relative to src/core_atmosphere/physics/.
   wsm6_v842.py           physics_mmm/mp_wsm6.F90, mp_wsm6_effectRad.F90,
                          mp_radar.F90 (MMM; its GAMMLN also NR);
                          physics_wrf/module_mp_wsm6.F (WRF)
-  ugwp_oro_v842.py       physics_noaa/UGWP/bl_ugwp.F (USGOV),
+  ugwp_oro_v842.py       physics_noaa/UGWP/bl_ugwp.F (UGWP),
                          physics_wrf/module_bl_ugwp_gwdo.F (WRF) -- NOTICE section 8
   ugwp_ngw_v842.py       physics_noaa/UGWP/bl_ugwpv1_ngw.F, cires_ugwpv1_*.F,
-                         cires_tauamf_data.F (USGOV) -- NOTICE section 8
+                         cires_tauamf_data.F (UGWP) -- NOTICE section 8
   ysu_gwdo_v842.py       physics_mmm/bl_gwdo.F90 (MMM); physics_wrf/module_bl_gwdo.F (WRF)
   ysu_v842.py            physics_mmm/bl_ysu.F90 (MMM); physics_wrf/module_bl_ysu.F (WRF)
   compile_v842.py, config_v842.py, device_pools_v842.py, diagnostics_v842.py,
@@ -140,7 +144,7 @@ listed. Upstream paths are relative to src/core_atmosphere/physics/.
   verification/source-namelists/               rrfs-workflow configuration
                                                (NOTICE section 9)
   tests/test_mpas_ugwp_oro_v842.py, tests/test_ugwp_ngw_v842.py,
-  tests/ugwp_ngw_native/, tests/ugwp_oro_oracle/   USGOV (NOTICE section 8)
+  tests/ugwp_ngw_native/, tests/ugwp_oro_oracle/   UGWP (NOTICE section 8)
 
   Withheld from the public distribution (tools/licence_holds.json):
   tests/noahmp_v842/, tests/urban_v842/            NOTICE section 4
@@ -208,7 +212,7 @@ Stochastic random generator (src/hexcore/stochastic.cu)
 Generated kernel packs (release assets)
 ---------------------------------------
 Compiled entries retain the source terms above: MPAS, MMM, WRF, AER,
-USGOV, ARM, CORE, SUN, R123 and MT, plus project Apache-2.0 code.
+UGWP, USGOV, ARM, CORE, SUN, R123 and MT, plus project Apache-2.0 code.
 CuPy generated kernels and headers: MIT, licenses/LICENSE-CuPy-MIT.txt.
 CUB/Thrust/libcu++ headers: Apache-2.0 with LLVM exception and BSD notices,
 licenses/LICENSE-CCCL.txt. NOTICE section 16 covers these compiled copies.
@@ -248,3 +252,16 @@ Its header identifies the National Severe Storms Laboratory and describes
 nssl_sunpro.cuh carries the Sun Microsystems freely distributable expm1/tanh
 notice in full. nssl_math.py reuses the existing Arm/CORE-MATH/Sun device math
 covered by the notices above.
+TC potential intensity CUDA adaptation
+src/hexcore/tc_climate/potential_intensity.cu adapts the tcpyPI algorithm
+(MIT, copyright 2020 Daniel Gilford). The complete notice accompanies the
+file at src/hexcore/tc_climate/LICENSE.tcpypi. The tracker is independently
+implemented from the papers and contains no TempestExtremes source.
+
+
+rapidgzip (https://github.com/mxmlnkn/rapidgzip) supplies the parallel gzip
+decoder for global mesh archives. Licensed under MIT OR Apache-2.0.
+Full texts: licenses/rapidgzip-LICENSE-MIT.txt and licenses/rapidgzip-LICENSE-APACHE.txt.
+
+psutil supplies process identity checks for owned run directories.
+Licensed under BSD-3-Clause. Full text: licenses/psutil-LICENSE.txt.

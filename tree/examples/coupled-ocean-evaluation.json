@@ -1,0 +1,52 @@
+{
+  "output": "DELIVER",
+  "work": "RUN/evaluation",
+  "start": "2022-09-26T00:00:00",
+  "arms": {
+    "prescribed": "RUN/prescribed-reduced",
+    "pwp": "RUN/pwp-reduced"
+  },
+  "static": "INPUTS/x1.40962.native.static.nc",
+  "oisst": [
+    "OBS/oisst-avhrr-v02r01.20220926.nc",
+    "OBS/oisst-avhrr-v02r01.20220927.nc",
+    "OBS/oisst-avhrr-v02r01.20220928.nc",
+    "OBS/oisst-avhrr-v02r01.20220929.nc",
+    "OBS/oisst-avhrr-v02r01.20220930.nc",
+    "OBS/oisst-avhrr-v02r01.20221001.nc"
+  ],
+  "best_track": "OBS/bal092022.dat.gz",
+  "buoys": [
+    {
+      "id": "42036",
+      "lat": 28.501,
+      "lon": -84.508,
+      "path": "OBS/42036h2022.txt.gz"
+    },
+    {
+      "id": "42056",
+      "lat": 19.82,
+      "lon": -84.945,
+      "path": "OBS/42056h2022.txt.gz"
+    }
+  ],
+  "bounds": [
+    -100,
+    -60,
+    10,
+    40
+  ],
+  "mesh_label": "120 km",
+  "storm_radius_km": 500,
+  "wake_bounds": [
+    -86,
+    -79,
+    22,
+    30
+  ],
+  "wind_map_hours": [
+    24,
+    60,
+    96
+  ]
+}

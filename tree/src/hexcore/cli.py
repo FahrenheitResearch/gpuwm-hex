@@ -303,6 +303,7 @@ def _add_render_parser(commands: argparse._SubParsersAction) -> None:
 #: * ``global`` and the doors after it compose every door above from a row;
 #:   ``regional`` is the limited-area counterpart of ``global``.
 _DOORS: tuple[tuple[tuple[str, ...], Callable[[argparse._SubParsersAction], None]], ...] = (
+    (("tc-verify",), _door(".tc_verify", "register_cli")),
     (("country",), _door(".country_door", "add_country_parser")),
     (("version",), _add_version_parser),
     (("verify-dycore", "verify-mpas"), _add_verify_parsers),
@@ -381,6 +382,8 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
             "model core (a port of MPAS-Atmosphere v8.4.2)"
         ),
     )
+    parser.add_argument("--backend", choices=("cuda", "amd"),
+                        help="execution backend (default: CUDA; AMD is experimental)")
     commands = parser.add_subparsers(dest="command", required=True)
     for names, add in rows:
         try:
@@ -437,8 +440,31 @@ def _select_numerics(arguments: argparse.Namespace) -> None:
     arguments.numerics_source = source
 
 
+def _fold_stochastic_switches(arguments: argparse.Namespace) -> None:
+    """``--sppt/--no-sppt`` and ``--skeb/--no-skeb`` override the same keys of ``--stochastic`` JSON."""
+    switches = {name: getattr(arguments, name) for name in ("sppt", "skeb")
+                if getattr(arguments, name, None) is not None}
+    if not switches or not hasattr(arguments, "stochastic"):
+        return
+    import json
+    current = json.loads(arguments.stochastic) if arguments.stochastic else {}
+    if not isinstance(current, dict):
+        raise ValueError("--stochastic must be a JSON object")
+    current.update(switches)
+    arguments.stochastic = json.dumps(current, sort_keys=True)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    try:
+        from gpuwm.backend import consume_backend_option
+        argv = consume_backend_option(argv, local_backend_commands=("verify-dycore",))
+    except ValueError as error:
+        print(f"gpuwm-hex: {error}", file=sys.stderr)
+        return 2
+    except ModuleNotFoundError as error:
+        if not _engine_missing(error):
+            raise
     if _command_word(argv) != "forecast":
         return _main_once(argv)
     # A storm-following segment in a resident moving process (hexcore.mpasphys.moving_resident_v842): a stop that
@@ -480,6 +506,7 @@ def _main_once(argv: Sequence[str]) -> int:
             for row in options(arguments)[0]:
                 if row["writer"]:
                     require_binary(row)
+        _fold_stochastic_switches(arguments)
         _select_numerics(arguments)
         if arguments.command in {"init", "lbc"}:
             from .time_ledger import stage

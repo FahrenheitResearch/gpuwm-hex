@@ -42,7 +42,7 @@ def inventory(package_root=None, numerics=None, compiler_family=None, *, compile
             continue
         text = path.read_text(encoding="utf-8-sig")
         # Only a file whose text names raw_kernel can hold a raw_kernel(s) call, so the rest are not parsed:
-        # the same rows.  THE COST THIS REMOVES (V8X6000, 2026-10-29): parsing and walking all ~500 files was
+        # the same rows.  THE COST THIS REMOVES (eight-card system, 2026-10-29): parsing and walking all ~500 files was
         # 10 of the 15 s the cold catalog took on one thread before the compile pool could start.
         if "raw_kernel" not in text:
             continue
@@ -388,6 +388,13 @@ def physics_inventory(numerics=None):
                            "options": list(_hex_numerics.options(gf.COMPILER_OPTIONS, numerics=numerics)),
                            "route": "raw-nvrtc", "filename": "gf_mpas_v842.cu"}),
                  "physics_family": "gf_mpas"})
+    # RRFS GF-Li ("hrrrv5 + storm scheme" on the zoom globe). THE BREAKAGE THIS ENDS: absent here, a fresh box compiled
+    # it at its first convection call, about 2 min on one core while the card waited (cold canary, 2026-10-31).
+    from hexcore.mpasphys.rrfs import cu_gfl_bf6a4b0 as gfl
+    rows.append({**recipe({"source": gfl.cuda_source(),
+                           "options": list(_hex_numerics.options(gfl.COMPILER_OPTIONS, numerics=numerics)),
+                           "route": "raw-nvrtc", "filename": "cu_gfl_bf6a4b0.cu"}),
+                 "physics_family": "rrfs_cu_gfl_bf6a4b0"})
     from hexcore.mpasphys import seaice_v842 as seaice
     from hexcore.mpasphys.rrfs import noah_seaice as rrfs_seaice
     for family, source, filename in (
@@ -416,7 +423,7 @@ def physics_inventory(numerics=None):
                          "physics_family": "thompson_workspace"})
         # The same column module without the per-column workspace (thompson_v842._module workspace=False, exact
         # text). THE BREAKAGE THIS ENDS: absent here, a cold convection_permitting run compiled it on one core at
-        # its first radar/history output, 12.3-13.5 s after step 1 (V8X6000, 64 -> 2 km zoom globe, 2026-10-29).
+        # its first radar/history output, 12.3-13.5 s after step 1 (eight-card system, 64 -> 2 km zoom globe, 2026-10-29).
         source = thompson.cuda_source(device_math_source=resources.thompson_maths(resources._vendored_maths()),
                                       max_levels=levels, corrections=(), workspace=False, numerics=numerics)
         rows.append({**recipe({"source": source,
@@ -471,7 +478,7 @@ def physics_inventory(numerics=None):
                            "route": "direct-nvrtc", "filename": "kern.cu"}),
                  "physics_family": "tempo_rrfs"})
     # TEMPO's reflectivity of a given state (tempo_refl_v303: the f000 frame of a correct-mode TEMPO forecast
-    # and the DA posterior observers). It compiles the same strict text under both numerics, so it is declared
+    # and the state analysis posterior observers). It compiles the same strict text under both numerics, so it is declared
     # once, with the strict rows; the pack serves it by its text to a fast run too. THE BREAKAGE THIS ENDS:
     # absent here, every correct-mode TEMPO forecast compiled it on one core beside its set-up.
     if (numerics or _hex_numerics.mode()) == "strict":

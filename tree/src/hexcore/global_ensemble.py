@@ -281,6 +281,7 @@ def member_plan(value: Mapping[str, Any], members: Sequence[int], lags=None) -> 
 #: card shape (SM count, resident threads) the footprint row is priced from.
 _CARD_PROBE = r"""
 import json, cupy
+from gpuwm.hip_runtime import device_attribute
 r = cupy.cuda.runtime
 cards = []
 for d in range(r.getDeviceCount()):
@@ -290,7 +291,7 @@ for d in range(r.getDeviceCount()):
     name = p.get("name", b"")
     name = name.decode("utf-8", "replace") if isinstance(name, (bytes, bytearray)) else str(name)
     cards.append({"name": name, "free": int(free), "total": int(total), "sms": int(p["multiProcessorCount"]),
-                  "threads": int(r.deviceGetAttribute(r.cudaDevAttrMaxThreadsPerMultiProcessor, d))})
+                  "threads": device_attribute(cupy, "MaxThreadsPerMultiProcessor", d)})
 print(json.dumps(cards))
 """
 
@@ -405,7 +406,7 @@ def cards_per_member(value: Mapping[str, Any], args: argparse.Namespace,
     THE BREAKAGE THIS PREVENTS (8x RTX 5090 fit, 2026-10-27): a 30 km MPAS-route member peaks at 75,069 MiB
     on one card (``device_admission.MPAS_ROUTE_RUN_PEAKS``), more than twice a 32 GB card, and the ensemble
     door only ever put a member on ONE card (``forecast_argv`` strips ``--samehost-devices``), so a 30 km
-    global ensemble (and the synthetic-radar DA cycle's member forecasts, which run through this door) could
+    global ensemble could
     not run on any 32 GB card at all.  The forecast door already runs one member over several cards in one
     process (the same-host rank threads, ``mpasphys.samehost_v842`` on the MPAS route); this picks how many.
 
@@ -825,7 +826,7 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
                 rc = 1
             else:
                 rc = _cli(argv, log, {**env, "CUDA_VISIBLE_DEVICES": card,
-                                      "GPUWM_HEX_MEMBER_MEMORY": "shared-card" if len(group) > 1 else "single",
+                                      "GPUWM_HEX_MEMBER_MEMORY": "shared-card" if len(group) > 1 else "compact",
                                       GATE_ENV: str(gate_path(card)),
                                       TICKET_ENV: str(ticket)})
         finally:
@@ -884,7 +885,7 @@ def run_forecasts(value: Mapping[str, Any], members: list[dict[str, Any]], args,
                     time.sleep(0.5)  # a split group may still be queued by another card
                     continue
                 # Host-RAM admission for the PIPELINED start: the next group's process prepares on the host while
-                # this card's current group still holds its own host memory.  THE BREAKAGE THIS PREVENTS (V8X,
+                # this card's current group still holds its own host memory.  THE BREAKAGE THIS PREVENTS (eight-card system,
                 # 8x RTX 5090, 251 GB host, 2026-10-27): hex 60 km forecast children at 21-29 GB each were the
                 # cgroup OOM killer's victims 30 times in one night.  Waits only while another group of this card
                 # is still running (a first group always starts) and never longer than that group runs.
@@ -1074,8 +1075,14 @@ def run_ensemble(value: dict[str, Any], args: argparse.Namespace, stages: list[s
 def add_ensemble_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lagged", default=None, help="earlier source-cycle offsets in hours, e.g. 0,6,12,18; Cartesian product with --members")
     parser.add_argument("--stochastic", default=None, metavar="JSON",
-                        help="member options; default SPPT+SKEB on when fewer than 10 source members")
+                        help="member options; default SPPT+SKEB on for every ensemble of more than one member")
     parser.add_argument("--stochastic-seed", type=int, default=53)
+    parser.add_argument("--sppt", action=argparse.BooleanOptionalAction, default=None,
+                        help="stochastically perturbed parameterization tendencies (Buizza et al. 1999; Palmer et al. 2009); "
+                             "overrides the sppt key of --stochastic")
+    parser.add_argument("--skeb", action=argparse.BooleanOptionalAction, default=None,
+                        help="stochastic kinetic-energy backscatter (Shutts 2005; Berner et al. 2009); "
+                             "overrides the skeb key of --stochastic")
     parser.add_argument("--members", default=None, metavar="SPEC",
                         help="source members, or generated stochastic identities for a deterministic source, e.g. 1-30: each member's init, "
                              "then the members resident on the card in groups (see --members-per-card)")

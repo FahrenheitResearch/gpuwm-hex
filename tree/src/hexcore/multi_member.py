@@ -757,7 +757,7 @@ def run_suite_members(arguments, door, root, scratch):
         for run_id, member in members:
             log = root / f"{run_id}.log"
             process = context.Process(target=_suite_member_process, args=(member, str(log),
-                                              "shared-card" if len(members) > 1 else "single"),
+                                              "shared-card" if len(members) > 1 else "compact"),
                                       name=f"hex-suite-member-{run_id}")
             process.start()
             processes.append((run_id, member, log, process))
@@ -816,6 +816,8 @@ def _run_members(arguments, door, root, scratch, admit_co_tenancy):
             solo_required_bytes=door.required_free_bytes(first.cells, model=first.model,
                                                           margin_bytes=first.headroom_bytes),
             member_additional_bytes=tuple(door.stochastic_array_bytes(request.cells, request.stochastic, levels=levels)
+                                          + (door.tc_workspace_bytes(request, levels=levels)
+                                             if getattr(request, "tc_climate", None) is not None else 0)
                                           for _, request in requests))
         architecture = door.admit_architecture()
         binding, driver = door._load_drivers(first.repo)

@@ -2,7 +2,7 @@
 //!
 //! THE BREAKAGE THIS PREVENTS: tempo_table_init and tempo_table_compute called the host C library's tgammaf, so
 //! the TEMPO tables followed whatever libm the box had. glibc 2.43 (the native reference host) returns the
-//! correctly rounded gamma; glibc 2.39 (Ubuntu 24.04, e.g. the V5090 box) does not (tgammaf(4) = 6.0000005), so
+//! correctly rounded gamma; glibc 2.39 (Ubuntu 24.04, e.g. the reference system box) does not (tgammaf(4) = 6.0000005), so
 //! 268,926 of 772,327 table words (ccg, cig, crg, csg, cgg and everything computed from them) changed with the
 //! host and a strict hrrrv5 run differed from native in 1,957,713 of 7,901,197 words after 1 h on a case that is
 //! bitwise on the reference host.

@@ -2,6 +2,10 @@
 
 MPAS-Atmosphere v8.4.2 on the GPU, driven from the ArWen engine.
 
+CUDA remains the default. The [experimental AMD backend](docs/amd-backend.md)
+is opt-in with `--backend amd` or `GPUWM_BACKEND=amd`; the linked page records
+the installation paths, measured single-card scope and numerical limits.
+
 gpuwm-hex ports MPAS-A v8.4.2 to Python and CUDA, fully device-resident: the
 dynamical core on its unstructured global mesh with regional refinement, the
 MPAS physics suites, initialization and static fields, the incremental analysis
@@ -464,7 +468,7 @@ Also proven:
 | Python | 3.11 or newer |
 | GPU | A CUDA device: any NVIDIA card of compute capability 7.5 (Turing) or newer runs, on a CUDA 12 or CUDA 13 driver, with no flag. sm_86 and sm_89 are anchored (the numerical contract measured again on that architecture), sm_120 is the proven contract floor where it was first measured, and any other card runs unanchored and its receipt says so; `gpuwm-hex doctor` names your card and its status. Memory is set by mesh size *and* by the card, and not by a line through the two: the footprint is a per-card core, plus the Grell-Freitas and YSU column workspaces charged at `min(cells, tile)`, plus a per-cell term, all in `hexcore.device_admission`. Measured 2026-08-26 on an RTX 5090 at the merged tip: the published 40,962-cell global mesh (x1.40962, about 120 km) peaked at **8,874 MiB, inside a 12 GiB card's budget**; the 163,842-cell mesh (x4.163842, about 24 km) peaked at **20,446 MiB**, and every free-memory gate admits at the measured floor (the prediction plus that card's own margin, **about 21.7 GiB free at x4**), so x4 remains in practice a 32 GiB-card configuration. The core is a property of the card, not the mesh, and the door reads the card's multiprocessor count at the decision rather than assuming a 5090: the 16 GiB and 10 GiB parts each carry their own measured row, and a card nobody has measured gets a derived row that is labelled derived. A card with its own per-allocation ledger can still supply it with `--device-fixed-mib` / `--device-bytes-per-cell`. |
 | CUDA | CuPy matching your driver's CUDA major. There is no way for pip to detect it, so you choose (below). |
-| Engine | The `gpuwm` distribution, 2.9 (`gpuwm>=2.9.11,<2.10`), which pip resolves for you: the ArWen physics seam, and the bundle that carries the MPAS bridge binaries the doors drive (including `met_intermediate` for init-source and the renderers for products). The forecast runs on the installed engine; a git clone at `v2.9.0` is optional (receipts then name its commit). See *The engine pin*. gpuwm 2.8.9 cannot serve 0.4: it has no `met_intermediate`, its renderer knows none of the product windows, and it has no `rw_hex_points`. |
+| Engine | The `gpuwm` distribution, 2.9 (`gpuwm>=2.9.12,<2.10`), which pip resolves for you: the ArWen physics seam, and the bundle that carries the MPAS bridge binaries the doors drive (including `met_intermediate` for init-source and the renderers for products). The forecast runs on the installed engine; a git clone at `v2.9.12` is optional (receipts then name its commit). See *The engine pin*. gpuwm 2.8.9 cannot serve 0.4: it has no `met_intermediate`, its renderer knows none of the product windows, and it has no `rw_hex_points`. |
 | Platforms | Linux x86_64 with glibc 2.28 or newer installs the prebuilt wheel (`manylinux_2_28`: RHEL 8 and 9, Ubuntu 20.04 and later). Anywhere else pip builds the sdist, which needs a Rust toolchain (`cargo`) for the bundled helpers; the observation scorer is built only when `GPUWM_HEX_ENGINE_SOURCE` names a gpuwm source checkout, and otherwise `gpuwm-hex score` refuses by name and `doctor` reports the gap (forecasts are unaffected). There is no prebuilt Windows wheel. |
 | Assets | A mesh grid file, a matching static file, and (for the init door) a vertical-grid declaration, normally a `--vertical-spec` JSON; a native-minted init file as a capsule is the compatibility mode. `gpuwm-hex global` fetches its published meshes itself; otherwise **gpuwm-hex ships none of these**. See *Assets you must supply*. |
 | Rust binaries | The field engines (`rw_mpas_init`, `rw_mpas_static`, `rw_mpas_convert`, `rw_mpas_lbc`, `rw_wrfbatch` and the others) come from gpuwm's bridge bundle or a gpuwm source build. Eight of them ship in this wheel, with its own helpers: `rw_mpas_geometry`, `rw_mpas_stream`, `rw_mpas_static`, `rw_mpas_lbc` (native case-9 boundaries), `rw_igra2` (IGRA2 radiosondes for `gpuwm-hex score`) and the RRFS fork dycore's three programs. See *Getting the Rust engines*. |
@@ -550,13 +554,11 @@ is unchanged.
 
 ### The engine pin
 
-gpuwm-hex 0.4.2 requires gpuwm 2.9 (`gpuwm>=2.9.4,<2.10`). The sixteen seam
-files were measured against gpuwm 2.9.0 at its public tag `v2.9.0` (`0db04746`),
-from the three platform wheels PyPI serves
-(`verification/engine-verdicts/repin-290-20261014.json`).
+gpuwm-hex 0.4.12 requires gpuwm 2.9.12 or newer inside 2.9 (`gpuwm>=2.9.12,<2.10`). The installed
+engine version and seam digests are recorded in each forecast receipt.
+The bridge source commit and measured helper source sets ship in the package manifests.
 
-- **The range admits gpuwm 2.9.4 and newer patches below 2.10.** 0.3.3's one-patch range replaced
-  gpuwm 2.8.7 with 2.8.0; that is why the range changed.
+- **The range admits gpuwm 2.9.12 and newer patches below 2.10.**
 - **An engine inside the range whose radiation helper set this release has
   not measured is refused at the forecast door, by name:** the installed
   version, the version this release was measured on, and both remedies
@@ -1102,11 +1104,43 @@ dewpoint and temperature worse on three. So `reference` stays the default and
 `fast` is there for when time matters more than the near-surface forecast.
 The same measurement is in `docs/hex-point-hrrr.md`.
 
+### Stochastic physics (SPPT, SKEB)
+
+hex carries its own SPPT and SKEB, written from the published methods. SPPT
+follows Buizza, Miller & Palmer (1999) and Palmer et al. (2009); SKEB follows
+Shutts (2005) and Berner et al. (2009). They run on the GPU on every route
+and on every mesh: global, zoom globe, limited area, RRFS included.
+`--sppt` and `--skeb` on `forecast` and `global --members` turn them on.
+They are on by default in every hex ensemble of more than one member, and
+`--no-sppt` or `--no-skeb` turns them off. On the RRFS suite route, `--sppt`
+takes NOAA's RRFS v2 ensemble settings (one scale: 0.8, 450 km, 6 h).
+[Stochastic physics](docs/stochastic-physics.md) has the method, the
+controls and the measured pattern statistics.
+
+Measured on 2026-10-29:
+
+- **Pattern statistics** (450 km, 6 h): correlation falls to `exp(-1/2)`
+  at 450.5 km (Gaussian fit 451.0 km). Point variance is 1.001 and the lag
+  time is 5.996 h.
+- **Spread and skill** (10 GEFS members, 120 km, 2026-10-27 00Z, +6 h
+  against the GFS analysis):
+
+  | | z500 spread | z500 mean RMSE | t2m spread | t2m mean RMSE |
+  | --- | --- | --- | --- | --- |
+  | SPPT and SKEB off | 3.21 m | 4.065 m | 0.44 K | 1.698 K |
+  | SPPT and SKEB on | 3.50 m | 4.078 m | 0.51 K | 1.692 K |
+
+- **Cost:** under 1 % of the step.
+- **Restart:** a run restarted from a 3 h checkpoint is identical to the
+  straight run in every word.
+- **Both off:** forecasts are identical, word for word, to those of the
+  release before this change.
+
 ### Running an MPAS physics suite
 
 **MPAS physics is the default (0.4.6).** Every door (`forecast`, `global`,
 `mesh-plan --run`, `regional`, `country`, `moving`, ensembles, `cycle`, Hex
-with Regional parents, CUDA JEDI backgrounds) runs MPAS-A's own physics on the
+with Regional parents, backgrounds) runs MPAS-A's own physics on the
 MPAS route when the run names no physics. The suite follows MPAS-A practice by
 mesh (`src/hexcore/data/profiles/physics-default.v1.json`):
 
@@ -1442,7 +1476,7 @@ Stage walls were mesh 1,246.24 s, intermediate 328.85 s, init 3.44 s,
 boundaries 9.11 s, contract 85.19 s and forecast 1,908.79 s. These are shared
 host timings. The original command hung in the engine's `rw_hex_points`
 bridge after the forecast passed. The engine fix on
-`lane/improve-32b-hex-points-hang` (for 2.9.4) masks missing surface wind
+`development branch` (for 2.9.4) masks missing surface wind
 values and bounds raster work to the image canvas. The exact retained bridge
 invocation then completed in 0.53 s. Products-only recovery on
 the retained forecast completed in 13.81 s with 70 maps and

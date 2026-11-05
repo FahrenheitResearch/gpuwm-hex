@@ -4,6 +4,8 @@ Numerical text is generated from c942418, including the complete MPAS wrapper.
 Shared device maths is supplied by the caller. Forecast acceptance is separate.
 """
 from __future__ import annotations
+
+from gpuwm.backend import compilation_target as _compilation_target, image_target as _image_target
 from hexcore import numerics as _hex_numerics
 from typing import Mapping
 
@@ -10645,7 +10647,7 @@ errmsg = " ";
 errflg = 0;
 }
 };
-#ifdef HEX_NUMERICS_FAST
+#if defined(HEX_NUMERICS_FAST) && !defined(__HIP_PLATFORM_AMD__)
 #define MYNN_L4_REGS __maxnreg__(160)
 #else
 #define MYNN_L4_REGS
@@ -11084,7 +11086,8 @@ def lanes_per_column(kernels, ncols: int) -> int:
     sms = int(cp.cuda.Device().attributes['MultiProcessorCount'])
     fast = _hex_numerics.mode() == 'fast'
     for width in ((16,) if fast else sorted(LANE_WIDTHS, reverse=True)):
-        capacity = sms * max(int(driver.occupancyMaxActiveBlocksPerMultiprocessor(kernels[width].ptr, 32, 0)), 1)
+        from gpuwm.backend import active_blocks_per_multiprocessor
+        capacity = sms * max(int(active_blocks_per_multiprocessor(kernels[width].ptr, 32, 0)), 1)
         if -(-ncols * width // 32) <= capacity:
             return width
     return 4 if fast else 1
@@ -11224,16 +11227,22 @@ class MynnEdmfCuda:
             self._module.load(self.compiled_image)
             self._load_kernels()
             return
-        options = _hex_numerics.options(CUDA_OPTIONS) + ('--gpu-architecture=sm_' + cp.cuda.Device().compute_capability,)
-        program = nvrtc.createProgram(source, 'rrfs_mynnedmf.cu', (), ())
-        try:
+        from gpuwm.hip_backend import active
+        if active():
+            from hexcore.cuda_backend.aot import raw_image
+            ptx = raw_image(source, _hex_numerics.options(CUDA_OPTIONS),
+                            _compilation_target(xp=cp), filename='rrfs_mynnedmf.cu')
+        else:
+            options = _hex_numerics.options(CUDA_OPTIONS) + ('--gpu-architecture=sm_' + cp.cuda.Device().compute_capability,)
+            program = nvrtc.createProgram(source, 'rrfs_mynnedmf.cu', (), ())
             try:
-                nvrtc.compileProgram(program, options)
-            except Exception as exc:
-                raise RuntimeError(nvrtc.getProgramLog(program)) from exc
-            ptx = nvrtc.getCUBIN(program)
-        finally:
-            nvrtc.destroyProgram(program)
+                try:
+                    nvrtc.compileProgram(program, options)
+                except Exception as exc:
+                    raise RuntimeError(nvrtc.getProgramLog(program)) from exc
+                ptx = nvrtc.getCUBIN(program)
+            finally:
+                nvrtc.destroyProgram(program)
         self._module = cp.cuda.function.Module()
         self._module.load(ptx)
         self._load_kernels()
@@ -11409,7 +11418,7 @@ def prepare_pbl(backend: MynnEdmfCuda, common_arguments: Mapping, fields: Mappin
         source = CUDA_FTZ_HELPERS + backend.shared_math_source + PBL_GEOMETRY_CUDA
         # The same raw NVRTC compile, through the box's warm store and the pack (hexcore.cuda_backend.aot).
         module = cp.cuda.function.Module(); module.load(raw_image(source, _hex_numerics.options(CUDA_OPTIONS),
-            cp.cuda.Device().compute_capability, filename='rrfs_mynn_geometry.cu'))
+            _compilation_target(xp=cp), filename='rrfs_mynn_geometry.cu'))
         backend._geometry_module = module
         backend._geometry = module.get_function('rrfs_mynnedmf_dx')
     n = (ite-its+1)*(jte-jts+1)
@@ -11502,9 +11511,16 @@ def load_cuda_packet(packet, device):
     from hexcore.mynn_glibc_math import mynn_glibc_source
     image = Path(packet['image']).read_bytes()
     metadata = json.loads(Path(packet['metadata']).read_text())
+    from hexcore.cuda_backend.source_identity import mynn_source_matches
     source = CUDA_FTZ_HELPERS + mynn_glibc_source() + ARRAY_SUPPORT + MODULE_CUDA
-    options = list(_hex_numerics.options(CUDA_OPTIONS)) + ['--gpu-architecture=sm_' + device.cuda.Device().compute_capability]
-    if (metadata['source_sha256'] != hashlib.sha256(source.encode()).hexdigest()
+    from gpuwm.hip_backend import requested,compile_source
+    if requested() == 'hip':
+        if (not mynn_source_matches(source, metadata['source_sha256'])
+                or metadata['image_sha256'] != hashlib.sha256(image).hexdigest()):
+            raise RuntimeError('MYNN resource source or image digest differs')
+        return compile_source(source,_hex_numerics.options(CUDA_OPTIONS),filename='rrfs_mynnedmf.cu')[0]
+    options = list(_hex_numerics.options(CUDA_OPTIONS)) + ['--gpu-architecture=' + _image_target(xp=device)]
+    if (not mynn_source_matches(source, metadata['source_sha256'])
             or metadata['image_sha256'] != hashlib.sha256(image).hexdigest()
             or metadata['options'] != options):
         raise RuntimeError('MYNN CUDA resource differs from the strict source, image or device architecture')

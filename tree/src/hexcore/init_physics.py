@@ -300,7 +300,7 @@ def prepare_forecast_init(init, destination, physics, start_time):
             return init, None
         aerosol_change = "nwfa" in names and (bool(missing) or not state["analysis_pair"] or synthetic_source)
         category_change = land["land_surface_scheme"] != "noah" and state.get("soil_category_mismatches", 0) > 0
-    if not soil_change and not aerosol_change and not category_change:
+    if not missing and not soil_change and not aerosol_change and not category_change:
         return init, None
     if not start_time:
         raise ValueError("physics initialization needs the initial state's valid time for source analysis and monthly climatology")

@@ -23,7 +23,13 @@ def test_existing_country_source_override_binds_both_initialization_and_provenan
 def test_named_region_connects_cull_init_source_boundary_and_products(tmp_path, source, nlevels, humidity, endpoints):
     # AIFS boundaries come from its own 6-hourly forecast leads since region-any-init
     # (3dc8b074): two endpoints over the 6 h window. GFS posts hourly to 120 h, so it has seven.
-    result = plan(args(tmp_path, '--region','east-africa','--source',source))
+    # Analysis-only starts need a forecast source for lateral boundaries.
+    extra = ('--boundary-source', 'gfs') if source in ('era5', 'era5-cds') else ()
+    result = plan(args(tmp_path, '--region','east-africa','--source',source,*extra))
+    if extra:
+        nlevels, humidity = 34, 'no'
+        assert result['split_boundary']
+        assert result['boundary_source'] == 'gfs'
     commands = result['commands']
     assert commands['init'][2] == source
     assert '/parent/' in commands['init'][commands['init'].index('--grid')+1]
@@ -170,6 +176,9 @@ def test_existing_parent_is_revalidated_for_a_different_region(tmp_path, monkeyp
     monkeypatch.setattr(engines, 'resolve', lambda spec: Path('/rust')/spec.name)
     monkeypatch.setattr(prep_store, 'run_or_fetch', prepare)
     monkeypatch.setattr(cli, 'main', lambda command: 1)  # End after preparation, before field initialization.
+    # The source's fetch and decode start beside the mesh: no network in this test.
+    from hexcore import lbc_producer
+    monkeypatch.setattr(lbc_producer, 'produce_source_endpoints', lambda *a, **k: [])
     status = type('Status', (), {'note': lambda *a: None})()
     assert country_door._prepare_region(arguments, value, status) == 1
     assert len(seen) == 2
@@ -244,3 +253,28 @@ def test_only_the_initial_endpoint_takes_the_cold_land_donor(tmp_path):
     flags = [c['argv'][c['argv'].index('--soil-remap') + 1] if '--soil-remap' in c['argv'] else 'auto'
              for c in commands]
     assert flags == ['auto', 'off', 'off', 'off']
+
+
+def test_a_country_preparation_decodes_beside_its_mesh_and_a_stop_stops_the_decode(tmp_path, monkeypatch):
+    """hrrrv5 regional region: 13-186 s of decode after the mesh, static and cut (2026-10-31); a door that stops takes it along."""
+    import threading
+    import time
+    from hexcore import country_door
+
+    started, released = threading.Event(), threading.Event()
+    calls = []
+
+    def produce(commands, met_dir, *, workers, runner):
+        calls.append((commands, met_dir, workers))
+        started.set()
+        released.wait(5)
+        return ['decoded']
+
+    source = country_door._SourceBesideMesh(['endpoint'], tmp_path / 'met', 2, produce)
+    assert started.wait(5) and calls == [(['endpoint'], tmp_path / 'met', 2)]
+    assert not source.future.done()
+    released.set()
+    assert source.future.result(5) == ['decoded']
+    # A stopped source starts no further lead.
+    source.stop()
+    assert source.run(['init-source']) == 1

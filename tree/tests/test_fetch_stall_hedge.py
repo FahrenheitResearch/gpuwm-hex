@@ -1,6 +1,6 @@
 """A stalled source connection is hedged on a new connection instead of holding the fetch for the socket timeout.
 
-THE BREAKAGE (hex LAM vs zoom-globe measurement, V5090, 2026-10-27): one GFS f006 byte-range request stalled on
+THE BREAKAGE (hex LAM vs zoom-globe measurement, reference system, 2026-10-27): one GFS f006 byte-range request stalled on
 its S3 connection and the region's boundaries waited the full 300 s socket timeout before retrying it.  These tests
 run the real fetch code against a local HTTP server that forces that stall (a connection that is accepted and never
 answered, or one that stops part way through its body) and require the bytes to arrive, unchanged, a few stall
@@ -169,7 +169,13 @@ def test_a_whole_bz2_object_on_one_stream_is_hedged_and_the_loser_leaves_nothing
     how = src._fetch_whole_from(plan, target, plan.url)
     took = time.monotonic() - started
     assert target.read_bytes() == text
-    assert how["hedges"] == 1 and took < 4 * STALL + 2.0
+    assert took < 4 * STALL + 2.0
+    # The stalled copy is hedged on a new connection, and every hedge follows the rule: no byte from any live copy
+    # for STALL.  How many hedges that takes is the host's: at load ~55 (hex 0.5.0 sealing pass) the first hedge
+    # copy itself sent nothing for STALL and was hedged once more, as the rule requires, so the count is not fixed.
+    events = [event for event in src._HEDGES if event["url"] == plan.url]
+    assert how["hedges"] >= 1 and how["hedges"] == len(events) and how["attempts"] == how["hedges"] + 1
+    assert events[0]["copy"] == 2 and all(event["no_byte_for_s"] >= STALL for event in events)
     origin.release.set()  # the stalled copy wakes, finds the race decided and drops its part file
     deadline = time.monotonic() + 5.0
     while list(tmp_path.glob("*.part*")) and time.monotonic() < deadline:

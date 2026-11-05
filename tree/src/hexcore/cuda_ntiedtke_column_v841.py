@@ -283,7 +283,7 @@ def _capturing_new_tiedtke() -> Any:
             # column and llo3 is reduced and checked per chunk, exactly as on
             # any mesh already wider than the cap, so the width moves memory
             # and launch counts only.  An engine without the per-instance cap
-            # (before lane/292-hex-memory) ignores the attribute.
+            # (before development branch) ignores the attribute.
             self.tile_columns_per_sm = HEX_NT_TILE_COLUMNS_PER_SM
 
         def __call__(self, *, atmosphere, fields, state, cfg):

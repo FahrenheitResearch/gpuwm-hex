@@ -197,8 +197,11 @@ def test_dispatch_preserves_small_shape_and_strict_throughput(monkeypatch):
     cupy.cuda = cuda
     cuda.Device = lambda: SimpleNamespace(attributes={'MultiProcessorCount': 170})
     cuda.driver = SimpleNamespace(occupancyMaxActiveBlocksPerMultiprocessor=lambda *args: 8)
+    cuda.runtime = SimpleNamespace(is_hip=False)  # the backend selector reads it
     monkeypatch.setitem(sys.modules, 'cupy', cupy)
     monkeypatch.setitem(sys.modules, 'cupy.cuda', cuda)
+    import gpuwm.backend as engine_backend
+    monkeypatch.setattr(engine_backend, "_selected", None)  # the selector memoizes the first cupy it served
     monkeypatch.delenv('GPUWM_HEX_MYNNEDMF_LANES', raising=False)
     kernels = {w: SimpleNamespace(ptr=w) for w in edmf.LANE_WIDTHS}
     for mode, large_width in [('fast', 4), ('strict', 1)]:

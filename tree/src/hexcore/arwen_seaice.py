@@ -24,6 +24,8 @@ def install_noahmp_seaice(backend, seam):
     retire_engine_seaice(seam)
     if int(seam._cfg.sf_sfclay_physics) not in (1, 91):
         raise ValueError("Noah-MP sea ice requires the routed MM5 surface layer (1 or 91)")
+    from .ocean_pwp import select_ice_owner
+    select_ice_owner(driver)
     f = driver.fields
     for name in dict.fromkeys((*_SEA, *_INOUT)):
         f[_PREFIX + name] = f[name].copy()

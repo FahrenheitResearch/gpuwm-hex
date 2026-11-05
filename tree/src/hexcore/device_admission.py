@@ -303,16 +303,20 @@ def harmonic_basis_bytes(cells: int, degree: int) -> int:
 
 def stochastic_array_ledger(cells: int, levels: int, degree: int, *,
                             extra_scales: int = 0, skeb: bool = False) -> dict[str, int]:
-    """Logical array floor for one stochastic member on a closed global mesh.
+    """Logical array floor for one stochastic member on a mesh.
 
-    Counts the basis, retained mesh/member arrays, and named forcing arrays
-    live at the tendency-write kernels. Each member pays its own mesh
-    resource without a sharing credit. These are allocation shapes, not a
-    measured peak: construction scratch, intermediate expression outputs,
-    reduction/cuBLAS workspaces and allocator placement remain unpriced.
-    No mesh data or GPU context is needed to evaluate this stdlib-only sum.
+    Patterns are synthesised on the fly (no stored harmonic basis), so the
+    mesh resource holds coordinates, topology and recurrence tables. Counts
+    retained mesh/member arrays and the named forcing arrays live at the
+    tendency-write kernels. These are allocation shapes, not a measured peak:
+    construction scratch, intermediate expression outputs, reduction
+    workspaces and allocator placement remain unpriced. No mesh data or GPU
+    context is needed to evaluate this stdlib-only sum.
     """
-    basis = harmonic_basis_bytes(cells, degree)
+    if type(cells) is not int or cells < 4:
+        raise ValueError("a spherical Voronoi mesh needs at least four cells")
+    if type(degree) is not int or not 1 <= degree <= 512:
+        raise ValueError("harmonic degree must be 1..512")
     if type(levels) is not int or levels < 1:
         raise ValueError("stochastic levels must be a positive integer")
     if type(extra_scales) is not int or not 0 <= extra_scales <= 5:
@@ -322,11 +326,13 @@ def stochastic_array_ledger(cells: int, levels: int, degree: int, *,
     vertices, edges = 2*cells-4, 3*cells-6
     points, modes, processes = cells+vertices, (degree+1)**2-1, 1+extra_scales
     arrays = dict(
-        harmonic_basis=basis,
+        harmonic_recurrence_tables=8*modes,
+        mesh_coordinates=16*points,
         mesh_mode_degrees=8*modes,
         mesh_topology=16*edges+12*vertices,
         mesh_geometry=4*cells+12*edges,
         member_tapers=4*levels*points,
+        member_moisture_metric=4*levels*cells,
         member_spectral_coefficients=12*modes*processes,
         member_spectral_weights=4*modes*processes,
         member_pattern_outputs=12*points*processes,
@@ -666,7 +672,7 @@ PIN_RESTATEMENT_BYTES = int(round(484.0 * MIB))
 #: What a global row measured on the 2026-08 proof stack must be restated
 #: by, per cell, to price the stack the door runs today.  THE BREAKAGE IT
 #: PREVENTS (measured 2026-10-11, RTX PRO 6000 host, RTX PRO 6000, 188 SM, hex
-#: lane/hex-arbitrary-physics + engine 9f3f52565): a bare-defaults 30 km
+#: development branch + engine 9f3f52565): a bare-defaults 30 km
 #: global run (655,362 cells) peaked 82,404 MiB on its process after the
 #: door priced it at 66,086 MiB from the 170 SM row; the door admitted it
 #: and, before the late-health fix, it ran out of card memory.  The proof
@@ -1043,7 +1049,7 @@ _SHAPED_ROWS: dict[str, dict[str, Any]] = {
         "provenance": (
             "single-mesh row, split by the per-allocation hook, measured "
             "2026-10-11 on an RTX PRO 6000 Blackwell Server (188 SM, "
-            "97,887 MiB) at hex lane/hex-arbitrary-physics + the "
+            "97,887 MiB) at hex development branch + the "
             "late-health fix, engine 9f3f52565, through the bare forecast "
             "door: x1.655362 (655,362 cells, 55 levels), GFS 2026-10-03 "
             "12Z, MPAS-A defaults (monotonic limiter, CUDA-graph "
@@ -1112,7 +1118,7 @@ CURRENT_GLOBAL_ROW: Mapping[str, Any] = MappingProxyType({
     "stack": "census-cuts-2026-10",
     "provenance": (
         "two-point fit, hex/mem-census-cuts e212d4a5 + engine "
-        "lane/292-hex-memory cb2a7f4af54, RTX 5090 (170 SM), route A, bare "
+        "development branch cb2a7f4af54, RTX 5090 (170 SM), route A, bare "
         "forecast door, 1 h: x1.40962 peaked 5,726 MiB and x1.163842 12,244 "
         "MiB by this process's nvidia-smi row; the same runs on hex 3b6175b3 + "
         "engine 088511604c6 peaked 9,892 and 27,882 MiB with every history "
@@ -1215,7 +1221,41 @@ def _through_measured_rank_peaks(model: ShapedFootprintModel, *, single_card: bo
     return model
 
 
-def samehost_rank_model(model: ShapedFootprintModel, *, ranks: int = 2) -> ShapedFootprintModel:
+def samehost_rank_model(model: ShapedFootprintModel, *, ranks: int = 2,
+                        process_ranks: bool = False) -> ShapedFootprintModel:
+    """Price the selected executor, retaining the thread row's measured slope.
+
+    The 24 h 120 km run on 2026-11-02 (170 SM, 1536 threads/SM,
+    55 levels, fast ArWen physics, two processes on one card) held
+    22,524 MiB, against the thread row's 8,308 MiB. The process-local
+    pools and wide radiation buffers cannot share the thread row's core.
+    The whole-device peak is measured; its equal per-rank split is DERIVED
+    from two almost equal ranks (21,445 and 21,449 local columns), not a
+    second-size fit. Retain the known positive slope and tiled terms, and
+    raise the fixed term through that point. Other shapes retain their rows.
+    Receipt: tools/device_memory_ledger/process-ranks-20261102.json.
+    """
+    model = _samehost_thread_rank_model(model, ranks=ranks)
+    if (not process_ranks or int(ranks) < 2 or model.configuration != "global"
+            or model.card.multiprocessors != 170 or model.card.max_threads_per_sm != 1536
+            or model.levels != 55 or model.bytes_per_cell != SAMEHOST_RANK_BYTES_PER_CELL
+            or model.restated_bytes_per_cell != 0.0):
+        return model
+    peak_per_rank = 22_524 * MIB / 2
+    # Use the smaller observed rank: the measured pair's sum is never low.
+    added_core = max(0.0, peak_per_rank - model.predict_bytes(21_445))
+    return replace(model, core_bytes=model.core_bytes + added_core,
+                   radiation_chunk_override=8192, shortwave_arrays_override=16,
+                   measured=False, derived_from="process-ranks-20261102/170sm",
+                   provenance=model.provenance + "; PROCESS RANK CORE: derived equal split of "
+                   "the measured 22,524 MiB whole-device peak, 24 h / 144 steps, "
+                   "120 km, two process ranks on one RTX 5090, 21,445 + 21,449 local "
+                   "columns, 55 levels, fast ArWen physics; one size, retained thread "
+                   "slope and tiled growth. Observed shortwave block: 8192 columns x "
+                   "112 g-points x 16 arrays x 57 levels x 4 bytes (3192 MiB)")
+
+
+def _samehost_thread_rank_model(model: ShapedFootprintModel, *, ranks: int = 2) -> ShapedFootprintModel:
     """Price one resident same-host rank from same-host measurements.
 
     THE BREAKAGE IT PREVENTS (measured 2026-10-12, G3, 4 x RTX PRO 6000, hex
@@ -1518,12 +1558,21 @@ class RouteRunPeak:
 
 #: Whole-run peaks of ONE member on the MPAS physics route (fixed step, fast numerics).
 #:
-#: THE BREAKAGE IT PREVENTS (U-H4, global synradar cycle, 2026-10-27 00:28Z): ``gpuwm-hex global --row
+#: THE BREAKAGE IT PREVENTS (U-H4, global ensemble cycle, 2026-10-27 00:28Z): ``gpuwm-hex global --row
 #: global-30km --source gefs --members-per-card auto`` on two RTX PRO 6000 (97,887 MiB) priced each 30 km MPAS
 #: member at the ArWen-route floor (43,080 MiB), planned 2 per card, and all four members ran out of memory about
 #: 3 min in (CuPy: "Out of memory allocating 432,537,600 bytes (allocated so far: 48,761,238,528 bytes)"); the
 #: next 2-member groups met the same end.  One member alone on that card peaked 75,069 MiB.
 MPAS_ROUTE_RUN_PEAKS: tuple[RouteRunPeak, ...] = (
+    RouteRunPeak(
+        route="mpas", multiprocessors=188, levels=55, cells=737_281,
+        peak_mib=102_000_000_000 / MIB,
+        receipt=("10 km x1.5898242, 5,898,242 cells, 55 levels, eight 96 GB cards; "
+                 "ranks held 99.5/100.0 GB and requested another 1.61 GB, 2026-11-01. "
+                 "102 GB is a failed-allocation lower bound, not a completed-run peak. "
+                 "737,281 is ceil(global cells/8), an owned-share estimate, not a measured halo extent. "
+                 "Applying this conservative floor to local cells also charges for their halos. "
+                 "Source: HEX-GLOBAL-10KM-RESULT.md, MPAS physics memory result")),
     RouteRunPeak(
         route="mpas", multiprocessors=188, levels=55, cells=655_362, peak_mib=75_069.0,
         receipt=("x1.655362 30 km uniform globe, GEFS 2025-05-19 06Z members, 6 h, hex 0.4.8 MPAS physics "
@@ -1571,6 +1620,17 @@ def route_run_curve_mib(cells: int, route: str = "mpas", levels: int = MODEL_VER
     return max(0.0, y0 + (y1 - y0) * (x - x0) / (x1 - x0))
 
 
+def model_for_run(card: CardProfile, configuration: str = 'global', levels: int = MODEL_VERTICAL_LEVELS,
+                  *, route: str = 'arwen', suite: str | None = None,
+                  rollback_armed: bool = False, cells: int | None = None,
+                  qualified_defaults: bool = True) -> ShapedFootprintModel:
+    """Use the measured allocation policy for this route, with the legacy fallback."""
+    from .compact_memory import compact_model
+    return ((compact_model(card, configuration, levels, route=route, suite=suite,
+                          rollback_armed=rollback_armed, cells=cells) if qualified_defaults else None)
+            or model_for_card(card, configuration, levels, rollback_armed=rollback_armed))
+
+
 def route_required_free_bytes(cells: int, model: ShapedFootprintModel | None = None,
                               margin_bytes: int | None = None, *, route: str = "arwen") -> int:
     """:func:`required_free_bytes` for one member on ``route``.
@@ -1584,11 +1644,19 @@ def route_required_free_bytes(cells: int, model: ShapedFootprintModel | None = N
         raise ValueError(f"physics route {route!r} is not one of {PHYSICS_ROUTES}")
     model = FOOTPRINT_MODEL if model is None else model
     base = required_free_bytes(cells, model, margin_bytes)
+    from .compact_memory import CompactFootprintModel
+    if isinstance(model, CompactFootprintModel) and model.route == route:
+        return base
     if route == "arwen":
         return base
     curve = route_run_curve_mib(int(cells), route, int(model.levels))
     if curve is None:
-        return base
+        # The measured MPAS run has 55 levels. A different vertical grid
+        # still pays for that route's physics, with extra levels scaled up.
+        curve = route_run_curve_mib(int(cells), route, MODEL_VERTICAL_LEVELS)
+        if curve is None:
+            raise ValueError(f"no whole-run memory measurement for physics route {route}")
+        curve *= max(1.0, int(model.levels) / MODEL_VERTICAL_LEVELS)
     margin = model.margin_bytes() if margin_bytes is None else int(margin_bytes)
     return max(base, int(round(curve * (1.0 + ROUTE_RUN_MARGIN) * MIB)) + margin)
 

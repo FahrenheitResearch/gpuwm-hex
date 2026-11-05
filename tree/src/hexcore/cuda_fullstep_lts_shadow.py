@@ -33,7 +33,11 @@ from .cuda_courant_fullstep_lts import CudaColumnTransportMonitor
 # Re-audited 2026-10-30 (gpuwm-hex 0.4.11 fold HB2, feat/hex-moving-resident 78111207): the change adds an optional
 # upload_cache passthrough to the from-host constructor only; the LTS list branch still comes first and both transport
 # calls keep the same argument positions, neither touched.
-NATIVE_DRIVER_SHA256 = '01cbb4323d71febcb450256e110a5bb2f6321dc773ca153efd3ae141420a3d81'
+# Re-audited 2026-10-29 (fix/rrfs-shared-dycore-8card-s6, + fix/s6-scalar-lts-layout-hb17): s6 fuses the ordered
+# tendency add pairs (_add_pair) only; both transport calls are byte-identical to the deferral branch's.
+# Re-audited for 0.5.0 after the RRFS speed fold: both scalar calls retain source-old
+# density, split fluxes and stage duration; rdzw and rk_step remain explicit keywords.
+NATIVE_DRIVER_SHA256 = '656be62e34f0e48a7c210dc869e2449c00eece884129121b407b998a0d0582a5'
 
 
 class FullStepShadow:

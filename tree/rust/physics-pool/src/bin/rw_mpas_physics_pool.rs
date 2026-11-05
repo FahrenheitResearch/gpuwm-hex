@@ -319,7 +319,7 @@ fn read_locked(
 // ---- Classic netCDF (CDF-1, CDF-2, CDF-5) words read straight from the file ----
 //
 // THE COST THIS REMOVES (NOAA RRFS v2 conus3km, 2,341,819 cells x 59 levels, 8 x RTX PRO 6000,
-// V8X6000 2026-10-29): the transport took 34 s at 8, 16 and 32 reader processes alike, held by the two
+// eight-card system 2026-10-29): the transport took 34 s at 8, 16 and 32 reader processes alike, held by the two
 // 7.2 GB scalar fields (state scalars, lbc_scalars), each one field on one thread: 13 netCDF-C reads
 // behind the library lock, a per-word div/mod permutation of 1.8 G words, then one write and one SHA-256.
 // A field's words are now read by many threads at once: the netCDF-C metadata calls stay behind the

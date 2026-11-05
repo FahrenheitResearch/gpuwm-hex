@@ -84,7 +84,8 @@ jobs:
         run: |
           FLOOR=$("$PY" -c "import tomllib,pathlib;d=tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'));s=next(s for s in d['project']['dependencies'] if s.split('>=')[0].strip()=='gpuwm');print(s.split('>=')[1].split(',')[0].strip())")
           echo "declared engine floor: ${FLOOR}"
-          echo "tag=v${FLOOR}" >> "$GITHUB_OUTPUT"
+          ENGINE_TAG=$("$PY" -c 'import sys; parts=sys.argv[1].split("."); print(".".join(parts + ["0"] * max(0, 3-len(parts))))' "$FLOOR")
+          echo "tag=v${ENGINE_TAG}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -230,6 +231,9 @@ jobs:
             --require-libexec rw_igra2 \
             --require-libexec hex_gpmetis \
             --json dist-check.json
+
+      - name: refuse private material in both release artifacts
+        run: '"$PY" hex/tree/tools/release_hygiene.py dist/*.whl raw/*.tar.gz'
 
       - name: the artefacts install and answer outside the build tree
         run: |

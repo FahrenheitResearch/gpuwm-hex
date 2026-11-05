@@ -52,7 +52,7 @@
         "gpuwm/core/kernels/rrtmg_sw.cu": "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
         "gpuwm/ingest/wrf_ozone.py": "8594158cb44e65a2bbd25fa861c3ede4ff379f45251a4e45cb03ac2d9ebcd69c"
       },
-      "description": "gpuwm 2.9.2 with the memory cuts (lane/292-mem-cuts): rrtmg_sw_batched_device frees its SW scratch when each call returns. The other five helper sources are the 2.9.0 bytes. Admission establishes source identity only; the before/after forecast comparison is a separate measurement."
+      "description": "gpuwm 2.9.2 with the memory cuts (development branch): rrtmg_sw_batched_device frees its SW scratch when each call returns. The other five helper sources are the 2.9.0 bytes. Admission establishes source identity only; the before/after forecast comparison is a separate measurement."
     },
     {
       "id": "jax-hex-shape-a7c38f9c-source",
@@ -135,6 +135,32 @@
         "gpuwm/core/rrtmg_legacy_prep.py": "ae3aa96f7edf7658ffb538190d45a9f93f05aaecf1da3e8d5a3b3599b0b21e9f",
         "gpuwm/core/rrtmg_lw.py": "ab2a44d4735a760789e1624b3a0d1182a0041423be5efd78864439ca0e2d1c21",
         "gpuwm/core/rrtmg_mcica.py": "82b183eca3f89e2b32b4053900347a5e36b664c1a4f4e3694a1c5c10e9ca0833",
+        "gpuwm/core/rrtmg_sw.py": "b80bfbb7708d5bc560bd1d74329833f21e127d7ebbec63d588718eababdba92f",
+        "gpuwm/ingest/wrf_ozone.py": "420d91b5603acc6eb96ec72e22b0a328fc4c0934460cee7b4f1e1b1792932350"
+      }
+    },
+    {
+      "id": "engine-2.9.12-558d110548f8-source",
+      "engine_commit": "558d110548f8171c43286159264c8aa9518a7f57",
+      "description": "Exact gpuwm 2.9.12 candidate radiation helpers, measured by the engine repin at 558d11054. Admission establishes source identity only; it does not claim unchanged forecast numerics.",
+      "sources": {
+        "gpuwm/core/kernels/rrtmg_sw.cu": "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+        "gpuwm/core/rrtmg_legacy_prep.py": "b28fd410a67547b9e0e4113a3150cb6df22dc2937d5c40fbb05ea8dedc0ad86c",
+        "gpuwm/core/rrtmg_lw.py": "ab2a44d4735a760789e1624b3a0d1182a0041423be5efd78864439ca0e2d1c21",
+        "gpuwm/core/rrtmg_mcica.py": "82b183eca3f89e2b32b4053900347a5e36b664c1a4f4e3694a1c5c10e9ca0833",
+        "gpuwm/core/rrtmg_sw.py": "b80bfbb7708d5bc560bd1d74329833f21e127d7ebbec63d588718eababdba92f",
+        "gpuwm/ingest/wrf_ozone.py": "420d91b5603acc6eb96ec72e22b0a328fc4c0934460cee7b4f1e1b1792932350"
+      }
+    },
+    {
+      "id": "engine-2.9.12-source",
+      "engine_commit": "45cf4898d1e042ac83b9486c66e919ca6d2f952b",
+      "description": "Exact gpuwm 2.9.12 candidate radiation helpers, measured by the engine repin at 45cf4898d. Admission establishes source identity only; it does not claim unchanged forecast numerics.",
+      "sources": {
+        "gpuwm/core/kernels/rrtmg_sw.cu": "43134d6d6d2be4b3e668c7ab92d5850f1f992a09812dd09c9536fce5d9ab791e",
+        "gpuwm/core/rrtmg_legacy_prep.py": "2ab3c53361dcde4947a2a4bd1f181b0f26a6b6174a5223e23272971c3c135c92",
+        "gpuwm/core/rrtmg_lw.py": "ab2a44d4735a760789e1624b3a0d1182a0041423be5efd78864439ca0e2d1c21",
+        "gpuwm/core/rrtmg_mcica.py": "268e230c930a5b98ee88263e648eab71209a3b0cf1e0f105ada2b98cfa84c46f",
         "gpuwm/core/rrtmg_sw.py": "b80bfbb7708d5bc560bd1d74329833f21e127d7ebbec63d588718eababdba92f",
         "gpuwm/ingest/wrf_ozone.py": "420d91b5603acc6eb96ec72e22b0a328fc4c0934460cee7b4f1e1b1792932350"
       }

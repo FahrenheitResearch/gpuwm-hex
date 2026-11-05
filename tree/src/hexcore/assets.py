@@ -88,9 +88,18 @@ def verify(path, row, *, memoise=False):
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
         if digest != row['sha256']:
             raise AssetError(f'{path}: sha256 mismatch (expected {row["sha256"]}, got {digest})')
+        # A version changed within RACY_SECONDS is never remembered, nor one that changed while it was read:
+        # ctime comes from a coarse clock, so a same-size rewrite inside one tick keeps every key field equal
+        # (test_private_checkout_only_accepts_pin, hex 0.5.0 sealing pass reruns, 2026-11-02).
+        from .file_digest import RACY_SECONDS
+
+        def _version(status):
+            return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns
+        settled = (time.time_ns() - max(stat.st_mtime_ns, stat.st_ctime_ns) >= RACY_SECONDS * 1e9 and
+                   _version(path.stat()) == _version(stat))
     except OSError as error:
         raise AssetError(f'{path}: {error}') from error
-    if memoise:
+    if memoise and settled:
         _VERIFIED.add(key)
     return path
 
@@ -202,7 +211,7 @@ def is_inspection():
 def box_asset(name, row):
     """A verified copy of a pinned asset the box already holds outside this run's cache, else None.
 
-    THE BREAKAGE THIS ENDS (an RTX 5090 host and V8X6000, 2026-10-29): packs staged once on a box (the default cache,
+    THE BREAKAGE THIS ENDS (an RTX 5090 host and eight-card system, 2026-10-29): packs staged once on a box (the default cache,
     or baked into its image) were invisible to a run with its own cache root, which then fetched an
     unpublished tag, got a 404 and compiled every kernel through NVRTC.  Searched: the image directories
     (GPUWM_HEX_SYSTEM_ASSETS, default /opt/gpuwm-hex/assets) and the box's default cache.  Each holds

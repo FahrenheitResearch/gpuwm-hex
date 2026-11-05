@@ -1,7 +1,7 @@
 --- a/tools/rustwx/crates/rw-mpas/src/history.rs
 +++ b/tools/rustwx/crates/rw-mpas/src/history.rs
-@@ -7,6 +7,16 @@
- use crate::fieldmap::{FIELD_MAP, FieldMapping, FieldSource, native_history_name};
+@@ -9,6 +9,16 @@
+ };
  use crate::weights::MeshCoordinates;
  use rw_store::netcdf_classic::{NcAttr, NcAttrValue};
 +
@@ -17,7 +17,7 @@
  
  /// Physics identity is copied only when the native history actually declares it.
  /// A renderer conversion cannot infer a microphysics scheme from field names.
-@@ -17,6 +27,7 @@
+@@ -19,6 +29,7 @@
      "WOOF_PHYSICS_BACKEND",
      "WOOF_SCALAR_NAMES",
      "RADAR_MIXING_RATIO_BASIS",
@@ -25,7 +25,7 @@
      "MORR_RIMED_ICE",
      "morr_rimed_ice",
  ];
-@@ -694,6 +705,27 @@
+@@ -846,6 +857,27 @@
              (_, None) => absent.push(wrf_name.to_string()),
          }
      }
@@ -53,7 +53,7 @@
      drop(diag);
      drop(file);
  
-@@ -1165,3 +1197,18 @@
+@@ -1456,3 +1488,18 @@
          assert_eq!(next_month.seconds_since(&origin), 22 * 86_400);
      }
  }
@@ -74,7 +74,7 @@
 +}
 --- a/tools/rustwx/crates/rw-mpas/src/convert.rs
 +++ b/tools/rustwx/crates/rw-mpas/src/convert.rs
-@@ -709,8 +709,8 @@
+@@ -852,8 +852,8 @@
      // Resolved once so the writer gets the whole schema up front, then walked
      // a second time to push the data. `plan` holds what each variable is; the
      // values are produced on the second pass so no frame is held twice.
@@ -85,7 +85,7 @@
          dims: Vec<usize>,
          mapping: Option<usize>,
          stagger: &'static str,
-@@ -775,6 +775,16 @@
+@@ -918,6 +918,16 @@
              units: mapping.units,
              description: mapping.description,
          });
@@ -102,33 +102,57 @@
      }
  
      let mut vars: Vec<NcVarDef> = vec![
-@@ -982,7 +992,21 @@
-         }
- 
-         for planned in &plan {
+@@ -1129,7 +1139,27 @@
+         for batch in plan.chunks(8) {
+           let prepared: Vec<MpasResult<_>> = batch.par_iter().map(|planned| {
+             let mut composite_fallbacks = Vec::new();
 -            let mapping = &FIELD_MAP[planned.mapping.expect("every planned entry maps")];
 +            if planned.mapping.is_none() {
 +                let (source, levels) = &frame.fields[planned.name];
-+                if *levels != 1 { return Err(MpasError::Refusal(format!("{} is not a surface product", planned.name))); }
++                if *levels != 1 {
++                    return Err(MpasError::Refusal(format!("{} is not a surface product", planned.name)));
++                }
 +                let values = match composite {
-+                    Some(gather) => gather.gather(planned.name, 1, ny * nx)?.0,
++                    Some(gather) => {
++                        let (values, fell_back) = gather.gather(planned.name, 1, ny * nx)?;
++                        for label in fell_back {
++                            composite_fallbacks.push(format!("{}:{}", planned.name, label));
++                        }
++                        values
++                    }
 +                    None => match remap {
 +                        Some(r) => r.gather(remap_class(planned.name), source, 1)?,
 +                        None => weights.gather(source, 1)?,
 +                    },
 +                };
-+                writer.put_record(planned.name, 0, NcData::Floats(&values))?;
-+                written.push(planned.name.to_string());
-+                continue;
++                return Ok((values, 1, composite_fallbacks));
 +            }
 +            let mapping = &FIELD_MAP[planned.mapping.expect("standard mapped entry")];
              let levels = expected_levels(mapping, frame).ok_or_else(|| {
                  MpasError::Refusal(format!(
                      "{} has no level count on this frame",
+@@ -1202,11 +1232,16 @@
+           }).collect();
+           let mut slabs: Vec<(&str, Vec<f32>)> = Vec::new();
+           for (planned, prepared) in batch.iter().zip(prepared) {
+-            let mapping = &FIELD_MAP[planned.mapping.expect("every planned entry maps")];
+             let (values, levels, fallbacks) = prepared?;
+             for note in fallbacks {
+                 if !composite_fallbacks.contains(&note) { composite_fallbacks.push(note); }
+             }
++            if planned.mapping.is_none() {
++                slabs.push((planned.name, values));
++                written.push(planned.name.to_string());
++                continue;
++            }
++            let mapping = &FIELD_MAP[planned.mapping.expect("standard mapped entry")];
+             if radar_winds {
+                 let mass_name = match mapping.wrf_name {
+                     "U" => Some(RADAR_U_EARTH),
 --- a/tools/rustwx/crates/rw-mpas/src/fieldmap.rs
 +++ b/tools/rustwx/crates/rw-mpas/src/fieldmap.rs
-@@ -194,7 +194,8 @@
- pub static NEAREST_FIELDS: &[&str] = &["LANDMASK", "LU_INDEX", "TSLB", "SMOIS"];
+@@ -274,7 +274,8 @@
+ pub const MPASSIT_ONLY: &str = "mpassit";
  
  pub fn remap_class(wrf_name: &str) -> RemapClass {
 -    if CONSERVATIVE_FIELDS.contains(&wrf_name) {

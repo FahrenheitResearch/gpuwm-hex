@@ -158,6 +158,7 @@ def test_direct_physics_pack_serves_bytes_and_corruption_uses_exact_fallback(tmp
     from hexcore.kernel_pack import write
 
     entry = {**row(), "module_key": "nvrtc.direct." + source_hash("source"),
+             "options": list(aot.effective_options(("--fmad=false",))),
              "compile_request": aot.direct_metadata("physics.cu")}
     path = tmp_path / "direct.json"
     write(path, {"compiler": "test"}, [entry])
@@ -173,7 +174,7 @@ def test_direct_physics_pack_serves_bytes_and_corruption_uses_exact_fallback(tmp
     assert not calls
     selected.rows[0]["cubin_sha256"] = "0" * 64
     assert aot.direct_image("source", ["--fmad=false"], "sm_120", filename="physics.cu") == b"fallback"
-    assert calls == [("source", dict(options=("--fmad=false",), arch="120", filename="physics.cu"))]
+    assert calls == [("source", dict(options=tuple(entry["options"]), arch="120", filename="physics.cu"))]
 
 
 def test_direct_physics_inventory_covers_both_surface_variants_and_numerics():
@@ -190,7 +191,7 @@ def test_direct_physics_inventory_covers_both_surface_variants_and_numerics():
                                  "rrtmg_lw", "rrtmg_sw", "noah_shared_tables", "gf_mpas", "thompson", "thompson_workspace", "thompson_aero_workspace", "tempo_rrfs",
                                  "rrfs_sfclay_mm5", "noah_seaice", "rrfs_noah_seaice",
                                  "wsm6", "wsm6_workspace", "rrfs_wsm6_radar", "rrfs_wsm6_relhum", "ntiedtke", "ysu", "ysu_gwdo", "ugwp_ngw",
-                                 "rrfs_smoke", "nssl_rrfs", *fast_only, *strict_only}
+                                 "rrfs_smoke", "nssl_rrfs", "rrfs_cu_gfl_bf6a4b0", *fast_only, *strict_only}
         assert families.count("sf_mynn") == families.count("sfclay_mm5") == 2
         # MYNN: exact text and every correct-mode text set (RP7, the MPAS-route default).
         from hexcore.mpasphys.bl_mynn_v842 import MYNN_TEXT_CORRECTIONS
@@ -200,7 +201,7 @@ def test_direct_physics_inventory_covers_both_surface_variants_and_numerics():
         assert all(families.count(name) == 2 for name in ("wsm6_workspace", "rrfs_wsm6_radar", "thompson"))
         # WSM6: the exact text and the correct-mode text (WB3, WB5), at 55 and 59 levels.
         assert families.count("wsm6") == 4
-        assert all(row["compiler_route"] == ("raw-nvrtc" if row["physics_family"] in {"gf_mpas", "rrfs_smoke", "nssl_rrfs"}
+        assert all(row["compiler_route"] == ("raw-nvrtc" if row["physics_family"] in {"gf_mpas", "rrfs_smoke", "nssl_rrfs", "rrfs_cu_gfl_bf6a4b0"}
                                                else "direct-nvrtc") for row in rows)
         expected = "--fmad=false" if mode == "strict" else "--fmad=true"
         assert all(expected in row["options"] for row in rows)

@@ -26,6 +26,10 @@ prune rust/host-prep/target
 graft rust/ugwp-oro
 prune rust/ugwp-oro/target
 
+graft rust/wave-products
+prune rust/wave-products/target
+include WAVES.md
+
 # The MPAS physics suites' table decoders, which setup.py builds into the wheel
 # (gpuwm-hex physics-resources).
 graft rust/physics-tables

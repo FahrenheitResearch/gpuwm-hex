@@ -1,7 +1,7 @@
 {
   "assets": {
     "kernel-pack-cuda12.json": {
-      "bytes": 157829251,
+      "bytes": 143818011,
       "compiler": {
         "cache_key": "87417f5ddafec4c853dab1863f8bb308dafc152c",
         "cupy": "14.2.0",
@@ -17,10 +17,11 @@
         "use_ptx": false
       },
       "kind": "kernel-pack",
+      "release_tag": "kernel-packs-v0.4.12",
       "select": {
         "nvrtc_major": 12
       },
-      "sha256": "bffad2b599bf040c5c682a7e035b40fb09ff81beaf762275ee412e151f7d82ec"
+      "sha256": "3122012e0917a261526e9d0f6e3ad28ecbdccb5ce780a29db87356dda7170038"
     },
     "kernel-pack-cuda13.0.json": {
       "bytes": 166564762,
@@ -67,7 +68,7 @@
       "sha256": "0d1dbb5a71675aa5837b1b4e799e007b7a5e1decddb63cbbcd35bcfdd676da22"
     },
     "kernel-pack-cuda13.json": {
-      "bytes": 160669054,
+      "bytes": 145935566,
       "compiler": {
         "cache_key": "87417f5ddafec4c853dab1863f8bb308dafc152c",
         "cupy": "14.2.0",
@@ -83,10 +84,11 @@
         "use_ptx": false
       },
       "kind": "kernel-pack",
+      "release_tag": "kernel-packs-v0.4.12",
       "select": {
         "nvrtc_major": 13
       },
-      "sha256": "8041f30dfc48652801d7f38c43a91072e82ef8635c950752e353538b07af3233"
+      "sha256": "20d25490ee11bab31bd270a62d93e314ac75f1454eabe107891ec15899ad8ba1"
     }
   },
   "breakage": "The 169 MB gpuwm-hex 0.4.1 wheel exceeds the PyPI 100,000,000 B per-file cap.",

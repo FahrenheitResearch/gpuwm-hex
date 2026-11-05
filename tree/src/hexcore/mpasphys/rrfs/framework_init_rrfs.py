@@ -463,11 +463,10 @@ class FrameworkInitializationRRFS(FrameworkInitialization):
         field's origin. Native would read the stream's file; a field that came from the Registry's initial
         value instead would run the drag on zero var2d/oa/ol statistics, so that is refused by name.
         """
-        import json
-        from pathlib import Path
+        from ..pool_v842 import payload_manifest
         stream = self.session.layout.root.find("./streams/stream[@name='ugwp_oro_data_in']")
         names = [] if stream is None else [v.get('name') for v in stream.findall('var')]
-        manifest = json.loads((Path(self.session.hydration.payload) / 'manifest.json').read_text())
+        manifest = payload_manifest(self.session.hydration.payload)
         origins = {r['name']: r.get('origins') or [] for r in manifest['fields']
                    if r['pool'] in ('sfc_input', 'mesh')}
         missing = [name for name in names if not origins.get(name)
@@ -666,7 +665,7 @@ class FrameworkInitializationRRFS(FrameworkInitialization):
 
         ``resource``/``pin_set``: the fork source the backend resolves its tables from (the row's bound backend
         arguments; tempo_lookup_path).  THE BREAKAGE THIS PREVENTS (RRFS hrrrv5 on the 44c0849 default row,
-        mv3km, V8X6000, 2026-10-29): the read-ahead always resolved the 1d6e370e fork's files, so on the default
+        mv3km, eight-card system, 2026-10-29): the read-ahead always resolved the 1d6e370e fork's files, so on the default
         row it never matched, read_tempo_lookup_files read the 44c0849 files again on the main thread, and the
         unused read-ahead (~0.93 GB) stayed held for the whole run in every rank process.
         """

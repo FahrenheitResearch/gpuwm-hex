@@ -699,6 +699,12 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 from hexcore.arwen_surface_update import attach_host
                 attach_host(stack["backend"], host, schedule, output_root,
                             dt=base_dt, layout=tables.layout)
+                if moving_resume is not None and moving_weights is not None:
+                    from hexcore.moving_ocean import restore_surface_backend
+                    ocean_transfer = restore_surface_backend(stack["backend"], moving_resume,
+                        moving_weights, tables.layout, mesh, mapped_physics_cache)
+                    if ocean_transfer is not None:
+                        physics_remaps[-1]["ocean_transfer"] = ocean_transfer
                 if moving_resume is not None and moving_weights is None and "local_atmospheres" in moving_resume:
                     from hexcore.moving_checkpoint import restore_local_atmosphere
                     restore_local_atmosphere(stack["driver"],moving_resume["local_atmospheres"][tables.index])
@@ -789,6 +795,8 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             moving_receipt["physics"] = physics_remaps
             moving_receipt["new_rates"] = rate_info
             Path(output_root, "moving-remap.json").write_text(json.dumps(moving_receipt,indent=2)+"\n")
+
+        tc_start_calls = [row['steps'] for row in class_calls]
 
         # F000's surface-layer diagnostics come from each class's first physics
         # call (hexcore.f000_first_call): every class's first step starts from
@@ -934,6 +942,9 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 raise RuntimeError(f"an interface register is not empty at history step {step}; "
                                    "the frame would be written between two halves of a transfer")
             began = time.perf_counter()
+            for stack in stacks:
+                if getattr(stack["backend"], "wave_binding", None) is not None:
+                    stack["backend"].wave_binding.service.output(clock_offset+step*base_dt)
             arrays = []
             for index, stack in enumerate(stacks):
                 with physics_scope.rank(index, int(cp.cuda.Device().id)):
@@ -1249,7 +1260,11 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
             "clock_offset_seconds": clock_offset,
             "remap_shock_series": shock_rows,
         }
+        from hexcore.tc_flux import class_receipts as tc_class_receipts
+        tc_cost = tc_class_receipts(stacks, [row['steps'] - initial
+            for row, initial in zip(class_calls, tc_start_calls)])
         lts_receipt = {
+            **({'tc_flux_by_class': tc_cost} if tc_cost else {}),
             "schema": "gpuwm-hex.fullstep-lts-forecast/v1",
             "dispatch": "rate classes",
             **moving_fields,
@@ -1514,6 +1529,13 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                     from hexcore.arwen_surface_update import attach_host
                     attach_host(stack["backend"], host, schedule, output_root,
                                 dt=base_dt, layout=tables.layout)
+                    if moving_resume is not None and not same_partition:
+                        from hexcore.moving_ocean import restore_surface_backend
+                        with physics_lock:
+                            ocean_transfer = restore_surface_backend(stack["backend"], moving_resume,
+                                moving_weights, tables.layout, mesh, mapped_physics_cache)
+                            if ocean_transfer is not None:
+                                physics_remaps[tables.gid]["ocean_transfer"] = ocean_transfer
                     if same_partition and "local_atmospheres" in moving_resume:
                         from hexcore.moving_checkpoint import restore_local_atmosphere
                         restore_local_atmosphere(stack["driver"], moving_resume["local_atmospheres"][tables.gid])
@@ -1878,7 +1900,11 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                 "clock_offset_seconds": clock_offset,
                 "remap_shock_series": shock_rows,
             }
+            from hexcore.tc_flux import class_receipts as tc_class_receipts
+            tc_cost = tc_class_receipts(stacks, [row['steps'] for row in class_calls],
+                                       devices=block_devices)
             lts_receipt = {
+                **({'tc_flux_by_block': tc_cost} if tc_cost else {}),
                 "schema": "gpuwm-hex.fullstep-lts-forecast/v2",
                 "dispatch": "rate classes cut into blocks on several cards",
                 **moving_fields,

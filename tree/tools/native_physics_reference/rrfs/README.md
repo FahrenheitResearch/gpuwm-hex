@@ -725,7 +725,7 @@ comparison scripts in the delivery; none is renamed to imply a CUDA module
 replay or regenerated forecast. New parity door commands must select
 `--physics-mode exact`.
 
-The 2026-10-14 07:45Z ruling record (`DREW-RULING.json` in each derivative publication) is kept in
+The 2026-10-14 07:45Z ruling record (`REFERENCE-RULING.json` in each derivative publication) is kept in
 the reference store, not in this tree; `ruled_reference.py` reads it from `RRFS_SOURCE_AUTHORITY_RULING`
 and still binds its exact bytes by SHA-256. Recorded labels in published receipts are unchanged.
 

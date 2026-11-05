@@ -122,20 +122,26 @@ def test_prebuilt_bridges_are_bundled_only_with_their_pinned_bytes(hexsetup, tmp
 
 
 
-def test_hash_matched_old_stream_writer_cannot_satisfy_ordered_metadata(hexsetup, tmp_path, monkeypatch):
-    # A stale release asset matched its own old hash but failed every forecast
-    # when restart_v842 requested native dimension/attribute ordering.
-    data = b"\x7fELF stream without the required response field"
-    root = _pinned_root(tmp_path, {"rw_mpas_stream": data})
+@pytest.mark.parametrize("name,marker", [
+    ("rw_mpas_stream", "ordered_metadata"),
+    ("rw_mpas_static", "--preserve-lake-mask"),
+])
+def test_hash_matched_old_bridge_cannot_satisfy_required_capability(hexsetup, tmp_path, monkeypatch, name, marker):
+    # Old release assets matched their own hashes but stopped forecasts on
+    # ordered metadata or stopped TC member preparation on the lake mask.
+    data = b"\x7fELF bridge without the required capability"
+    root = _pinned_root(tmp_path, {name: data})
     pins_path = root / "src/hexcore/data/engine-bridges.json"
     pins = json.loads(pins_path.read_text())
-    pins["bridges"]["rw_mpas_stream"]["required_markers"] = ["ordered_metadata"]
+    required = json.loads(PINS.read_text())["bridges"][name]["required_markers"]
+    assert marker in required
+    pins["bridges"][name]["required_markers"] = required
     pins_path.write_text(json.dumps(pins))
     prebuilt = tmp_path / "prebuilt"
     prebuilt.mkdir()
-    (prebuilt / "rw_mpas_stream").write_bytes(data)
+    (prebuilt / name).write_bytes(data)
     monkeypatch.setenv("GPUWM_HEX_ENGINE_BRIDGES", str(prebuilt))
-    with pytest.raises(SystemExit, match="missing required bridge capability ordered_metadata"):
+    with pytest.raises(SystemExit, match=f"missing required bridge capability {re.escape(marker)}"):
         hexsetup.engine_bridges(root)
 
 

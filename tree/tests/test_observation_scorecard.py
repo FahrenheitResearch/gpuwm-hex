@@ -373,3 +373,15 @@ def test_completed_card_checks_binary_configuration_and_all_native_stream_bytes(
         files[key].write_bytes(saved)
     write(card)
     assert scorecard.completed_scorecard(tmp_path, cfg)['measured_metrics'] == 1
+
+
+def test_regional_current_year_fetch_selects_only_its_stations(tmp_path, monkeypatch):
+    monkeypatch.setattr(scorecard, "binary", lambda name: f"/bin/{name}")
+    commands = _ArchiveCommands(tmp_path)
+    config = _sonde_config(tmp_path)
+    config["region"] = {"west": -99, "south": 33, "east": -95, "north": 37}
+    scorecard.acquire_sondes_igra2(scorecard.datetime.now(scorecard.timezone.utc), tmp_path / "sondes", commands, config)
+    fetches = [argv for argv, _ in commands.calls if Path(str(argv[0])).name == "rw_igra2"]
+    assert len(fetches) == 1
+    assert "--stations" in fetches[0]
+    assert fetches[0][fetches[0].index("--stations") + 1] == "USM00072357,USM00072451"

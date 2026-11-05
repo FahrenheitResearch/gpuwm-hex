@@ -62,9 +62,11 @@ def rank_continuation(session):
             clock[name] = np.array(native.get_table(name)[0], copy=True)
         except (AttributeError, KeyError, RuntimeError):
             pass
+    window = getattr(session, 'iau_window', None)
     return dict(scheme_flags={k: v for k, v in flags.items() if v},
                 output_accumulators=accumulators() if callable(accumulators) else None,
-                clock_start=clock)
+                clock_start=clock,
+                iau_window=None if window is None else window.checkpoint_state())
 
 def _seconds(hours):
     values = [Fraction(value.strip()) * 3600 for value in str(hours).split(',')]
@@ -390,6 +392,35 @@ class CheckpointRoute(MovingRoute):
         if self.continuation_receipt is not None:
             result['checkpoint_continuation'] = self.continuation_receipt
         return result
+
+
+#: The valid-time stamp MPAS stream filename templates write ($Y-$M-$D_$h.$m.$s).
+import re as _re
+_FRAME_STAMP = _re.compile(r'\.(\d{4}-\d{2}-\d{2}_\d{2}\.\d{2}\.\d{2})\.nc$')
+
+
+def set_aside_frames_after(out, valid_time):
+    """Rename stream files in ``out`` stamped after ``valid_time`` to ``<name>.pre-restart``.
+
+    A resume from a checkpoint regenerates every frame after the checkpoint's valid time (MPAS resets the
+    output alarms on a restart, so the frame AT that time is the earlier leg's and is kept).  THE BREAKAGE THIS
+    FIXES (IFS-9KM-DEFAULT-2026-11-04): a leg cut after writing frames past its last checkpoint left
+    ``history.<valid>.nc`` files that the never_modify writer refused on the resume, so every pool-cut 96 -> 3 km
+    run had to have them moved aside by hand.  Kept, not deleted: a ``.pre-restart`` copy from an earlier resume
+    is replaced.  Returns the moved names."""
+    cut = datetime.strptime(valid_time, TIME_FORMAT)
+    moved = []
+    for path in sorted(Path(out).glob('*.nc')):
+        match = _FRAME_STAMP.search(path.name)
+        if match is None or datetime.strptime(match.group(1), '%Y-%m-%d_%H.%M.%S') <= cut:
+            continue
+        path.replace(path.with_name(path.name + '.pre-restart'))
+        moved.append(path.name)
+    if moved:
+        import sys
+        print(f'gpuwm-hex: resuming at {valid_time}: {len(moved)} frame(s) after the checkpoint set aside as '
+              f'*.pre-restart ({moved[0]} .. {moved[-1]})', file=sys.stderr, flush=True)
+    return moved
 
 
 def resolve_route(arguments, text):

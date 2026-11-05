@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.4.12
+
+Requires gpuwm>=2.9.12,<2.10.
+
+New:
+- Regional forecasts start from RRFS v1, with separate boundary sources and cycles.
+- HRDPS and RDPS regional starts, with deep-soil and upper-air donors.
+- Held-Suarez forcing on global meshes (`ra_lw_physics = 31`).
+- Opt-in hurricane line: cyclone tracking, HAFS starts and storm-following regions.
+- Opt-in wave forecasts, stations and maps.
+- SPPT and SKEB stochastic physics, written from the published method (opt-in).
+- 0-1, 0-2 and 0-3 km updraft helicity maxima in history and on maps.
+- A 10 km global mesh, with parallel download and unpack.
+- An experimental AMD (ROCm/HIP) backend, opt-in. CUDA stays the default.
+- Storm-following regions run on several cards.
+
+Changed:
+- RRFS conus3km transport went from 93.4 ms to 71.5 ms.
+- hrrrv5 with the storm scheme runs at 1.18x the MPAS-physics step, down from 1.60x, and its final pass went from 227 s to 31 s.
+- Less device memory: 120 km MPAS 10.44 to 5.49 GiB, 60 km ArWen 14.95 to 11.96 GiB, an hrrrv5 region 6.49 to 2.86 GiB.
+- Less host memory during mesh preparation and history writes.
+- Sources are prepared and maps finished across more cores, and a region's source preparation runs beside mesh preparation. Sub-area end-of-run maps went from 81.5 s to 13.5 s.
+- Process-rank device memory is priced from its measured whole-run peak, and low-memory forecasts are priced before launch.
+
+Fixed:
+- Four-card MPAS-physics runs start: the process transport links only the ranks that share halo words.
+- 1 km runs split across cards no longer stop at random: each card checks only the columns it owns.
+- rrfs_v2_dev and every column suite without Noah-MP run again, on one card or several.
+- Reflectivity maps include the rain from active cumulus schemes.
+- Coastal water cells take their sea temperature by the WPS SKINTEMP rule.
+- A refused cap mesh is built at another centre and turned to the requested point.
+- Stale run files are recovered, MPAS device memory is checked before startup, and waiting ranks stop when the forecast coordinator fails.
+- Native restarts, checkpoints and history timing are preserved.
+- Runs that write checkpoints no longer write zeros for boundary-layer height, surface heat fluxes and reflectivity in their first frame.
+- `--dynamics KEY=VALUE` now reaches runs on the MPAS-physics route.
+- A run resumed from a checkpoint keeps its maps' start time, and frames written past the checkpoint are set aside.
+- The 96 -> 3 km zoom globe is priced from its measured peak, so restarts that fit are admitted.
+- Fixes to source soil layers, static culls, field units and worker refusals.
+
+NOAA GSL UGWP is now credited under its Apache-2.0 licence in NOTICE.
+
 ## 0.4.11
 
 Requires gpuwm>=2.9.11,<2.10.
@@ -48,6 +89,7 @@ Changed:
 - GEFS member inits and boundaries download only the records the init reads, about 34 MB instead of 106-118 MB per member and lead.
 
 Fixed:
+- Limited-area runs (RRFS `hrrrv5`, hex limited-area regions) take less card time per step: the vertically implicit acoustic solve runs level-parallel around its column sweeps and the acoustic flux sums read the mesh tables in thread order. Every word is unchanged in fast and strict numerics.
 - A local-time-stepping run on MPAS physics records every class step, the coordinator's work between them and the loop's own measured rate in `native-runtime-timings.json`; it used to hold only the class that finished last, so most of each step was unlabelled.
 - A local-time-stepping profile run (`GPUWM_HEX_LTS_DEVICE_SPANS=1`) records each class step's device time. The default receipt's per-class rows are host wall, which on one card includes the device work queued ahead of a class, and the receipt now says so.
 - The zoom-globe receipt (`global-vr-receipt.json`) names the physics mode the forecast ran. A run that named a suite but no mode ran correct mode, and the receipt said exact.

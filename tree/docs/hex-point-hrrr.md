@@ -39,7 +39,7 @@ Stage walls were mesh 1,246.24 s, intermediate 328.85 s, init 3.44 s,
 boundaries 9.11 s, contract 85.19 s and forecast 1,908.79 s. These are shared
 host timings. The original command hung in the engine's `rw_hex_points`
 bridge after the forecast passed. The engine fix on
-`lane/improve-32b-hex-points-hang` (for 2.9.4) masks missing surface wind
+`development branch` (for 2.9.4) masks missing surface wind
 values and bounds raster work to the image canvas. The exact retained bridge
 invocation then completed in 0.53 s. Products-only recovery on
 the retained forecast completed in 13.81 s with 70 maps and

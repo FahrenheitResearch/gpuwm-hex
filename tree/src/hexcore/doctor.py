@@ -349,6 +349,14 @@ def _installed_cupy_wheels() -> list[str]:
 
 
 def check_gpu_runtime() -> list[Finding]:
+    from gpuwm.gpu_smi import is_amd
+    if is_amd() or os.environ.get('GPUWM_BACKEND')=='hip-nvidia':
+        from gpuwm.hip_doctor import run
+        report=run()
+        return [Finding('HIP runtime', VERIFIED if report['ok'] else MISSING,
+            f"Experimental AMD; ROCm {report['rocm_version']}; gfx {report['gfx_target']}; wave {report['wave_size']}; kernel smoke {report['kernel_smoke']}",
+            'gpuwm-hex doctor --backend amd',
+            required=True,evidence=report)]
     """CuPy, and the CUDA major this distribution's own runtime floor requires.
 
     THE DEFECT THIS REPLACES, and it is worth stating because it cost a
@@ -564,6 +572,8 @@ def _card_probe() -> dict[str, object] | None:
         "out = {}\n"
         "try:\n"
         "    import cupy\n"
+        "    if cupy.cuda.runtime.is_hip:\n"
+        "        raise RuntimeError('CUDA is the default; select --backend amd for experimental ROCm checks')\n"
         "    out['device_count'] = int(cupy.cuda.runtime.getDeviceCount())\n"
         "    if out['device_count'] > 0:\n"
         "        p = cupy.cuda.runtime.getDeviceProperties(0)\n"
@@ -612,6 +622,9 @@ def check_gpu_architecture() -> list[Finding]:
     all is context, not a gap: the CuPy finding above says why.
     """
 
+    from gpuwm.hip_backend import active
+    if active():
+        return []  # The HIP runtime finding includes gfx target and wave size.
     from .cuda_backend.arch_admission import architecture_status, nvrtc_refusal
 
     if _no_local_gpu():
@@ -1096,6 +1109,22 @@ def check_physics_resources() -> list[Finding]:
     return findings
 
 
+def check_geography() -> list[Finding]:
+    """Check the same default archive and datasets used by the static door."""
+    try:
+        from gpuwm import rustwx_static
+    except ImportError:
+        return []  # The dependency check already reports the missing engine.
+    root = rustwx_static.default_geog_root()
+    refusal = rustwx_static.geog_refusal(root)
+    if refusal is None:
+        return [Finding("WPS_GEOG (mesh static)", VERIFIED,
+                        f"{root} has the datasets required by the static builder")]
+    return [Finding("WPS_GEOG (mesh static)", MISSING,
+                    refusal.splitlines()[0],
+                    remedy="gpuwm fetch-geog --datasets mesh", required=True)]
+
+
 def collect() -> list[Finding]:
     """Every finding, in the order a reader should meet them."""
 
@@ -1107,6 +1136,7 @@ def collect() -> list[Finding]:
     findings.extend(check_gpu_architecture())
     findings.extend(check_engines())
     findings.extend(check_assets())
+    findings.extend(check_geography())
     findings.extend(check_on_demand_assets())
     findings.extend(check_physics_resources())
     return findings

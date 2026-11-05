@@ -15,6 +15,14 @@ import sysconfig
 from setuptools import Distribution, setup
 from setuptools.command.build_py import build_py
 
+
+def copy_helper(source: Path, destination: Path) -> None:
+    """Stage a helper, including when a prior build already hard-linked it."""
+    if destination.exists() and source.samefile(destination):
+        return
+    shutil.copy2(source, destination)
+
+
 try:  # setuptools >= 70.1 vendors bdist_wheel; older trees use the wheel package
     from setuptools.command.bdist_wheel import bdist_wheel
 except ImportError:  # pragma: no cover - older setuptools
@@ -37,6 +45,8 @@ CHEM_SOURCES = "rw_hex_chem_sources" + (".exe" if sys.platform == "win32" else "
 # The GSL drag's orographic statistics for any mesh (hexcore.ugwp_oro binds this name).
 UGWP_ORO = "rw_hex_ugwp_oro" + (".exe" if sys.platform == "win32" else "")
 S2S_ENERGY = "rw_s2s_energy" + (".exe" if sys.platform == "win32" else "")
+WAVE_PRODUCTS = "rw_hex_wave_products" + _EXE
+WAVE_AUDIT = "wave_audit" + _EXE
 NETCDF_COPY = "gpuwm-hex-netcdf-copy" + (".exe" if sys.platform == "win32" else "")
 # The history writer's parallel deflate (hexcore.history_deflate binds this name).
 HISTORY_DEFLATE = "libhex_history_deflate.so"
@@ -160,20 +170,20 @@ class BuildPy(build_py):
                         str(root / "rust/host-prep/target")], check=True)
         destination = Path(self.build_lib) / "hexcore/libexec" / HOSTPREP
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(root / "rust/host-prep/target/release" / HOSTPREP, destination)
+        copy_helper(root / "rust/host-prep/target/release" / HOSTPREP, destination)
         # The MPAS physics suites' table decoders, for `gpuwm-hex physics-resources`.
         subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
                         str(root / "rust/physics-tables/Cargo.toml"), "--target-dir",
                         str(root / "rust/physics-tables/target")], check=True)
         for name in PHYSICS_TABLES:
-            shutil.copy2(root / "rust/physics-tables/target/release" / name, destination.parent / name)
+            copy_helper(root / "rust/physics-tables/target/release" / name, destination.parent / name)
         # The MPAS route's Registry pool reader.  It links netCDF-C; a build
         # host without the development files still installs everything else,
         # and the MPAS route then refuses by name unless --native-pool-reader
         # names one (hexcore.mpasphys.resources_build.pool_reader).
         reader = self.build_pool_reader(root)
         if reader is not None:
-            shutil.copy2(reader, destination.parent / POOL_READER)
+            copy_helper(reader, destination.parent / POOL_READER)
         scorer = root / "src/hexcore/libexec" / OBS_SCORER
         if not scorer.is_file():
             engine = engine_source()
@@ -196,10 +206,10 @@ class BuildPy(build_py):
                                 "--engine", str(engine), "--out", str(root / "rust/obs-scorecard/build"),
                                 "--install"], check=True)
         if scorer.is_file():
-            shutil.copy2(scorer, destination.parent / OBS_SCORER)
+            copy_helper(scorer, destination.parent / OBS_SCORER)
         energy = s2s_energy_bridge(root)
         if energy is not None:
-            shutil.copy2(energy, destination.parent / S2S_ENERGY)
+            copy_helper(energy, destination.parent / S2S_ENERGY)
         # THE BREAKAGE THIS PREVENTS (verify-final-hex item 4, 2026-10-12):
         # the vertical door's CDF-5 template copier was looked up only beside
         # a source checkout, so no pip install had it.  Every install then
@@ -215,22 +225,40 @@ class BuildPy(build_py):
         # environment a build host with no system libnetcdf (the hosted runner, any pip sdist build) failed
         # "rust-lld: unable to find library -lnetcdf"; publish.yml passed only because its job-wide
         # LIBRARY_PATH names /opt/netcdf-classic.
-        subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
-                        str(root / "rust/chem-sources/Cargo.toml"), "--target-dir",
-                        str(root / "rust/chem-sources/target")], check=True,
-                       env=BuildPy.netcdf_environment(root))
-        shutil.copy2(root / "rust/chem-sources/target/release" / ("rw_hex_chem_sources" + _EXE),
-                     destination.parent / ("rw_hex_chem_sources" + _EXE))
+        # THE BREAKAGE THIS PREVENTS (hex 0.5.0 Windows leg, desktop, 2026-11-02): on a host with no netCDF-C
+        # development files (every stock Windows host) the link failed ("cannot open input file 'netcdf.lib'")
+        # and, with check=True, took the whole `pip install gpuwm-hex` down with it.  Off Linux it is now a
+        # named gap like the pool reader: everything else installs, and the chemistry door refuses by name
+        # (chem_emissions.py, "rw_hex_chem_sources is not installed").  Linux, the release platform whose
+        # pinned static netCDF is always present, still requires it.
+        chem = subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
+                               str(root / "rust/chem-sources/Cargo.toml"), "--target-dir",
+                               str(root / "rust/chem-sources/target")], check=sys.platform.startswith("linux"),
+                              env=BuildPy.netcdf_environment(root))
+        chem_binary = root / "rust/chem-sources/target/release" / ("rw_hex_chem_sources" + _EXE)
+        if chem.returncode == 0 and chem_binary.is_file():
+            copy_helper(chem_binary, destination.parent / ("rw_hex_chem_sources" + _EXE))
+        else:
+            print("gpuwm-hex: rw_hex_chem_sources NOT BUILT: cargo could not link it against libnetcdf "
+                  "(install the netCDF-C development files); the chemistry door will refuse by name",
+                  file=sys.stderr)
         # THE BREAKAGE THIS PREVENTS (2026-10-24): the RRFS-shape suite's GSL drag reads
         # <mesh>.ugwp_oro_data.nc, which RRFS publishes for its own meshes only; without
         # this generator every other mesh refused the suite before its first step.
         subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
                         str(root / "rust/ugwp-oro/Cargo.toml"), "--target-dir",
                         str(root / "rust/ugwp-oro/target")], check=True)
-        shutil.copy2(root / "rust/ugwp-oro/target/release" / UGWP_ORO, destination.parent / UGWP_ORO)
+        copy_helper(root / "rust/ugwp-oro/target/release" / UGWP_ORO, destination.parent / UGWP_ORO)
+        subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
+                        str(root / "rust/wave-products/Cargo.toml"), "--target-dir",
+                        str(root / "rust/wave-products/target")], check=True)
+        copy_helper(root / "rust/wave-products/target/release" / WAVE_PRODUCTS,
+                     destination.parent / WAVE_PRODUCTS)
+        copy_helper(root / "rust/wave-products/target/release" / WAVE_AUDIT,
+                     destination.parent / WAVE_AUDIT)
         copier = self.build_netcdf_copy(root)
         if copier is not None:
-            shutil.copy2(copier, destination.parent / NETCDF_COPY)
+            copy_helper(copier, destination.parent / NETCDF_COPY)
         # THE BREAKAGE THIS PREVENTS (B4, 2026-10-16): without the library in
         # the wheel every install compressed history frames on one thread (a
         # 15 km frame: 143 s against 53 s on 16 CPUs, measured, same bytes).
@@ -240,26 +268,26 @@ class BuildPy(build_py):
         # Strict geometry must carry its arithmetic authority in the wheel.
         geometry = self.build_geometry_math(root)
         if geometry is not None:
-            shutil.copy2(geometry, destination.parent / GEOMETRY_MATH)
-        # THE BREAKAGE THIS PREVENTS (30 km globe over 4 cards, V5090 box, 2026-10-27): the GNU float batch bridge
+            copy_helper(geometry, destination.parent / GEOMETRY_MATH)
+        # THE BREAKAGE THIS PREVENTS (30 km globe over 4 cards, reference system box, 2026-10-27): the GNU float batch bridge
         # (hexcore.native_libm_batch) was built on first use with rustc, which no run box carries, so its callers
         # fell back to one ctypes call per element on the GIL (the damping build: ~25 s per rank at 30 km).
         bridge = self.build_libm_batch(root)
         if bridge is not None:
-            shutil.copy2(bridge, destination.parent / bridge.name)
+            copy_helper(bridge, destination.parent / bridge.name)
         deflate = self.build_history_deflate(root)
         if deflate is not None:
-            shutil.copy2(deflate, destination.parent / HISTORY_DEFLATE)
+            copy_helper(deflate, destination.parent / HISTORY_DEFLATE)
         if sys.platform.startswith("linux"):
             crate = root / "rust/s2s-zarr"
             subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
                             str(crate / "Cargo.toml"), "--target-dir", str(crate / "target")], check=True)
-            shutil.copy2(crate / "target/release/libhex_s2s_zarr.so", destination.parent / "libhex_s2s_zarr.so")
+            copy_helper(crate / "target/release/libhex_s2s_zarr.so", destination.parent / "libhex_s2s_zarr.so")
         # Both physics routes decode their timed surface stream through this
         # source-built bridge. A lab-only reader.so is never a package input.
         surface = self.build_surface_reader(root)
         if surface is not None:
-            shutil.copy2(surface, destination.parent / SURFACE_READER)
+            copy_helper(surface, destination.parent / SURFACE_READER)
         # THE BREAKAGE THIS PREVENTS (release readiness B5, 2026-10-14): the
         # init door needs rw_mpas_geometry speaking hex-vertical-v1 and the
         # stream I/O needs rw_mpas_stream, and no released engine carries
@@ -270,22 +298,22 @@ class BuildPy(build_py):
         # generated grid a static that declares binary64 coordinates it does
         # not hold, so the point door could not build a regional mesh.
         for bridge in engine_bridges(root):
-            shutil.copy2(bridge, destination.parent / bridge.name)
+            copy_helper(bridge, destination.parent / bridge.name)
         # The surface-series producer is owned by this source distribution.
         # Its source fingerprint is separate from the frozen engine bridge pins.
         series = surface_series_bridge(root)
         if series is not None:
-            shutil.copy2(series, destination.parent / series.name)
+            copy_helper(series, destination.parent / series.name)
         renderer = s2s_renderer_bridge(root)
         if renderer is not None:
-            shutil.copy2(renderer, destination.parent / renderer.name)
+            copy_helper(renderer, destination.parent / renderer.name)
             sibling = renderer.with_name("rw_ensbatch" + _EXE)
-            shutil.copy2(sibling, destination.parent / sibling.name)
+            copy_helper(sibling, destination.parent / sibling.name)
             reducer = renderer.with_name("rw_s2s" + _EXE)
-            shutil.copy2(reducer, destination.parent / reducer.name)
+            copy_helper(reducer, destination.parent / reducer.name)
         converter = chemistry_converter_bridge(root)
         if converter is not None:
-            shutil.copy2(converter, destination.parent / converter.name)
+            copy_helper(converter, destination.parent / converter.name)
         # THE BREAKAGE THIS PREVENTS (hex global on 2x RTX PRO 6000, 2026-10-16,
         # defect 4): automatic multi-card runs need a METIS partition and a pip
         # install had no gpmetis, so every two-card run refused.  The wheel now
@@ -294,7 +322,7 @@ class BuildPy(build_py):
         # then uses PATH's gpmetis or refuses with the install command.
         partitioner = self.build_gpmetis(root)
         if partitioner is not None:
-            shutil.copy2(partitioner, destination.parent / partitioner.name)
+            copy_helper(partitioner, destination.parent / partitioner.name)
 
     @staticmethod
     def build_gpmetis(root: Path) -> Path | None:
@@ -343,7 +371,9 @@ class BuildPy(build_py):
         target = out / f"libhex_libm_batch-{key}.so"
         rustc = shutil.which("rustc")
         built = None if rustc is None else subprocess.run(
-            [rustc, "--edition=2021", "--crate-type=cdylib", "-C", "opt-level=2", str(out / "libm_batch.rs"),
+            [rustc, "--edition=2021", "--crate-type=cdylib", "-C", "opt-level=2",
+             "--remap-path-prefix=" + str(Path.home()) + "=/build-user",
+             "--remap-path-prefix=" + str(root.resolve()) + "=/source", str(out / "libm_batch.rs"),
              "-o", str(target)])
         if built is not None and built.returncode == 0 and target.is_file():
             return target
@@ -662,6 +692,11 @@ class BuildHex(BuildPy):
         if packs:
             raise RuntimeError("kernel packs must ship as release assets, not wheel data: "
                                + ", ".join(str(path) for path in packs))
+        # `gpuwm-hex verify-dycore` runs the native dry reference recipe; the wheel carries it
+        # (hexcore.verify_dycore_door.reference_location says what broke without it).
+        shutil.copytree(Path(__file__).parent / "tools/native_dry_reference",
+                        Path(self.build_lib) / "hexcore/data/native_dry_reference",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"), dirs_exist_ok=True)
 
 
 class NativeReferenceDistribution(Distribution):
@@ -739,6 +774,8 @@ def bundled_helpers(root: Path) -> tuple[Path, ...]:
             root / "rust/chemistry-converter-build" / ("rw_mpas_convert" + _EXE),
             root / "rust/chem-sources/target/release" / CHEM_SOURCES,
             root / "rust/ugwp-oro/target/release" / UGWP_ORO,
+            root / "rust/wave-products/target/release" / WAVE_PRODUCTS,
+            root / "rust/wave-products/target/release" / WAVE_AUDIT,
             root / "rust/s2s-energy-build" / S2S_ENERGY,
             root / "rust/netcdf-copy/target/release" / NETCDF_COPY,
             (Path(os.environ["GPUWM_HEX_ENGINE_BRIDGES"]) / ("rw_wrfbatch" + _EXE)

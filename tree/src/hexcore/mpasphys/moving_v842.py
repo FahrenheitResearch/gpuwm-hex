@@ -183,6 +183,9 @@ def load_carrier(path) -> dict[str, Any]:
         # Handed over in memory by the previous segment of this resident process (its file was never written).
         return carried
     receipt = json.loads(path.with_suffix(path.suffix + ".json").read_text())
+    if receipt.get('resident') and (receipt.get('bytes') is None or not path.is_file()):
+        raise RuntimeError('resident move carrier belongs to an exited forecast process; '
+                           'resume from a durable recovery seal')
     data = _read_verified(path, int(receipt["bytes"]), receipt["sha256"])
     payload = pickle.loads(memoryview(data))
     del data
@@ -325,7 +328,10 @@ def build_weights(*, source_mesh, source_vertical, operator, source_grid, target
     weights = ConservativeMap.load(operator, source=source, target=target)
     weights = ConservativeMap(weights.overlap * scale, weights.source_area * scale, weights.target_area * scale,
                               dict(weights.receipt, effective_area_radius_m=radius, generator_area_scale=scale))
-    weights = weights.with_physical_areas(source_mesh.arrays["areaCell"], mesh.arrays["areaCell"])
+    # RKIND prepared areas are admitted through the generator geometry, as moving_checkpoint and analysis_remap do
+    # (G03 moved member refused, 2026-11-02).
+    weights = weights.with_physical_areas(source_mesh.arrays["areaCell"], mesh.arrays["areaCell"],
+                                          generator_areas=(source.area, target.area), generator_area_scale=scale)
     height = os.environ.get("GPUWM_HEX_MOVING_HEIGHT_REMAP")
     if height in ("1", "absolute"):
         from ..moving_vertical import HeightConservativeMap
@@ -374,6 +380,11 @@ class MovingRoute:
     # ----------------------------------------------------------------- construction
     @classmethod
     def from_environ(cls, arguments, environ=os.environ) -> "MovingRoute":
+        if any(environ.get(name) for name in
+               ("GPUWM_HEX_MOVING_ANALYSIS", "GPUWM_HEX_MOVING_BACKGROUND")):
+            from ..fullstep_lts_admission import MOVING_ROUTE_REFUSAL
+            raise ValueError(f"{MOVING_ROUTE_REFUSAL}, but moving analysis insertion and background "
+                             "export require the single-card active-LTS ArWen route")
         if environ.get("GPUWM_HEX_MOVING_ZONE"):
             # THE BREAKAGE THIS PREVENTS: the frozen-far-field zone transfer (hexcore.moving_zone_state) maps the
             # atmosphere only; on this route every carried physics field would be left on the old member's
@@ -682,6 +693,13 @@ class MovingRoute:
         service = getattr(session, "surface_service", None)
         if service is not None and physics.get("surface_service") is not None:
             service.restore_restart_state(physics["surface_service"])
+        ocean = getattr(session, "ocean_pwp", None)
+        if ocean is None and physics.get("ocean_pwp") is not None:
+            # THE BREAKAGE THIS PREVENTS: the carried ocean columns would be dropped and the SST would jump
+            # back to the member's initial field.
+            raise ValueError("the moving carrier ran the PWP ocean; this member does not select --ocean-mode pwp")
+        if ocean is not None:
+            ocean.restore_state(physics.get("ocean_pwp"), donors if weights is not None else None)
 
     @staticmethod
     def _pool_name(layout, pool, name):
@@ -757,6 +775,8 @@ class MovingRoute:
                        manager=_manager_state(session),
                        manager_elapsed=str(Fraction(str(self.physics_clock_offset(dt)[1]))
                                            + Fraction(str(step)) * Fraction(str(dt))))
+        physics['ocean_pwp'] = (None if getattr(session, 'ocean_pwp', None) is None
+                                else session.ocean_pwp.restart_state())
         physics.update(self.continuation_state(session))
         valid = (datetime.strptime(self.origin_time, TIME_FORMAT) + timedelta(seconds=model_seconds)).strftime(TIME_FORMAT)
         payload = dict(schema=SCHEMA, route="mpas-suite", time_seconds=float(model_seconds),
@@ -765,12 +785,27 @@ class MovingRoute:
                        stochastic=(None if getattr(dycore, 'stochastic', None) is None else
                                    dycore.stochastic.process.snapshot()),
                        chemistry=(None if getattr(dycore, 'chemistry', None) is None else
-                                  dycore.chemistry.restart_state()))
+                                  dycore.chemistry.restart_state()),
+                       waves=(None if getattr(session, 'wave_binding', None) is None else
+                              session.wave_binding.service.snapshot()))
         return payload, dict(
             physics_fields=len(rows), physics_words=int(sum(np.asarray(v).size for v in pools.values())),
             state={k: list(v.shape) for k, v in state.items()})
 
     # ----------------------------------------------------------------- per step: shock series, frames, stop
+    def host_publication_required(self, step, *, steps, dt) -> bool:
+        """Only tracker frames and the final carrier consume host pool mirrors.
+
+        Shock diagnostics read resident columns directly. Stream capture also
+        reads device buffers; neither needs the full compatibility publication.
+        Keep the same exact frame predicate as after_step, including restarts.
+        """
+        if step >= steps:
+            return True
+        seconds = self.offset_seconds + step * dt
+        return (self.control is not None and seconds % self.frame_seconds == 0
+                and not (step == 0 and self.carrier is not None))
+
     def after_step(self, step, *, steps, dt, columns, session, dycore, mesh, vertical, names, layout, out) -> bool:
         """Shock series, tracker frame and the controller's verdict after a completed step; True stops."""
         model_seconds = self.offset_seconds + step * dt

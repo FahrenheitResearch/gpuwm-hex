@@ -302,3 +302,14 @@ an overlap or relaxes either gate. Incompatible component totals still refuse.
 Operator receipts record the original floor, accepted CG updates, final errors,
 FP32 constant reproduction and reconciliation wall time. Progress goes to stderr;
 the `moving operator` command keeps one final JSON document on stdout.
+
+
+For the opt-in native TC surface exchange, set `"preserve_lake_mask": true`
+in the moving case before preparation. This asks the source-built
+`rw_mpas_static --preserve-lake-mask` for an independent `tc_lakemask` field
+from dominant with-lakes MODIS classification. The native 20-class land use
+and Noah water treatment stay unchanged. Init carries the mask in target
+mesh order; each moved member binds its own mask. Old prepared 20-class
+inputs without this field are refused for TC exchange because lake
+identity cannot be reconstructed from category 17. Use identical prepared
+inputs for the TC ON/OFF comparison.

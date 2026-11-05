@@ -1,0 +1,24 @@
+{
+  "schema": "hex.coupled-ocean-case/v1",
+  "case": "Atlantic hurricane period 2022-09-26 through 2022-10-01",
+  "start_time": "2022-09-26_00:00:00",
+  "hours": 120,
+  "mesh": "hex-x1.40962-native",
+  "dt_seconds": 600,
+  "history_every_minutes": 720,
+  "checkpoint_at_end": true,
+  "initialization": "ERA5 anonymous ARCO, 2022-09-26 00Z; 55 levels",
+  "observations": [
+    "NOAA OISST v2.1",
+    "NOAA NDBC 42036 and 42056",
+    "NHC best track"
+  ],
+  "pwp_options": {},
+  "ice_owner": "hex",
+  "run_cap_bytes": 20000000000,
+  "scope": "120 km broad ocean response; cannot resolve hurricane eyewall intensity",
+  "subsurface_initialization": "configured 30 m mixed layer and 0.05 K/m thermocline prior; no observed subsurface analysis",
+  "grid_file": "x1.40962.grid.nc",
+  "static_file": "x1.40962.native.static.nc",
+  "init_file": "init.nc"
+}

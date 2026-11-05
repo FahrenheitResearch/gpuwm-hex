@@ -74,6 +74,7 @@ def choose_copy_paths(
     peer_access: Mapping[tuple[int, int], bool],
     copy_policy: str = "auto",
     numa_nodes: Mapping[int, int | None] | None = None,
+    links: Mapping[tuple[int, int], Mapping[str, Any]] | None = None,
 ) -> dict[tuple[int, int], str]:
     """Resolve actual routes once, including the measured mixed-NUMA case.
 
@@ -100,7 +101,8 @@ def choose_copy_paths(
             paths[src, dst] = (
                 "peer" if both and (copy_policy == "peer" or
                                      copy_policy == "auto" and
-                                     (not nodes or src in nodes and dst in nodes and nodes[src] == nodes[dst]))
+                                     ((links or {}).get((src, dst), {}).get("type") == "xgmi" or
+                                      not nodes or src in nodes and dst in nodes and nodes[src] == nodes[dst]))
                 else "staged"
             )
     return paths
@@ -347,7 +349,11 @@ class SameHostTransport:
                         self._peer_access[src, dst] = bool(xp.cuda.runtime.deviceCanAccessPeer(src, dst))
         if numa_nodes is None and not self._cpu:
             numa_nodes = _device_numa_nodes(xp, self.devices)
-        self.paths = choose_copy_paths(self.devices, self._peer_access, copy_policy, numa_nodes)
+        self._links = {}
+        if not self._cpu and xp.cuda.runtime.is_hip:
+            from gpuwm.hip_runtime import peer_links
+            self._links = peer_links(self.devices)
+        self.paths = choose_copy_paths(self.devices, self._peer_access, copy_policy, numa_nodes, self._links)
         if self.stage_same_device:
             # An explicit diagnostic can exercise both pinned-host DMA legs
             # with two ranks on one physical card. Ordinary routing is intact.
@@ -1032,6 +1038,7 @@ class SameHostTransport:
                 "requested": self.copy_policy,
                 "can_access_peer": bool(self._peer_access.get((src, dst), False)),
                 "actual": "host-reference" if self._cpu else path,
+                "link": getattr(self, "_links", {}).get((src, dst)),
                 "host_legs": 0 if self._cpu or path != "staged" else 2,
             }
             for (src, dst), path in sorted(self.paths.items())

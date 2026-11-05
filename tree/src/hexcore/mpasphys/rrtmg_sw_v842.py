@@ -517,7 +517,7 @@ class MPASShortwave(CudaSW):
         """
         from gpuwm.core.rrtmg_sw import sw_batched_vram_bytes
         cp = self.cp
-        quantum, cap = self.SUNLIT_CHUNK_QUANTUM, self.SUNLIT_CHUNK_CAP
+        quantum, cap = self.SUNLIT_CHUNK_QUANTUM, min(self.SUNLIT_CHUNK_CAP, 1024)
         wrapper_column = 4 * (8 * nl * 112 + 15 * nl + 2 * (nl + 1)
                               + (3 * 14 * nl if aerosol else 0) + 16 * (nl + 1))
         solver_bytes = sw_batched_vram_bytes(quantum, nl, mcica_layout="column")

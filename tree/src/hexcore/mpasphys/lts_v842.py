@@ -311,6 +311,8 @@ class LtsClassExecution:
     def bind_dycore(self, dycore):
         self.dycore = dycore
 
+    def wave_input(self):
+        return self.wave_global_mesh, self.partition.cell_l2g, self.partition.n_owned_cells
     def build_dycore(self, factory, *args, **kwargs):
         from .moving_class_gpu_v842 import restore_driver
         return restore_driver(self.prepared_moving_class, factory, *args,
@@ -922,6 +924,8 @@ class ClassMoving:
         windows = self.comm.gather(None if window is None else window.snapshot(), root=0)
         services = self.comm.gather(None if session.surface_service is None else
                                     session.surface_service.restart_state(), root=0)
+        ocean = getattr(session, 'ocean_pwp', None)
+        oceans = self.comm.gather(None if ocean is None else ocean.restart_state(), root=0)
         psfc = self.comm.gather(None if columns is None else dycore.cp.asnumpy(columns.psfc_p), root=0)
         continuations = None
         if continuation:
@@ -933,6 +937,11 @@ class ClassMoving:
             return None
         if any(service != services[0] for service in services):
             raise ValueError('moving surface service calendars differ between rate classes')
+        # --ocean-mode pwp: each class's owned PWP columns, assembled once (moving_mpi_v842 does the same per rank).
+        # THE BREAKAGE THIS PREVENTS: without them the seal holds no ocean and the next segment refuses
+        # ("the carrier holds no PWP ocean state") or, worse, a move restarts the ocean from SST.
+        from .ocean_pwp_v842 import OceanWords, assemble_owned
+        global_ocean = assemble_owned(oceans, self.partitions)
         global_window = None
         if windows[0] is not None:
             global_window = {key: assemble_columns([w[key] for w in windows], self.partitions, entity='cell')
@@ -943,7 +952,8 @@ class ClassMoving:
                    precipitation_window=None if global_window is None else WindowWords(global_window),
                    surface_service=None if services[0] is None else ServiceWords(services[0]),
                    continuation=(None if continuations is None else
-                                 assemble_continuation(continuations, self.partitions)))
+                                 assemble_continuation(continuations, self.partitions)),
+                   ocean_pwp=None if global_ocean is None else OceanWords(global_ocean))
         global_dycore = NS(cp=HostArrays, atmosphere=NS(state=NS(**state), saved=NS(**saved)))
         global_columns = None if psfc[0] is None else NS(psfc_p=assemble_columns(psfc, self.partitions, entity='cell'))
         return proxy, global_dycore, global_columns
@@ -1492,6 +1502,7 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
                       and os.environ.get('CUPY_CUDA_PER_THREAD_DEFAULT_STREAM', '0') in ('', '0'))
     for execution in executions:
         execution.multi_card = bplan is not None
+        execution.wave_global_mesh = mesh
         execution.stream_ordered = stream_ordered
         execution.stochastic_shared = member_stochastic
         execution.stochastic_lock = stochastic_lock

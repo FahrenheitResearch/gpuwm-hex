@@ -144,7 +144,7 @@ def test_stage_records_failure_and_preserves_log(tmp_path, monkeypatch):
 
 
 def test_a_multicard_stage_is_compared_per_card(tmp_path, monkeypatch):
-    """THE BREAKAGE (V8X6000 2026-10-29): a 2-card run's receipt compared its 28,722 MiB per-card prediction with
+    """THE BREAKAGE (eight-card system 2026-10-29): a 2-card run's receipt compared its 28,722 MiB per-card prediction with
     both cards' sum, 60,722 MiB, and said the plan was 52.7 % under; the largest card held 30,813."""
     monkeypatch.setattr(card_fit, "_gpu_memory_by_card", lambda pids: {"GPU-a": 29924.0, "GPU-b": 30798.0})
     result = card_fit.run_stage([sys.executable, "-c", "pass"], name="two-cards", directory=tmp_path)
@@ -392,13 +392,27 @@ def test_a_failed_door_stops_the_decode_beside_it(tmp_path, monkeypatch):
 
 
 def test_background_stage_reports_its_own_wall_and_cpu(tmp_path):
-    handle = card_fit.start_stage([sys.executable, "-c", "import time; sum(range(10**6)); time.sleep(0.3)"],
-                                  name="beside", directory=tmp_path)
+    import os
     import time
-    time.sleep(1.0)  # the door is busy with the foreground stage
+    stamp = tmp_path / "beside.exit"
+    before = time.monotonic()
+    handle = card_fit.start_stage([sys.executable, "-c", "import sys, time; sum(range(10**6)); time.sleep(0.3); "
+                                   "open(sys.argv[1], 'w').write(repr(time.monotonic()))", str(stamp)],
+                                  name="beside", directory=tmp_path)
+    launched = time.monotonic()
+    # The door is busy with the foreground stage until well after the child has exited (seen without reaping it).
+    # The child's own run time is the host's (1.38 s at load ~55 in the hex 0.5.0 sealing pass), so the stage's
+    # wall is checked against the child's exit and the join, never against a fixed run time.
+    os.waitid(os.P_PID, handle.process.pid, os.WEXITED | os.WNOWAIT)
+    time.sleep(0.5)
+    joined = time.monotonic()
     row = handle.finish()
     assert row["returncode"] == 0 and row["background"]
-    assert 0.3 <= row["wall_seconds"] < 0.95  # its own exit, not the join
+    exited = float(stamp.read_text())
+    assert row["wall_seconds"] >= 0.3
+    assert row["wall_seconds"] >= round(exited - launched, 3)  # it ends at the child's exit or later ...
+    assert row["wall_seconds"] < joined - launched  # ... and before the join: its own exit, not the join
+    assert row["wall_seconds"] <= round(time.monotonic() - before, 3)
     assert row["cpu_seconds"] > 0
     failing = card_fit.start_stage([sys.executable, "-c", "raise SystemExit(5)"], name="bad", directory=tmp_path)
     assert failing.finish()["returncode"] == 5
@@ -612,7 +626,7 @@ def test_the_run_goes_on_the_cards_the_plan_priced(tmp_path, monkeypatch, route)
 
 
 #: hex 0.4.10's regional GFS cold-start default, convection_permitting + hrrr-like-aerosol (physics-default
-#: recipe_rules), measured on the r700 96 -> 3 km zoom globe (286,530 cells, 55 levels) on RTX PRO 6000s, box V8X6000
+#: recipe_rules), measured on the r700 96 -> 3 km zoom globe (286,530 cells, 55 levels) on RTX PRO 6000s, box eight-card system
 #: 2026-10-29, the HB9 tip ed2dd96b, one process per card: (cards, the largest card's peak MiB).
 MEASURED_AEROSOL_2026_10_29 = [(1, 44989.0), (2, 30813.0), (4, 19929.0)]
 AEROSOL = {"route": "mpas", "suite": "convection_permitting", "profile": "hrrr-like-aerosol"}
@@ -677,7 +691,7 @@ def test_door_prices_the_gfs_zoom_globe_on_the_aerosol_profile_it_runs(tmp_path,
     plan = json.loads(out.read_text())["prediction_before_generation"]
     assert plan["physics"] == AEROSOL
     # zoom_plan prices 2 x RTX 5090: the run held to a 5090's 32,607 MiB per card (27,998 MiB), not the 96 GB card's
-    # 30,813 MiB, which refused this shape on 2 x 5090 (V8X6000 2026-10-29).
+    # 30,813 MiB, which refused this shape on 2 x 5090 (eight-card system 2026-10-29).
     assert plan["predicted_peak_mib"] == pytest.approx(27998.0 * (1 + card_fit.WHOLE_RUN_MARGIN), abs=.01)
     assert plan["fits"]
     assert "convection_permitting + hrrr-like-aerosol (mpas route) on 2 cards" in capsys.readouterr().out
@@ -690,7 +704,7 @@ def test_door_prices_the_gfs_zoom_globe_on_the_aerosol_profile_it_runs(tmp_path,
 
 
 def test_a_plan_takes_the_runs_measured_with_its_own_card_memory():
-    """THE BREAKAGE (hex 0.4.10 review, V8X6000 2026-10-29): the 2-card aerosol row was a 96 GB card's peak (30,813
+    """THE BREAKAGE (hex 0.4.10 review, eight-card system 2026-10-29): the 2-card aerosol row was a 96 GB card's peak (30,813
     MiB: idle pool sets kept while the card had room, free-sized tiles), so 2 x RTX 5090 was priced 33,894 MiB per card
     and refused, a shape the same run held to a 5090's 32,607 MiB completes.  At each size a plan takes the runs
     measured with the card memory nearest its own card's from above, else the most below."""
