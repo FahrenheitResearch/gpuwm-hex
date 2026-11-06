@@ -797,8 +797,11 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # 2026-10-18: phase two requests only the columns its seam consumes.
     # Re-derived 2026-10-18 (parked-merge hex-speed): that file plus the
     # parked asynchronous history-ready seam; digest of the merged file.
+    # Re-frozen 2026-11-06 (hex 0.4.14, ArWen-route waves on several ranks): the backend keeps the
+    # lowest level's moist air density beside the LES winds only when a wave binding is attached
+    # (wave_rho_air); with waves off (this proof) it stores None and nothing else moved. No card run.
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "9a21ff704fe9563fc07d16c34a39b969bfddd35f6f3c4c3dad1e793645c81e2e"
+        "6364fbdb6fc3251f2aee3db13e5e5cdb6c1d0b56743416b11a81fbf6da12cf7e"
     ),
     # New pin 2026-10-05: the New Tiedtke row's seam (the frozen column-batch
     # class subclassed, driver built at cu_physics=16, raw cumulus momentum

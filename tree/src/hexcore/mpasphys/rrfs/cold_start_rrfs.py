@@ -776,9 +776,7 @@ def select_initial_state_stream(configs: Mapping[str, Any]) -> str:
     stream this module's init writes.
     """
 
+    from ...restart_rrfs import RestartControl
     configs = {key.casefold(): value for key, value in configs.items()}
-    if configs.get("config_do_restart"):
-        return "restart"
-    if configs.get("config_do_dacycling"):
-        return "da_state"
-    return "input"
+    return RestartControl(bool(configs.get("config_do_restart")),
+                          bool(configs.get("config_do_dacycling"))).initial_stream

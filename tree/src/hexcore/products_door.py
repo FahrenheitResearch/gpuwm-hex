@@ -1139,6 +1139,34 @@ def global_window(mesh, size: str) -> tuple[str, str | None]:
     return window, why
 
 
+#: The widest context box, in km (its height is 0.7 of its width). THE BREAKAGE THIS PREVENTS (both-routes matrix,
+#: gpuwm-hex 0.4.14 candidate, 2026-11-06): a 240 -> 60 km zoom globe's refined window is 5,886 km across, so the
+#: context box at 8 x its half-extent was 23,547 x 16,483 km; rw_mpas_convert refuses a region wider than half a
+#: meridian (pi x 6,370 km = 20,012 km), the view failed and the whole mesh-plan --run door exited 1 after a finished
+#: forecast, on both physics routes. The cap is not the converter's own 20,012 km: at that width the box's corners lie
+#: 12,200 km from its centre, past the quarter turn (10,006 km) where a Lambert cone stretches without bound and the
+#: converter selects no cells (rw-mpas MESH_FOCUS_MAX_ANGULAR_RADIUS_RAD), so the picture's corners are stretched or
+#: blank. At 16,394 km the corners sit at the quarter turn: the widest box whose every pixel is real ground on a
+#: usable cone, still about three core widths for the widest core it frames. Not the global view instead: that view
+#: is already drawn, on lat-lon, with the core off centre; the context's job is the core in its surroundings,
+#: centred, on the same conformal cone as the core view, and the WOOF tree files it as its own view.
+CONTEXT_MAX_EXTENT_KM = math.pi * 6370.0 / math.sqrt(1.0 + 0.7 ** 2)
+#: The context box is this many times the core window's half-extent (four core widths), and never under 1,500 km.
+CONTEXT_EXTENT_PER_HALF = 8.0
+CONTEXT_MIN_EXTENT_KM = 1500.0
+
+
+def context_extent_km(half_km: float) -> tuple[float, str | None]:
+    """The context box's width around a core window of half-extent ``half_km``, and why when it was capped."""
+
+    wanted = max(CONTEXT_MIN_EXTENT_KM, CONTEXT_EXTENT_PER_HALF * half_km)
+    if wanted <= CONTEXT_MAX_EXTENT_KM:
+        return wanted, None
+    return CONTEXT_MAX_EXTENT_KM, (f"{wanted:.0f} km ({CONTEXT_EXTENT_PER_HALF:g} x the core's {half_km:.0f} km "
+                                   f"half-extent) capped at {CONTEXT_MAX_EXTENT_KM:.0f} km, the widest box whose "
+                                   f"corners stay within a quarter turn of the core")
+
+
 #: Below this |latitude| the converter frames a region on lat-lon, not Lambert (rw-mpas
 #: MESH_FOCUS_MIN_LAMBERT_LATITUDE_DEG); the context view there keeps the converter's own region window.
 REGION_MIN_LAMBERT_LATITUDE = 10.0
@@ -1912,7 +1940,9 @@ def run_products(args) -> int:
                 mesh_uniform = False
             if refined_centre is not None and not limited_area:
                 lat, lon, half = refined_centre
-                extent = max(1500.0, 8.0 * half)
+                extent, capped = context_extent_km(half)
+                if capped:
+                    print(f"PRODUCTS context box {capped}", flush=True)
                 core_spec = (manifest.get("convert") or {}).get("window_spec") if manifest else None
                 core_dx = core_spec.get("dx_metres") if isinstance(core_spec, dict) else None
                 regions["refined-context"], context_why = context_window(

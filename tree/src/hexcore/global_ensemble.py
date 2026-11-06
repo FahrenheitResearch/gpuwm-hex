@@ -331,7 +331,7 @@ def memory_group_limit(value: Mapping[str, Any], args: argparse.Namespace) -> in
 
     from . import forecast_door as door
     from .device_admission import (card_profile_from_attributes, co_tenancy_limits, model_for_card,
-                                   route_required_free_bytes)
+                                   mpas_member_increment_bytes, route_required_free_bytes)
     from .multi_member import argv_physics_route
 
     cards = _probe_cards(getattr(args, "devices", None))
@@ -352,11 +352,13 @@ def memory_group_limit(value: Mapping[str, Any], args: argparse.Namespace) -> in
         profile = card_profile_from_attributes(card["name"], {"MultiProcessorCount": card["sms"],
                                                               "MaxThreadsPerMultiProcessor": card["threads"]})
         model = model_for_card(profile, "global", rollback_armed="--stop-on-refusal" in argv)
+        solo = route_required_free_bytes(cells, model, margin, route=route)
+        increment = mpas_member_increment_bytes(cells, levels) if route == "mpas" else None
         table, memory = co_tenancy_limits(
             mesh_kind="global", cells=cells, levels=levels, card_bytes=int(card["total"]),
-            free_bytes=int(card["free"]),
-            solo_required_bytes=route_required_free_bytes(cells, model, margin, route=route),
-            member_additional_bytes=additional)
+            free_bytes=int(card["free"]), solo_required_bytes=solo,
+            member_additional_bytes=additional,
+            member_increment_bytes=None if increment is None else min(increment, solo))
         limits.append(min(table, memory))
     return max(1, min(limits))
 
@@ -432,11 +434,13 @@ def cards_per_member(value: Mapping[str, Any], args: argparse.Namespace,
     if not cards:
         return 1
     from . import forecast_door as door
-    from .device_admission import card_profile_from_attributes, model_for_card, route_required_free_bytes
+    from .device_admission import (card_profile_from_attributes, model_for_card, mpas_rank_card_bytes,
+                                   route_required_free_bytes)
     from .multi_member import argv_physics_route
 
     argv = list(value["commands"]["forecast"])
     route = argv_physics_route(argv)
+    levels = int(value.get("vertical", {}).get("n_vert_levels", 55))
     headroom = _forecast_flag(argv, "--headroom-mib")
     margin = None if headroom is None else int(round(float(headroom) * door.MIB))
     cells = int(value["mesh"]["cells"])
@@ -449,7 +453,10 @@ def cards_per_member(value: Mapping[str, Any], args: argparse.Namespace,
         return 1
     for count in range(2, len(cards) + 1):
         share = -(-int(cells * (1.0 + RANK_HALO_SHARE)) // count)
-        if route_required_free_bytes(share, model, margin, route=route) <= total:
+        # A rank alone on its card: the measured rank-per-card row on the MPAS route (both-routes RED 4).
+        rank = (mpas_rank_card_bytes(share, levels, model, margin) if route == "mpas"
+                else route_required_free_bytes(share, model, margin, route=route))
+        if rank <= total:
             return count
     # Not even every visible card holds it: one card each, and the forecast door's own admission refuses by name.
     return 1

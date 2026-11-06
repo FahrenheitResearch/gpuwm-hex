@@ -200,6 +200,9 @@ class _Binding:
     overlapping_fields: bool = False
     peer_descriptors: tuple[Any, ...] = ()
     word_rows: bool = False
+    # Active steps of its batch since this binding was last looked up (retire_stale_bindings).
+    idle_steps: int = 0
+    used: bool = True
 
 
 @dataclass
@@ -212,6 +215,8 @@ class _Batch:
     owners: tuple[Any, ...] = ()
     bindings: OrderedDict = field(default_factory=OrderedDict)
     serial_unpack: bool = False
+    # Looked up since the rank's last step boundary (retire_stale_bindings).
+    used: bool = False
 
 
 @dataclass
@@ -394,6 +399,7 @@ class SameHostTransport:
             "descriptor_uploads": 0,
             "dimension_uploads": 0, "descriptor_cache_hits": 0,
             "descriptor_cache_misses": 0, "descriptor_cache_evictions": 0,
+            "descriptor_cache_retired": 0,
             "serial_unpack_batches": 0, "serial_unpack_launches": 0,
         }
 
@@ -652,6 +658,7 @@ class SameHostTransport:
                       for packet in active for _, shape, _, _ in packet.specs)
             binding = _Binding(descriptor, owners, rows, overlapping, peer_descriptors, word_rows)
             batch.bindings[signature] = binding
+            batch.used = True
             delta["descriptor_cache_misses"] += 1
             if rows:
                 delta["descriptor_uploads"] += 1
@@ -660,6 +667,7 @@ class SameHostTransport:
                 delta["descriptor_cache_evictions"] += 1
         else:
             batch.bindings.move_to_end(signature)
+            binding.used = batch.used = True
             delta["descriptor_cache_hits"] += 1
         batch.signature = signature
         batch.descriptor, batch.owners, batch.rows = binding.descriptor, binding.owners, binding.rows
@@ -676,6 +684,47 @@ class SameHostTransport:
                 kernel((32, batch.rows), (256,), (batch.descriptor, np.int32(scatter)), stream=stream)
                 delta["unpack_launches" if scatter else "pack_launches"] += 1
         self._add_stats(delta)
+
+    #: A binding not looked up in this many consecutive active steps of its batch is dropped.
+    stale_binding_steps = 2
+
+    def retire_stale_bindings(self, rank: int) -> int:
+        """Drop rank's address bindings unused for ``stale_binding_steps`` active steps of their batch.
+
+        Called by the rank's exchanger at each step boundary, on the rank's own thread (the only thread
+        that looks up its batches). A binding's key holds its fields' device addresses, so a field the
+        step allocates afresh (a temporary handed to a halo round) makes a new binding on every step and
+        never reuses an old one. THE BREAKAGE THIS PREVENTS: those dead bindings were kept until the
+        4,096-entry LRU filled, which it never did; the 8-rank same-host x1.40962 run made 41,194 of them
+        in 120 steps (0 evictions) and its quiet pool floor rose about 0.7 MiB per step, ~0.4 GiB over a
+        5-day run. A smaller LRU cap is not the remedy: 64 missed 78% of lookups at 15 km, because live
+        rotating bindings outnumber it. Live bindings are looked up every step, or every other step for
+        a two-level rotation, so they are kept; a batch idle for a whole step (a round that runs only on
+        some steps) does not age its bindings. Retained submissions keep evicted descriptors alive until
+        their DMA completes, as LRU eviction always has. Dropping an entry changes no word: a binding
+        rebuilt later uploads the same table.
+        """
+        dropped = 0
+        limit = int(self.stale_binding_steps)
+        for buffers in tuple(self._cache[int(rank)].values()):
+            for batch in (buffers.send_batch, buffers.recv_batch):
+                if not batch.used:
+                    continue
+                batch.used = False
+                stale = []
+                for signature, binding in batch.bindings.items():
+                    if binding.used:
+                        binding.used, binding.idle_steps = False, 0
+                    else:
+                        binding.idle_steps += 1
+                        if binding.idle_steps >= limit:
+                            stale.append(signature)
+                for signature in stale:
+                    del batch.bindings[signature]
+                dropped += len(stale)
+        if dropped:
+            self._add_stats({"descriptor_cache_retired": dropped})
+        return dropped
 
     @staticmethod
     def _overlapping_fields(fields) -> bool:

@@ -261,6 +261,48 @@ def test_incremental_build_preserves_other_images_and_compiles_only_missing(tmp_
     assert result["entries"] == 5
 
 
+def test_release_build_prunes_stale_images_and_resumes_from_its_job_directory(tmp_path, monkeypatch):
+    """THE BREAKAGE: a release pack rebuilt with --base-pack kept every image of kernels the tree no longer
+    has (0.4.10's 13.0/13.2 packs: 764 stale of 2,340), and a long whole-pack compile killed part way
+    (OOM, a restart) started again from nothing.  tools/build_kernel_packs.py builds with --prune --job-dir."""
+    from hexcore.cuda_backend import aot_build
+    from hexcore.cuda_backend.aot import ARCHITECTURES
+    from hexcore.kernel_pack import read, write
+    from gpuwm.certify import compile_platform
+
+    identity = {"compiler": "test"}
+    monkeypatch.delenv("GPUWM_HEX_AOT", raising=False)
+    monkeypatch.setattr(aot_build, "compiler_identity", lambda: identity)
+    monkeypatch.setattr(compile_platform, "nvrtc_banner", lambda: "test banner")
+    monkeypatch.setattr(compile_platform, "nvrtc_build", lambda _: "test")
+    monkeypatch.setattr(compile_platform, "nvrtc_build_id", lambda _: "CL-test")
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    def compile_(entry, arch):
+        # Runs in the forked job process: record the call where the parent can count it.
+        (calls / arch).write_text("1")
+        return row(arch)
+    monkeypatch.setattr(aot_build, "compile_entry", compile_)
+    stale = {**row(), "module_key": "removed.kernel"}
+    base = tmp_path / "base.json"
+    write(base, identity, [row(ARCHITECTURES[0]), stale])
+    out = tmp_path / "pack.json"
+    jobs = tmp_path / "jobs"
+    result = aot_build.build(out, base_pack=base, entries=[row()], workers=2, prune=True, job_dir=jobs,
+                             reserve_bytes=0)
+    assert sorted(p.name for p in calls.iterdir()) == sorted(ARCHITECTURES[1:])
+    assert result["compiled"] == 3 and result["reused"] == 1 and result["entries"] == 4
+    held = read(out, identity)
+    assert "removed.kernel" not in {r["module_key"] for r in held}
+    assert sorted(r["arch"] for r in held) == sorted(ARCHITECTURES)
+    # A second build finds every compiled image in the job directory and compiles nothing.
+    for path in calls.iterdir():
+        path.unlink()
+    again = aot_build.build(tmp_path / "again.json", base_pack=base, entries=[row()], workers=2, prune=True,
+                            job_dir=jobs, reserve_bytes=0)
+    assert not list(calls.iterdir()) and again["entries"] == 4
+
+
 def test_incremental_build_refuses_wrong_compiler_and_corrupt_reuse(tmp_path, monkeypatch):
     from hexcore.cuda_backend import aot_build
     from hexcore.kernel_pack import write
@@ -414,14 +456,14 @@ def test_pack_image_refuses_a_cubin_that_fails_its_digest():
     assert Pack.image({**shipped, "cubin_sha256": "0" * 64}) is None
 
 
-@pytest.mark.parametrize("family", [12, 13])
+@pytest.mark.parametrize("family", ["12", "13", "13.0", "13.2", "13.4", "13.4.59"])
 def test_shipped_pack_covers_every_declared_module_on_every_architecture(family):
     """THE BREAKAGE: a kernel edited without rebuilding the pack JITs on every fresh box.
 
     Checked per numerics mode with the exact options the pack selects on: a pack holding only
     strict rows misses every hex kernel of a default (fast) run (owner ruling 2026-10-16).
-    Rebuild with: python tools/build_hex_aot.py --output release-assets/kernel-packs/<name>
-    (in a venv holding the pack's CuPy and NVRTC, named in its "compiler" field).
+    Rebuild every pack with: python tools/build_kernel_packs.py <tree> --out <dir> --base <previous packs>
+    --tag kernel-packs-v<version> (one venv per NVRTC; only changed kernels compile).
     """
     from hexcore.cuda_backend.aot import ARCHITECTURES
     from hexcore.cuda_backend.aot_build import inventory
@@ -438,7 +480,8 @@ def test_shipped_pack_covers_every_declared_module_on_every_architecture(family)
     held = {(e["arguments"]["module_key"], e["arguments"]["source_sha256"],
              tuple(e["arguments"]["options"]), e["arguments"]["arch"]) for e in document["entries"]}
     for mode in ("fast", "strict"):
-        missing = sorted({row["module_key"] for row in inventory(numerics=mode, compiler_family=family) for arch in ARCHITECTURES
+        missing = sorted({row["module_key"] for row in inventory(numerics=mode, compiler_family=int(family.split(".")[0]))
+                          for arch in ARCHITECTURES
                           if (row["module_key"], row["source_sha256"], tuple(row["options"]), arch) not in held})
         assert not missing, f"kernel pack is stale for {mode} numerics: {missing}"
 

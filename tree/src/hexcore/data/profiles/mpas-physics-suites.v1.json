@@ -5433,7 +5433,6 @@
     "native_table_selector": "hexcore.mpasphys.rrfs.driver_rrfs:native_table_inputs",
     "native_table_override_keyword": "override_roots",
     "native_table_stream_selector": "hexcore.mpasphys.rrfs.driver_rrfs:native_table_stream_inputs",
-    "initial_state_selector": "hexcore.mpasphys.rrfs.cold_start_rrfs:select_initial_state_stream",
     "native_initialization_namelist": "hexcore.mpasphys.rrfs.driver_rrfs:stage_native_initialization_namelist",
     "native_table_streams": [
       {

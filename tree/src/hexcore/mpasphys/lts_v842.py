@@ -1554,6 +1554,8 @@ def run_lts_classes(arguments, config, layout, payload, streams, start, stop, dt
     for execution in executions:
         execution.multi_card = bplan is not None
         execution.wave_global_mesh = mesh
+        # Blocks on several cards share the run's one wave service, on the first block's card (waves.for_mesh).
+        execution.wave_service_card = unit_devices[0] if bplan is not None else None
         execution.stream_ordered = stream_ordered
         execution.stochastic_shared = member_stochastic
         execution.stochastic_lock = stochastic_lock

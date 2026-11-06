@@ -4,6 +4,7 @@ This exercises the actual moving restore method, not GPU transport accuracy.
 """
 import copy
 import sys
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import numpy as np
@@ -112,7 +113,7 @@ def test_carried_waves_still_restore_from_the_source_mesh(monkeypatch, tmp_path)
     seen = []
     binding = object()
     service = SimpleNamespace(
-        clock=600., bind=lambda **kw: binding,
+        clock=600., bind=lambda **kw: binding, on_card=nullcontext,
         restore_moving=lambda state, mesh, remap: seen.append((state, mesh, remap)),
         output=lambda clock: seen.append(clock))
     monkeypatch.setattr(waves, "for_mesh", lambda *args, **kwargs: service)

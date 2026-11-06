@@ -160,7 +160,7 @@ def op_construct(ctx, *, local, attach, arwen_checkout, stop_on_refusal, compile
                                                       if restart_entry is not None else {}))
             from hexcore.arwen_surface_update import attach_host
             attach_host(stack["backend"], attach if attach is not None else ctx.host, ctx.schedule, ctx.output_root,
-                        dt=float(forecast.DT_SECONDS), layout=layout)
+                        dt=float(forecast.DT_SECONDS), layout=layout, wave_ranks=(ctx.rank, ctx.layouts))
             stack["restart_forcing"] = (restart.restore_forcing(restart_entry, stack)
                                          if restart_entry is not None else None)
             from hexcore.partition_overlap_v841 import interior_edges
@@ -180,6 +180,13 @@ def op_construct(ctx, *, local, attach, arwen_checkout, stop_on_refusal, compile
                 stack["driver"].horizontal.ncells: layout.n_owned_cells,
                 edge_extent: layout.n_owned_edges,
             }
+            # The 2-5 km updraft-helicity maximum (and the 0-x km layers when asked for), as the one-card
+            # ArWen driver writes it. THE BREAKAGE THIS PREVENTS (both-routes matrix, gpuwm-hex 0.4.14
+            # candidate, 2026-11-06): the ranks never armed the layers, so a multi-card ArWen run rendered no
+            # UH maps while the same run on one card did.
+            from hexcore.uh_layers import attach_rank
+            stack["uh_layers_receipt"] = attach_rank(stack, local["prepared"].mesh, cp,
+                                                     initial=restart_entry is None)
         finally:
             # Construction also enqueues device-table uploads. Finish
             # them before a failed constructor releases scoped owners.
@@ -289,6 +296,9 @@ def op_advance(ctx, *, step, refl_due, first, card_selection, last=False, expect
     atmosphere = stack["driver"].atmosphere
     exchanger.round_step_boundary(atmosphere.state, atmosphere.saved, result.dynamics_tendencies)
     exchanger.end_step()
+    # After the boundary round: the halo edges around every owned cell's vertices hold this step's words.
+    from hexcore.uh_layers import rank_update
+    rank_update(stack)
     ctx.previous = result.committed.surface_updates
     ctx.forcing = result.dynamics_tendencies
     return {"driver": asdict(result.committed.receipt),
@@ -343,7 +353,57 @@ def op_final(ctx):
     return out
 
 
+def op_wave_take(ctx):
+    """A rank other than 0: its owned wave forcing of the step just ended (None elsewhere or with waves off)."""
+    from hexcore.waves import ArwenRankBinding
+    binding = getattr(ctx.stack["backend"], "wave_binding", None)
+    return binding.take() if isinstance(binding, ArwenRankBinding) else None
+
+
+def op_wave_roughness(ctx, *, values=None):
+    """A rank other than 0: its local columns' surface roughness from rank 0's wave service."""
+    from hexcore.waves import ArwenRankBinding
+    binding = getattr(ctx.stack["backend"], "wave_binding", None)
+    if isinstance(binding, ArwenRankBinding):
+        binding.set_roughness(values)
+    return None
+
+
+def couple_waves(group, *, initial=False):
+    """The coordinator's wave step for a rank group: rank 0's one service gets every rank's owned forcing.
+
+    After every shared step (and once before step 1, ``initial``, for the first roughness), on rank 0's card and
+    stream. THE BREAKAGE THIS PREVENTS: every rank process built its own whole-mesh wave model on its own cells'
+    winds and they all wrote the same waves/ files (waves.attach_arwen). No-op with waves off or one rank.
+    """
+    from hexcore import waves
+    ctx0 = group.contexts[0]
+    binding = getattr(ctx0.stack["backend"], "wave_binding", None)
+    if binding is None or not getattr(binding, "peers", None):
+        return
+    pending = None if initial else group.call("wave_take")[1:]
+    device, stream = ctx0.device_scope()
+    with device, stream:
+        values = waves.peer_roughness(binding) if initial else waves.couple_rank_group(binding, pending)
+        ctx0.cp.cuda.get_current_stream().synchronize()
+    if binding.service.options["roughness_feedback"]:
+        group.call("wave_roughness", per_rank=[{"values": None}] + [{"values": value} for value in values])
+
+
+def wave_output(group, endpoint):
+    """Rank 0 writes the run's wave frame at an output boundary (the one-card route's capture does the same)."""
+    ctx0 = group.contexts[0]
+    binding = getattr(ctx0.stack["backend"], "wave_binding", None)
+    if binding is None:
+        return
+    device, stream = ctx0.device_scope()
+    with device, stream:
+        binding.service.output(float(endpoint))
+        ctx0.cp.cuda.get_current_stream().synchronize()
+
+
 OPS = {
+    "wave_take": op_wave_take, "wave_roughness": op_wave_roughness,
     "release_preparation": op_release_preparation,
     "construct": op_construct, "initial_surface": op_initial_surface, "describe": op_describe,
     "setup_exchange": op_setup_exchange, "iau": op_iau, "collect_owned": op_collect_owned,
@@ -448,9 +508,10 @@ class ThreadRankGroup:
                                    streams=self.streams)
         return self
 
-    def call(self, name, **kwargs):
+    def call(self, name, *, per_rank=None, **kwargs):
         operation = OPS[name]
-        return self.ranks.call(lambda rank: operation(self.contexts[rank], **kwargs))
+        return self.ranks.call(lambda rank: operation(self.contexts[rank], **kwargs,
+                                                      **({} if per_rank is None else per_rank[rank])))
 
     def step(self, step, *, dt, last, **kwargs):
         def advance(rank):

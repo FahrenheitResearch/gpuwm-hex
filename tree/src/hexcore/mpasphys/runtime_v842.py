@@ -992,6 +992,32 @@ def keeps_initialized_deformation(row):
     return entry is not None and bool(entry.get('keep_initialized_deformation', True))
 
 
+def native_state_sources(arguments, layout):
+    """(state file, mesh overlay, invariant file, cold_start) for the dycore loaders.
+
+    The state file is the selected initial stream (``--init`` after ``forecast_v842.initial_state_input``). The
+    vertical grid and the initialized mesh fields come from it when it carries them (an init, an MPAS-A restart),
+    else from the invariant stream, which the core reads first (MPAS-Model-rrfs mpas_atm_core.F:120-133;
+    Registry.xml invariant stream). A warm start (a restart, not a DA cycle) keeps the restart's coupled words
+    (``cold_start=False``; mpas_atm_core.F:542). THE BREAKAGE THIS FIXES: the loaders read the vertical grid and
+    the mesh overlay only from ``--init``, so with the restart selected an RRFS restart (no zgrid) was refused
+    "zgrid=None ... native vertical authority is incomplete" (restart-check, x1.163842 hrrrv5, 2026-11-06).
+    A cold start (initial stream ``input``) is unchanged: init, init, no invariant, cold.
+    """
+    init = Path(arguments.init)
+    cold_start = getattr(arguments, '_initial_state_cold_start',
+                         not bool(layout.configs.get('config_do_restart', False)))
+    invariant = getattr(arguments, '_initial_state_invariant', None)
+    if invariant is None:
+        return init, init, None, cold_start
+    from netCDF4 import Dataset
+    with Dataset(init, 'r') as dataset:
+        carries_grid = 'zgrid' in dataset.variables
+    if carries_grid:
+        return init, init, None, cold_start
+    return init, Path(invariant), Path(invariant), cold_start
+
+
 def load_native_dynamics_inputs(arguments, layout, payload, *, keep_initialized_deformation=False):
     """Complete input ownership before CUDA; mpas_atm_core.F:116-200,589-596."""
     if layout.configs.get('config_apply_lbcs', False):
@@ -1004,7 +1030,7 @@ def load_native_dynamics_inputs(arguments, layout, payload, *, keep_initialized_
     from ..vector import initialize_reconstruction_coefficients
     from ..driver import load_mpas_vertical_grid,load_mpas_initial_state
     from ..dynamics_v841 import load_v841_reference_wind_profiles
-    init=Path(arguments.init)
+    init,overlay,invariant,cold_start=native_state_sources(arguments,layout)
     hydration=NativePoolHydration(None,layout,payload)
     # The native input stream overlays the grid with initialized mesh fields,
     # including fEdge/fVertex; Registry.xml:498-545; mpas_atm_core.F:116-151.
@@ -1012,7 +1038,7 @@ def load_native_dynamics_inputs(arguments, layout, payload, *, keep_initialized_
     # lineage is independent of whether this dycore retains deformation.
     mesh_options={'native_parent_chain':True}
     mesh_options['exclude_variables']=native_mesh_state_exclusions(layout)
-    mesh=Mesh.from_netcdf(getattr(arguments,'grid',None) or init,init,**mesh_options)
+    mesh=Mesh.from_netcdf(getattr(arguments,'grid',None) or overlay,overlay,**mesh_options)
     # Native MPAS (single precision) reads a double-precision coordinate into RKIND on input
     # (mpas_io_streams.F:925-1023). An init_atmosphere init stores them single already, so this is a
     # no-op there (x1.2562: no double array remains after the init overlay). THE BREAKAGE IT PREVENTS:
@@ -1031,13 +1057,13 @@ def load_native_dynamics_inputs(arguments, layout, payload, *, keep_initialized_
     mesh.arrays['edgeNormalVectors']=vectors.edge_normal_vectors
     mesh.arrays['localVerticalUnitVectors']=vectors.local_vertical_unit_vectors
     mesh.arrays['cellTangentPlane']=vectors.cell_tangent_plane
-    grid=load_mpas_vertical_grid(init,mesh,config_coef_3rd_order=layout.configs['config_coef_3rd_order'])
+    grid=load_mpas_vertical_grid(init,mesh,config_coef_3rd_order=layout.configs['config_coef_3rd_order'],
+                                 invariant_path=invariant)
     profiles=load_v841_reference_wind_profiles(init,n_vert_levels=grid.vertical_grid.n_vert_levels)
     names=next(r['components'] for r in layout.fields if r['pool']=='state' and r['name']=='scalars')
     state,reference,saved=load_mpas_initial_state(init,mesh,grid.vertical_grid,
             scalar_names=(),reference_path=init,terrain_metrics=grid.terrain_metrics,
-            return_saved_diagnostics=True,cold_start=getattr(arguments, '_initial_state_cold_start',
-                not bool(layout.configs.get('config_do_restart', False))))
+            return_saved_diagnostics=True,cold_start=cold_start)
     # Native allocates every selected carrier, including absent input species;
     # Registry.xml:1701-1754; mpas_atmphys_init_microphysics.F:98-226. Rust already
     # applied their Registry defaults while decoding the complete scalar buffer.
@@ -1080,8 +1106,8 @@ def _regional_source_inputs(arguments, layout):
     from ..driver import load_mpas_vertical_grid, load_mpas_initial_state
     from ..dynamics_v841 import load_v841_reference_wind_profiles
     from ..rust_geometry import _run
-    init = Path(arguments.init)
-    mesh = Mesh.from_netcdf(getattr(arguments, 'grid', None) or init, init,
+    init, overlay, invariant, cold_start = native_state_sources(arguments, layout)
+    mesh = Mesh.from_netcdf(getattr(arguments, 'grid', None) or overlay, overlay,
                             native_parent_chain=True,
                             exclude_variables=native_mesh_state_exclusions(layout))
     for name, value in list(mesh.arrays.items()):
@@ -1093,12 +1119,11 @@ def _regional_source_inputs(arguments, layout):
                             'coeffs_reconstruct'), values):
         mesh.arrays[name] = value
     grid = load_mpas_vertical_grid(init, mesh, config_coef_3rd_order=layout.configs['config_coef_3rd_order'],
-                                   allow_regional_sentinels=True)
+                                   allow_regional_sentinels=True, invariant_path=invariant)
     profiles = load_v841_reference_wind_profiles(init, n_vert_levels=grid.vertical_grid.n_vert_levels)
     state, reference, saved = load_mpas_initial_state(init, mesh, grid.vertical_grid,
             scalar_names=(), reference_path=init, terrain_metrics=grid.terrain_metrics,
-            return_saved_diagnostics=True, cold_start=getattr(arguments, '_initial_state_cold_start',
-                not bool(layout.configs.get('config_do_restart', False))), allow_regional_sentinels=True)
+            return_saved_diagnostics=True, cold_start=cold_start, allow_regional_sentinels=True)
     return mesh, grid, profiles, state, reference, saved, keys_at_nominal
 
 
@@ -1177,7 +1202,7 @@ def load_native_regional_inputs(arguments, layout, payload, *, keep_initialized_
     from ..dynamics_v841 import load_v841_reference_wind_profiles
     from ..host_parallel import contiguous_copy
     from ..rust_geometry import _run
-    init = Path(arguments.init)
+    init, overlay, invariant, cold_start = native_state_sources(arguments, layout)
 
     # THE COST THIS REMOVES (mv3km 3 km limited area, 206,726 cells, V6000, 2026-10-28): this loader ran
     # 10-13 s on one host thread while the card waited (about 80-100 s at e3km/conus3km).  The Rust pool
@@ -1209,7 +1234,7 @@ def load_native_regional_inputs(arguments, layout, payload, *, keep_initialized_
 
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix='hex-pool-words') as side:
         hydration_future = side.submit(NativePoolHydration, None, layout, payload)
-        mesh = Mesh.from_netcdf(getattr(arguments, 'grid', None) or init, init,
+        mesh = Mesh.from_netcdf(getattr(arguments, 'grid', None) or overlay, overlay,
                                 native_parent_chain=True,
                                 exclude_variables=native_mesh_state_exclusions(layout))
         for name, value in list(mesh.arrays.items()):
@@ -1224,13 +1249,12 @@ def load_native_regional_inputs(arguments, layout, payload, *, keep_initialized_
                                 'coeffs_reconstruct'), values):
             mesh.arrays[name] = value
         grid = load_mpas_vertical_grid(init, mesh, config_coef_3rd_order=layout.configs['config_coef_3rd_order'],
-                                       allow_regional_sentinels=True)
+                                       allow_regional_sentinels=True, invariant_path=invariant)
         profiles = load_v841_reference_wind_profiles(init, n_vert_levels=grid.vertical_grid.n_vert_levels)
         names = next(r['components'] for r in layout.fields if r['pool'] == 'state' and r['name'] == 'scalars')
         state, reference, saved = load_mpas_initial_state(init, mesh, grid.vertical_grid,
                 scalar_names=(), reference_path=init, terrain_metrics=grid.terrain_metrics,
-                return_saved_diagnostics=True, cold_start=getattr(arguments, '_initial_state_cold_start',
-                not bool(layout.configs.get('config_do_restart', False))), allow_regional_sentinels=True)
+                return_saved_diagnostics=True, cold_start=cold_start, allow_regional_sentinels=True)
         scalars, deformation = words_future.result()
     return _finish_regional_inputs(mesh, grid, profiles, state, reference, saved, names, scalars, deformation,
                                    keep_initialized_deformation)
@@ -1624,8 +1648,12 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
             # The fork source the backend reads its tables from: the row's bound resource and pin set (the 44c0849
             # row binds its own), so the read-ahead takes the files read_tempo_lookup_files will ask for.
             bound = backend_type.keywords if isinstance(backend_type, partial) else {}
-            prefetch_tables(layout.configs, named_tables,
-                            **{name: bound[name] for name in ('resource', 'pin_set') if name in bound})
+            source = {name: bound[name] for name in ('resource', 'pin_set') if name in bound}
+            read_ahead = prefetch_tables(layout.configs, named_tables, **source)
+            # Strict numerics checks the lookup files' digests against the strict packet before the run starts.
+            verify_tables = getattr(framework_entry(config, 'initialization'), 'verify_strict_tables', None)
+            if verify_tables is not None:
+                verify_tables(layout.configs, named_tables, cuda_resources, future=read_ahead, **source)
     with timed_stage(timings, 'dycore-inputs', parallelism={'device':'CPU','host_threads':host_threads(),
                      'host_schedule':'main-thread chain (mesh, vertical grid, state) with threaded reads and copies; payload on a side thread'},
                      timeline='prep.native.dycore_inputs'):
@@ -2084,7 +2112,8 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
             wave_carrier = None if not resumed else moving.carrier.get('waves')
             wave_offset = float(getattr(moving, 'offset_seconds', 0.))
             wave_binding = attach_mpas(session, mesh, arguments, start=start, dt=dt,
-                steps=steps, out=out, execution=execution, carried=wave_carrier, weights=physics_map,
+                steps=steps, out=out, execution=execution, carried=wave_carrier,
+                weights=physics_map if physics_map is not None else getattr(moving, 'wave_weights', None),
                 source_carrier=None if not resumed else moving.carrier, clock_offset=wave_offset)
             if (wave_binding is None) != (wave_carrier is None) and resumed:
                 raise ValueError('wave mode differs between checkpoint and resumed forecast')

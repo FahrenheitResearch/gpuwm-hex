@@ -325,7 +325,7 @@ def attach(backend, *, work_dir, init_path, start, end, cell_order=None, n_globa
     return service.receipt()
 
 
-def attach_host(backend, host, schedule, work_dir, *, dt, layout=None):
+def attach_host(backend, host, schedule, work_dir, *, dt, layout=None, wave_ranks=None):
     """Bind original file indices to one whole mesh, rank or LTS class."""
     from datetime import datetime
     from .cuda_arwen_physics_v841 import PersistentTwoPhaseCudaPhysicsBackendV841
@@ -354,7 +354,7 @@ def attach_host(backend, host, schedule, work_dir, *, dt, layout=None):
         start=start, end=start+timedelta(seconds=float(schedule["steps"])*dt),
         cell_order=order, n_global_cells=cells)
     from .waves import attach_arwen
-    waves = attach_arwen(backend, host, schedule, work_dir, dt=dt, layout=layout)
+    waves = attach_arwen(backend, host, schedule, work_dir, dt=dt, layout=layout, ranks=wave_ranks)
     if waves is not None:
         result = dict(result, waves=waves)
     return result

@@ -13,12 +13,15 @@ from typing import Mapping
 # IEEE quotients and roots, so ptxas optimisation changes no word (module replay of real hrrrv5 calls, strict, old
 # -O0 image vs this one: 0 different words, rrfs/mynn-speed 2026-10-28). The -O0 image ran the PBL at 242 ms of a
 # 322 ms strict step.
-# Split compilation (rrfs/speed2-mynn-edmf, 2026-10-28): the image holds one kernel per lane width (LANE_WIDTHS), and
-# NVRTC + ptxas otherwise build them on one core (fast 70-126 s on a loaded RTX 5090 host, strict several minutes). Split
-# across the host's cores: fast 35 s. It changes only how the compiler schedules its work; every word is the same
-# (module replays, fast and strict).
+# ptxas splits its work across the host's cores; NVRTC does not.  THE BREAKAGE (gpuwm-hex 0.4.14 memory lane,
+# 2026-11-06): with NVRTC's own --split-compile=0 (rrfs/speed2-mynn-edmf, 2026-10-28) every compile of this unit gave a
+# different machine code -- five compiles of the same source and options (pack builder and runtime route, 8 and 48
+# cores, and two on 8 cores) gave five different .text sections -- so a run that compiled it (no matching pack)
+# differed from its own rerun on the pack image by 228,559 words at step 1 (8 ranks, fast).  Measured on box-4x with
+# NVRTC 13.4.59 (fast): NVRTC split alone, 8 vs 48 cores: two different cubins; ptxas split alone: the same cubin
+# byte for byte at 8 and 48 cores (105 s); no split: the same cubin (177 s).  So only ptxas splits.
 CUDA_OPTIONS = ("--std=c++17", "--fmad=false", "--ftz=false", "--prec-div=true", "--prec-sqrt=true",
-                "--split-compile=0", "--ptxas-options=--split-compile=0")
+                "--ptxas-options=--split-compile=0")
 
 ARRAY_SUPPORT = r'''
 // Stack frame (rrfs/mynn-speed, 2026-10-28): the generator inlines the two once-per-column entry routines

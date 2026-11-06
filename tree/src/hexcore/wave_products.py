@@ -24,6 +24,17 @@ def units(name):
     return "m s-1" if name == "ustar" else "1"
 
 
+def render_workdir(forecast_dir):
+    """The render scratch folder, as a resolved path.
+
+    THE BREAKAGE THIS FIXES (hex 0.4.14): gpuwm's NativeIO.load resolves each array path and requires it inside the
+    folder it was given, which it does not resolve.  Under an output path with a symlink in it (a test host's and the
+    files inside the prepared folder", after the forecast had finished (the door's products stage exited 2).
+    """
+    import tempfile
+    return Path(tempfile.mkdtemp(prefix="render-", dir=Path(forecast_dir) / "waves")).resolve()
+
+
 def write_frame(service):
     """Output cadence; device transfers complete before timing collection."""
     from gpuwm.io.nc_writer_bridge import ClassicSchema
@@ -172,8 +183,7 @@ def render(forecast_dir, mesh_path, out_case, *, domain="global", bounds=(-180,1
         raise FileNotFoundError(renderer_remedy())
     table = Path(table_path) if table_path else files("hexcore").joinpath("data/wave-products.v1.json")
     native = NativeIO()
-    import tempfile
-    work = Path(tempfile.mkdtemp(prefix="render-", dir=forecast_dir / "waves"))
+    work = render_workdir(forecast_dir)
     made = []
     deleted = []
 

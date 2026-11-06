@@ -1070,7 +1070,7 @@ def _source_manifest() -> dict[str, Any]:
     return source_manifest()
 
 
-def assemble_mpas_source(cache: Path, *, mpas_source: Path | None = None, offline: bool = False,
+def _assemble_mpas_source_unlocked(cache: Path, *, mpas_source: Path | None = None, offline: bool = False,
                          log: Callable[[str], None] = _log) -> dict[str, str]:
     """The pinned MPAS-Model tree the route reads at run time, from fetched files.
 
@@ -1098,7 +1098,7 @@ def assemble_mpas_source(cache: Path, *, mpas_source: Path | None = None, offlin
     return {"path": str(root), "sha256": digest}
 
 
-def assemble_rrfs_source(cache: Path, *, rrfs_source: Path | None = None, offline: bool = False,
+def _assemble_rrfs_source_unlocked(cache: Path, *, rrfs_source: Path | None = None, offline: bool = False,
                          log: Callable[[str], None] = _log, jobs: int | None = None,
                          pin_set: str = "rrfs") -> dict[str, str]:
     """The RRFS fork tree the RRFS route reads at run time: its Registry and its physics tables.
@@ -1145,6 +1145,32 @@ def assemble_rrfs_source(cache: Path, *, rrfs_source: Path | None = None, offlin
     return {"path": str(root), "sha256": digest}
 
 
+def _assembly_lock(cache: Path) -> Path:
+    """The one lock every source-tree assembly and installed-record write in ``cache`` takes.
+
+    THE BREAKAGE THIS PREVENTS: eight same-host rank threads assembling ``physics-resources/rrfs-source`` at
+    once raced in ``_link_relative`` (one unlinked the table link another had just checked, FileNotFoundError on
+    CCN_ACTIVATE_DATA; restart-check box 2, 2026-11-06, attempt 6), and concurrent ``record_installed`` calls
+    each wrote back a record missing the other's row.  One assembler works; the others wait, then find the
+    finished tree (assembly is idempotent: verified files are reused and matching links are kept).
+    """
+    return Path(cache) / ".assembly.lock"
+
+
+def assemble_mpas_source(cache: Path, **options) -> dict[str, str]:
+    """The pinned MPAS-Model tree, assembled by one process at a time (``_assembly_lock``)."""
+    from ..file_lock import held
+    with held(_assembly_lock(cache)):
+        return _assemble_mpas_source_unlocked(cache, **options)
+
+
+def assemble_rrfs_source(cache: Path, **options) -> dict[str, str]:
+    """The RRFS fork tree, assembled by one process at a time (``_assembly_lock``)."""
+    from ..file_lock import held
+    with held(_assembly_lock(cache)):
+        return _assemble_rrfs_source_unlocked(cache, **options)
+
+
 def installed_record_path(cache: Path | None = None) -> Path:
     return (Path(cache) if cache is not None else default_cache()) / "installed.json"
 
@@ -1160,7 +1186,13 @@ def read_installed(cache: Path | None = None) -> dict[str, Any]:
 
 
 def record_installed(cache: Path, rows: dict[str, dict[str, str]]) -> Path:
-    """Merge ``rows`` into the cache's installed-resources record (atomically)."""
+    """Merge ``rows`` into the cache's installed-resources record (atomically, one writer at a time)."""
+    from ..file_lock import held
+    with held(installed_record_path(cache).with_name(".installed.lock")):
+        return _record_installed_unlocked(cache, rows)
+
+
+def _record_installed_unlocked(cache: Path, rows: dict[str, dict[str, str]]) -> Path:
     record = read_installed(cache)
     current = (Path(cache) if cache is not None else default_cache()).resolve()
     recorded = _recorded_root(record)
@@ -1286,8 +1318,18 @@ def ensure_route_resources(keys: tuple[str, ...], *, cache: Path | None = None,
     if pin_set.startswith('rrfs') and source_key in missing:
         # The fork's DATA (Registry and tables, fetched by SHA-256): no compiler, no native library.
         root = Path(cache if cache is not None else default_cache()).resolve()
-        record_installed(root, {source_key: assemble_rrfs_source(root, log=log, pin_set=pin_set)})
-        out[source_key] = resolve_resource(source_key, root)
+        from ..file_lock import held
+        # Its own lock file: assemble_rrfs_source takes the assembly lock and record_installed the record lock inside.
+        with held(_assembly_lock(root).with_name(".first-use.lock")):
+            # Another rank or process may have finished it while this one waited for the lock: take it only whole.
+            try:
+                resolved = resolve_resource(source_key, root)
+            except PhysicsResourceError:
+                resolved = None
+            if resolved is None or source_tables_missing(resolved, pin_set):
+                record_installed(root, {source_key: assemble_rrfs_source(root, log=log, pin_set=pin_set)})
+                resolved = resolve_resource(source_key, root)
+            out[source_key] = resolved
         missing.remove(source_key)
         if not missing:
             return out

@@ -1295,6 +1295,9 @@ tests/test_hrrr_intermediate_fetch_requests.py
 # The TEMPO lookup read-ahead resolves the suite row's bound pin set and is never held unused
 # (fix/rrfs-rank-rss, same-host rank host memory); host-only, stubbed reads.
 tests/test_tempo_lookup_prefetch_pin.py
+# Strict numerics refuses TEMPO lookup files that are not the strict packet's (a run read the NOAA copies where
+# native read the strict-rebuilt tables, 2026-11-06); host-only, temporary files.
+tests/test_strict_tempo_table_hashes.py
 # GPUWM_HEX_EXCHANGE_TIMING reaches every same-host transport on the MPAS-physics route, threads and processes
 # (rrfs/mc-scale2 23103f7, the same-host halo timer); host-only, source checks and the summary.
 tests/test_exchange_timing_v841.py
@@ -1422,3 +1425,27 @@ tests/test_mynn_source_identity.py
 tests/test_native_forecast_measurement.py
 # Resume after a cut lease sets aside frames past the checkpoint; maps keep the run init (fix/hex-restart-ifs9 c6fd0bd966ad).
 tests/test_restart_frames_and_init_v842.py
+# A refused, out-of-memory or killed forecast never exits 0, at the console door or as a composing door stage (fix0414/tooling), host-only.
+tests/test_door_exit_status.py
+tests/test_restart_warm_start.py
+
+# hex 0.4.14 fixes, host-only (CPU stand-ins for CuPy where a kernel is involved; GPU-marked cases are deselected here):
+# same-host ranks share radiation budgets and one TEMPO blob per card; MPAS admission rows for members and ranks.
+tests/test_device_share_radiation_budget.py
+tests/test_mpas_member_and_rank_rows.py
+# a named --native-physics-tables folder must hold every TEMPO lookup file.
+tests/test_named_tempo_tables.py
+# same-host halo descriptor bindings retire after two idle active steps.
+tests/test_samehost_halo_binding_retire_v841.py
+# waves on same-host ranks and cards: owner map, one rank-0 service, checkpoints, ordered reductions, shared bathymetry.
+tests/test_samehost_wave_owner_map_v842.py
+tests/test_wave_arwen_rank_coupling.py
+tests/test_wave_checkpoint_ranks_and_cards_v842.py
+tests/test_wave_coordinate_float64_mesh.py
+tests/test_wave_ordered_reductions.py
+tests/test_wave_prepare_one_at_a_time.py
+tests/test_wave_rank_coupling.py
+tests/test_wave_shared_bathymetry.py
+# updraft-helicity layers on the ArWen route: default 2-5 km band, LTS classes and same-host ranks.
+tests/test_uh_layers_arwen_default.py
+tests/test_uh_layers_partitions.py

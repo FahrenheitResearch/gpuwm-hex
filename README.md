@@ -1,6 +1,6 @@
 # gpuwm-hex
 
-MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.13 ports the whole model to
+MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.14 ports the whole model to
 CUDA: the dynamical core, both MPAS physics suites and their scheme options,
 initialization and static fields, the incremental analysis update, limited-area
 runs, streams, restart and diagnostics (the scheme list and what is not yet in
@@ -21,7 +21,7 @@ what it is matched against and how that is checked.
 
 ---
 
-## What 0.4.13 claims, and how far
+## What 0.4.14 claims, and how far
 
 Each line is measured, and each carries its scope. Nothing outside the scope
 is claimed. [`tree/README.md`](tree/README.md) gives the detail.
@@ -39,6 +39,8 @@ Kernels compile with fast numerics by default (FMA contraction, flush-to-zero); 
 | `gpuwm-hex global` runs a global forecast in one command. | Rows are defined at 120, 60, 30 and 15 km, on ArWen physics and on the Morrison suite (Morrison, Grell-Freitas, YSU, revised MM5, Noah, RRTMGP); the measured runs are the 120 km rows. |
 | A storm-following 3 km region, experimental: `gpuwm-hex moving`. | ArWen physics, three 48-hour tropical cyclone runs; the balanced remap between moves is the default. |
 | RRFS-MPAS runs end to end from a pip install: the GSL fork's dycore and table-admitted physics run on the GPU by default. `hrrrv5`, `rrfs_convection_permitting`, `rrfs_mesoscale_reference`, and RRFS New Tiedtke use the ported framework without a native library. Native comparison backends remain explicit site builds. | With every physics slot on the native library (`--physics-default-backend native-cpu`), a one-hour `hrrrv5` run on `x1.2562`, one process, is bitwise to the native fork build in every field hex writes; each GPU port is bitwise as a module replay. RRFS initial conditions and hourly boundaries come from `gpuwm-hex init --physics-suite hrrrv5`, the fork's init ported to Rust ([RRFS init](tree/docs/rrfs-init.md)). |
+| A whole `hrrrv5` (RRFS-MPAS) forecast with every physics slot on the GPU is bitwise identical to the native fork build in every history, diagnostics and restart word hex writes, at 8 ranks and on one card. | `x1.40962` 120 km, 59 levels, 2023-03-31 12Z, 24 h, strict numerics: 8 same-host ranks on one card against 8 MPI ranks on the same partition, 1,958,644,100 words, 0 different; one card against one rank, 786,309,080 words, 0 different. The reference is the pinned 44c0849 strict build with four labelled source lines where native reads values it never set; it is rebuildable and always called patched (`tree/README.md`). |
+| Native MPAS restart files restart the dynamics on every MPAS physics suite. With `--numerics strict` a restart reproduces native's own restart; on the default route it continues the run exactly, which native's restart does not. | Strict: 0 of 540,860,379 words against native restarted from its own file (`x1.40962`, one card). Default: 0 of 1,208,871,000 words against the uninterrupted run (`x1.40962`, 8 ranks) and 0 of 452,696,265 (`x1.163842`, 8 ranks, restarted at +24 h). |
 
 Named gaps, each with its reason, are listed in
 [`tree/README.md`](tree/README.md#not-in-this-release).

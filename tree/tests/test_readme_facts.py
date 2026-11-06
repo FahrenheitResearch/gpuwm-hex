@@ -55,11 +55,13 @@ def test_the_long_description_has_no_relative_links():
 
 
 def test_the_cu13_extra_cannot_resolve_an_nvrtc_without_a_pack():
+    """A pack is bound to its NVRTC library bytes, so the ceiling is the newest pack's exact version: a
+    ``<13.(N+1)`` cap would let a later 13.N patch release resolve and miss the pack (0.4.12's 13.5.37)."""
     extra = DECLARATION["project"]["optional-dependencies"]["gpu-cu13"]
-    caps = [re.search(r"<13\.(\d+)", r) for r in extra if r.startswith("nvidia-cuda-nvrtc")]
+    caps = [re.search(r"<=(13\.\d+\.\d+)", r) for r in extra if r.startswith("nvidia-cuda-nvrtc")]
     assert caps and caps[0], f"gpu-cu13 must cap NVRTC at the newest pinned CUDA 13 pack: {extra}"
-    newest = max(version for version, _, _ in _packs() if version[0] == 13)
-    assert int(caps[0].group(1)) == newest[1] + 1, (newest, extra)
+    newest = max((row for version, _, row in _packs() if version[0] == 13), key=lambda row: tuple(row["compiler"]["nvrtc"]))
+    assert newest["compiler"]["nvrtc_package"] == f"nvidia-cuda-nvrtc=={caps[0].group(1)}", (newest["compiler"], extra)
 
 
 def test_the_repository_front_page_states_this_version():

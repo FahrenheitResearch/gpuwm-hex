@@ -4851,9 +4851,10 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
                         help="arm a [hex_nests] table: the loop looks on the card every cadence_s and "
                              "writes each firing to <out>/nest-triggers.jsonl for `add-nest --watch`")
     parser.add_argument("--uh-layers", choices=("on", "off"), default=None,
-                        help="write running-max updraft helicity for 0-1, 0-2, 0-3 and 2-5 km AGL "
-                             "(updraft_helicity_max_01/_02/_03, updraft_helicity_max; m2 s-2, reset each "
-                             "history frame) on either physics route; default off (or GPUWM_HEX_UH_LAYERS=1)")
+                        help="running-max updraft helicity (m2 s-2, reset each history frame). Default: the "
+                             "2-5 km maximum (updraft_helicity_max) on both physics routes (MPAS's own on the MPAS "
+                             "route). on: also 0-1, 0-2 and 0-3 km AGL (updraft_helicity_max_01/_02/_03; or "
+                             "GPUWM_HEX_UH_LAYERS=1). off: none of these on the ArWen route")
     parser.add_argument("--stochastic", default=None, metavar="JSON",
                         help="per-member SPPT/SKEB configuration, default off; see stochastic.py")
     parser.add_argument("--sppt", action=argparse.BooleanOptionalAction, default=None,

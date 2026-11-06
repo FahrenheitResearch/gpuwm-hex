@@ -650,6 +650,11 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
     prefix = [sys.executable, "-m", "hexcore.cli"]
     prefetch = None
     live_export = None
+    # The forecast's own outcome, for the live export. THE BREAKAGE THIS PREVENTS (both-routes matrix, gpuwm-hex
+    # 0.4.14 candidate, 2026-11-06): one products view refused after a finished forecast, and the failure path told the
+    # live export the forecast had failed, so it was stopped within 30 s instead of exporting the last frames it had
+    # still to close: a map failure took the run's export with it.
+    forecast_finished = False
     try:
         static_engine = resolve(STATIC, arguments.static_exe)
         geog = mesh_point.resolve_geog(arguments.geog)
@@ -860,6 +865,7 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                 "--start-time", cycle.start_time, "--hours", arguments.hours,
                 *step, "--history-every-minutes", arguments.history_every_minutes,
                 "--out", run, "--scratch", root / "scratch", "--no-products", *extra, *samehost])
+            forecast_finished = True
             receipt["first_look"] = look.finish()
             # The forecast was the run's last GPU work; the products are CPU work in Rust binaries, so a card
             # queue gets its card back now instead of after the maps (hexcore.card_lease).
@@ -883,7 +889,7 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
         if prefetch is not None:
             prefetch.cancel()  # the door failed before the init needed it
         if live_export is not None:
-            receipt["live_export"] = live_export.finish(forecast_ok=False)
+            receipt["live_export"] = live_export.finish(forecast_ok=forecast_finished)
         if not isinstance(error, Exception):
             raise
         receipt["status"] = "failed"

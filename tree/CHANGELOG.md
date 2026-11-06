@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.14
+
+Requires gpuwm>=2.9.12,<2.10.
+
+Fixed:
+- Native MPAS restart files now restart the dynamics on every physics suite. On the default route a restart continues the run that wrote it exactly; with `--numerics strict` it reproduces native MPAS's own restart.
+- Checkpoint resumes and same-mesh resumes of storm-following regions on MPAS physics continue the run exactly, on one card or several ranks.
+- Several ranks on one card use much less memory: radiation work space is shared between them and the TEMPO tables are held once per card.
+- Memory admission prices MPAS-physics runs from measurements on this release: one member at 120, 60 and 30 km, co-resident members, ranks sharing a card and one rank per card. Shapes that were refused before now start.
+- Same-host ranks no longer grow their memory over a long run.
+- `--samehost-ranks threads` runs again on both physics routes.
+- Waves run on several ranks and cards with one wave model per run, give the same numbers run to run, keep their state in checkpoints, and runs on one host download the bathymetry once.
+- ArWen-physics runs with waves start on the native global meshes.
+- ArWen-physics runs write the 2-5 km updraft-helicity maximum and draw its maps, on one card, with local time stepping and on several cards.
+- Variable-resolution globes with a coarse background draw their "around the core" map instead of stopping the run.
+- A region run no longer stops now and then with "boundary intermediate digest differs".
+- Runs with observation scoring turned off finish instead of stopping after the forecast.
+- RUC land: frozen-soil runoff matches native MPAS in the last bit.
+- Strict runs refuse TEMPO tables that are not the strict ones, and a named table folder must hold every table.
+- Prebuilt kernel packs cover NVRTC 13.5.37 and 13.4.59, so a fresh `[gpu-cu13]` install starts without compiling. The RRFS MYNN-EDMF kernel compiles to the same machine code every time.
+
 ## 0.4.13
 
 Requires gpuwm>=2.9.12,<2.10.

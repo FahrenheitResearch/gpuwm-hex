@@ -797,8 +797,12 @@ class RegionalContract:
 #: per element; measured equal, not assumed: lam7k hrrrv5 44c0849 1 h, every one of 4,320 substeps compared in
 #: process against the one-kernel forms (fast and strict), strict 0 of 112,584,002 history/diag/restart words vs
 #: native 44c0849, fast 0 of 112,584,002 vs HB18 6f335af8. Re-derived by tools/repin_source_tables.py.
+#: (40) 2026-11-06 (hex-0414/restart-warm): cuda_backend/aot.py words the missing-prebuilt-pack line as a one-line
+#: DEFECT naming the loaded NVRTC (pack_defect_line); the message text only, no CUDA source string, compile
+#: request or arithmetic changed. The only changed member of this set since (39). Re-derived by
+#: tools/repin_source_tables.py; not a new mint.
 MINTED_KERNEL_SET_SHA256 = (
-    "5c35df3619a32dbf9f0ecd96e9f70ab3b81885ceda60977e5a25611968ffaebb"
+    "168c03acb84cae20707f4872dc26c577c6183b705dba7f5b1c90ca6ae60bb2c6"
 )
 
 _DRY_MINT_CAVEAT = (

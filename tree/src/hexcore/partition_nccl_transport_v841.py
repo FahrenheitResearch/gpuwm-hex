@@ -134,6 +134,7 @@ class NcclHaloTransport(SameHostTransport):
             "nccl_recvs": 0, "digest_rounds": 0, "digests_checked": 0,
             "pack_launches": 0, "unpack_launches": 0, "descriptor_uploads": 0, "dimension_uploads": 0,
             "descriptor_cache_hits": 0, "descriptor_cache_misses": 0, "descriptor_cache_evictions": 0,
+            "descriptor_cache_retired": 0,
             "serial_unpack_batches": 0, "serial_unpack_launches": 0, "host_enqueue_seconds": 0.0,
         }
         self.peer_bytes = {peer: 0 for peer in self.neighbours}

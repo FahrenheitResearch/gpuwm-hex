@@ -24,10 +24,22 @@ formed the low-level layers; the MPAS-A v8.4.2 route (the hex default) formed 2-
 ArWen-physics route on hex formed none.  One implementation serves both routes, so they write the
 same fields with the same names and the same running maximum.
 
-Off by default: with ``GPUWM_HEX_UH_LAYERS`` unset (the door's ``--uh-layers off``) nothing here is
-constructed, no kernel is compiled and every output byte is what it was.  On: one kernel per step
-(plus the dycore's own vorticity solve where the step did not already form it), no host sync per
-step; one small device-to-host copy per history frame.
+Defaults, per route.  The MPAS-physics routes write MPAS's own 2-5 km ``updraft_helicity_max`` in every run, so
+the ArWen-physics route writes the same field from here by default (``ARWEN_DEFAULT_NAMES``): every hex capability
+on every physics route.  THE BREAKAGE THIS PREVENTS (both-routes matrix, gpuwm-hex 0.4.14 candidate, 2026-11-06):
+the MPAS route rendered composite_reflectivity_uh, uh_2to5km and 1km_reflectivity_uh2to5km and the ArWen route rendered none
+of them (global leg, 225 vs 207 maps).  ``GPUWM_HEX_UH_LAYERS`` on (the door's ``--uh-layers on``) adds the 0-1/0-2/
+0-3 km layers on both routes; off writes none of these on the ArWen route (the MPAS routes keep MPAS's own 2-5 km)
+and then nothing here is constructed and no kernel is compiled.  When armed: one kernel per step (plus the dycore's
+own vorticity solve where the step did not already form it), no host sync per step; one small device-to-host copy
+per history frame.
+
+Partitioned ArWen executors (the full-step LTS classes, one card or several, and same-host multi-card ranks) arm
+one set of layers per class or rank over its own local mesh (``attach_rank``), fold it after each of that class's
+or rank's steps (``rank_update``) and hand its words to the history capture (``rank_history_arrays``), whose owned
+blocks the executors already scatter to global cells by name (samehost_identity_v841.assemble_owned_arrays).  Each
+cell sums its kites in its own ``verticesOnCell`` order (MPAS's loop, and the same on every partition), so a
+partition's owned words are the whole mesh's words whenever its atmosphere is.
 
 Known gap: same-host multi-rank MPAS-physics runs (several cards in one process) do not get the
 fields yet; the gathered writer would need each rank's owned words.  The receipt says so.
@@ -101,13 +113,50 @@ def enabled() -> bool:
     return os.environ.get(ENV, "").strip().lower() in ("1", "on", "true", "yes")
 
 
-def _plan(cells_on_vertex: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+#: What the ArWen-physics route writes when the run names no ``--uh-layers``: the 2-5 km maximum, the field every
+#: MPAS-physics run carries natively.
+ARWEN_DEFAULT_NAMES = ("updraft_helicity_max",)
+
+
+def arwen_names() -> tuple[str, ...]:
+    """The fields the ArWen-physics route writes: all four when asked for, none when turned off, else the default."""
+
+    value = os.environ.get(ENV, "").strip().lower()
+    if value in ("1", "on", "true", "yes"):
+        return NAMES
+    if value in ("0", "off", "false", "no"):
+        return ()
+    return ARWEN_DEFAULT_NAMES
+
+
+def _plan(cells_on_vertex: np.ndarray, n: int, vertices_on_cell: np.ndarray | None = None,
+          n_edges_on_cell: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Per cell, the flat (vertex*degree + slot) indices that name it, as CSR (offsets, entries).
 
     ``cells_on_vertex`` is (nVertices, degree), zero-based; slots naming no cell in [0, n) (MPAS's
     nCells+1 sentinel, a culled neighbour) are dropped.  Built once per run on the host.
+
+    With ``vertices_on_cell`` (nCells, maxEdges, zero-based) and ``n_edges_on_cell``, each cell's entries
+    follow its own vertex order (MPAS's ``do i=1,nEdgesOnCell`` loop), so the kite sum is the same sum on a
+    partition-local mesh, whose vertices are renumbered, as on the whole mesh.  THE BREAKAGE THIS PREVENTS:
+    ordered by flat vertex index, a cell's sum ran in global vertex order on one card and in local order on a
+    rank, so the ranks' owned UH words could differ from the one-card run's in the last bits while every
+    atmosphere word was equal.  A vertex whose row does not name the cell (a clamped halo reference) is dropped.
     """
 
+    if vertices_on_cell is not None and n_edges_on_cell is not None:
+        cov2 = np.asarray(cells_on_vertex, dtype=np.int64)
+        degree = int(cov2.shape[1])
+        voc = np.asarray(vertices_on_cell, dtype=np.int64)[:n]
+        count = np.asarray(n_edges_on_cell, dtype=np.int64).reshape(-1)[:n]
+        valid = (np.arange(voc.shape[1])[None, :] < count[:, None]) & (voc >= 0) & (voc < cov2.shape[0])
+        vertex = np.where(valid, voc, 0)
+        match = cov2[vertex] == np.arange(n, dtype=np.int64)[:, None, None]
+        present = valid & match.any(axis=2)
+        entries = (vertex * degree + match.argmax(axis=2))[present].astype(np.int32)
+        offsets = np.zeros(n + 1, dtype=np.int32)
+        offsets[1:] = np.cumsum(present.sum(axis=1)).astype(np.int32)
+        return offsets, entries
     cov = np.asarray(cells_on_vertex, dtype=np.int64).ravel()
     flat = np.nonzero((cov >= 0) & (cov < n))[0]
     cells = cov[flat]
@@ -123,7 +172,8 @@ class UpdraftHelicityLayers:
 
     def __init__(self, cp: Any, *, cells_on_vertex: np.ndarray, kite_areas_on_vertex: np.ndarray,
                  area_cell: np.ndarray, n_cells: int, n_out: int | None = None,
-                 names: tuple[str, ...] = NAMES) -> None:
+                 names: tuple[str, ...] = NAMES, vertices_on_cell: np.ndarray | None = None,
+                 n_edges_on_cell: np.ndarray | None = None) -> None:
         cov = np.asarray(cells_on_vertex)
         kite = np.asarray(kite_areas_on_vertex, dtype=np.float32)
         if cov.ndim != 2 or kite.shape != cov.shape:
@@ -135,7 +185,7 @@ class UpdraftHelicityLayers:
             raise ValueError("history cell count is smaller than the computed cells")
         self.names = tuple(names)
         self.degree = int(cov.shape[1])
-        offsets, entries = _plan(cov, self.n)
+        offsets, entries = _plan(cov, self.n, vertices_on_cell, n_edges_on_cell)
         self.offsets = cp.asarray(offsets)
         self.entries = cp.asarray(entries)
         self.kite = cp.asarray(np.ascontiguousarray(kite.ravel()))
@@ -303,15 +353,34 @@ def _attach_mpas(diagnostics: Any, output: Any, *, halo: Any = None) -> dict[str
     return {"enabled": True, **layers.receipt()}
 
 
-def for_arwen(cp: Any, mesh: Any, *, n_cells: int) -> UpdraftHelicityLayers | None:
-    """The layers on the ArWen-physics route (the hex dycore's mesh), or None when not asked for."""
+def _mesh_member(mesh: Any, name: str) -> Any:
+    arrays = getattr(mesh, "arrays", None)
+    if isinstance(arrays, Mapping) and name in arrays:
+        return arrays[name]
+    return getattr(mesh, name, None)
 
-    if not enabled():
+
+def for_arwen(cp: Any, mesh: Any, *, n_cells: int, n_out: int | None = None) -> UpdraftHelicityLayers | None:
+    """The layers on the ArWen-physics route (the hex dycore's mesh, whole or one partition's local mesh), or None
+    when turned off (``arwen_names``).  ``n_out`` is the history's cell extent when it carries more columns than
+    the mesh solves (a limited-area driver's garbage column)."""
+
+    names = arwen_names()
+    if not names:
         return None
     try:
-        cov = _zero_based(np.asarray(mesh.cellsOnVertex), int(n_cells))
-        return UpdraftHelicityLayers(cp, cells_on_vertex=cov, kite_areas_on_vertex=np.asarray(mesh.kiteAreasOnVertex),
-                                     area_cell=np.asarray(mesh.areaCell), n_cells=int(n_cells))
+        n_cells = int(n_cells)
+        cov = _zero_based(np.asarray(_mesh_member(mesh, "cellsOnVertex")), n_cells)
+        voc = _mesh_member(mesh, "verticesOnCell")
+        count = _mesh_member(mesh, "nEdgesOnCell")
+        if voc is not None and count is not None:
+            voc = _zero_based(np.asarray(voc), int(cov.shape[0]))
+        else:
+            voc = count = None
+        return UpdraftHelicityLayers(cp, cells_on_vertex=cov,
+                                     kite_areas_on_vertex=np.asarray(_mesh_member(mesh, "kiteAreasOnVertex")),
+                                     area_cell=np.asarray(_mesh_member(mesh, "areaCell")), n_cells=n_cells,
+                                     n_out=n_out, names=names, vertices_on_cell=voc, n_edges_on_cell=count)
     except Exception as error:  # noqa: BLE001 -- an optional diagnostic never stops the forecast
         print(f"uh_layers: not armed ({type(error).__name__}: {error}); the forecast goes on without the UH layers",
               file=sys.stderr, flush=True)
@@ -347,3 +416,49 @@ def arwen_history_arrays(layers: UpdraftHelicityLayers) -> Mapping[str, np.ndarr
     """``take()`` for the ArWen-route writer, which writes every (nCells,) array by name."""
 
     return layers.take()
+
+
+def attach_rank(stack: dict[str, Any], mesh: Any, cp: Any, *, initial: bool) -> dict[str, Any] | None:
+    """Arm the layers on one partition (an LTS class or a same-host rank) of the ArWen-physics route.
+
+    ``mesh`` is the partition's local mesh (its solved cells first); the history extent is the driver's cell
+    count.  ``initial``: fold the start state now, as the one-card driver does before its F000 frame (not on a
+    restart or a resumed moving segment, whose first frame is not re-captured).  Returns the receipt row, or None
+    when the run turned the layers off.
+    """
+
+    driver = stack["driver"]
+    solved = int(np.asarray(_mesh_member(mesh, "areaCell")).reshape(-1).size)
+    layers = for_arwen(cp, mesh, n_cells=min(solved, int(driver.horizontal.ncells)),
+                       n_out=int(driver.horizontal.ncells))
+    stack["uh_layers"] = layers
+    if layers is None:
+        return None
+    if initial:
+        update_from_driver(layers, driver)
+    return layers.receipt()
+
+
+def rank_update(stack: Mapping[str, Any]) -> None:
+    """Fold this partition's committed step (call after its step, inside its device scope)."""
+
+    layers = stack.get("uh_layers")
+    if layers is not None:
+        update_from_driver(layers, stack["driver"])
+
+
+def rank_history_arrays(stack: Mapping[str, Any]) -> dict[str, np.ndarray]:
+    """This partition's interval maxima for its history capture (every name on every partition).
+
+    A partition whose layers switched off after a fault hands zeros under the same names: every rank's capture
+    must carry the same fields (assemble_owned_arrays refuses diverging paths), and a fault must never stop the
+    forecast.  The fault is on stderr and in the layers' receipt.
+    """
+
+    layers = stack.get("uh_layers")
+    if layers is None:
+        return {}
+    taken = layers.take()
+    if not taken:
+        return {name: np.zeros(layers.n_out, dtype=np.float32) for name in layers.names}
+    return taken

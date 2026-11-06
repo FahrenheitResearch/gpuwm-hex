@@ -43,7 +43,7 @@ name = "gpuwm-hex"
 # partition-invariant, but it has no door, no demo, and no re-proof at the
 # current engine pin, so it is not what a version number should be sold on.
 # Numbers are not reserved here any more.  A minor bump names what shipped.
-version = "0.4.13"
+version = "0.4.14"
 description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.2 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -244,12 +244,13 @@ mpi = ["mpi4py>=4.1"]
 # table does not pretend to choose; it names both and the docs tell the user
 # to match the one their driver reports.
 gpu-cu12 = ["cupy-cuda12x[ctk]>=14.0"]
-# NVRTC capped below the first minor that has no pinned kernel pack.  THE BREAKAGE (0.4.12 post-publish check,
-# 2026-11-05): cupy-cuda13x[ctk] pulled NVRTC 13.5.37, published after the gate, which matched no pack, so a
-# fresh install compiled every kernel for about 100 s before its first step.  The cap resolves NVRTC 13.4.92,
-# whose pack is pinned (kernel-packs-v0.4.12).  Raise it with the next pack (tests/test_readme_facts.py holds the
-# cap to the newest pinned CUDA 13 pack).
-gpu-cu13 = ["cupy-cuda13x[ctk]>=14.0", "nvidia-cuda-nvrtc>=13.0,<13.5"]
+# NVRTC capped at the newest NVRTC that has a pinned kernel pack, to the patch release.  THE BREAKAGE (0.4.12
+# post-publish check, 2026-11-05): cupy-cuda13x[ctk] pulled NVRTC 13.5.37, published after the gate, which matched
+# no pack, so a fresh install compiled every kernel for about 100 s before its first step.  A pack is bound to the
+# library bytes, so a later patch release (13.5.x) would miss it exactly as a new minor does; the ceiling is the
+# exact version, 13.5.37 (kernel-packs-v0.4.14).  Raise it with the next pack (tools/build_kernel_packs.py;
+# tests/test_readme_facts.py holds the ceiling to the newest pinned CUDA 13 pack).
+gpu-cu13 = ["cupy-cuda13x[ctk]>=14.0", "nvidia-cuda-nvrtc>=13.0,<=13.5.37"]
 # Experimental AMD backend; ROCm 7.0 wheel, see docs/amd-backend.md.
 rocm = ['cupy-rocm-7-0==14.2.0; sys_platform == "linux" and platform_machine == "x86_64"']
 #

@@ -188,6 +188,10 @@ __all__ = [
     "MPAS_ROUTE_RUN_PEAKS",
     "PHYSICS_ROUTES",
     "ROUTE_RUN_MARGIN",
+    "MPAS_MEMBER_ROWS",
+    "MPAS_RANK_CARD_ROWS",
+    "mpas_member_increment_bytes",
+    "mpas_rank_card_bytes",
     "RouteRunPeak",
     "route_required_free_bytes",
     "route_run_curve_mib",
@@ -232,7 +236,8 @@ CO_TENANCY_ROWS = (
 
 
 def co_tenancy_limits(*, mesh_kind: str, cells: int, levels: int, card_bytes: int, free_bytes: int,
-                      solo_required_bytes: int, member_additional_bytes: Sequence[int] = ()) -> tuple[int, int]:
+                      solo_required_bytes: int, member_additional_bytes: Sequence[int] = (),
+                      member_increment_bytes: int | None = None) -> tuple[int, int]:
     """``(table limit, memory limit)`` for resident members of one mesh on one card.
 
     The ONE pricing both the ensemble planner (``global_ensemble.group_limit``) and the runtime
@@ -247,15 +252,25 @@ def co_tenancy_limits(*, mesh_kind: str, cells: int, levels: int, card_bytes: in
             and cells <= row.maximum_cells and levels <= row.maximum_levels
             and card_bytes >= row.minimum_card_bytes]
     table = max((row.maximum_members for row in rows), default=1)
-    per_member = solo_required_bytes + max(member_additional_bytes, default=0)
+    extra = max(member_additional_bytes, default=0)
+    if member_increment_bytes is not None:
+        # The first member pays its solo price, each further member the measured increment (MPAS_MEMBER_ROWS).
+        if free_bytes < solo_required_bytes + extra:
+            return table, 0
+        return table, 1 + (free_bytes - solo_required_bytes - extra) // (int(member_increment_bytes) + extra)
+    per_member = solo_required_bytes + extra
     return table, free_bytes // per_member
 
 
 def admit_co_tenancy(*, mesh_kind: str, cells: int, levels: int,
                      members: int, card_bytes: int, free_bytes: int,
                      solo_required_bytes: int,
-                     member_additional_bytes: tuple[int, ...] = ()) -> dict[str, Any]:
-    """Refuse before construction rather than OOM at a member's radiation step."""
+                     member_additional_bytes: tuple[int, ...] = (),
+                     member_increment_bytes: int | None = None) -> dict[str, Any]:
+    """Refuse before construction rather than OOM at a member's radiation step.
+
+    ``member_increment_bytes`` (MPAS suite groups, :data:`MPAS_MEMBER_ROWS`): every member after the first is
+    charged this measured increment instead of a whole solo floor."""
     values = (cells, levels, members, card_bytes, free_bytes, solo_required_bytes)
     if any(type(value) is not int or value <= 0 for value in values):
         raise ValueError("co-tenancy needs positive integer dimensions and memory sizes")
@@ -264,13 +279,22 @@ def admit_co_tenancy(*, mesh_kind: str, cells: int, levels: int,
         raise ValueError("additional allocations need one nonnegative byte count per member")
     limit, memory_limit = co_tenancy_limits(
         mesh_kind=mesh_kind, cells=cells, levels=levels, card_bytes=card_bytes, free_bytes=free_bytes,
-        solo_required_bytes=solo_required_bytes, member_additional_bytes=member_additional_bytes)
+        solo_required_bytes=solo_required_bytes, member_additional_bytes=member_additional_bytes,
+        member_increment_bytes=member_increment_bytes)
     additional = sum(member_additional_bytes)
-    required = members * solo_required_bytes + additional
+    if member_increment_bytes is None:
+        required = members * solo_required_bytes + additional
+        priced = f"{solo_required_bytes} solo"
+        basis = "sum of full solo admission floors; no unmeasured sharing credit"
+    else:
+        required = solo_required_bytes + (members - 1) * int(member_increment_bytes) + additional
+        priced = f"{solo_required_bytes} solo for the first + {int(member_increment_bytes)} measured increment"
+        basis = ("first member's solo floor + the measured per-member increment for each further member "
+                 "(device_admission.MPAS_MEMBER_ROWS, +ROUTE_RUN_MARGIN)")
     if members > limit or required > free_bytes:
         raise MemoryError(
             f"co-tenancy refuses {members} members: table limit {limit}, "
-            f"memory limit {memory_limit} at {solo_required_bytes} solo + "
+            f"memory limit {memory_limit} at {priced} + "
             f"{max(member_additional_bytes, default=0)} additional bytes per member, "
             f"required {required} bytes, available {free_bytes} bytes, "
             f"shortfall {max(0, required - free_bytes)} bytes; prevents "
@@ -284,7 +308,8 @@ def admit_co_tenancy(*, mesh_kind: str, cells: int, levels: int,
             "required_free_bytes": required, "measured_free_bytes": free_bytes,
             "measured_total_bytes": card_bytes,
             "member_additional_bytes": list(member_additional_bytes),
-            "basis": "sum of full solo admission floors; no unmeasured sharing credit"}
+            "member_increment_bytes": member_increment_bytes,
+            "basis": basis}
 
 
 def harmonic_basis_bytes(cells: int, degree: int) -> int:
@@ -1563,6 +1588,8 @@ class RouteRunPeak:
 #: member at the ArWen-route floor (43,080 MiB), planned 2 per card, and all four members ran out of memory about
 #: 3 min in (CuPy: "Out of memory allocating 432,537,600 bytes (allocated so far: 48,761,238,528 bytes)"); the
 #: next 2-member groups met the same end.  One member alone on that card peaked 75,069 MiB.
+_CURVE_RECEIPT = "GFS 2023-03-31 12Z, MPAS convection_permitting, fast numerics, 1 h, the global door's own forecast argv, one member alone on an RTX PRO 6000 (97,887 MiB, 188 SM); whole-card nvidia-smi rows of the run's processes every 0.5 s; hex 0.4.14 release measurement, 2026-11-06"
+
 MPAS_ROUTE_RUN_PEAKS: tuple[RouteRunPeak, ...] = (
     RouteRunPeak(
         route="mpas", multiprocessors=188, levels=55, cells=737_281,
@@ -1573,6 +1600,25 @@ MPAS_ROUTE_RUN_PEAKS: tuple[RouteRunPeak, ...] = (
                  "737,281 is ceil(global cells/8), an owned-share estimate, not a measured halo extent. "
                  "Applying this conservative floor to local cells also charges for their halos. "
                  "Source: HEX-GLOBAL-10KM-RESULT.md, MPAS physics memory result")),
+    # Re-measured on the 0.4.14 tree (hex 0.4.14, 2026-11-06).  THE BREAKAGE IT PREVENTS: the 0.4.8 points
+    # (12,664 MiB at 40,962 cells, 75,069 MiB at 655,362) priced a 120 km member at 17.97e9 bytes for a 9.2 GB peak,
+    # so smaller cards were refused and every planner and site price derived from the curve was about 2x high.
+    RouteRunPeak(
+        route="mpas", multiprocessors=188, levels=55, cells=40_962, peak_mib=9_162.0,
+        receipt="x1.40962 120 km global-120km row (rerun 9,154 MiB); " + _CURVE_RECEIPT),
+    RouteRunPeak(
+        route="mpas", multiprocessors=188, levels=55, cells=163_842, peak_mib=18_136.0,
+        receipt="x1.163842 60 km global-60km row; " + _CURVE_RECEIPT),
+    RouteRunPeak(
+        # The larger of two runs: 1 h peaked 60,372 MiB, 6 h 61,522 MiB.  Both peaks fall in the first hour (the
+        # 6 h run held at most 53,374 MiB from then on), so this is run-to-run spread of the early peak, not growth;
+        # the curve takes the higher one (60 km: 1 h 18,136 MiB, 6 h 18,134 MiB).
+        route="mpas", multiprocessors=188, levels=55, cells=655_362, peak_mib=61_522.0,
+        receipt=("x1.655362 30 km global-30km row, the larger of a 1 h run (60,372 MiB) and a 6 h run (61,522 MiB, "
+                 "its peak in the first hour); " + _CURVE_RECEIPT)),
+)
+#: The retired 0.4.8 points, kept as the record (never priced).
+RETIRED_MPAS_ROUTE_RUN_PEAKS_048: tuple[RouteRunPeak, ...] = (
     RouteRunPeak(
         route="mpas", multiprocessors=188, levels=55, cells=655_362, peak_mib=75_069.0,
         receipt=("x1.655362 30 km uniform globe, GEFS 2025-05-19 06Z members, 6 h, hex 0.4.8 MPAS physics "
@@ -1592,6 +1638,112 @@ MPAS_ROUTE_RUN_PEAKS: tuple[RouteRunPeak, ...] = (
 #: Headroom over the MPAS-route whole-run curve, the same 10 % the card-fit whole-run curve carries
 #: (``card_fit.WHOLE_RUN_MARGIN``): the curve passes through sampled peaks a sampler can miss by a spike.
 ROUTE_RUN_MARGIN = 0.10
+
+
+@dataclass(frozen=True)
+class MpasMemberRow:
+    """Co-resident MPAS-suite members of one mesh on one card, measured: the card's peak at 1 and at N members."""
+
+    levels: int
+    cells: int
+    solo_peak_mib: float
+    peaks_mib: tuple[tuple[int, float], ...]   # (members, whole-card peak MiB), N >= 2
+    receipt: str
+
+    def increment_mib(self) -> float:
+        """The largest measured cost of each member after the first."""
+        return max((peak - self.solo_peak_mib) / (members - 1) for members, peak in self.peaks_mib)
+
+
+#: THE BREAKAGE IT PREVENTS (both-routes matrix RED 2, hex 0.4.14, 2026-11-06): ``multi_member.admit_suite_group``
+#: charged every co-resident MPAS member the whole one-member price (17.97 GB at 120 km on an RTX PRO 6000), so
+#: 2 members asked 36.08 GB and were refused on any card with less free, while 2 members peaked at 10.8 GB.  Each
+#: member after the first is now charged the measured increment (+ROUTE_RUN_MARGIN) on meshes no larger than the
+#: measured one; larger meshes keep the full per-member price until a row there is measured.
+MPAS_MEMBER_ROWS: tuple[MpasMemberRow, ...] = (
+    MpasMemberRow(
+        levels=55, cells=40_962, solo_peak_mib=9_162.0, peaks_mib=((2, 10_780.0), (4, 21_872.0)),
+        receipt=("x1.40962 120 km global-120km row, GFS 2023-03-31 12Z, MPAS convection_permitting, fast numerics, 1 h, "
+                 "SPPT on, RTX PRO 6000 (188 SM); whole-card nvidia-smi rows of every member process every 0.5 s: "
+                 "1 member 9,162 MiB, 2 co-resident members 10,780 MiB, 4 members 21,872 MiB; hex 0.4.14 release "
+                 "measurement, 2026-11-06")),
+    MpasMemberRow(
+        levels=55, cells=163_842, solo_peak_mib=18_136.0, peaks_mib=((2, 29_502.0), (4, 56804.0)),
+        receipt=("x1.163842 60 km global-60km row, GFS 2023-03-31 12Z, MPAS convection_permitting, fast numerics, 1 h, "
+                 "SPPT on, RTX PRO 6000 (188 SM); whole-card nvidia-smi rows every 0.5 s: 1 member 18,136 MiB, "
+                 "2 co-resident members 29,502 MiB, 4 members 56,804 MiB; hex 0.4.14 release measurement, "
+                 "2026-11-06")),
+)
+
+
+def mpas_member_increment_bytes(cells: int, levels: int) -> int | None:
+    """Bytes each co-resident MPAS member after the first is charged, or None where no row covers the mesh."""
+
+    rows = [row for row in MPAS_MEMBER_ROWS if int(cells) <= row.cells and int(levels) <= row.levels]
+    if not rows:
+        return None
+    row = min(rows, key=lambda r: r.cells)   # the smallest measured mesh that covers this one
+    return int(round(row.increment_mib() * (1.0 + ROUTE_RUN_MARGIN) * MIB))
+
+
+@dataclass(frozen=True)
+class MpasRankCardRow:
+    """One MPAS-route member split one rank per card, measured: the mesh on one card, and the largest card's peak
+    when split.  Solved for a fixed and a per-local-column term."""
+
+    levels: int
+    cells: int
+    solo_peak_mib: float
+    rank_cells: int
+    rank_peak_mib: float
+    receipt: str
+
+    def terms_mib(self) -> tuple[float, float]:
+        per_column = (self.solo_peak_mib - self.rank_peak_mib) / (self.cells - self.rank_cells)
+        return self.solo_peak_mib - per_column * self.cells, per_column
+
+
+#: THE BREAKAGE IT PREVENTS (both-routes matrix RED 4, 2026-11-06): the two-card MPAS route asked 15.68 GB free on
+#: card 0 for a rank of 21,445 local columns (the one-member curve extrapolated below its smallest measured run),
+#: while the whole two-card run peaked 15.5 GB summed over both cards.  A rank alone on its card is now priced from
+#: these measured terms (+ROUTE_RUN_MARGIN) up to the measured mesh size, never above the one-member price.
+MPAS_RANK_CARD_ROWS: tuple[MpasRankCardRow, ...] = (
+    MpasRankCardRow(
+        levels=55, cells=40_962, solo_peak_mib=9_162.0, rank_cells=21_449, rank_peak_mib=7_972.0,
+        receipt=("x1.40962 120 km global-120km row, GFS 2023-03-31 12Z, MPAS convection_permitting, fast numerics, 1 h, "
+                 "RTX PRO 6000 (188 SM): one card 9,162 MiB; --samehost-devices 0,1 (one rank process per card, "
+                 "21,445 + 21,449 local columns) peaked 5,462 and 7,972 MiB per card (13,434 summed), nvidia-smi rows "
+                 "every 0.5 s; hex 0.4.14 release measurement, "
+                 "2026-11-06")),
+    MpasRankCardRow(
+        levels=55, cells=163_842, solo_peak_mib=18_136.0, rank_cells=84_060, rank_peak_mib=14_812.0,
+        receipt=("x1.163842 60 km global-60km row, GFS 2023-03-31 12Z, MPAS convection_permitting, fast numerics, 1 h, "
+                 "RTX PRO 6000 (188 SM): one card 18,136 MiB; --samehost-devices 0,1 (84,042 + 84,060 local columns) "
+                 "peaked 14,812 and 14,146 MiB per card (28,958 summed), nvidia-smi rows every 0.5 s; hex 0.4.14 "
+                 "release measurement, 2026-11-06")),
+)
+
+
+def mpas_rank_card_bytes(local_cells: int, levels: int, model: "ShapedFootprintModel | None" = None,
+                         margin_bytes: int | None = None) -> int:
+    """Bytes a card needs for ONE rank of a member split over several cards (MPAS route).
+
+    From the smallest measured mesh whose ranks cover this one (:data:`MPAS_RANK_CARD_ROWS`, +ROUTE_RUN_MARGIN),
+    never below the one-member price of the same columns.  Past every row the one-member price is raised by the
+    largest measured ratio of a rank's peak to the one-member curve at its columns: a rank holds its halos, seam
+    packets and its own process beside its columns (60 km: 14,812 MiB for a rank of 84,060 columns where one member
+    of that size is 12,309 MiB on the curve)."""
+
+    one_member = route_required_free_bytes(int(local_cells), model, margin_bytes, route="mpas")
+    rows = [row for row in MPAS_RANK_CARD_ROWS if int(local_cells) <= row.cells and int(levels) <= row.levels]
+    if rows:
+        row = min(rows, key=lambda r: r.cells)   # the smallest measured mesh whose ranks cover this one
+        fixed, per_column = row.terms_mib()
+        priced = int(round((fixed + per_column * int(local_cells)) * (1.0 + ROUTE_RUN_MARGIN) * MIB))
+        return max(one_member, priced)
+    ratios = [row.rank_peak_mib / curve for row in MPAS_RANK_CARD_ROWS
+              if (curve := route_run_curve_mib(row.rank_cells, "mpas", row.levels))]
+    return int(round(one_member * max([1.0, *ratios])))
 
 
 def route_run_curve_mib(cells: int, route: str = "mpas", levels: int = MODEL_VERTICAL_LEVELS) -> float | None:
@@ -1657,7 +1809,11 @@ def route_required_free_bytes(cells: int, model: ShapedFootprintModel | None = N
         if curve is None:
             raise ValueError(f"no whole-run memory measurement for physics route {route}")
         curve *= max(1.0, int(model.levels) / MODEL_VERTICAL_LEVELS)
-    margin = model.margin_bytes() if margin_bytes is None else int(margin_bytes)
+    # The curve is whole-card nvidia-smi peaks of complete runs: they already hold the radiation arena and the
+    # instrument gap the footprint model's margin terms price, so the curve is charged its ROUTE_RUN_MARGIN only (a
+    # run's own --headroom-mib still adds).  THE BREAKAGE IT PREVENTS (hex 0.4.14, 2026-11-06): adding the
+    # 3.2 GB model margin on top of the margin-carrying curve priced a 9.2 GB 120 km member at 17.97e9 bytes.
+    margin = 0 if margin_bytes is None else int(margin_bytes)
     return max(base, int(round(curve * (1.0 + ROUTE_RUN_MARGIN) * MIB)) + margin)
 
 

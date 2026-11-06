@@ -5068,7 +5068,21 @@ def _bind_native_views(provider,call):
     if provider.level!=2:raise ValueError("MPAS microphysics updates state time level 2")
     resource=provider.tempo_v303_resources;flags=tuple(bool(call.options[n]) for n in CONFIG_ARGUMENTS)
     if resource["tables"] is None:
-        resource["tables"]=_session_tables(provider.native,flags,provider.cp)
+        # One blob per card for the same-host ranks on it (threads share the array, rank processes its device
+        # memory): the blob is const in every TEMPO kernel and its bytes are fixed by the native build, the live
+        # flags and the numerics (hexcore.device_share names the breakage: 8 identical copies on one card).  One
+        # rank per card builds its own, as before.  The fast conversion below is folded into the shared build, so
+        # no rank holds a private binary32 copy beside a shared binary64 one.
+        import json
+        from ...device_share import shared_readonly
+        cp=provider.cp;fast=_fast()
+        def build():
+            tables=_session_tables(provider.native,flags,cp)
+            if fast and tables.dtype!=cp.float32:
+                tables=fast_tables(tables);cp.cuda.get_current_stream().synchronize()
+            return tables
+        key=("tempo_v303.session_tables",flags,fast,json.dumps(provider.native.build,sort_keys=True,default=str))
+        resource["tables"]=shared_readonly(key,build,cp=cp)
         resource["flags"]=flags
     if tuple(map(bool,resource["flags"]))!=flags:
         raise ValueError("native initialized TEMPO parameters differ from the live flags")

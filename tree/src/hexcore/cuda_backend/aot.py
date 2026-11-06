@@ -215,10 +215,28 @@ def default_pack(identity):
     from hexcore import assets
     path, reason = assets.resolve_pack(identity)
     if path is None and not assets.is_inspection():
-        _warn_once(("asset-unavailable",),
-                   f"prebuilt kernel pack unavailable: {reason}; using NVRTC compile path; "
-                   "stage with `gpuwm-hex fetch-assets` or GPUWM_HEX_ASSETS_FROM=<dir>")
+        _warn_once(("asset-unavailable",), pack_defect_line(identity, reason))
     return path
+
+
+def pack_defect_line(identity, reason):
+    """The one line a run without a prebuilt kernel pack logs: a DEFECT naming the loaded NVRTC.
+
+    THE BREAKAGE THIS NAMES: with no pack for the loaded NVRTC every CUDA module of the route compiles through
+    NVRTC on one host thread before the first step while the card waits (114 s on box 2, x1.163842 hrrrv5,
+    2026-11-06: the lane venv loaded nvidia-cuda-nvrtc 13.4.59, library sha256 5fc18c75a772, and the packs are
+    pinned to 13.0.88 and 13.4.92). The old note read as routine. The fix is the pack for that NVRTC (or the
+    pinned NVRTC); this line says which one the run needs.
+    """
+    identity = identity if isinstance(identity, dict) else {}
+    version = identity.get("nvrtc")
+    version = ".".join(str(part) for part in version) if isinstance(version, (list, tuple)) else str(version)
+    package = identity.get("nvrtc_package") or "no pip NVRTC distribution (system library)"
+    library = str(identity.get("nvrtc_library_sha256") or "unknown")[:12]
+    return (f"DEFECT: no prebuilt kernel pack for the loaded NVRTC {version} ({package}, library sha256 "
+            f"{library}): {reason}; every CUDA module compiles through NVRTC on one host thread before the first "
+            "step; stage the pack for this NVRTC (`gpuwm-hex fetch-assets`, GPUWM_HEX_ASSETS_FROM=<dir>) or install "
+            "the pinned NVRTC")
 
 
 def source_hash(source):

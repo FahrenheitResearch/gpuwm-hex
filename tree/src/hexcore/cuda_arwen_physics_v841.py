@@ -1727,7 +1727,14 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
             # LES reads only these two winds. Retaining the whole preparation
             # kept pressure, species, interfaces and scratch through the
             # dycore and alongside the next step's new preparation.
-            self._les_columns = SimpleNamespace(u_p=prepared.u_p, v_p=prepared.v_p)
+            # The wave coupling reads one more row: the lowest level's moist air density (waves._arwen_forcing).
+            # THE BREAKAGE THIS PREVENTS: trimming this to the LES winds (26ebf4d3) left the wave forcing reading
+            # prepared.rho_dry off it, so every ArWen-route run with --waves on stopped at its first commit.
+            wave_rho_air = None
+            if getattr(self, "wave_binding", None) is not None:
+                wave_rho_air = __import__("cupy").ascontiguousarray(
+                    prepared.rho_dry[0] * (np.float32(1) + prepared.species_p["qv"][0]))
+            self._les_columns = SimpleNamespace(u_p=prepared.u_p, v_p=prepared.v_p, wave_rho_air=wave_rho_air)
             self._validate_phase1_output(output, time_seconds=start)
             surface_classification = self._validate_surface_classification()
             noahmp_census = self._validate_noahmp_census(require=True)

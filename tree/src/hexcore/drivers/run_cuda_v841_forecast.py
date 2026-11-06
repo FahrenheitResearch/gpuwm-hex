@@ -3587,12 +3587,11 @@ def execute_forecast(
     capture_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hex-capture") if async_capture else None
     capture_pending = []
     wind_frames = {}
-    # Running-max updraft helicity layers (hexcore.uh_layers), off unless the run asks (imported only then).
-    uh_layers = None
+    # Running-max updraft helicity (hexcore.uh_layers): the 2-5 km maximum by default, as every MPAS-physics run
+    # writes it; --uh-layers on adds 0-1/0-2/0-3 km, off writes none (uh_layers.arwen_names).
     uh_frames = {}
-    if os.environ.get("GPUWM_HEX_UH_LAYERS", "").strip().lower() in ("1", "on", "true", "yes"):
-        from hexcore import uh_layers as uh_layers_module
-        uh_layers = uh_layers_module.for_arwen(cp, host["prepared"].mesh, n_cells=int(N_CELLS))
+    from hexcore import uh_layers as uh_layers_module
+    uh_layers = uh_layers_module.for_arwen(cp, host["prepared"].mesh, n_cells=int(N_CELLS))
     capture_finish_seconds = 0.0
     # F000's surface-layer diagnostics come from the first physics call
     # (hexcore.f000_first_call): the frame is captured before step 1 and

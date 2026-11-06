@@ -33,7 +33,7 @@ individual gpuwm source files by SHA-256. A bare install reached an engine the
 pin refused, and the forecast door refused at launch with a digest mismatch
 that named neither the version that works nor the fact that pip chose it.
 
-gpuwm-hex 0.4.13 declares `gpuwm>=2.9.12,<2.10`, inside the 2.9 minor, so
+gpuwm-hex 0.4.14 declares `gpuwm>=2.9.12,<2.10`, inside the 2.9 minor, so
 installing it never downgrades an engine you already have. An engine inside
 that range whose radiation helper set this release has not measured is refused
 at the forecast door by name, with the version to install. The range is
@@ -51,7 +51,7 @@ pip install "gpuwm-hex[gpu]"     # or, spelled out, "gpuwm-hex[gpu-cu12]"
 **A CUDA 12 or a CUDA 13 driver runs this port.** `[gpu]` installs
 `cupy-cuda12x`, which runs on either, because a driver runs its own CUDA
 major and every older one. On a CUDA 13 driver you may instead install
-`"gpuwm-hex[gpu-cu13]"` (`cupy-cuda13x`, with an NVRTC below 13.5 so a
+`"gpuwm-hex[gpu-cu13]"` (`cupy-cuda13x`, with NVRTC 13.5.37 at most so a
 prebuilt kernel pack matches it). `gpuwm-hex doctor` warns when the loaded
 NVRTC matches no pinned pack. Do not install `[gpu-cu13]` on a
 CUDA 12 driver: it imports, and then every device call stops with

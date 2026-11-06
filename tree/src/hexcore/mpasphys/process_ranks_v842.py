@@ -93,6 +93,18 @@ def _run_rank(rank, request, local, comm, output_comm, halo_links, devices_here,
     execution.last_step = request.get('steps')
     execution.output_comm = output_comm
     device = devices_here[rank]
+    from ..device_share import rank_process_card
+    with rank_process_card(device, int((request.get('card_ranks') or {}).get(rank, 1)),
+                           request.get('card_share_dir')):
+        return _run_rank_on_card(rank, request, local_layout, local_payload, execution, comm, output_comm,
+                                 halo_links, devices_here, device, holder)
+
+
+def _run_rank_on_card(rank, request, local_layout, local_payload, execution, comm, output_comm, halo_links,
+                      devices_here, device, holder):
+    import cupy as cp
+    from . import runtime_v842 as runtime
+    from ..process_transport import process_halo_transport as ProcessHaloTransport
     with cp.cuda.Device(device):
         if request.get('halo', 'process') == 'nccl':
             from ..nccl_runtime import NcclCommunicator
@@ -191,10 +203,17 @@ def run_process_ranks(*, arguments, config, layout, streams, start, stop, dt, st
         receipt.update(shared_objects_wait_seconds=time.perf_counter() - began_shared,
                        shared_objects_bytes=shared_objects.nbytes)
     hosts = 1 if session is None else len(session.hosts)
+    # Every rank process is told how many of this host's ranks share its card: the radiation budgets divide by it
+    # and the read-only tables are mapped once per card (hexcore.device_share names the breakage).  A process
+    # cannot see the others, so without this each counted 1.
+    from collections import Counter
+    on_card = Counter(int(devices[rank]) for rank in local_ranks)
+    card_ranks = {int(rank): on_card[int(devices[rank])] for rank in local_ranks}
     shared = dict(arguments=arguments, config=config, partitions=partitions, field_indices=indices,
                   streams=streams, start=start, stop=stop, dt=dt, steps=steps, out=out, devices=list(devices),
                   numerics=numerics.mode(), moving=moving_state, global_layout=layout,
-                  analysis_receipt=analysis_receipt, timeout=timeout, halo=halo, nccl_uid=nccl_uid, hosts=hosts)
+                  analysis_receipt=analysis_receipt, timeout=timeout, halo=halo, nccl_uid=nccl_uid, hosts=hosts,
+                  card_ranks=card_ranks, card_share_dir=str(Path(job) / 'card-share'))
     began = time.perf_counter()
     group.start()
     receipt.update(rank_processes=[dict(rank=rank, pid=process.pid) for rank, process in group.processes.items()],
@@ -286,6 +305,9 @@ def run_process_ranks(*, arguments, config, layout, streams, start, stop, dt, st
     if failure is not None or any(code != 0 for code in codes.values()):
         group.kill()
     group.close()
+    # Every child has exited, so nothing maps this process's shared tables any more.
+    from ..device_share import release_exports
+    release_exports(wait=0)
     records = []
     for rank in children:
         path = Path(out) / f'rank-process.rank{rank}.json'

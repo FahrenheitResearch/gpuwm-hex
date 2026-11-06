@@ -456,8 +456,9 @@ def test_mpas_suite_roster_refuses_a_group_the_card_cannot_hold(tmp_path, monkey
         655_362, device_admission.model_for_card(device_admission.card_profile_from_attributes(
             _PRO_6000["name"], {"MultiProcessorCount": 188, "MaxThreadsPerMultiProcessor": 1536}), "global"),
         route="mpas")
-    # Never below the measured single-member peak, plus the curve's 10 %; and one member still fits the card.
-    assert 75_069 * 1024**2 * 1.10 < admitted < _PRO_6000["free"]
+    # Never below the measured single-member peak (re-measured at 30 km on the 0.4.14 tree), plus the curve's 10 %;
+    # and one member still fits the card.
+    assert round(60_372 * 1024**2 * 1.10) <= admitted < _PRO_6000["free"]
 
 
 _RTX_5090 = {"name": "NVIDIA GeForce RTX 5090", "free": 32_100 * 1024**2, "total": 32_607 * 1024**2,

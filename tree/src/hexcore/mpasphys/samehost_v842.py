@@ -184,7 +184,22 @@ class SameHostRankExecution(RankExecution):
         return getattr(self, '_step', 0)
 
     def wave_input(self):
-        return self.wave_global_mesh, self.partition.cell_l2g, self.partition.n_owned_cells
+        """The wave service's owner map: the global mesh this rank's partition was cut from, and its cells.
+
+        Every rank's local mesh names that mesh (``partition_source_mesh``, partition_local_mesh_v841): rank threads
+        hold the one object, rank processes receive it with their inputs (rank_processes.SharedObjects).  THE
+        BREAKAGE THIS PREVENTS: this read ``wave_global_mesh``, which only the thread executor set, so ``--waves on``
+        with same-host rank processes (the Linux default) stopped with AttributeError when the wave service attached.
+        """
+        mesh = getattr(self.inputs[0], 'partition_source_mesh', None)
+        if mesh is None:
+            raise ValueError("this rank's mesh does not name the global mesh it was cut from; the wave service "
+                             "cannot map its owned cells to global wave cells")
+        return mesh, self.partition.cell_l2g, self.partition.n_owned_cells
+
+    def wave_rank_comm(self):
+        """The rank communicator the wave coupling uses (waves._attach_mpas_ranks): one service, on rank 0."""
+        return self.comm
 
     def bind_dycore(self, dycore):
         from ..partition_overlap_v841 import interior_edges
@@ -944,7 +959,6 @@ def _run_rank_threads(arguments, config, layout, streams, start, stop, dt, steps
         local_layout, local_payload, local, _ = prepared[rank]
         execution = SameHostRankExecution(comms[rank], partitions, local, indices,
             transport=transport, global_layout=layout, devices=devices)
-        execution.wave_global_mesh = inputs[0]
         execution.analysis_receipt = analysis_receipt
         execution.output_comm = output_comms[rank]
         rank_moving = None

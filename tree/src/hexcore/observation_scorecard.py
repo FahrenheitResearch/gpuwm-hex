@@ -1132,9 +1132,20 @@ def door_scorecard(run, config_path):
     joined = join_automatic_scorer(run, config_path) or completed_scorecard(run, config_path)
     if joined is not None:
         return joined
-    config, _ = discover(run, json.loads(Path(config_path).read_text(encoding="utf-8")))
-    scheduled = forecast_hook(run, init=config["init"], grid=config["grid"], start=config["start"],
-                              config_path=config_path)
+    if str(os.environ.get(SCORING_ENV, "")).strip().lower() == "off":
+        # Nothing to discover for a run that asked for no scoring: the record says SKIPPED and why.
+        scheduled = forecast_hook(run, init=None, grid=None, start=None, config_path=config_path)
+    else:
+        config, _ = discover(run, json.loads(Path(config_path).read_text(encoding="utf-8")))
+        scheduled = forecast_hook(run, init=config["init"], grid=config["grid"], start=config["start"],
+                                  config_path=config_path)
+    if scheduled["status"] == "SKIPPED":
+        # Scoring turned off (GPUWM_HEX_OBSERVATION_SCORING=off, a door's --skip score) is an outcome, not a
+        # failure. THE BREAKAGE THIS PREVENTS (both-routes matrix, gpuwm-hex 0.4.14 candidate, 2026-11-06): a
+        # country door run with the variable set and its score stage still listed raised here after a finished
+        # forecast, and the door exited 1.
+        return {"joined": "skipped", **scheduled,
+                "note": f"observation scoring SKIPPED ({SCORING_ENV}=off): {scheduled['path']}"}
     if scheduled["status"] in {"QUEUED", "NOT_YET_OBSERVABLE", "DEFERRED"}:
         return {"joined": "automatic", **scheduled,
                 "note": f"CPU observation scoring {scheduled['status']}: {scheduled['path']}"}

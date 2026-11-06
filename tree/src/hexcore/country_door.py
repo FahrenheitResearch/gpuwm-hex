@@ -273,9 +273,24 @@ class _SourceBesideMesh:
         import threading
         self.stopped = threading.Event()
         self.running = []
+        self.ready = {item["valid_time"]: threading.Event() for item in commands if isinstance(item, dict)}
         pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="boundary-endpoints")
-        self.future = pool.submit(produce, commands, met_dir, workers=workers, runner=self.run)
+        self.future = pool.submit(produce, commands, met_dir, workers=workers, runner=self.run,
+                                  on_ready=lambda item, record: self.ready[item["valid_time"]].set())
         pool.shutdown(wait=False)
+
+    def wait(self, valid_time):
+        """Block until the endpoint at ``valid_time`` is decoded and verified (or the source stage has ended).
+
+        THE BREAKAGE THIS PREVENTS (hex 0.4.14 both-routes matrix, RED 3, 2026-11-06): endpoint 0 decodes into
+        parent/init, and the init stage ran its own full init-source into the same directory beside it, so two
+        processes wrote parent/init/MET:<start> and the endpoint's digest check read the other writer's file
+        ("boundary intermediate digest differs"). The init now waits here and builds with --from-decoded."""
+        event = self.ready[valid_time]
+        while not event.wait(0.05):
+            if self.future.done():
+                self.future.result()  # the endpoint's own failure, named where it happened
+                return
 
     def run(self, argv):
         if self.stopped.is_set():
@@ -301,12 +316,12 @@ def _prepare_region(args, value, status):
     source = _SourceBesideMesh(value["boundary_endpoints"], args.work_dir.resolve() / "boundary-met",
                                args.endpoint_workers, produce_source_endpoints)
     try:
-        return _prepare_region_stages(args, value, status, source.future)
+        return _prepare_region_stages(args, value, status, source)
     finally:
         source.stop()
 
 
-def _prepare_region_stages(args, value, status, endpoints):
+def _prepare_region_stages(args, value, status, source):
     from .lbc_producer import produce_source_endpoints
     from .cli import main
     from . import mesh_rows
@@ -376,6 +391,10 @@ def _prepare_region_stages(args, value, status, endpoints):
         # A producer suite (hrrrv5) starts from its own case 7 on the cut below, so the parent's v8.4.2 init is
         # neither built nor cut: the start time's intermediate comes from boundary endpoint 0's decode.
         status.note("initializing the global parent from the selected source")
+        if "--from-decoded" in value["commands"]["init"]:
+            # One writer of parent/init: boundary endpoint 0 decodes the start time there beside the mesh, and the
+            # init builds from that decode once it is verified (_SourceBesideMesh.wait).
+            measured("start-decode", lambda: source.wait(value["boundary_endpoints"][0]["valid_time"]))
         rc = measured("init", lambda: main(value["commands"]["init"]))
         if rc:
             return rc
@@ -401,7 +420,7 @@ def _prepare_region_stages(args, value, status, endpoints):
         lbc_source=f"{row['init_source']} source table endpoints in {root / 'lbc'}", admission=cut_admission,
         dt_seconds=mesh["dt_seconds"])
     mesh_rows.write_rows(root / "mesh-rows.json", [registered, cut])
-    measured("boundary-endpoints", endpoints.result)
+    measured("boundary-endpoints", source.future.result)
     if value.get("start_endpoints"):
         measured("start-endpoint", lambda: produce_source_endpoints(
             value["start_endpoints"], root / "start-met", workers=args.endpoint_workers))
@@ -554,7 +573,10 @@ def plan(args):
             boundary_interval_hours=getattr(args, "boundary_interval_hours", None))
         parent = root / "parent"
         if endpoints and not split:
+            # Endpoint 0 is the start time's decode, made beside the mesh into the init's own directory; the init
+            # builds from it (--from-decoded) and never decodes there itself (RED 3, _SourceBesideMesh.wait).
             endpoints[0]["argv"][endpoints[0]["argv"].index("--out-dir") + 1] = str(parent / "init")
+            initialization += ["--from-decoded"]
         initialization[initialization.index("--grid") + 1] = str(parent / "mesh.grid.nc")
         initialization[initialization.index("--static") + 1] = str(parent / "mesh.static.nc")
         initialization[initialization.index("--out-dir") + 1] = str(parent / "init")

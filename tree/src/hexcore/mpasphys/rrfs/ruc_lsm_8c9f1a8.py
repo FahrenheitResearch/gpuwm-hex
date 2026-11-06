@@ -2844,7 +2844,12 @@ RUCDEV void land_soilmoist(Tables &tb, Arena &arena, float  delt, int  nzs, int 
     k = (k * jj); // L4855
     loop5_continue: ;
     } loop5_exit: ; // L4856
-    sum = __fadd_rn(sum, __fdiv_rn(gfk_pow(acrt, __fsub_rn(cvfrz, jk)), float(k))); // L4857
+    // L4857: cvfrz is the constant 3., so gfortran unrolls this loop and folds acrt**2. to acrt*acrt and acrt**1. to acrt
+    // (the native soilmoist has no powf call). glibc-style powf(acrt,2.) can round 1 ULP away from acrt*acrt, which moved
+    // sfcrunoff/acrunoff by 1-2 ULP in frozen-soil cells (x1.40962 hrrrv5 cell 22084, step 7).
+    { const float e_fold = __fsub_rn(cvfrz, jk);
+      const float p_fold = (e_fold == 2.f) ? __fmul_rn(acrt, acrt) : (e_fold == 1.f) ? acrt : gfk_pow(acrt, e_fold);
+      sum = __fadd_rn(sum, __fdiv_rn(p_fold, float(k))); } // L4857
     loop4_continue: ;
     } loop4_exit: ; // L4858
     fcr = __fsub_rn(1.f, __fmul_rn(gfk_exp_fma((-acrt)), sum)); // L4859

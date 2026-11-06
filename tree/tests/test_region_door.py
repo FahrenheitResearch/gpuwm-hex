@@ -264,7 +264,7 @@ def test_a_country_preparation_decodes_beside_its_mesh_and_a_stop_stops_the_deco
     started, released = threading.Event(), threading.Event()
     calls = []
 
-    def produce(commands, met_dir, *, workers, runner):
+    def produce(commands, met_dir, *, workers, runner, on_ready=None):
         calls.append((commands, met_dir, workers))
         started.set()
         released.wait(5)
@@ -278,3 +278,75 @@ def test_a_country_preparation_decodes_beside_its_mesh_and_a_stop_stops_the_deco
     # A stopped source starts no further lead.
     source.stop()
     assert source.run(['init-source']) == 1
+
+
+def test_the_region_init_waits_for_the_start_endpoint_that_shares_its_directory(tmp_path, monkeypatch):
+    """RED 3 (hex 0.4.14 both-routes matrix, 2026-11-06): the start endpoint decodes into parent/init beside the mesh
+    while the init stage ran its own full init-source into the same directory, so two processes wrote
+    parent/init/MET:<start> and the endpoint's digest check read the other writer's half-written file
+    ("boundary intermediate digest differs"). One writer: the init stage waits for that endpoint and builds from it."""
+    import threading
+    from hexcore import country_door, engines, prep_store, cli, lbc_producer
+    arguments = args(tmp_path, '--point', '36.5,-97.5', '--radius-km', '100', '--hours', '1')
+    value = plan(arguments)
+    first = value['boundary_endpoints'][0]['argv']
+    init = value['commands']['init']
+    assert Path(first[first.index('--out-dir')+1]) == Path(init[init.index('--out-dir')+1])
+    assert '--from-decoded' in init and '--stop-after' in first
+    build_parser().parse_args(init)
+    arguments.work_dir.mkdir(parents=True)
+    decoding = threading.Event()
+    decoding.set()
+    seen = []
+
+    def prepare(argv):
+        Path(argv[argv.index('--out')+1]).write_bytes(b'stand-in')
+
+    def produce(commands, met_dir, *, workers, runner, on_ready=None):
+        threading.Event().wait(1.0)  # the start endpoint's acquire and decode, still writing parent/init
+        decoding.clear()
+        if on_ready is not None:
+            on_ready(commands[0], {})
+        return []
+
+    def main(command):
+        seen.append((list(command), decoding.is_set()))
+        return 1  # End at the init stage.
+
+    monkeypatch.setattr(engines, 'resolve', lambda spec: Path('/rust')/spec.name)
+    monkeypatch.setattr(prep_store, 'run_or_fetch', prepare)
+    monkeypatch.setattr(cli, 'main', main)
+    monkeypatch.setattr(lbc_producer, 'produce_source_endpoints', produce)
+    status = type('Status', (), {'note': lambda *a: None})()
+    assert country_door._prepare_region(arguments, value, status) == 1
+    assert seen and seen[0][0][0] == 'init-source'
+    assert seen[0][1] is False, 'the init stage ran while the start endpoint was still decoding into its directory'
+
+
+def test_a_start_endpoint_never_reuses_a_receipt_that_went_on_to_build_an_init(tmp_path):
+    """A rerun in the same work dir: parent/init's receipt then holds the last init, which --from-decoded refuses."""
+    import hashlib
+    from hexcore.init_sources import load_table
+    commands = source_endpoint_commands(source='gfs', cycle='2023-03-31T12', hours=1, out_dir=tmp_path/'inputs')
+    invoked = []
+
+    def runner(argv):
+        invoked.append(argv)
+        root = Path(argv[argv.index('--out-dir')+1]); root.mkdir(parents=True, exist_ok=True)
+        item = next(c for c in commands if c['argv'] == argv)
+        met = root/'met'; met.write_bytes(b'decoder stand-in')
+        (root/'init-source-receipt.json').write_text(json.dumps({
+            'source': 'gfs', 'source_cycle': '2023-03-31_12:00:00', 'member': None,
+            'lead_hours': int(argv[argv.index('--lead-hours')+1]),
+            'table': {'sha256': load_table()['_sha256']}, 'valid_time': item['valid_time'],
+            'decode': {'met': str(met), 'met_sha256': hashlib.sha256(met.read_bytes()).hexdigest()}}))
+        return 0
+    ready = []
+    produce_source_endpoints(commands, tmp_path/'met', runner=runner,
+                             on_ready=lambda item, record: ready.append(item['valid_time']))
+    assert len(invoked) == 2 and sorted(ready) == [c['valid_time'] for c in commands]
+    receipt = tmp_path/'inputs/endpoint-0000/init-source-receipt.json'
+    data = json.loads(receipt.read_text()); data['init'] = {'path': 'init.nc'}
+    receipt.write_text(json.dumps(data))
+    produce_source_endpoints(commands, tmp_path/'met', runner=runner)
+    assert len(invoked) == 3 and invoked[-1] == commands[0]['argv']

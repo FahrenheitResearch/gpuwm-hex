@@ -263,9 +263,28 @@ def compatible_pack(identity, pins=None):
         loaded = '.'.join(str(part) for part in version)
         return None, None, (f'loaded NVRTC {loaded} (library sha256 '
                             f'{str(identity.get("nvrtc_library_sha256"))[:12]}) matches no NVRTC {major} pin '
-                            f'[{", ".join(pinned_compilers(candidates))}]; no compatible pack is downloaded')
+                            f'[{", ".join(pinned_compilers(candidates))}]; no compatible pack is downloaded; '
+                            f'remedy: {nvrtc_remedy(identity, pins)}')
     name, row = compatible[0]
     return name, row, None
+
+
+def nvrtc_remedy(identity, pins=None):
+    """The exact pip command that loads an NVRTC with a pinned pack: the newest pinned pack of the loaded major.
+
+    A pack is bound to the NVRTC library bytes, so every patch release is a different compiler (13.4.59 and
+    13.4.92 are two; a box venv holding 13.4.59 matched no pack, 2026-11-06).  The remedy is that exact pin,
+    never "an NVRTC 13.4"."""
+    pins = load_pins() if pins is None else pins
+    version = identity.get('nvrtc') or ()
+    major = version[0] if version else None
+    same_major = [r for r in pins['assets'].values()
+                  if r.get('kind') == 'kernel-pack' and r.get('select', {}).get('nvrtc_major') == major
+                  and r.get('compiler', {}).get('nvrtc_package')]
+    if not same_major:
+        return f'pip install "gpuwm-hex[gpu-cu{12 if major == 12 else 13}]"'
+    newest = max(same_major, key=lambda r: tuple(r['compiler'].get('nvrtc', ())))
+    return f'pip install "{newest["compiler"]["nvrtc_package"]}"'
 
 
 def pinned_compilers(candidates):
@@ -416,7 +435,7 @@ def add_fetch_assets_parser(commands):
 
 
 def pin(arguments):
-    """Pin every ``kernel-pack-cuda<N>[.<minor>].json`` in the directory.
+    """Pin every ``kernel-pack-cuda<N>[.<minor>[.<patch>]].json`` in the directory.
 
     One pack per loaded NVRTC: CUDA 12.9 pip, CUDA 13.4 pip, and CUDA 13.0
     (the system toolkit of a driver-580 machine and the 13.0.88 pip wheel
@@ -425,9 +444,11 @@ def pin(arguments):
     assets = {}
     names = sorted(path.name for path in Path(arguments.from_directory).glob('kernel-pack-cuda*.json'))
     for name in names:
-        match = re.fullmatch(r'kernel-pack-cuda(\d+)(?:\.(\d+))?\.json', name)
+        # A patch level names a second pack of one minor: a pack is bound to the NVRTC library bytes, and
+        # 13.4.59 and 13.4.92 are two compilers (tools/build_kernel_packs.py builds both).
+        match = re.fullmatch(r'kernel-pack-cuda(\d+)(?:\.(\d+))?(?:\.(\d+))?\.json', name)
         if match is None:
-            raise AssetError(f'{name}: not a kernel-pack-cuda<N>[.<minor>].json name')
+            raise AssetError(f'{name}: not a kernel-pack-cuda<N>[.<minor>[.<patch>]].json name')
         major = int(match.group(1))
         data = (arguments.from_directory / name).read_bytes()
         compiler = json.loads(data)['compiler']
@@ -435,6 +456,10 @@ def pin(arguments):
             raise AssetError(f'{name}: expected the CUDA {major} nine-key compiler identity')
         if match.group(2) is not None and compiler['nvrtc'][1] != int(match.group(2)):
             raise AssetError(f'{name}: built with NVRTC {compiler["nvrtc"]}, not {major}.{match.group(2)}')
+        if match.group(3) is not None and not str(compiler.get('nvrtc_package') or '').endswith(
+                f'=={major}.{match.group(2)}.{match.group(3)}'):
+            raise AssetError(f'{name}: built with {compiler.get("nvrtc_package")}, not '
+                             f'{major}.{match.group(2)}.{match.group(3)}')
         assets[name] = {'kind': 'kernel-pack', 'bytes': len(data),
                         'sha256': hashlib.sha256(data).hexdigest(),
                         'select': {'nvrtc_major': major}, 'compiler': compiler}

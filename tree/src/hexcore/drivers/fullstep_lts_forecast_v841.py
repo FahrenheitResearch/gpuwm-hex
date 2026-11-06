@@ -708,6 +708,13 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 if moving_resume is not None and moving_weights is None and "local_atmospheres" in moving_resume:
                     from hexcore.moving_checkpoint import restore_local_atmosphere
                     restore_local_atmosphere(stack["driver"],moving_resume["local_atmospheres"][tables.index])
+                # Each class's own updraft-helicity layers over its local mesh (hexcore.uh_layers.attach_rank);
+                # its owned words reach the history through _capture_rank. THE BREAKAGE THIS PREVENTS
+                # (both-routes matrix, gpuwm-hex 0.4.14 candidate, 2026-11-06): the class executor never armed
+                # the layers, so an ArWen LTS run rendered no UH maps while the same run on the fixed step did.
+                from hexcore.uh_layers import attach_rank
+                attach_rank(stack, local_host["prepared"].mesh, cp,
+                            initial=start_step == 0 and moving_resume is None)
                 cp.cuda.get_current_stream().synchronize()
             edge_extent = int(stack["driver"].horizontal.nedges)
             stack["owned_health_extents"] = {
@@ -846,6 +853,10 @@ def execute_fullstep_lts(forecast, *, native_execute, policy, host, schedule, ca
                 raise
             previous[index] = committed.surface_updates
             forcing[index] = next_dynamics
+            if stack.get("uh_layers") is not None:
+                from hexcore.uh_layers import rank_update
+                with physics_scope.rank(index, int(cp.cuda.Device().id)):
+                    rank_update(stack)
             if first_call is not None and not first_call.done and index not in first_reads:
                 with physics_scope.rank(index, int(cp.cuda.Device().id)):
                     first_reads[index] = f000_first_call.read_arwen_first_call(stack["backend"], cp)
@@ -1539,6 +1550,9 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                     if same_partition and "local_atmospheres" in moving_resume:
                         from hexcore.moving_checkpoint import restore_local_atmosphere
                         restore_local_atmosphere(stack["driver"], moving_resume["local_atmospheres"][tables.gid])
+                    # Each block's own updraft-helicity layers (hexcore.uh_layers.attach_rank), as on one card.
+                    from hexcore.uh_layers import attach_rank
+                    attach_rank(stack, local_host["prepared"].mesh, cp, initial=moving_resume is None)
                     cp.cuda.get_current_stream().synchronize()
                 edge_extent = int(stack["driver"].horizontal.nedges)
                 stack["owned_health_extents"] = {
@@ -1618,6 +1632,10 @@ def _execute_multi(forecast, *, policy, host, schedule, cache_root, output_root,
                     after_phase_one=block.exchanger.round_phase_one if raw_exchange else None)
             previous[gid] = committed.surface_updates
             forcing[gid] = next_dynamics
+            if stack.get("uh_layers") is not None:
+                from hexcore.uh_layers import rank_update
+                with physics_scope.rank(gid, block.device):
+                    rank_update(stack)
             if first_call is not None and not first_call.done and gid not in first_reads:
                 with physics_scope.rank(gid, block.device):
                     first_reads[gid] = f000_first_call.read_arwen_first_call(stack["backend"], cp)

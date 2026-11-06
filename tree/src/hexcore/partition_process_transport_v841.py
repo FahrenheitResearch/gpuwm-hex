@@ -342,7 +342,8 @@ class ProcessHaloTransport(SameHostTransport):
             "rounds": 0, "bytes": 0, "local_bytes": 0, "peer_bytes": 0, "staged_bytes": 0, "seconds": 0.0,
             "completed_rounds": 0, "pack_launches": 0, "unpack_launches": 0, "descriptor_uploads": 0,
             "dimension_uploads": 0, "descriptor_cache_hits": 0, "descriptor_cache_misses": 0,
-            "descriptor_cache_evictions": 0, "serial_unpack_batches": 0, "serial_unpack_launches": 0,
+            "descriptor_cache_evictions": 0, "descriptor_cache_retired": 0,
+            "serial_unpack_batches": 0, "serial_unpack_launches": 0,
             "header_wait_seconds": 0.0, "headers_sent": 0, "headers_received": 0, "round_checks": 0,
             "shared_buffers": 0, "shared_buffer_bytes": 0,
         }

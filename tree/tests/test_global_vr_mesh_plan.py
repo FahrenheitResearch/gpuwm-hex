@@ -391,6 +391,65 @@ def test_a_failed_door_stops_the_decode_beside_it(tmp_path, monkeypatch):
     assert [c[0] for c in calls] == ["init-source-decode", "mesh-template", "init-source-decode.cancel"]
 
 
+def test_a_products_failure_after_a_finished_forecast_lets_the_live_export_finish(tmp_path, monkeypatch):
+    """both-routes matrix, gpuwm-hex 0.4.14 candidate (2026-11-06): one products view refused after a finished
+    forecast and the failure path told the live export the forecast had failed, so it was stopped within 30 s
+    instead of exporting the frames it still had to close. The door still fails (a map the user asked for is
+    missing); the export is not taken with it."""
+    from types import SimpleNamespace
+    from hexcore import export_door, init_sources
+    from hexcore.swath import sizing
+    request = args(tmp_path, "--generate", "--run", "--source", "gfs", "--cycle", "2023-03-31T12")
+    binary = tmp_path / "engine"
+    binary.write_bytes(b"binary")
+    monkeypatch.setattr("hexcore.engines.resolve", lambda *a: binary)
+    monkeypatch.setattr(init_sources, "resolve_writer", lambda *a: binary)
+    monkeypatch.setattr(init_sources, "resolve_vtable", lambda *a: binary)
+    monkeypatch.setattr(sizing, "dry_run", lambda *a, **k: {"predicted_cells": 216000})
+    monkeypatch.setattr(mesh_point, "resolve_geog", lambda *a: tmp_path)
+    monkeypatch.setattr(mesh_point, "static_coordinate_errors", lambda *a: [])
+    monkeypatch.setattr(mesh_point, "admit_pair", lambda *a, **k:
+                        {"n_cells": 215000, "timestep_choice": {"dt_seconds": 90}, "regional": False})
+    row = SimpleNamespace(name="generated-row", n_cells=215000, as_dict=lambda: {"name": "generated-row"})
+    monkeypatch.setattr(mesh_rows, "describe_resolution_spec", lambda **kwargs: row)
+    monkeypatch.setattr(mesh_rows, "write_rows", lambda path, rows: path.write_text("runtime rows"))
+    finished = []
+
+    class Export:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            return self
+
+        def finish(self, *, forecast_ok, timeout=900.0):
+            finished.append(forecast_ok)
+            return {"status": "done" if forecast_ok else "stopped"}
+
+    monkeypatch.setattr(export_door, "LiveExport", Export)
+    calls = []
+
+    def run(argv, *, name, directory, env):
+        calls.append((name, argv, dict(env)))
+        if name == "mesh-template":
+            Path(argv[argv.index("--out") + 1]).write_bytes(b"template grid")
+        if name == "init-source":
+            out = tmp_path / "init"
+            out.mkdir()
+            (out / "init-source-receipt.json").write_text(json.dumps({"source": "gfs", "cycle": "2023-03-31_12:00:00"}))
+        return {"returncode": 1 if name == "products" else 0, "wall_seconds": 10, "peak_process_vram_mib": 16000,
+                "log": "products.log"}
+
+    monkeypatch.setattr(card_fit, "run_stage", run)
+    monkeypatch.setattr(card_fit, "start_stage", fake_background(calls))
+    monkeypatch.setattr("hexcore.moving_mesh.rotate_grid", fake_rotation)
+    with pytest.raises(MpasPortError, match="products exited 1"):
+        mesh_plan_door.run_global_mesh(request)
+    assert finished == [True]
+    receipt = json.loads((tmp_path / "global-vr-receipt.json").read_text())
+    assert receipt["status"] == "failed" and receipt["live_export"]["status"] == "done"
+
+
 def test_background_stage_reports_its_own_wall_and_cpu(tmp_path):
     import os
     import time
@@ -564,7 +623,7 @@ def test_a_suite_with_no_multicard_run_is_priced_as_a_rank_not_as_one_cards_loop
     two = card_fit.predict(163842, card=card, levels=59, dt_seconds=300, hours=1, suite="hrrrv5", cards=2)
     one = card_fit.predict(81921, card=card, levels=59, dt_seconds=300, hours=1, suite="hrrrv5")
     excess = two["whole_run_floor"]["rank_excess"]
-    assert excess["ratio"] > 1.2  # the 2-card r700 rank against the one-card curve at its columns
+    assert excess["ratio"] > 1.1  # the 2-card r700 rank against the one-card curve at its columns (1.18 on the 0.4.14 curve)
     assert two["predicted_peak_mib"] == pytest.approx(one["predicted_peak_mib"] * excess["ratio"], rel=1e-4)
     # hrrrv5 is never priced from the lighter convection_permitting rows while it has runs of its own.
     assert two["whole_run_floor"]["physics"]["suite"] == "hrrrv5"

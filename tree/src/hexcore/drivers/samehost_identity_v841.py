@@ -125,7 +125,13 @@ def collect_owned(layouts: Sequence[Any], rank: int, stack: Mapping[str, Any]) -
             native_padding=regional)
 
     arrays, scalars = {}, {}
-    _walk_leaves("", stack["backend"].restart_state(), arrays, scalars)
+    # The wave state is the run's one whole-mesh service on rank 0 (waves.attach_arwen), not a partitioned
+    # field: it has no owned slice to assemble. THE BREAKAGE THIS PREVENTS: with waves on and more than one
+    # rank, rank 0's restart state carried the spectrum and the others only a marker, and the boundary writer
+    # stopped the run ("boundary entry paths diverge: only on rank 0 ['__backend__/waves/forcing/psfc', ...]").
+    state = dict(stack["backend"].restart_state())
+    state.pop("waves", None)
+    _walk_leaves("", state, arrays, scalars)
     for path in sorted(arrays):
         host = _to_numpy(arrays[path])
         full_path = f"__backend__/{path}"

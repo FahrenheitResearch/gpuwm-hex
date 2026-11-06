@@ -67,6 +67,40 @@ def test_forecast_hook_queues_without_scoring_or_gpu_lease_delay(tmp_path, monke
     assert all(r["n"] == 0 and r["status"] == "NOT_MEASURED" for r in card["metrics"])
 
 
+def test_a_door_run_with_scoring_off_reports_skipped_instead_of_raising(tmp_path, monkeypatch):
+    """both-routes matrix, gpuwm-hex 0.4.14 candidate (2026-11-06): with GPUWM_HEX_OBSERVATION_SCORING=off and the
+    score stage still listed, door_scorecard raised "could not schedule CPU observation scoring" after a finished
+    forecast and the country door exited 1."""
+    run = tmp_path / "forecast"
+    run.mkdir()
+    (run / "cuda-history.2026-10-10_12.00.00.nc").write_bytes(b"history inventory fixture")
+    config = tmp_path / "observation-scorecard.config.json"
+    config.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv(scorecard.SCORING_ENV, "off")
+    monkeypatch.setattr(scorecard, "queue_retry", lambda *a, **k: (_ for _ in ()).throw(AssertionError("queued")))
+    joined = scorecard.door_scorecard(run, config)
+    assert joined["status"] == "SKIPPED" and joined["joined"] == "skipped"
+    assert "SKIPPED" in joined["note"] and scorecard.SCORING_ENV in joined["note"]
+    card = json.loads((run / "observation-scorecard" / "scorecard.json").read_text(encoding="utf-8"))
+    assert card["status"] == "SKIPPED" and card["measured_metrics"] == 0
+
+
+def test_the_country_door_score_stage_finishes_with_scoring_off(tmp_path, monkeypatch):
+    from hexcore import country_door
+
+    root = tmp_path / "work"
+    (root / "forecast").mkdir(parents=True)
+    (root / "mesh-rows.json").write_text("{}", encoding="utf-8")
+    (root / "observation-scorecard.config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv(scorecard.SCORING_ENV, "off")
+    notes = []
+    status = type("Status", (), {"note": lambda self, text: notes.append(text)})()
+    args = type("Args", (), {"work_dir": root})()
+    result = country_door._run_stage("score", args, {"commands": {}}, status)
+    assert result["returncode"] == 0 and result["status"] == "SKIPPED"
+    assert any("SKIPPED" in note for note in notes)
+
+
 def test_small_command_receipt_avoids_loading_large_driver_arrays(tmp_path):
     run = tmp_path / "fc"
     run.mkdir()

@@ -72,7 +72,10 @@ def test_mpas_10km_eight_96gb_cards_refused_and_shared_cards_summed():
     required = rank_requirements(cells, range(8), dict.fromkeys(range(8), profile), 55)
     assert all(need > 97_887 * MIB for need in required.values())
     one = rank_requirements([40_962], [0], {0: profile}, 55)[0]
-    assert rank_requirements([40_962,40_962], [0,0], {0: profile}, 55)[0] == 2 * one
+    # Two ranks on one card are co-tenants priced from the measured row (memory_admission.MPAS_COTENANT_RANK_ROWS),
+    # not two whole members: never below one member of their combined columns, below two whole members.
+    two = rank_requirements([40_962,40_962], [0,0], {0: profile}, 55)[0]
+    assert one < two <= 2 * one
     assert rank_requirements([40_962], [0], {0: profile}, 80)[0] > one
 
 

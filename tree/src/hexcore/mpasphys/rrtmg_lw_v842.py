@@ -1141,8 +1141,12 @@ def _lw_wrapper_chunk(ncol, nlayers):
     to the solver. Its radiance and optical-depth slabs were additional live
     storage, so the advertised 1 GiB bound did not bound a radiation call.
     Column width changes storage only: each column has independent KISS state.
+    The budget and the compact ceiling are divided among the same-host ranks
+    on this card (hexcore.device_share names the breakage).
     """
     import cupy as cp
+    from ..device_share import ranks_on_device
+    ranks = ranks_on_device(cp=cp)
     layers = max(1, int(nlayers))
     quantum = 256
     wrapper_column = 4 * _LW_WRAPPER_COLUMN_WORDS_PER_LAYER * layers
@@ -1150,14 +1154,14 @@ def _lw_wrapper_chunk(ncol, nlayers):
     per_column = wrapper_column + (solver + quantum - 1) // quantum
     free_bytes, _ = cp.cuda.runtime.memGetInfo()
     pool = cp.get_default_memory_pool()
-    available = int(free_bytes) + int(pool.free_bytes())
+    available = (int(free_bytes) + int(pool.free_bytes())) // ranks
     limit = int(pool.get_limit())
     if limit > 0:
         available = min(available, max(0, limit - int(pool.used_bytes())))
-    budget = min(_LW_WRAPPER_BUDGET_BYTES, available // 8)
+    budget = min(_LW_WRAPPER_BUDGET_BYTES // ranks, available // 8)
     width = max(quantum, budget // per_column // quantum * quantum)
     from ..device_memory_release import shared_card_memory
-    ceiling = 1024 if shared_card_memory() else max(1, ncol)
+    ceiling = max(quantum, 1024 // ranks // quantum * quantum) if shared_card_memory() else max(1, ncol)
     return int(min(max(1, ncol), ceiling, width))
 
 

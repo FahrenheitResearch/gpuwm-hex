@@ -1135,8 +1135,8 @@ def check_kernel_pack() -> list[Finding]:
     newest = max((r for _, r in same_major), key=lambda r: tuple(r.get("compiler", {}).get("nvrtc", ())),
                  default=None)
     package = (newest or {}).get("compiler", {}).get("nvrtc_package")
-    remedy = (f'pip install "{package}"\n# the NVRTC the newest pinned CUDA {major} pack was built with'
-              if package else f'pip install "gpuwm-hex[gpu-cu{12 if major == 12 else 13}]"')
+    remedy = (assets.nvrtc_remedy(identity) + f"\n# the NVRTC the newest pinned CUDA {major} pack was built with"
+              if package else assets.nvrtc_remedy(identity))
     return [Finding(subject=subject, status=WARN,
                     detail=(f"{reason}.  Pinned: {', '.join(pinned) or 'none'}.  Forecasts still run; the first "
                             "start of each kernel compiles through NVRTC (about 100 s on a fresh install)."),

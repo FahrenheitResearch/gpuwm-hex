@@ -151,28 +151,56 @@ def require_table_stream_inputs(config, bindings):
                                     f"install the fork tables or bind --stream-input {name}=FILE")
 
 
+def _logical(value):
+    if isinstance(value, str):
+        return value.strip().casefold() in ('.true.', 'true', 't', '.t.')
+    return bool(value)
+
+
+def initial_state_control(config, text):
+    """The row's restart control: which initial stream the core reads and whether it couples a cold start.
+
+    One place for every suite row: the row's stream contract (``route_table.stream_contract``; MPAS-A v8.4.2's
+    ``restart_v842`` for a row that names none, the fork's ``restart_rrfs`` for the RRFS rows) carries
+    ``RestartControl``, the transcription of the core's own choice (MPAS-A mpas_atm_core.F:129-133,522-530;
+    MPAS-Model-rrfs mpas_atm_core.F:134-150,542). THE BREAKAGE THIS PREVENTS: the choice was a per-row
+    ``initial_state_selector`` key that b0b9a31 added to ``mpasphys_rrfs`` only; the 44c0849 re-pin row (hrrrv5)
+    and the MPAS-A row lacked it, so ``config_do_restart = true`` read the restart into the physics pools while
+    the dynamics cold-started from init.nc, a day-old state, and said nothing (hex-bitwise-long restart-check,
+    x1.163842 hrrrv5, 2026-11-06: 25.3 M of 36.4 M diag words differed at +25 h).
+    """
+    from .route_table import stream_contract
+    # A door with no namelist text (a deck-less run) has no group to parse; its controls are the defaults
+    # and the execution options, as before this table-driven choice.
+    groups = parse_fortran_namelist(text) if '&' in (text or '') else {}
+    configs = {key: value for group in groups.values() for key, value in group.items()}
+    configs.update(getattr(config, 'execution_options', None) or {})
+    values = {key.casefold(): value for key, value in configs.items()}
+    control = stream_contract(config).writer.RestartControl(_logical(values.get('config_do_restart', False)),
+                                                           _logical(values.get('config_do_dacycling', False)))
+    return control, configs
+
+
 def initial_state_input(arguments, config, text, streams_path, bindings):
     """Resolve the row's initial stream once for pool hydration and dycore input.
 
     RRFS mpas_atm_core.F:120-166 reads invariant, then exactly one of input,
-    da_state or restart. Explicit stream bindings take precedence over a deck
-    filename. Without a streams deck, --init names the selected state file.
+    da_state or restart; MPAS-A reads input or restart. Explicit stream bindings take
+    precedence over a deck filename. Without a streams deck, --init names the selected state file.
     """
     row = load_table()[getattr(config, 'table_key', 'mpasphys_v842')]
-    selector = row.get('initial_state_selector')
-    if selector is None:
-        return 'input', Path(arguments.init).resolve()
-    configs = {key: value for group in parse_fortran_namelist(text).values()
-               for key, value in group.items()}
-    configs.update(config.execution_options)
-    module, operation = selector.split(':', 1)
-    name = getattr(import_module(module), operation)(configs)
+    control, configs = initial_state_control(config, text)
+    name = control.initial_stream
     if name in bindings:
         return name, bindings[name]
     if name != 'input' and streams_path is not None:
         from .runtime_v842 import expand_input_filename
-        parser_module, parser_call = row['streams_parser'].split(':', 1)
-        tree = getattr(import_module(parser_module), parser_call)(streams_path)
+        parser = row.get('streams_parser')
+        if parser is None:
+            tree = ET.parse(streams_path).getroot()
+        else:
+            parser_module, parser_call = parser.split(':', 1)
+            tree = getattr(import_module(parser_module), parser_call)(streams_path)
         element = next((e for e in tree if e.get('name') == name), None)
         if element is None or 'input' not in element.get('type', '').split(';'):
             raise ValueError(f'initial state stream {name} is not an input stream in {streams_path}')
@@ -1085,9 +1113,23 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
     bindings = {**deck_inputs, **bindings}
     require_table_stream_inputs(config, {**table_bindings, **bindings})
     initial_stream, initial_file = initial_state_input(arguments, config, text, streams_path, bindings)
-    # Checkpoint preparation may later change config_do_restart. Preserve
-    # the kind of the file actually selected for native hydration.
-    arguments._initial_state_cold_start = initial_stream != 'restart'
+    from .checkpoint_v842 import native_restart_continuation
+    continuation = native_restart_continuation(arguments, config, initial_stream, initial_file)
+    if continuation is not None:
+        # Correct mode: a native restart written by a correct-mode run continues that run exactly, through the
+        # checkpoint route (checkpoint_v842.resolve_route); its static inputs come from the run's init.
+        from copy import copy
+        arguments = copy(arguments)
+        arguments.restart_from = continuation
+        arguments._native_restart_continuation = initial_file
+        text = set_namelist_options(text, {'restart': {'config_do_restart': False}})
+        bindings = {name: path for name, path in bindings.items() if name != 'restart'}
+        initial_stream, initial_file = initial_state_input(arguments, config, text, streams_path, bindings)
+    # Checkpoint preparation may later change config_do_restart. Preserve the kind of the file actually selected
+    # for native hydration: a warm start (a restart, not a DA cycle) skips atm_init_coupled_diagnostics and keeps
+    # the restart's coupled words (mpas_atm_core.F:542).
+    arguments._initial_state_cold_start = (initial_stream == 'input'
+                                           or initial_state_control(config, text)[0].initialize_coupled_diagnostics)
     if initial_stream != 'input':
         # Do not hydrate a warm start from the cold input or the unselected restart/DA file.
         from copy import copy
@@ -1098,6 +1140,10 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
         bindings = {name: path for name, path in bindings.items()
                     if name not in ('input', 'restart', 'da_state') or name == initial_stream}
         bindings[initial_stream] = initial_file
+        # The dycore loaders take the vertical grid and the initialized mesh from the invariant stream when the
+        # selected state file does not carry them (an RRFS restart or mpasout holds no zgrid; MPAS-Model-rrfs
+        # mpas_atm_core.F:120-133 reads invariant first). runtime_v842.native_state_sources.
+        arguments._initial_state_invariant = bindings.get('invariant')
     # Timed surface input is first read in the forecast loop, after startup
     # output; mpas_atm_core.F:198-210,655-724,779-806. Preserve init SST/xice
     # during pool hydration and install timed records only on their alarms.
@@ -1109,7 +1155,7 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
     text = apply_start_time(text, getattr(arguments, 'start_time', None))
     text = bind_limited_area(arguments, text)
     from .checkpoint_v842 import resolve_route
-    moving, text = resolve_route(arguments, text)
+    moving, text = resolve_route(arguments, text, config=config)
     if (getattr(moving, 'cli_restart', False) and moving.carrier is not None
             and not getattr(arguments, 'preflight', False)):
         from .checkpoint_v842 import set_aside_frames_after

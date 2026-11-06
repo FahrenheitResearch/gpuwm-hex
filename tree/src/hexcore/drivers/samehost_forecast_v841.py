@@ -940,6 +940,10 @@ def _capture_rank_arrays(proof, host, stack, step, label, download, *, resident)
             raise RuntimeError("history step committed no reflectivity")
         refl = cp.zeros_like(state.rho)
     arrays["refl10cm"] = download(refl, cp)
+    # This partition's running-max updraft helicity (hexcore.uh_layers.attach_rank), on the host already; the
+    # executors scatter its owned words to global cells with every other cell field.
+    from hexcore.uh_layers import rank_history_arrays
+    arrays.update(rank_history_arrays(stack))
     regional = getattr(driver, "regional_v841", None)
     if regional is not None:
         arrays = {name: value if name == "normal_u" else regional.history_slice(value)
@@ -1305,7 +1309,10 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
         static = proof._static_output_fields(host)
         # All ranks have uploaded and IAU has consumed the global fields.
         # Mutate every shared host mapping so the caller cannot retain them.
-        group.call("release_preparation")
+        # local_call: no rank worker is open yet. THE BREAKAGE THIS PREVENTS: group.call here needs the step scope
+        # (ThreadRankGroup.open), so every ArWen-route --samehost-ranks threads run stopped before step 1 with
+        # "NoneType object has no attribute call" (since ec96043b). The process group runs it the same either way.
+        group.local_call("release_preparation")
         from hexcore.host_lifetime import release_preparation
         if source_host is not host:
             release_preparation(source_host)
@@ -1354,6 +1361,9 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
         held_f000 = []
         try:
             with group.open(None if processes else transport):
+                # One wave service on rank 0 (waves.attach_arwen): the other ranks' first roughness.
+                rank_group.couple_waves(group, initial=True)
+
                 def boundary(step):
                     with measure_wall("fingerprints"):
                         collected = group.call("collect_owned")
@@ -1362,6 +1372,7 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                             return
                         record_boundary(step, collected)
                 def capture(step):
+                    rank_group.wave_output(group, float(step) * dt)
                     with measure_wall("capture_inclusive"):
                         with output_span("forecast.output.capture", step):
                             return capture_arrays(step)
@@ -1443,6 +1454,7 @@ def _execute_samehost(forecast, *, physics_scope, devices, layouts_path, part_pa
                         rank_receipts = group.step(step, dt=dt, last=step == int(schedule["steps"]),
                                                    refl_due=step in captures, first=step == 1,
                                                    card_selection=card_selection)
+                        rank_group.couple_waves(group)
                         if product_ready is not None:
                             last_step_clock = (time.monotonic(), time.time())
                         if pipeline == "1":

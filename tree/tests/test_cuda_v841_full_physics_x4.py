@@ -228,7 +228,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # export became declinable (default armed).  The rationale lives
         # beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "9a21ff704fe9563fc07d16c34a39b969bfddd35f6f3c4c3dad1e793645c81e2e"
+            "6364fbdb6fc3251f2aee3db13e5e5cdb6c1d0b56743416b11a81fbf6da12cf7e"
         ),
         # New pin 2026-10-05 (New Tiedtke row); the rationale lives beside the
         # runner's pin.
