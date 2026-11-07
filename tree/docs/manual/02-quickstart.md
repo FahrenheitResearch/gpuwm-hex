@@ -33,7 +33,7 @@ individual gpuwm source files by SHA-256. A bare install reached an engine the
 pin refused, and the forecast door refused at launch with a digest mismatch
 that named neither the version that works nor the fact that pip chose it.
 
-gpuwm-hex 0.4.14 declares `gpuwm>=2.9.12,<2.10`, inside the 2.9 minor, so
+gpuwm-hex 0.4.15 declares `gpuwm>=2.9.12,<2.10`, inside the 2.9 minor, so
 installing it never downgrades an engine you already have. An engine inside
 that range whose radiation helper set this release has not measured is refused
 at the forecast door by name, with the version to install. The range is

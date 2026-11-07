@@ -2121,3 +2121,23 @@ FLOOR_DERIVATION: Mapping[str, Any] = MappingProxyType(
         },
     }
 )
+
+
+#: ``--physics KEY=VALUE`` overrides that only switch MPAS alarms and read per-cell surface planes, so the measured
+#: compact rows still price the run.  THE BREAKAGE THIS PREVENTS (global16 prove, 2026-11-06, gpuwm-hex 0.4.13 and
+#: 0.4.14): any --physics override disqualified the compact row at all three admission gates, so the 60 km global with
+#: SST/sea-ice updating (``--physics config_sst_update=.true.``, which the s2s door passes on the MPAS route) was
+#: refused on a 16 GB RTX 5070 Ti as a 27,659.5 MiB fitted footprint (request gate) and 29,930,042,163 bytes (MPAS
+#: rank gate); the same run is admitted at 15,623,782,400 bytes without the override, and with it ran 10 days at a
+#: 15,034 MiB card peak (14,516 MiB in its first day).  Every other key still falls back to the legacy row.
+MEMORY_NEUTRAL_PHYSICS_KEYS = frozenset({"config_sst_update", "config_sstdiurn_update", "config_deepsoiltemp_update"})
+
+
+def physics_overrides_move_footprint(items) -> bool:
+    """True when any ``--physics KEY=VALUE`` string or ``(key, value)`` pair names a key outside
+    :data:`MEMORY_NEUTRAL_PHYSICS_KEYS`."""
+    for item in items or ():
+        key = item[0] if isinstance(item, (tuple, list)) else str(item).split("=", 1)[0]
+        if str(key).strip() not in MEMORY_NEUTRAL_PHYSICS_KEYS:
+            return True
+    return False

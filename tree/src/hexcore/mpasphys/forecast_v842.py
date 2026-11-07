@@ -763,7 +763,7 @@ def _in_defaults(element: Any) -> int:
 
 def write_default_streams(layout: Any, path: Path, *, history_minutes: float | None = None,
                           checkpoint_hours: Any = None, surface_interval: str | None = None,
-                          omit: Mapping[str, Any] | None = None, bound_inputs=()) -> Path:
+                          omit: Mapping[str, Any] | None = None, bound_inputs=(), add_output=()) -> Path:
     """MPAS's own default streams.atmosphere and stream_list.atmosphere.* files, from the Registry this run decoded.
 
     THE BREAKAGE THIS PREVENTS: the MPAS suite route refused every run that named no streams.atmosphere
@@ -798,6 +798,14 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
     """
     root = ET.Element('streams')
     bound = set(bound_inputs)
+    # ``add_output`` (--history-field): Registry fields a run asks to have in its default output stream as well.
+    # THE BREAKAGE IT PREVENTS (hex 0.4.15 fit16-rows, a test host, 2026-11-07): MPAS-A's default output list carries
+    # no downward surface shortwave (swdnb), so a 7-day 60 km S2S run on the MPAS-physics route finished its
+    # forecast and its energy products stopped with 'missing field ["swdown", "swdnb", "SWDOWN"]'.
+    known = {f['name'] for f in layout.fields}
+    unknown = sorted(set(add_output) - known)
+    if unknown:
+        raise ValueError(f'--history-field {unknown}: not a field of the Registry this run decoded')
     dropped = {name: set((spec or {}).get('fields') or ()) for name, spec in (omit or {}).items()}
     sizes = getattr(layout, 'dimensions', None) or {}
     empty = {f['name'] for f in layout.fields if any(sizes.get(d) == 0 for d in f.get('dimensions') or ())}
@@ -857,14 +865,14 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
         if name == 'output':
             from hexcore.cycle.land_state import LAND_FIELDS
             active = {f['name'] for f in layout.fields}
-            for field in LAND_FIELDS:
-                if field.name not in active:
+            for field in [*(f.name for f in LAND_FIELDS), *add_output]:
+                if field not in active:
                     continue
                 if separate:
-                    if field.name not in listed:
-                        listed.append(field.name)
-                elif not any(e.get('name') == field.name for e in element):
-                    ET.SubElement(element, 'var', {'name': field.name})
+                    if field not in listed:
+                        listed.append(field)
+                elif not any(e.get('name') == field for e in element):
+                    ET.SubElement(element, 'var', {'name': field})
         if separate:
             (path.parent / list_name).write_text(''.join(f'{field}\n' for field in listed))
     ET.indent(root)
@@ -1085,6 +1093,10 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
         streams_path = namelist.with_name('streams.atmosphere')
     if streams_path is not None and not Path(streams_path).is_file():
         raise ValueError(f'MPAS native route: the named streams.atmosphere does not exist: {streams_path}')
+    if streams_path is not None and getattr(arguments, 'history_field', None):
+        # A named streams file is held to exactly what it lists, so an added field would not be written.
+        raise ValueError(f'--history-field {arguments.history_field} adds to the default output stream; this run '
+                         f'names its streams file ({streams_path}), which is held as written: list the field there')
     out = getattr(arguments,'out',None)
     if out is None:
         raise ValueError('MPAS native route requires --out for stream products and the receipt')
@@ -1229,7 +1241,9 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
         streams_path = write_default_streams(layout, scratch/'streams.atmosphere',
                                              history_minutes=getattr(arguments,'history_every_minutes',None),
                                              checkpoint_hours=None, omit=row.get('default_streams_omit'),
-                                             bound_inputs=bindings, **timed)
+                                             bound_inputs=bindings, **timed,
+                                             **({'add_output': tuple(arguments.history_field)}
+                                                if getattr(arguments, 'history_field', None) else {}))
     parser=load_table()[getattr(config,'table_key','mpasphys_v842')].get('streams_parser')
     tree=None
     if parser is not None:

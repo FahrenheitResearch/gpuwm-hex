@@ -1449,3 +1449,13 @@ tests/test_wave_shared_bathymetry.py
 # updraft-helicity layers on the ArWen route: default 2-5 km band, LTS classes and same-host ranks.
 tests/test_uh_layers_arwen_default.py
 tests/test_uh_layers_partitions.py
+
+# hex 0.4.15 fixes, host-only: the MPAS rank gate takes the first gate's compact row on one card; memory-neutral --physics keys;
+# global-vr receipts are standard JSON; S2S forecast forcing, t2m products and swdnb history; dead-owner handoff sweep.
+tests/test_admission_single_card_compact_row.py
+tests/test_admission_memory_neutral_physics.py
+tests/test_mesh_plan_receipt_json.py
+tests/test_s2s_gfs_surface_forecast.py
+tests/test_s2s_products_t2m.py
+tests/test_history_field_swdnb.py
+tests/test_stream_handoff_sweep.py

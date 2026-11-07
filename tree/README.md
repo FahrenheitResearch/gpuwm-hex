@@ -2,7 +2,7 @@
 
 MPAS-Atmosphere v8.4.2 on the GPU, driven from the ArWen engine.
 
-CUDA remains the default. The [experimental AMD backend](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/amd-backend.md)
+CUDA remains the default. The [experimental AMD backend](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/amd-backend.md)
 is opt-in with `--backend amd` or `GPUWM_BACKEND=amd`; the linked page records
 the installation paths, measured single-card scope and numerical limits.
 
@@ -19,17 +19,17 @@ at the end of every run, and an experimental storm-following region.
 is an independent port and is not affiliated with or endorsed by them. The name
 is used here only to say which model was ported.)*
 
-**New here? Start with the [User Manual](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/manual/index.md):** a
+**New here? Start with the [User Manual](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/manual/index.md):** a
 plain-language introduction, a quickstart in which every command was run
 before it was printed, task guides for each door, and a troubleshooting index
 built from the doors' own refusals. This README is the capability contract;
-the manual is how you walk it. [What's new in 0.4](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/manual/10-whats-new-0.4.md)
+the manual is how you walk it. [What's new in 0.4](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/manual/10-whats-new-0.4.md)
 gives each new piece its command, its proof, a picture and what it does not
 yet do.
 
 ## 0.4 in short
 
-[Physics routes and measured comparison scopes](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/physics-routes-0.4.1.md) describe the MPAS physics route (the default since 0.4.6), the ArWen route and public licence exclusions.
+[Physics routes and measured comparison scopes](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/physics-routes-0.4.1.md) describe the MPAS physics route (the default since 0.4.6), the ArWen route and public licence exclusions.
 
 0.3.3 (2026-09-29) was the MPAS-A dynamical core on the GPU, running ArWen's
 physics. 0.4.1 is the whole of MPAS-A v8.4.2 on the GPU, each piece proven
@@ -95,7 +95,7 @@ its glibc. Against an optimised native build, hex
 differs exactly as much as two native builds differ from each other. Not
 claimed for the dycore alone: other meshes, more ranks, several cards, and
 local time stepping, which is a different time scheme by design and is never
-called identical. [MPAS compatibility](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/mpas-compatibility.md) has the
+called identical. [MPAS compatibility](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/mpas-compatibility.md) has the
 tables; `gpuwm-hex verify-dycore` rebuilds the reference and checks it.
 
 ### MPAS physics, all on the GPU (the headline)
@@ -116,7 +116,7 @@ One 24-hour forecast of the `convection_permitting` suite on the public
 The same gate runs both MPAS suites (`mesoscale_reference` and
 `convection_permitting`) with every scheme on the native backend, and they are
 bitwise in every written field too (`x1.2562`, 24 h, one process). The decks
-are in [`verification/gates/`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/verification/gates/README.md) and the
+are in [`verification/gates/`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/verification/gates/README.md) and the
 reference recipe in `tools/native_physics_reference/`.
 
 ### Every other MPAS-A physics scheme
@@ -167,7 +167,7 @@ proof above was run in exact mode. `--physics-correct-skip ID` leaves one
 correction out, for an observation A/B arm. On the ArWen physics route the
 same flags, and correct mode by default, apply the corrections the installed
 gpuwm carries (WB4, New Tiedtke's dry-mass coupling; WB5, WSM6's surface
-integral) and name the rest as gaps. Details: [MPAS physics seam](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/manual/mpas-physics-seam.md#correct-mode-and-exact-mode).
+integral) and name the rest as gaps. Details: [MPAS physics seam](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/manual/mpas-physics-seam.md#correct-mode-and-exact-mode).
 
 ### Initialization, statics and the services around the forecast
 
@@ -189,18 +189,18 @@ speaking `hex-vertical-v1`, MPAS streams and restart use `rw_mpas_stream`,
 and a mesh generated at a point needs an `rw_mpas_static` whose statics hold
 the binary64 coordinates they declare. No released gpuwm carries any of the
 three in the version this release needs, so the wheel carries them in
-`hexcore/libexec` ([engine bridges](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/engine-bridges.md)). A door that
+`hexcore/libexec` ([engine bridges](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/engine-bridges.md)). A door that
 needs one and cannot find it refuses by name.
 
 **A forecast from an analysis.** `gpuwm-hex forecast --analysis BUNDLE` starts
-a forecast from an MPAS analysis bundle ([analysis bundle](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/analysis-bundle.md)):
+a forecast from an MPAS analysis bundle ([analysis bundle](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/analysis-bundle.md)):
 by direct insertion, with an IAU window from the bundle's increment, as a
 cycling restart, or with a remap onto another mesh. Measured on one convective
 case (ArWen physics): with no bundle every history file is byte-identical to
 the run before this release, and in correct mode a zero increment is bitwise a
 plain run. IAU also runs across a restart (the checkpoint carries its window),
 on the explicit MPAS suite route, on same-host multi-card ranks and in member
-rosters ([analysis bundle](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/analysis-bundle.md)); IAU on multi-card local
+rosters ([analysis bundle](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/analysis-bundle.md)); IAU on multi-card local
 time stepping is refused by name.
 
 ### Hex global, in one command
@@ -223,7 +223,7 @@ mesh's own step the YSU boundary layer and New Tiedtke left single layers up to
 24 K too hot, and one row ran away to 381 K. The cause is explicit tendencies
 overshooting their donor layers; an engine carrying both donor bounds runs the
 ArWen rows at the mesh's own step with no hot layer, and the door retires the
-cap there by itself. See [Hex global](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/global-door.md).
+cap there by itself. See [Hex global](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/global-door.md).
 
 ### Storm-following region (experimental)
 
@@ -233,7 +233,7 @@ measured runs used ArWen physics). One case file drives `stage`, `prepare`,
 `run` and `fixed` (the matched control); `gpuwm-hex moving check` tests an
 install with no inputs. With no moving command and no `GPUWM_HEX_MOVING_*`
 variable set, a run is unchanged (`tests/test_moving_inactive_noop.py`).
-Guide: [Moving nests](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/moving-nest.md).
+Guide: [Moving nests](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/moving-nest.md).
 
 Measured: three tropical cyclones, 48 hours each, five moves each, one card,
 a 3 km region about 450 km in radius.
@@ -247,7 +247,7 @@ a 3 km region about 450 km in radius.
   (1.5004 and 1.81). The balance fix is now the default; on `gpuwm-hex
   moving check` it brings the worst post-move jolt from 16.2 to 1.01 on a
   card with local time stepping and from 21.4 to 1.04 on the CPU (ordinary
-  integrator); see [the jolt report](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/moving-jolt-report.md). A
+  integrator); see [the jolt report](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/moving-jolt-report.md). A
   full-cyclone replay of those two moves with the fix is not yet run. MPAS-A
   v8.4.2 suites move too, on one card: each move carries the suite's physics
   state, and on a 2 h western Pacific case with every convection_permitting
@@ -356,7 +356,7 @@ Noah-MP v5.0 stays a licence stub unless that build and the run opt in.
 The wheel bundles the three Rust programs the fork's dycore calls.
 `gpuwm-hex init --physics-suite hrrrv5` makes `init.nc`, the fork static and
 the hourly boundaries from GFS, the fork's init ported to Rust
-([RRFS init](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/rrfs-init.md)). The deck's invariant file is read by default
+([RRFS init](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/rrfs-init.md)). The deck's invariant file is read by default
 from the deck's directory or the init's (`--stream-input invariant=FILE` names
 another).
 
@@ -464,7 +464,7 @@ Also proven:
   route (`--physics-suite arwen_mpas_column`) is not identical to native MPAS, and the dycore check does not
   qualify one. Its measured differences from native MPAS are registered, with
   mechanism, magnitude and observational referee, in
-  [Declared divergences](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/declared-divergences.md). Its referee is skill
+  [Declared divergences](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/declared-divergences.md). Its referee is skill
   against observations (MRMS, Stage-IV, ASOS, radiosondes), not agreement
   with another model; a bias that is wrong against observations is still
   wrong.
@@ -507,7 +507,7 @@ Also proven:
 | Platforms | Linux x86_64 with glibc 2.28 or newer installs the prebuilt wheel (`manylinux_2_28`: RHEL 8 and 9, Ubuntu 20.04 and later). Anywhere else pip builds the sdist, which needs a Rust toolchain (`cargo`) for the bundled helpers; the observation scorer is built only when `GPUWM_HEX_ENGINE_SOURCE` names a gpuwm source checkout, and otherwise `gpuwm-hex score` refuses by name and `doctor` reports the gap (forecasts are unaffected). There is no prebuilt Windows wheel. |
 | Assets | A mesh grid file, a matching static file, and (for the init door) a vertical-grid declaration, normally a `--vertical-spec` JSON; a native-minted init file as a capsule is the compatibility mode. `gpuwm-hex global` fetches its published meshes itself; otherwise **gpuwm-hex ships none of these**. See *Assets you must supply*. |
 | Rust binaries | The field engines (`rw_mpas_init`, `rw_mpas_static`, `rw_mpas_convert`, `rw_mpas_lbc`, `rw_wrfbatch` and the others) come from gpuwm's bridge bundle or a gpuwm source build. Eight of them ship in this wheel, with its own helpers: `rw_mpas_geometry`, `rw_mpas_stream`, `rw_mpas_static`, `rw_mpas_lbc` (native case-9 boundaries), `rw_igra2` (IGRA2 radiosondes for `gpuwm-hex score`) and the RRFS fork dycore's three programs. See *Getting the Rust engines*. |
-| MPAS physics suites | The MPAS-A framework uses the wheel's helpers and pinned DATA from `physics-resources-v0.4.1`. `gpuwm-hex physics-resources fetch --from DIR` stages an offline mirror; `GPUWM_HEX_PHYSICS_RESOURCES_FROM=DIR` selects it at first use. RRFS `hrrrv5`, both RRFS alias suites and New Tiedtke run on the same terms; selections without resident CUDA table entries require a site-built native library. See [MPAS physics resources](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/physics-resources.md). |
+| MPAS physics suites | The MPAS-A framework uses the wheel's helpers and pinned DATA from `physics-resources-v0.4.1`. `gpuwm-hex physics-resources fetch --from DIR` stages an offline mirror; `GPUWM_HEX_PHYSICS_RESOURCES_FROM=DIR` selects it at first use. RRFS `hrrrv5`, both RRFS alias suites and New Tiedtke run on the same terms; selections without resident CUDA table entries require a site-built native library. See [MPAS physics resources](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/physics-resources.md). |
 
 ### Install
 
@@ -554,9 +554,9 @@ required item is missing, so it works as a gate in a script.
 - `gpuwm-hex global-cycle` repeats a global row with schedule, retention
   and status records.
 - `gpuwm-hex moving-ensemble` runs the members of a prepared storm-following case,
-  each with its own SPPT/SKEB forcing ([moving-region ensembles](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/moving-ensemble.md)).
+  each with its own SPPT/SKEB forcing ([moving-region ensembles](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/moving-ensemble.md)).
 - `gpuwm-hex chem-sources` lists, fetches and prepares smoke, composition, dust and
-  sea-salt source files for aerosol transport ([chemistry sources](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/chemistry-sources.md)).
+  sea-salt source files for aerosol transport ([chemistry sources](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/chemistry-sources.md)).
 
 ### Kernel packs
 
@@ -591,7 +591,7 @@ is unchanged.
 
 ### The engine pin
 
-gpuwm-hex 0.4.14 requires gpuwm 2.9.12 or newer inside 2.9 (`gpuwm>=2.9.12,<2.10`). The installed
+gpuwm-hex 0.4.15 requires gpuwm 2.9.12 or newer inside 2.9 (`gpuwm>=2.9.12,<2.10`). The installed
 engine version and seam digests are recorded in each forecast receipt.
 The bridge source commit and measured helper source sets ship in the package manifests.
 
@@ -679,7 +679,7 @@ engine does not invent the vertical grid.
   mint is schema-complete (134/134 variables), the constructed vertical sits
   within 3.9 mm of native `zgrid` with the per-field cost quantified, and the
   minted init runs the dycore; boundary in
-  [`docs/native-free-init-admission.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/native-free-init-admission.md).
+  [`docs/native-free-init-admission.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/native-free-init-admission.md).
 - **Native-capsule compatibility mode:** pass `--capsule`/`--reference` naming
   a native-minted init-class file; the door reads `zgrid, zz, fzm, fzp, dzu,
   rdzw, zb, zb3` and the smoothed terrain out of it and asserts the capsule's
@@ -715,7 +715,7 @@ binaries. The wheel carries sixteen compiled programs of its own in
   `rw_mpas_rrfs_connectivity`, `rw_mpas_rrfs_damping` and
   `rw_mpas_rrfs_deformation`. Their bytes are pinned in
   `hexcore/data/engine-bridges.json`; see
-  [engine bridges](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/engine-bridges.md).
+  [engine bridges](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/engine-bridges.md).
 
 That is the prebuilt Linux wheel. A build from the sdist (it needs `cargo`)
 always builds the host-preparation helper and the table decoders; the pool
@@ -800,7 +800,7 @@ real-data initialization needs an `rw_mpas_geometry` that speaks
 coordinates it declares (gpuwm 2.9.0's does not, and the door refuses its
 statics by name). No released gpuwm carries any of the three, so this wheel
 carries them in `hexcore/libexec`, pinned by SHA-256 to the gpuwm commit they
-were built from ([engine bridges](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/engine-bridges.md)). A flag or variable
+were built from ([engine bridges](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/engine-bridges.md)). A flag or variable
 still wins over the bundled copy (`GPUWM_HEX_RW_MPAS_STREAM` names the stream
 program), and a door that needs one refuses by name when it is absent or too
 old.
@@ -838,16 +838,16 @@ each one changes the numbers in a file that opens cleanly and reads plausibly
 either way, so a default would be a silent wrong answer. Each refusal prints the
 native namelist key it corresponds to, so a captured `namelist.init_atmosphere`
 transcribes without guessing. Full detail, including the sixteen named refusals:
-[`docs/init-door.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/init-door.md).
+[`docs/init-door.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/init-door.md).
 
 What the door accepts is not a promise but a measured table:
-[`docs/source-matrix.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/source-matrix.md) drives every source in the
+[`docs/source-matrix.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/source-matrix.md) drives every source in the
 RW-WPS registry with real bytes through intermediate, init and a
 five-composite-step forecast, and records one verdict per source — a green
 run with receipts, or the chain's refusal, verbatim.
 
 `--vertical-spec` is the native-free path (see *Assets you must supply* and
-[`docs/native-free-init-admission.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/native-free-init-admission.md));
+[`docs/native-free-init-admission.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/native-free-init-admission.md));
 `--capsule`/`--reference` with a native-minted init file is the compatibility
 mode. The two are mutually exclusive.
 
@@ -873,7 +873,7 @@ inside it, and is deleted after a clean run.
 
 There is no fallback plotter. If the Rust renderer is absent the door refuses by
 name; it never draws a weather field in Python. Full detail:
-[`docs/render-door.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/render-door.md).
+[`docs/render-door.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/render-door.md).
 
 ## Four smaller doors
 
@@ -932,7 +932,7 @@ mesh (never a checkout edit), cuts the cull and mints its vertical.
 lat-lon WPS intermediate the init and boundary engines read, through the
 engine's own decoder and interpolation operator; `gpuwm-hex lbc` builds the
 boundary series from the hourly intermediates. The whole chain, with what it
-measured, is [`docs/hex-point-hrrr.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/hex-point-hrrr.md).
+measured, is [`docs/hex-point-hrrr.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/hex-point-hrrr.md).
 
 ### Placement and cycling
 
@@ -941,7 +941,7 @@ sea-level-reduced pressure, a declarative threat grammar, commensurable
 ranking across phenomena that carry different units, and hysteresis so a grid
 does not chase noise. `gpuwm-hex cycle` runs the loop: a coarse parent, the
 corridors placed inside it, and the next cycle's re-detection. See
-[`docs/cycle-door.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/cycle-door.md).
+[`docs/cycle-door.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/cycle-door.md).
 
 ### Local time stepping, opt-in
 
@@ -1033,7 +1033,7 @@ SLOWER: every dycore kernel on a mesh this size runs in one wave on the card,
 so the fine class costs what the whole mesh costs and each coarse-class
 launch is a further wave. The corridor cull (40,520 cells, GFS-driven) gives
 the same numbers (0.989x, 1.068x). What the forced interface does to the
-fields is in [`docs/local-timestep-lam.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/local-timestep-lam.md).
+fields is in [`docs/local-timestep-lam.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/local-timestep-lam.md).
 
 #### The full-step form, measured to a no-go
 
@@ -1151,7 +1151,7 @@ and on every mesh: global, zoom globe, limited area, RRFS included.
 They are on by default in every hex ensemble of more than one member, and
 `--no-sppt` or `--no-skeb` turns them off. On the RRFS suite route, `--sppt`
 takes NOAA's RRFS v2 ensemble settings (one scale: 0.8, 450 km, 6 h).
-[Stochastic physics](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/stochastic-physics.md) has the method, the
+[Stochastic physics](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/stochastic-physics.md) has the method, the
 controls and the measured pattern statistics.
 
 Measured on 2026-10-29:
@@ -1224,7 +1224,7 @@ gpuwm-hex forecast --mesh x1.2562 --grid x1.2562.grid.nc --init x1.2562.init.nc 
   entries require its separate site build,
   `gpuwm-hex physics-resources build --pin-set rrfs`, and a public install
   refuses the missing entry by name. See
-  [MPAS physics resources](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/physics-resources.md).
+  [MPAS physics resources](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/physics-resources.md).
 - **The mode** is correct unless `--physics-mode exact` is given (see
   *Correct mode* above).
 
@@ -1328,7 +1328,7 @@ obs-skill comparison, which is the verification of record for ArWen's physics,
 ran on 2026-08-25 and reaches two of the three; the register of
 all three — the mechanism, the magnitude, the named observational referee and
 now what that referee said — is
-[`docs/declared-divergences.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/declared-divergences.md).
+[`docs/declared-divergences.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/declared-divergences.md).
 
 Measured over 24 h, two independent weather cases, two mixing regimes,
 163,842-cell mesh, cell-aligned with no interpolation.
@@ -1497,7 +1497,7 @@ hourly boundaries with `rw_mpas_lbc`, earns a fresh configuration's runtime
 mint, checks the contract on its rings, runs `forecast --lbc-dir`, and invokes
 the products door. Mesh rows and contract evidence are passed internally.
 The source and run shape are limited-area rows in the init-source and country
-tables. See [the point/HRRR guide](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/hex-point-hrrr.md).
+tables. See [the point/HRRR guide](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/hex-point-hrrr.md).
 
 Measured 2026-10-20 on an RTX PRO 6000: the command above completed a 43,360-cell,
 55-level forecast with 2,160 steps at 5 s and four history frames. The forecast
@@ -1624,7 +1624,7 @@ PYTHONPATH=src python -m pytest tests -q
 ```
 
 Three tiers gate themselves and each names why it is skipping — see
-[`tools/battery/README.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/tools/battery/README.md) for what each covers and
+[`tools/battery/README.md`](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/tools/battery/README.md) for what each covers and
 how to run the gated ones:
 
 | tier | selector | needs |
@@ -1641,8 +1641,8 @@ configured for the engine behaves the same) bans device contact outright.
 
 `gpuwm-hex s2s --row global-120km --source gfs --members 4 --days 30
 --cycle 2026-10-17T00 --devices 0 --work-dir s2s-run` drives the persistent
-ensemble workflow. See [the S2S door](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/s2s/README.md) for lagged starts,
+ensemble workflow. See [the S2S door](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/s2s/README.md) for lagged starts,
 checkpoint recovery, products, baseline interpretation and measured costs.
 Use `--dry-run` to inspect the plan.
 
-Native forecast stores: [Icechunk output](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.14/tree/docs/icechunk.md).
+Native forecast stores: [Icechunk output](https://github.com/FahrenheitResearch/gpuwm-hex/blob/v0.4.15/tree/docs/icechunk.md).

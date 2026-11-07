@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.15
+
+Requires gpuwm>=2.9.12,<2.10.
+
+Fixed:
+- A 60 km global run with MPAS physics starts on a 16 GB card. It was refused for memory it does not use.
+- Turning on SST, sea-ice or deep-soil updating with `--physics` no longer raises the memory price.
+- Shortwave radiation holds about 720 MB less at the 60 km memory peak, with the same results.
+- Killed runs no longer leave their stream handoff files in /dev/shm; the next run clears them.
+- The GFS source carries its dated surface forecast, and S2S runs take SST and sea-ice forcing from any source that has one.
+- S2S products and energy rows run on the MPAS-physics route.
+- An interrupted analysis start is rebuilt on resume, and start-source receipts are written whole.
+- Global mesh-plan receipts are standard JSON: a uniform globe wrote `Infinity`, which strict JSON readers refuse.
+
 ## 0.4.14
 
 Requires gpuwm>=2.9.12,<2.10.

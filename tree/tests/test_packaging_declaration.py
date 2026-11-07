@@ -37,8 +37,8 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.4.14", (
-        "0.4.14 is the candidate paired with gpuwm 2.9.12; "
+    assert declared == "0.4.15", (
+        "0.4.15 is the candidate paired with gpuwm 2.9.12; "
         "moving it is a release decision, not an edit"
     )
 

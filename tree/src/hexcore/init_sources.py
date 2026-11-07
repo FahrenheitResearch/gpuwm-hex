@@ -2022,8 +2022,12 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
             receipt["cold_soil_remap_off"] = soil_off_reason
         receipt["stage_seconds"] = stages
         receipt["seconds"] = round(time.time() - started, 3)
-        (out_dir / "init-source-receipt.json").write_text(
-            json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        # Written whole or not at all (temporary file, then rename): a full disk once left a 0-byte receipt
+        # beside a finished-looking init.nc (fit16-rows s2s2, 2026-11-07), which every reader then refused.
+        final = out_dir / "init-source-receipt.json"
+        partial = final.with_name(final.name + ".part")
+        partial.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        partial.replace(final)
 
     prior = _decoded_receipt(out_dir, receipt) if getattr(arguments, "from_decoded", False) else None
     if prior is not None:

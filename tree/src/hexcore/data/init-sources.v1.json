@@ -179,6 +179,41 @@
         "decode": {
           "vtable": "vtables/Vtable.NCEP-surface",
           "map_source": "ncep-gfs"
+        },
+        "forecast": {
+          "interval_hours": 6,
+          "max_hours": 384,
+          "products": [
+            {
+              "transport": "https",
+              "filename": "gfs-{yyyymmddhh}.grib2",
+              "url": [
+                "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{yyyymmdd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{lead:03d}",
+                "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{yyyymmdd}/{hh}/gfs.t{hh}z.pgrb2.0p25.f{lead:03d}",
+                "https://data.gdex.ucar.edu/d084001/{yyyy}/{yyyymmdd}/gfs.0p25.{yyyymmddhh}.f{lead:03d}.grib2"
+              ],
+              "index": {
+                "url": [
+                  "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{yyyymmdd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{lead:03d}.idx",
+                  "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{yyyymmdd}/{hh}/gfs.t{hh}z.pgrb2.0p25.f{lead:03d}.idx"
+                ],
+                "format": "ncep-idx",
+                "select": {
+                  "records": [
+                    [
+                      "^(TMP|ICEC|LAND|SNOD)$",
+                      "^surface$"
+                    ]
+                  ]
+                }
+              },
+              "role": "primary"
+            }
+          ],
+          "decode": {
+            "vtable": "vtables/Vtable.NCEP-surface",
+            "map_source": "ncep-gfs"
+          }
         }
       },
       "archive": {

@@ -1310,8 +1310,8 @@ def resolve_admission_model(request: "ForecastRequest") -> ShapedFootprintModel:
     if isinstance(supplied, _SuppliedRow):
         return replace(supplied.with_card(card, configuration, rollback_armed=armed), levels=levels)
     from .compact_memory import compact_model
-    from .device_admission import model_for_card
-    qualified = not (getattr(request, 'physics_overrides', ())
+    from .device_admission import model_for_card, physics_overrides_move_footprint
+    qualified = not (physics_overrides_move_footprint(getattr(request, 'physics_overrides', ()))
         or getattr(request, 'physics_backend', 'wsm6_column') != 'wsm6_column'
         or getattr(request, 'local_timestep', False)
         or getattr(request, 'fullstep_local_timestep', False))
@@ -4150,6 +4150,8 @@ def admit_native_device(arguments, config) -> AdmissionVerdict:
         if error.name != 'cupy':
             raise
         hip = False
+    # The MPAS rank gate (memory_admission.admit) prices a single context with this suite's qualified row too.
+    arguments.native_admission_suite = getattr(config, 'suite', None)
     if getattr(arguments, 'samehost_devices', None) or hip:
         # Full-domain one-context pricing refused valid multi-card layouts
         # before the halo-inclusive rank gate could run. Actual AMD has no
@@ -4164,11 +4166,10 @@ def admit_native_device(arguments, config) -> AdmissionVerdict:
         levels = len(dataset.dimensions['nVertLevels'])
     card = read_card_profile()
     configuration = 'limited-area' if getattr(arguments, 'lbc_dir', None) else 'global'
+    from .mpasphys.memory_admission import qualified_defaults
     model = model_for_run(card, configuration, levels, route='mpas', suite=config.suite,
         rollback_armed=bool(getattr(arguments, 'stop_on_refusal', False)), cells=cells,
-        qualified_defaults=not any(getattr(arguments, key, None) for key in
-            ('physics', 'physics_profile', 'physics_namelist', 'physics_default_backend',
-             'local_timestep', 'fullstep_local_timestep')))
+        qualified_defaults=qualified_defaults(arguments))
     raw_headroom = getattr(arguments, 'headroom_mib', None)
     import math
     if raw_headroom is not None and (not math.isfinite(raw_headroom) or raw_headroom < 0):
@@ -4213,6 +4214,11 @@ def _run_forecast(arguments: argparse.Namespace) -> int:
         # --physics-mode exact runs native MPAS v8.4.2 bit for bit; every proof names it.
         native_config, native_text = native_route(arguments, default_mode=PHYSICS_MODE_DEFAULT)
         require_forecast_inputs(arguments, native=native_config is not None)
+        if getattr(arguments, "history_field", None) and native_config is None:
+            # THE BREAKAGE THIS PREVENTS: an added history field the ArWen-physics route's writer never reads
+            # would be accepted and silently not written.
+            raise ValueError("--history-field adds to MPAS's default output stream on the MPAS-physics route; "
+                             "this run is on the ArWen-physics route, whose history does not read it")
         if getattr(arguments, "hosts", None) is not None or os.environ.get("GPUWM_HEX_HOSTS"):
             if native_config is None:
                 raise ValueError("--hosts runs the MPAS-physics route (--physics-backend mpasphys, the hex default "
@@ -4827,6 +4833,9 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
         help="history cadence; must divide the run into whole steps")
     parser.add_argument("--history-from-minutes", type=float, default=0.0,
                         help="write scheduled history frames starting at this lead minute")
+    parser.add_argument("--history-field", action="append", default=None, metavar="NAME",
+                        help="add a Registry field to MPAS's default output (history) stream on the MPAS-physics "
+                             "route (repeatable); a named --streams file is held as written")
     parser.add_argument(
         "--fingerprint-every", type=int, default=0, metavar="STEPS",
         help="boundary identity fingerprint interval; zero disables recording")

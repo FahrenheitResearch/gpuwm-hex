@@ -1,6 +1,6 @@
 # gpuwm-hex
 
-MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.14 ports the whole model to
+MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.15 ports the whole model to
 CUDA: the dynamical core, both MPAS physics suites and their scheme options,
 initialization and static fields, the incremental analysis update, limited-area
 runs, streams, restart and diagnostics (the scheme list and what is not yet in
@@ -21,7 +21,7 @@ what it is matched against and how that is checked.
 
 ---
 
-## What 0.4.14 claims, and how far
+## What 0.4.15 claims, and how far
 
 Each line is measured, and each carries its scope. Nothing outside the scope
 is claimed. [`tree/README.md`](tree/README.md) gives the detail.

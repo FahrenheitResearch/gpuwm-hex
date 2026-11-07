@@ -590,12 +590,17 @@ class MPASShortwave(CudaSW):
     def rrtmg_swrad(self, fields, surface, p8w, t8w, *, xtime, gmt, julday, radt,
                     degrad, declin, solcon, icloud, cldovrlp, idcor, o3input,
                     pin, o3clim, has_reqc=0, has_reqi=0, has_reqs=0,
-                    aer_opt=0, aerosol=None, column_chunk=None):
+                    aer_opt=0, aerosol=None, column_chunk=None, consume_fields=False):
         cp = self.cp
         nc, nz = fields["p3d"].shape
         nl = nz + 1
         f = cp.stack([self._array(n, fields[n], (nc, nz)) for n in FIELD_NAMES])
         s = cp.stack([self._array(n, surface[n], (nc,)) for n in SURFACE_NAMES])
+        if consume_fields:
+            # The caller hands over its transposed copies (radiation_sw_from_MPAS): once stacked they are
+            # not read again, so they are not held through the sunlit batches (global16 hex-fit16
+            # 2026-11-06: 309 MiB at x1.163842, held at the run's live peak). Same words, shorter lifetime.
+            fields.clear()
         p8w = self._array("p8w", p8w, (nc, nz + 1))
         t8w = self._array("t8w", t8w, (nc, nz + 1))
         nozn = int(pin.size)
@@ -619,6 +624,11 @@ class MPASShortwave(CudaSW):
                      tuple(np.int32(v) for v in (nc, nz, icloud, o3input, has_reqc, has_reqi, has_reqs, nozn))
                      + tuple(np.float32(v) for v in (xtime, gmt, radt, degrad, declin))
                      + (f, s, p8w, t8w, pin, o3clim, layers, interfaces, height, cosine))
+        # After the prep kernel only pi3d (f[3]) is read again, by mpas_sw_outputs. Keep that one
+        # (nc, nz) plane and drop the twelve-field stack before the sunlit batches allocate their
+        # workspace (global16 hex-fit16 2026-11-06: 412 MiB at x1.163842, held at the run's live peak).
+        pi3d = f[3].copy()
+        del f
         # Driver initializes all SW outputs before the wrapper's night gate.
         scalars = cp.zeros((14, nc), dtype=cp.float32)
         tendency = cp.zeros((nc, nz), dtype=cp.float32)
@@ -665,7 +675,7 @@ class MPASShortwave(CudaSW):
             # before it is read, constants are refilled on allocation).
             self.release_scratch()
         self._launch("mpas_sw_outputs", nc,
-                     (np.int32(nc), np.int32(nz), cosine, f[3], profiles[0], profiles[2],
+                     (np.int32(nc), np.int32(nz), cosine, pi3d, profiles[0], profiles[2],
                       profiles[1], profiles[3], direct, heat, scalars, tendency))
         result = {n: scalars[i] for i, n in enumerate(SCALAR_OUTPUTS)}
         result.update(zip(PROFILE_OUTPUTS, (profiles[0], profiles[1], profiles[2], profiles[3])))
@@ -853,7 +863,8 @@ class MPASShortwave(CudaSW):
             options.update(aer_opt=0)
         if "o3clim" in options:
             options["o3clim"] = cp.ascontiguousarray(options["o3clim"].T)
-        out = self.rrtmg_swrad(converted, surfaces, cp.ascontiguousarray(p8w.T), cp.ascontiguousarray(t8w.T), **options)
+        out = self.rrtmg_swrad(converted, surfaces, cp.ascontiguousarray(p8w.T), cp.ascontiguousarray(t8w.T),
+                               consume_fields=True, **options)
         out["rthratensw"] = cp.ascontiguousarray(out["rthratensw"].T)
         for name in PROFILE_OUTPUTS:
             out[name] = cp.ascontiguousarray(out[name].T)

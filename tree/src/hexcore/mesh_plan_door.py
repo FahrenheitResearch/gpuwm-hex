@@ -40,6 +40,30 @@ from typing import Any, Mapping, Sequence
 from .errors import MpasPortError
 
 
+def _finite(value: Any) -> Any:
+    """The value with every non-finite float (inf, -inf, nan) as None, so the receipt is standard JSON."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(v) for v in value]
+    return value
+
+
+def receipt_json(receipt: Mapping[str, Any], **kwargs: Any) -> str:
+    """A door receipt as standard JSON: a number with no finite value is written null.
+
+    THE BREAKAGE THIS PREVENTS: a uniform global spec (no regions) has a steepest gradient of 0 %/cell, so its
+    transition band is ln 2 / ln 1 = inf cells, and json.dumps wrote the bare token ``Infinity`` into
+    global-vr-receipt.json. That is not JSON: strict readers (JavaScript's JSON.parse, jq, the WOOF site's customer copy
+    of a run's receipt) refused the whole file, so every uniform-global run's receipt was withheld from its customer
+    (run_c20529382a29ebc8, uniform 15 km, hex 0.4.14, 2026-11-07). The in-memory receipt keeps the float; only the
+    written text changes, and only where a value was non-finite.
+    """
+    return json.dumps(_finite(receipt), allow_nan=False, **kwargs)
+
+
 def _load(path: Path) -> Mapping[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -170,13 +194,13 @@ def run_mesh_plan(arguments: argparse.Namespace) -> int:
         vram_gib=arguments.vram_gib,
     )
     if arguments.json:
-        print(json.dumps(receipt, indent=2, sort_keys=True))
+        print(receipt_json(receipt, indent=2, sort_keys=True))
     else:
         print("\n".join(_report(spec, receipt)))
     if arguments.out is not None:
         arguments.out.parent.mkdir(parents=True, exist_ok=True)
         arguments.out.write_text(
-            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+            receipt_json(receipt, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -569,7 +593,7 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
         "vertical_spec": str(vertical), "stages": [],
     }
     if arguments.json:
-        print(json.dumps(receipt, indent=2, sort_keys=True))
+        print(receipt_json(receipt, indent=2, sort_keys=True))
     else:
         named_profile = fit["physics"].get("profile")
         runtime_seconds = fit["runtime"]["seconds"]
@@ -584,7 +608,7 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
                  "forecast runtime: no measured rate for this route/card"), flush=True)
     if arguments.out is not None:
         arguments.out.parent.mkdir(parents=True, exist_ok=True)
-        arguments.out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        arguments.out.write_text(receipt_json(receipt, indent=2, sort_keys=True) + "\n")
     if not arguments.generate:
         return 0
     if not fit["fits"]:
@@ -621,7 +645,7 @@ def run_global_mesh(arguments: argparse.Namespace) -> int:
     def save() -> None:
         receipt["wall_seconds"] = round(time.monotonic() - started, 3)
         pending = receipt_path.with_suffix(".json.pending")
-        pending.write_text(json.dumps(receipt, indent=2, sort_keys=True, default=str) + "\n")
+        pending.write_text(receipt_json(receipt, indent=2, sort_keys=True, default=str) + "\n")
         pending.replace(receipt_path)
 
     def stage(name: str, argv: list[Any]) -> dict[str, Any]:

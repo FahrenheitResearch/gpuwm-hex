@@ -80,12 +80,46 @@ def cotenant_card_bytes(local_cells, levels, model):
     return max(priced, floor), basis
 
 
-def rank_requirements(local_cells, devices, profiles, levels, *, basis=None):
+#: Door options that change the footprint, so the measured compact rows (data/compact-memory.v1.json) do not price
+#: the run.  Both MPAS-route gates read this one list (:func:`qualified_defaults`).  ``--physics`` is judged per key
+#: (device_admission.physics_overrides_move_footprint): the memory-neutral ones keep the row.
+FOOTPRINT_OPTION_KEYS = ('physics_profile', 'physics_namelist', 'physics_default_backend',
+                         'local_timestep', 'fullstep_local_timestep')
+
+
+def qualified_defaults(arguments) -> bool:
+    """True when the run keeps the defaults the compact whole-run rows were measured with."""
+    from ..device_admission import physics_overrides_move_footprint
+    return not (physics_overrides_move_footprint(getattr(arguments, 'physics', None))
+                or any(getattr(arguments, key, None) for key in FOOTPRINT_OPTION_KEYS))
+
+
+def single_context_model(profile, levels, cells, *, configuration="global", suite=None, rollback_armed=False):
+    """The qualified compact row for ONE context alone on ONE card, or None outside its measured shapes.
+
+    The same row :func:`hexcore.forecast_door.admit_native_device` prices the run with a moment earlier
+    (``model_for_run``: card, route, suite, numerics, configuration and the measured column range)."""
+    from ..compact_memory import compact_model
+    return compact_model(profile, configuration, int(levels), route="mpas", suite=suite,
+                         rollback_armed=bool(rollback_armed), cells=int(cells))
+
+
+def rank_requirements(local_cells, devices, profiles, levels, *, basis=None, single_context=False,
+                      configuration="global", suite=None, qualified=True, rollback_armed=False):
     """What every card needs for the ranks assigned to it, halos included.
 
     One rank on a card is one member (route_required_free_bytes).  Two or more ranks on one card are priced as
     co-tenants from a measured row (:func:`cotenant_card_bytes`), not as that many whole members.  ``basis``, a
     dict, receives each card's pricing.
+
+    ``single_context`` (one context, one card, no --samehost-devices) prices that member with the qualified compact
+    row the first MPAS gate used (:func:`single_context_model`), when ``qualified`` and a row covers the shape;
+    otherwise the legacy per-card row as before.  THE BREAKAGE THIS PREVENTS (global16 hex-fit16, 2026-11-06,
+    gpuwm-hex 0.4.13 and 0.4.14): this second gate priced the single-card run with the legacy row only, so the 60 km
+    globe (x1.163842, MPAS physics) that the RTX 5070 Ti compact row prices at 15,623,782,400 bytes, and that peaks
+    11.1 GiB live / 14,492 MiB on the card over 24 h, was refused on that 16 GB card as "card 0 needs 29,930,042,163
+    bytes" after the first gate had admitted it.  Rank layouts keep their measured rank rows: the compact rows were
+    measured one process per card.
     """
     if len(local_cells) != len(devices):
         raise ValueError("one local cell count is required per rank device")
@@ -96,8 +130,12 @@ def rank_requirements(local_cells, devices, profiles, levels, *, basis=None):
     for device, cells in by_card.items():
         model = model_for_card(profiles[device], "global", levels=int(levels))
         if len(cells) == 1 and len(by_card) == 1:
-            required[device] = route_required_free_bytes(cells[0], model, route="mpas")
-            card_basis = dict(method="one member", ranks=1, local_cells=cells[0])
+            compact = (single_context_model(profiles[device], levels, cells[0], configuration=configuration,
+                                            suite=suite, rollback_armed=rollback_armed)
+                       if single_context and qualified else None)
+            required[device] = route_required_free_bytes(cells[0], compact or model, route="mpas")
+            card_basis = dict(method="one member", ranks=1, local_cells=cells[0],
+                              row=("qualified compact row" if compact is not None else "legacy per-card row"))
         elif len(cells) == 1:
             # One rank alone on its card, of a member split over several cards: the measured rank-per-card row
             # (device_admission.MPAS_RANK_CARD_ROWS; both-routes RED 4), never above the one-member price.
@@ -144,6 +182,8 @@ def input_payload_bytes(path):
 
 
 def admit(arguments):
+    """The MPAS rank gate.  A single context is priced with the suite the first gate priced
+    (``arguments.native_admission_suite``, set by forecast_door.admit_native_device)."""
     from ..mesh_rows import _dimensions
     from ..drivers.samehost_forecast_v841 import device_list, request_options
     from ..forecast_door import measure_device_memory, read_card_profile
@@ -175,7 +215,13 @@ def admit(arguments):
     pricing = {}
     required = (amd_capacity_trial(local_cells, devices, global_cells=cells,
                                   input_payload_bytes=payload)
-                if physical_amd else rank_requirements(local_cells, devices, profiles, levels, basis=pricing))
+                if physical_amd else rank_requirements(
+                    local_cells, devices, profiles, levels, basis=pricing, single_context=not named,
+                    configuration='limited-area' if getattr(arguments, 'lbc_dir', None) else 'global',
+                    suite=(getattr(arguments, 'native_admission_suite', None)
+                           or getattr(arguments, 'physics_suite', None)),
+                    qualified=qualified_defaults(arguments),
+                    rollback_armed=bool(getattr(arguments, 'stop_on_refusal', False))))
     record = {"route": "mpas", "levels": levels, "local_cells": local_cells,
               "devices": list(devices), "required_bytes": required,
               "free_bytes": {device: value[0] for device, value in memory.items()},
