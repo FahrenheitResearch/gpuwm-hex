@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0
+
+Requires gpuwm>=3.0.0,<3.1.
+
+New:
+- Runs on gpuwm 3.0, released with it. On the regional, global and hrrrv5 gate cases the MPAS route gives output bit for bit the same as on gpuwm 2.9.13. ArWen-physics runs follow gpuwm 3.0's physics (its changelog), for example its new start for Noah-MP snow layers.
+- Physics defaults are the latest upstream releases; every pinned version stays selectable by name, and the bitwise proofs run the pins.
+- The RRFS route runs MYNN v6.1 by default (MYNN-EDMF v6.1.1 + MYNN-SFC v6.1.0). `--physics config_mynn_version=pinned` runs RRFS 44c0849's MYNN, bitwise to native.
+- TEMPO v3.2.5 is the default TEMPO on the RRFS route, with the hail-hyperaware category on. `config_tempo_version = 'v3.0.3'` runs the RRFS 44c0849 TEMPO; `--physics-mode exact` runs v3.0.3 unless a version is named.
+- MMM-physics moves to 550b5b4 (WRF v4.8.0) for YSU and the revised MM5 surface layer, with the KIM form-drag option (off by default). `mmm_version=a4baf7f` runs the MPAS-A v8.4.2 code.
+- KIM orographic drag (MPAS PR #1409) is selectable with `--physics gwdo_version=kim2026`. The v8.4.2 drag stays the default. The KIM option builds its orographic statistics with gpuwm 3.0's static builder.
+- `--physics-mode exact` runs every pinned scheme (TEMPO v3.0.3, MYNN 44c0849, MMM a4baf7f) unless the run names a version.
+- Pin bookkeeping: UGWP MPAS_20261104, RUC ef5c949, GFL 873b414, rrtmgp-data v1.9.2, with identical output.
+
+Fixed:
+- The memory check for an hrrrv5 run uses hrrrv5's own measured runs. A 30 km hrrrv5 globe was admitted with about 14 GB less than it uses, on one card and split over two or four.
+- The kernel-pack and physics-resource downloads retry when the release host answers with a temporary error.
+- Limited-area runs and hrrrv5 runs load three more kernels from the kernel pack instead of compiling them at every start.
+- ArWen-physics runs load the Grell-Freitas kernel and the engine's other physics kernels from the kernel pack. The Grell-Freitas kernel compiled for about 90 s on one core at every run that uses it, so every move of a storm-following region waited that long.
+- TEMPO picked over an ArWen-physics suite loads its kernels from the kernel pack. It compiled one engine kernel for about 30 s on one core at every run.
+- Two `gpuwm-hex global` runs started together on an empty cache both get the mesh; one of them used to stop in its mesh stage.
+- A microphysics scheme picked over an ArWen-physics suite (NSSL 2-moment, P3, TEMPO, also TEMPO beside Grell-Freitas) runs: it gets its extra fields in the start file, on every door, and NSSL draws its first reflectivity frame. On gpuwm 2.9.13 these picks stopped before the forecast; they need gpuwm 3.0.
+- TEMPO picked over an ArWen-physics suite steps at 150 s or less. A default step above that takes 150 s, and a longer `--dt` stops before the run and says why. On the 120 km globe, TEMPO at the mesh's own 600 s step stopped within its first 40 minutes, and at 300 s its rain water was still growing after an hour; at 150 s it ran 6 h with bounded fields. MPAS-A suites that carry TEMPO (hrrrv5) run on the MPAS route and are not affected.
+- `gpuwm-hex score` on a limited-area run scores only observations inside the region.
+- In correct mode, IAU applies every scalar increment the analysis file carries (cloud, rain, ice and graupel numbers, graupel volume, aerosol numbers), not only the moist masses. Exact mode is unchanged.
+
 ## 0.4.15
 
 Requires gpuwm>=2.9.12,<2.10.
@@ -34,6 +60,7 @@ Fixed:
 - RUC land: frozen-soil runoff matches native MPAS in the last bit.
 - Strict runs refuse TEMPO tables that are not the strict ones, and a named table folder must hold every table.
 - Prebuilt kernel packs cover NVRTC 13.5.37 and 13.4.59, so a fresh `[gpu-cu13]` install starts without compiling. The RRFS MYNN-EDMF kernel compiles to the same machine code every time.
+- `gpuwm-hex[gpu-cu12]` and `[gpu-cu13]` also install gpuwm's extra of the same name, so the pair resolves one CUDA stack: on CUDA 13 that is NVRTC 13.4.92, the one this release was gated on (before, a fresh `[gpu-cu13]` install took NVRTC 13.5.37, which gpuwm 3.0 excludes).
 
 ## 0.4.13
 

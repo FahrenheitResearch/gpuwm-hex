@@ -4,10 +4,10 @@ THE BREAKAGE THIS PREVENTS.  gpuwm-hex is Apache-2.0 and its public distribution
 third-party code and US Government code.  Before this gate an MPAS suite run with ``config_lsm_scheme='sf_noahmp'``
 ran Noah-MP v5.0 (MPAS's, or the RRFS fork's), whose UCAR terms forbid selling it or any work that contains it.
 Nothing on the console or in the receipt said so, so a run (or a box built from one) could carry code that cannot
-be sold without anyone having chosen it.  The owner ruling of 2026-10-14: the package stays Apache-2.0 and no
+be sold without anyone having chosen it.  Since 2026-10-14 the package stays Apache-2.0 and no
 default routes into code that cannot be sold or is limited.
 
-Not gated: UGWP (Apache-2.0 upstream since 2026-11-04, NOTICE section 8) and, by the owner ruling of 2026-10-14,
+Not gated: UGWP (Apache-2.0 upstream since 2026-11-04, NOTICE section 8) and, since 2026-10-14,
 the RRFS fork's NOAA GSL physics (MYNN-EDMF, MYNN-SFC, RUC, GFL, smoke), treated as US Government code; they ship
 and the fork-exact RRFS stage (hrrrv5) runs with no opt-in.
 The table records them under ``not_gated``.  Their former opt-in names, ``noaa-gsl-unlicensed`` and ``ugwp-held``,

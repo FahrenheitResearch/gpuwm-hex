@@ -156,7 +156,10 @@ gravity-wave drag (bl_gwdo.F90), the New Tiedtke cumulus scheme
 (cu_ntiedtke.F90), WSM6 microphysics (mp_wsm6.F90,
 mp_wsm6_effectRad.F90), the radar reflectivity diagnostic (mp_radar.F90),
 the MYNN surface layer (sf_mynn.F90) and the revised MM5 surface layer
-(sf_sfclayrev.F90). These ports are governed by the licence below (also in
+(sf_sfclayrev.F90). The YSU top-down entrainment cap and the revised MM5
+KIM form-drag option also follow MMM-physics commit
+550b5b494758 (the copy WRF v4.8.0 ships; selectable as mmm_version).
+These ports are governed by the licence below (also in
 licenses/LICENSE-MMM-physics-BSD-3-Clause.txt).
 
 Numerical Recipes. mp_radar.F90 carries the line
@@ -449,7 +452,13 @@ https://github.com/NOAA-GSL/UGWP/blob/main/LICENSE):
 
 The ported commit c1c893e is an ancestor of that commit; between the two
 the only source change is in bl_ugwp.F (alpha_fd, the TOFD coefficient,
-became a namelist option). licenses/LICENSE-UGWP-Apache-2.0.txt is the
+became an input of bl_ugwp_run). gpuwm-hex carries that latest release,
+tag MPAS_20261104 (4108d491470c): the orographic port takes alpha_fd as an
+argument of bl_ugwp_run, as upstream does, defaulting to 12, upstream's value.
+Neither MPAS-A nor RRFS has a namelist name for it yet, so every run uses 12,
+and at 12 its compiled kernel is byte-identical to the c1c893e port. The
+c1c893e pin stays the referee, because MPAS-A v8.4.2 and RRFS 44c0849
+build against it. licenses/LICENSE-UGWP-Apache-2.0.txt is the
 upstream LICENSE file as published. Most of UGWP is adapted from NOAA's
 CCPP physics (github.com/ufs-community/ccpp-physics, physics/GWD), which is
 released under the same terms ("Copyright 2017, NOAA, UCAR/NCAR CU/CIRES").
@@ -488,9 +497,16 @@ b66187f, NOAA-GSL/RUCLSM 8c9f1a8, NOAA-GSL/GFL bf6a4b0, NOAA-GSL/SMOKE
 9652bbf and NOAA-GSL/UGWP c1c893e. Apart from TEMPO they carry no licence
 file at those pins (MYNN-EDMF added Apache-2.0 upstream on 2026-09-30 and
 UGWP on 2026-11-04, after their pins; UGWP's terms are in section 8).
-gpuwm-hex treats the others as works of the US Government (NOAA GSL), by
-the project's ruling of 2026-10-14. Credit for each scheme belongs to NOAA
-GSL, NCAR and their authors. Their hex ports ship under that ruling, with
+The latest upstream commits the default route carries are RUCLSM
+ef5c9497bd7e (the one change since 8c9f1a8 moves a diagnostic water-budget
+accumulator that hex does not write; hex keeps its own zeroing, which is
+safe on restarts and DA cycles), GFL 873b414670 (the commit WRF v4.8.0
+ships; its deep, shallow and MPAS-driver sources are byte-identical to
+bf6a4b0, and only the WRF driver differs) and UGWP MPAS_20261104 4108d49
+(section 8). The fork's pins above remain the referee pins.
+gpuwm-hex treats the others as works of the US Government (NOAA GSL), as
+of 2026-10-14. Credit for each scheme belongs to NOAA
+GSL, NCAR and their authors. Their hex ports ship on that basis, with
 this attribution; the UGWP ports ship under section 8. The fork's Noah-MP is under UCAR's terms
 (section 4): it stays withheld, and an RRFS stage run that selects
 sf_noahmp is refused unless it names them with --licence-opt-in ucar-noahmp.
@@ -570,7 +586,7 @@ the Rust standard library under Apache-2.0 OR MIT, taken under Apache-2.0
     They retain their own grants and are not offered under Apache-2.0.
     Full texts: licenses/LICENSE-SourceSans3-OFL-1.1.txt and
     licenses/LICENSE-Inter-OFL-1.1.txt. Both fonts are permitted when bundled
-    by the release ruling of 2026-10-20.
+    with software, as OFL-1.1 allows.
     The combined full texts are licenses/LICENSE-embedded-fonts-OFL-1.1.txt.
   - liblookup_decode.so, table_decode, rw_mpas_rrtmg_lw_tables,
     rw_mpas_rrtmg_sw_tables, ruc_table_decode, tempo_table_compute and
@@ -689,7 +705,7 @@ is absent or named otherwise).
 The compiled kernel packs retain the licences of the code they compile:
 project code (Apache-2.0), MPAS (BSD-3-Clause), MMM physics (BSD-3-Clause),
 WRF v4 lineage (public domain), AER RRTMG (BSD-3-Clause), NOAA GSL ports
-under the standing ruling in section 9, Arm optimized routines and
+as US Government code (section 9), Arm optimized routines and
 CORE-MATH (MIT), FDLIBM (Sun permissive notice), Random123 and MT19937
 (BSD-3-Clause). Their complete texts are in licenses/ and the sections
 above. The gamma routine disposition remains section 2.
@@ -712,7 +728,9 @@ texts. It accompanies the public assets. Fortran runtimes and native
 resource ZIPs that carry them are excluded from this release's asset set.
 Noah-MP v5 is held out under section 4. UGWP is included under section 8.
 
-The additional RRFS pin set rrfs-44c0849 uses MYNN-EDMF
+The RRFS referee pin set rrfs-44c0849 (RRFSx/MPAS-Model 44c0849, the
+native reference every RRFS bitwise claim is proven against, labelled
+patched) uses MYNN-EDMF
 c6d08709e83fbc6245e91a65600fd78c7219f1ee and SMOKE
 5d2c71e2cf4083b6beeedbfa4d2091674b1556ea. Neither tracked tree
 contains a LICENSE, LICENCE or COPYING file at those pins. Their ports
@@ -722,11 +740,32 @@ that is intended for NOAA’s operational use will be hosted in this
 public-facing submodule repository." This is provenance, not a licence
 grant. TEMPO remains at 9adf9ef under its existing Apache-2.0 notice.
 
+The selectable MYNN suite versions on the rrfs-44c0849 pin set
+(config_mynn_version; the default is "mynn-v6.1", and "pinned" selects the pin set above)
+port NCAR/MYNN-SFC v6.1.0 a038a9ea35a12f0bf879fac8b64c99a77ffdae1c in
+src/hexcore/mpasphys/rrfs/sf_mynnsfc_v610.py. MYNN-SFC is licensed under
+the Apache License, Version 2.0 from f4a52ed (v6.1.0): "Copyright 2026,
+NOAA, CU/CIRES, UCAR/NCAR". The licence text is
+licenses/LICENSE-MYNN-SFC-Apache-2.0.txt. The port is a CUDA translation of
+that release's land, water, ice and driver files; the module docstring
+lists each change from the v6.0.0 port.
+
+The mynn-v6.1 suite version also ports NCAR/MYNN-EDMF v6.1.1
+2b2da61b05a8ef9f9b06795c816dc01e347e0736 in
+src/hexcore/mpasphys/rrfs/bl_mynnedmf_v611.py, generated from the four files
+of its MPAS build (src/MPAS/module_bl_mynnedmf_common.F90,
+src/module_bl_mynnedmf_diags.F90, src/module_bl_mynnedmf.F90,
+src/module_bl_mynnedmf_driver.F90) by tests/rrfs_mynnedmf/generate_backend.py
+--layout v6. MYNN-EDMF is licensed under the Apache License, Version 2.0 from
+c581499 (v6.0.5): "Copyright 2026, NOAA, UCAR/NCAR CU/CIRES". The licence text
+is licenses/LICENSE-MYNN-EDMF-Apache-2.0.txt. The port is a CUDA translation of
+that release; the pinned MYNN-EDMF c6d08709 port is unchanged.
+
 SMOKE 9652bbf152f8b946bf04f72a2b48ff67e15d7973 has no standalone LICENSE.
 Its module_plumerise.F90:10-11 attributes the plume-rise work to INPE/UFJS
 (Brazil) and NOAA (USA); seas_ngac_mod.F90:5-6 credits NASA/GSFC and says
 "Adapted by NOAA/GSD/ESRL". These attributions are retained under the same
-2026-10-14 government-code ruling, explicitly covering the carried plume
+US Government code treatment (section 9), which covers the carried plume
 rise. The GPU smoke port uses the installed shared CORE-MATH error function
 (MIT; its full grant is retained in src/hexcore/glibc_erff.cuh). No emission
 dataset is redistributed with this port.
@@ -737,7 +776,7 @@ reproduced in licenses/LICENSE.libcudacxx. No modified libcu++ source is vendore
 
 ==========================================================================
 17. Stochastic physics (SPPT, SKEB) -- project code written from papers
-==========================================================================
+===================================================================
 
 hexcore/stochastic.py and hexcore/stochastic.cu are project code
 (Apache-2.0), written from these published methods:

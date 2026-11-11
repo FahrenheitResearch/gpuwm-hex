@@ -1,6 +1,6 @@
 # gpuwm-hex
 
-MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.4.15 ports the whole model to
+MPAS-Atmosphere v8.4.2 on the GPU. gpuwm-hex 0.5.0 ports the whole model to
 CUDA: the dynamical core, both MPAS physics suites and their scheme options,
 initialization and static fields, the incremental analysis update, limited-area
 runs, streams, restart and diagnostics (the scheme list and what is not yet in
@@ -16,12 +16,12 @@ capability contract: every claim with its scope) and the
 [user manual](tree/docs/manual/index.md). This page says what the project is,
 what it is matched against and how that is checked.
 
-**Install:** `pip install gpuwm-hex`. It requires the ArWen engine, gpuwm 2.9
-(`gpuwm>=2.9.12,<2.10`), and pip resolves it.
+**Install:** `pip install gpuwm-hex`. It requires the ArWen engine, gpuwm 3.0
+(`gpuwm>=3.0.0,<3.1`), and pip resolves it.
 
 ---
 
-## What 0.4.15 claims, and how far
+## What 0.5.0 claims, and how far
 
 Each line is measured, and each carries its scope. Nothing outside the scope
 is claimed. [`tree/README.md`](tree/README.md) gives the detail.

@@ -1,6 +1,6 @@
 """Compile a run's whole CUDA kernel set at once, on every core, before step 1.
 
-THE DEFECT (2026-10-16, owner ruling: "no single-CPU path on the critical path").  On
+THE DEFECT (2026-10-16; no single-CPU stage may sit on the critical path).  On
 a cold kernel cache -- a new card architecture, a fresh box, a wiped cache --
 a forecast sat at 100 % of ONE core with its card at 0 % for minutes before
 step 1, compiling 160-220 NVRTC images one after another as each kernel was
@@ -829,7 +829,8 @@ def prioritize_physics(config) -> None:
         for slot, scheme in selectors.items():
             if not active(slot):
                 continue
-            descriptor = slots[slot].get("cuda_entries", {}).get(scheme) or {}
+            from .mpasphys.driver_v842 import slot_cuda_entry
+            descriptor = slot_cuda_entry(config, slots, slot, scheme) or {}
             module = str(descriptor.get("module", "")).rsplit(".", 1)[-1]
             if module:
                 families.add(re.sub(r"_v[0-9]+$", "", module))

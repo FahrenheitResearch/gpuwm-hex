@@ -1,7 +1,7 @@
 """The init-source table and its one path.
 
 THE BREAKAGES THESE PREVENT.  (1) A per-model branch creeping into the path:
-the arbitrary acceptance test (a project ruling, 2026-08-16) says a new source is
+the arbitrary acceptance test (2026-08-16) says a new source is
 table work, so the module must not name any source.  (2) A row whose Vtable
 or first-guess declaration is missing reaches met_intermediate or the init
 door and fails after the download was paid for, or silently drops fields.

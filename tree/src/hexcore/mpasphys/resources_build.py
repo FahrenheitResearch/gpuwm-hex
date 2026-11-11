@@ -1456,7 +1456,12 @@ def rrfs_mynnedmf_images() -> tuple[tuple[str, str], ...]:
     found = {}
     for row in load_table().values():
         slots = row.get("slots") if isinstance(row, Mapping) else None
-        for slot in (slots or {}).values():
+        # A suite version (the row's mynn_versions) overlays the slot's entry and names its own image, so it is
+        # packed too. THE BREAKAGE THIS PREVENTS: config_mynn_version=mynn-v6.1 compiled its 0.84 MB MYNN-EDMF
+        # v6.1.1 unit through NVRTC on one host thread (about 11 min) before the first step of its first run.
+        versions = (row.get("mynn_versions") or {}).get("versions", {}) if isinstance(row, Mapping) else {}
+        overlays = [((version.get("cuda_entries") or {}).get("pbl") or {}) for version in versions.values()]
+        for slot in [*(slots or {}).values(), *({"cuda_entries": o} for o in overlays)]:
             entry = ((slot.get("cuda_entries") or {}).get("bl_mynnedmf") if isinstance(slot, Mapping) else None)
             module = entry.get("module") if isinstance(entry, Mapping) else None
             if module and module.startswith("rrfs."):

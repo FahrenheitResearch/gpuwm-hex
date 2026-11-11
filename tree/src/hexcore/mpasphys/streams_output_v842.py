@@ -187,6 +187,8 @@ class PhysicsStreams(NativePoolStreams):
             pinned = {} if contract.git_version is None else {'git_version': contract.git_version}
             self.attrs = global_attributes(session.layout, header,
                 configs=getattr(session, 'output_config_snapshot', None), **pinned)
+            # The run's TEMPO when it is not the RRFS pin (tempo_v303.output_attributes); none on a pinned run.
+            self.attrs.update(getattr(session, 'output_extra_attributes', None) or {})
             self.field_attrs = input_field_attributes(session.layout, header,
                 field_definition=contract.registry.field_definition)
         # mpas_atm_core.F:264-277: restarts retain the original CF epoch.
@@ -772,6 +774,10 @@ class PhysicsStreams(NativePoolStreams):
                 out[name] = replace(item, values=values)
         return snapshot if out is None else out
 
+    def _identity_step(self, step):
+        """Return the native request step for a captured history frame."""
+        return int(step)
+
     def _encode(self, jobs, snapshot, when, step, extras=None):
         records = []
         snapshot = self._native_sentinels(snapshot)
@@ -792,6 +798,17 @@ class PhysicsStreams(NativePoolStreams):
                 if extras and stream.name in ('output', 'history'):
                     options['extra_fields'] = extras
                 writer.write_stream(target, stream, self.mesh, snapshot, when, **options)
+            request = self.output / 'native-physics-request.json'
+            from ..native_geometry import FIELDS, seal, sidecar, publish
+            if (stream.name in ('output', 'history') and request.is_file()
+                    and (json.loads(request.read_text()).get('native_state_publication', False)
+                         or set(FIELDS) <= set(self.stream_fields(stream)))):
+                arrays = {name: np.asarray(snapshot[name].values) for name in FIELDS if name in snapshot}
+                identity = seal(arrays, request, when.strftime('%Y-%m-%d_%H:%M:%S'), self._identity_step(step))
+                target_sidecar = sidecar(target)
+                frames = json.loads(target_sidecar.read_text()) if record else {}
+                frames[str(record)] = identity
+                publish(target_sidecar, frames)
             records.append(dict(name=stream.name, step=step, seconds=perf_counter()-started,
                 writer='rw_mpas_stream', path=str(target), record_index=record))
         self._publish_closed(jobs, step)

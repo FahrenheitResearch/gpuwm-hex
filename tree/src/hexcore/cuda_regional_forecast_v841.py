@@ -2680,7 +2680,7 @@ def open_regional_forecast_v841(
 ) -> Any:
     """Open one regional configuration on the card, recording its anchor.
 
-    RETIRED 2026-10-10 as a gate (owner ruling).  This used to refuse every regional configuration whose class
+    RETIRED 2026-10-10 as a gate.  This used to refuse every regional configuration whose class
     held no forecast mint, and the only way past it was a measurement
     instrument that swapped this function for the assembler.  It now asks
     the same question, records the answer on the driver

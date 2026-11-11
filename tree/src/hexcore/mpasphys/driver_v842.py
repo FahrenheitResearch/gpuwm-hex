@@ -34,7 +34,7 @@ PHYSICS_MODES = ("exact", "correct")
 #: when the correction is active, so a correct-mode run never silently executes an uncorrected scheme.  A
 #: native-cpu slot is pristine MPAS v8.4.2 and declares none; a hex-cuda slot declares what its table
 #: descriptor lists under "corrections".  When an active slot's implementation does not declare an active
-#: finding, the run is not refused (coordinator ruling 2026-10-14, default correct): the finding is left out
+#: finding, the run is not refused (2026-10-14, default correct): the finding is left out
 #: of the run as a whole and listed as a NAMED GAP in the receipt and on the console.  "owners" names the
 #: follow-up owner of each such gap (the lane that owns the slot implementation; a dict when it depends on the
 #: scheme), from the 2026-10-13 radiation/PBL/LSM/sea-ice scheme review ("Scheme lanes still to do").
@@ -77,7 +77,7 @@ CORRECTIONS_V842: Mapping[str, Mapping[str, Any]] = MappingProxyType({
             "owners": {"land_surface": "p17-noahmp"},
             "breakage": "config_pbl_interval integrates the surface and PBL schemes interval/dt times too long"},
     # Findings that act OUTSIDE the MPAS suite route: the ArWen column route's engine corrections and the
-    # IAU and boundary doors' findings.  One finding table for every route (integrator ruling 2026-10-14;
+    # IAU and boundary doors' findings.  One finding table for every route (2026-10-14;
     # lane H1).  "slots" and "owners" stay empty because no MPAS physics slot implements them, so the suite
     # route never activates them; "hex_route" says where each one acts, which hexcore.correct_mode reads.
     "WB4": {"slots": {}, "owners": {},
@@ -180,6 +180,22 @@ class CpuSlot:
     def as_dict(self) -> dict[str, str]:
         return {"slot": self.slot, "scheme": self.scheme, "backend": str(Backend.NATIVE_CPU),
                 "reason": self.reason}
+
+
+def slot_cuda_entry(config: Any, rows: Mapping[str, Any], slot: str, scheme: str) -> Mapping[str, Any] | None:
+    """A slot's CUDA descriptor for this run: the table row's entry with the run's suite version laid over it.
+
+    ``rows`` is the route row's ``slots``.  A version (``config.mynn_version``, the row's ``mynn_versions``)
+    replaces only the keys it names for the slot/scheme it names; "pinned", and every other slot, return the
+    row's own entry unchanged."""
+    entry = (rows.get(slot, {}).get("cuda_entries") or {}).get(scheme)
+    version = getattr(config, "mynn_version", "pinned")
+    if entry is None or version == "pinned":
+        return entry
+    table = load_table()[getattr(config, "table_key", "mpasphys_v842")]
+    overlay = (table["mynn_versions"]["versions"][version].get("cuda_entries", {})
+               .get(slot, {}).get(scheme))
+    return {**entry, **overlay} if overlay else entry
 
 
 def gpu_port_absence(row_key: str, slot: str, scheme: str) -> str | None:
@@ -302,6 +318,16 @@ class DriverConfig:
     tc_surface: Mapping[str, str] = field(default_factory=dict)
     #: --ocean-mode pwp on this route (hexcore.mpasphys.ocean_pwp_v842): the PWP column table the OML slot runs.
     ocean_pwp: Mapping[str, Any] = field(default_factory=dict)
+    #: The selected MYNN suite version (``config_mynn_version``, the route table's ``mynn_versions``); "pinned"
+    #: is the row's own CUDA entries.  Never written into the native Registry.
+    mynn_version: str = "pinned"
+    #: MMM-physics generation for YSU and the revised MM5 layer (mmm_version.configure); None is the a4baf7f
+    #: pin.  Engine extension; never written into the native Registry.
+    mmm: Mapping[str, Any] | None = None
+    #: The KIM drag's choice (gwdo_version.configure: version and the MPAS PR #1409 knobs) when the run selects
+    #: bl_kim_gwdo; None on every other drag (the v8.4.2 pin).  Engine extension; gwdo_version never enters the
+    #: native Registry (the two knobs do, with bl_kim_gwdo, as PR #1409 adds them).
+    gwdo: Mapping[str, Any] | None = None
 
     def cpu_warning(self) -> str | None:
         """The loud start-up lines naming each active slot that runs on the CPU, or None when none does."""
@@ -395,6 +421,14 @@ class DriverConfig:
             result["tc_surface"] = dict(self.tc_surface)
         if self.ocean_pwp:
             result["ocean_pwp"] = dict(self.ocean_pwp)
+        if self.mmm:
+            from .mmm_version import PINNED_OPTIONS
+            # A pinned choice leaves the receipt word for word what it was before the option existed.
+            if dict(self.mmm) != dict(PINNED_OPTIONS):
+                result["mmm"] = dict(self.mmm)
+        if self.gwdo:
+            # Only KIM runs carry it: a v8.4.2-drag receipt is word for word what it was before the knob existed.
+            result["gwdo"] = dict(self.gwdo)
         # Exact-mode receipts stay word for word what they were before the switch existed.
         if self.mode != "exact":
             result.update(physics_mode=self.mode, corrections=sorted(self.corrections),
@@ -501,7 +535,7 @@ def settle_corrections(config: DriverConfig, requested: Iterable[str],
 
     A finding is applied only when every active slot it lives in has an implementation that declares it;
     otherwise none of it is applied (no half-corrected finding) and each slot lacking it is a named gap.
-    Coordinator ruling 2026-10-14: a gap is listed in the receipt and printed loudly, never refused."""
+    A gap is listed in the receipt and printed loudly, never refused."""
     applied, gaps = set(), []
     for finding in sorted(requested):
         missing = []
@@ -848,6 +882,9 @@ class SlotCall:
     #: Finding ids correct mode applies in this run (empty in exact mode); a slot implementation that
     #: declared an id at registration applies that correction when the id is present here.
     corrections: frozenset[str] = frozenset()
+    #: The run's MMM-physics choice (mmm_version.resolve: version, kim_tofd, tofd_factor) for YSU and the
+    #: revised MM5 surface layer; None is the a4baf7f pin (module replays, library resolutions).
+    mmm: Mapping[str, Any] | None = None
 
 
 class DriverHooks(Protocol):
@@ -900,7 +937,7 @@ class SlotRegistry:
         if missing:
             raise RuntimeError(f"MPAS physics slot implementations not registered: {missing}")
         # Correct mode: a finding a slot does not implement was settled at resolution into a NAMED GAP
-        # (settle_corrections; coordinator ruling 2026-10-14, never a refusal), so config.corrections holds
+        # (settle_corrections, never a refusal), so config.corrections holds
         # only findings every active slot implements.  What remains to check is that the registered
         # implementations are the ones that settlement read.  Breakage this prevents: a registry whose
         # implementation contradicts the declarations would run a finding uncorrected while the receipt
@@ -1209,7 +1246,7 @@ class PhysicsDriver:
                         "driver" if slot is None else c.selectors[slot],
                         glue_backend if slot is None else c.backends[slot],
                         step, time, float(self.manager.scheme_dt.get(slot, self.manager.dt)),
-                        flags, pools, MappingProxyType(options), c.corrections)
+                        flags, pools, MappingProxyType(options), c.corrections, getattr(c, "mmm", None))
         self.calls.append({"operation": operation, "slot": call.slot,
                            "backend": str(call.backend), "itimestep": step,
                            "time_seconds": time, "flags": asdict(call.flags)})

@@ -332,7 +332,10 @@ fn surface(path:&Path,valid:&str)->Result<Vec<Ob>> {
         let key=(o.id.clone(),o.q.clone());if chosen.get(&key).map(|x|dt<x.0).unwrap_or(true){chosen.insert(key,(dt,o));}
     } Ok(chosen.into_values().map(|r|r.1).collect())
 }
-struct Hex {mesh:Mesh,init_mesh:Mesh,n:usize,p:Vec<f64>,z:Vec<f64>,nz:usize,fields:BTreeMap<String,Vec<f64>>}
+struct Hex {mesh:Mesh,init_mesh:Mesh,n:usize,p:Vec<f64>,z:Vec<f64>,nz:usize,fields:BTreeMap<String,Vec<f64>>,
+    /// Limited-area meshes only: per history cell, true when the cell is interior (bdyMaskCell 0). None on a global mesh.
+    interior:Option<Vec<bool>>,mask_source:&'static str}
+fn boundary_mask(file:&netcrust::File)->Result<Option<Vec<f64>>> {if file.variable("bdyMaskCell").is_some(){Ok(Some(nc(file,"bdyMaskCell")?))}else{Ok(None)}}
 fn nc(file:&netcrust::File,name:&str)->Result<Vec<f64>> {Ok(file.read_array_f64(name)?.into_values())}
 fn stream_field(history:&netcrust::File,diagnostics:Option<&netcrust::File>,names:&[&str])->Result<Option<Vec<f64>>> {
     for file in std::iter::once(history).chain(diagnostics) {
@@ -356,7 +359,17 @@ impl Hex {
             ("v10",&["v10"][..]),("rainc",&["rainc"][..]),("rainnc",&["rainnc"][..])] {
             if let Some(values)=stream_field(&f,d.as_ref(),names)? {fields.insert(q.into(),values);}
         }
-        Ok(Self{mesh,init_mesh,n,p,z,nz:n+1,fields})
+        let mut hex=Self{mesh,init_mesh,n,p,z,nz:n+1,fields,interior:None,mask_source:"none"};
+        // A limited-area mesh carries bdyMaskCell with a nonempty boundary zone (rings 1-7: relaxation 1-5, specified 6-7);
+        // a global mesh carries it all zero or not at all (hexcore.mesh, Mesh.validate). THE BREAKAGE THIS PREVENTS
+        // (L8-L9 hrrrv5 region, 2026-11-09): with no footprint every North American ASOS station was scored on the
+        // nearest boundary cell of a 120 km-radius region, 1,235 stations, T2 RMSE 8.04 K, numbers that meant nothing.
+        let cells=lat.len();
+        let own=match boundary_mask(&f)?.filter(|m|m.len()==cells) {Some(m)=>Some((m,"history")),None=>match &d {Some(d)=>boundary_mask(d)?.filter(|m|m.len()==cells).map(|m|(m,"diagnostics")),None=>None}};
+        if let Some((m,source))=own {if m.iter().any(|&v|v!=0.) {hex.interior=Some(m.iter().map(|&v|v==0.).collect());hex.mask_source=source}}
+        else if let Some(m)=boundary_mask(&i)?.filter(|m|m.len()==hex.init_mesh.pts.len()) {if m.iter().any(|&v|v!=0.) {
+            hex.interior=Some((0..cells).map(|c|hex.zcell(c).map(|ic|m[ic]==0.).unwrap_or(false)).collect());hex.mask_source="init"}}
+        Ok(hex)
     }
     fn zcell(&self,c:usize)->Option<usize> {let a=self.init_mesh.nearest(self.mesh.pts[c],1)[0];(a.0.sqrt()<1e-6).then_some(a.1)}
     fn sample(&self,o:&Ob)->Option<f64> {
@@ -373,6 +386,25 @@ impl Hex {
                     let zmid=0.5*(self.z[ic*self.nz]+self.z[ic*self.nz+1]);let tl=t+0.0065*(zmid-zs);self.fields.get("ps")?[c]*(9.80665*dz/(287.*(tl+0.00325*dz))).exp()},_=>return None}}
             ;if !value.is_finite() || value.abs()>1e20 {return None}out+=w*value;
         }Some(out)
+    }
+    /// True when (lat, lon) lies in an interior cell's Voronoi footprint: its nearest cell is interior. Always true on a
+    /// global mesh. Off a limited-area mesh the nearest cell is an outer-ring cell, so off-mesh points are excluded too.
+    fn covers(&self,lat:f64,lon:f64)->bool {match &self.interior {None=>true,Some(m)=>m[self.mesh.nearest(xyz(lat,lon),1)[0].1]}}
+    fn footprint(&self)->Value {
+        let Some(m)=&self.interior else{return json!({"schema":"gpuwm-hex.observation-footprint/v1","limited_area":false,"cells":self.mesh.pts.len()})};
+        let pts=self.mesh.pts.iter().zip(m).filter(|p|*p.1).map(|(p,_)|(p[2].clamp(-1.,1.).asin().to_degrees(),p[1].atan2(p[0]).to_degrees())).collect::<Vec<_>>();
+        let mut region=Value::Null;
+        if !pts.is_empty() {
+            let pad=0.5;let (s,n)=pts.iter().fold((90f64,-90f64),|a,p|(a.0.min(p.0),a.1.max(p.0)));
+            // The smaller longitude span of the -180..180 and 0..360 conventions keeps a region across the dateline a box.
+            let span=|shift:f64|pts.iter().fold((f64::MAX,f64::MIN),|a,p|{let l=(p.1+shift).rem_euclid(360.)-shift;(a.0.min(l),a.1.max(l))});
+            let (a,b)=(span(180.),span(0.));let (w,e)=if b.1-b.0<a.1-a.0 {b}else{a};
+            let (s,n)=((s-pad).max(-90.),(n+pad).min(90.));
+            let (w,e)=if e-w+2.*pad>=360. || n>=90. || s<= -90. {(-180.,180.)}else{(w-pad,e+pad)};
+            region=json!({"west":w,"south":s,"east":e,"north":n});
+        }
+        json!({"schema":"gpuwm-hex.observation-footprint/v1","limited_area":true,"cells":m.len(),"interior_cells":pts.len(),"boundary_cells":m.len()-pts.len(),"mask_source":self.mask_source,"region":region,
+            "selection":"a report or precipitation lattice point is scored only when its nearest cell (the Voronoi cell holding it) is interior, bdyMaskCell 0; points off the mesh and in the 7 boundary rings (relaxation rings 1-5, specified rings 6-7) are not scored"})
     }
     fn rain(&self,lat:f64,lon:f64)->Option<f64> {let c=self.mesh.nearest(xyz(lat,lon),1)[0].1;Some(self.fields.get("rainc")?[c]+self.fields.get("rainnc")?[c])}
 }
@@ -544,6 +576,8 @@ fn score_rain(request:&Value,hex:&Hex,valid_references:&BTreeSet<String>)->Resul
         provenance.push(json!({"pack":source_identity(&spec.path)?,"grid":source_identity(&spec.grid_path)?,"end":expected.to_rfc3339(),"source":radar.provenance}));
     }
     (observed,valid,provenance)};
+    let mut valid=valid;
+    if hex.interior.is_some() {for (i,&(lat,lon)) in coordinates.iter().enumerate() {if !hex.covers(lat,lon){valid[i]=false}}}
     let previous_file=netcrust::File::open(Path::new(request["previous_history"].as_str().ok_or("previous history absent")?))?;
     let previous_mesh=Mesh::new(&previous_file.read_f64("latCell")?,&previous_file.read_f64("lonCell")?);
     let previous_diag=request["previous_diagnostics"].as_str().map(|p|netcrust::File::open(Path::new(p))).transpose()?;
@@ -622,11 +656,15 @@ fn run(request:&Value)->Result<Value> {
     if let Some(path)=request["diagnostics"].as_str(){output["provenance"]["diagnostics"]=source_identity(Path::new(path))?;}
     let region=Region::from_request(request)?;
     if let Some(r)=region {output["region"]=json!({"west":r.w,"east":r.e,"south":r.s,"north":r.n,"step_degrees":r.step,"selection":"radiosonde and surface reports inside the box; precipitation lattice spans the box"});}
+    let mut kept=BTreeMap::new();
     for (source,key) in [("radiosonde","sondes"),("asos","surface")] {
         let rows=if let Some(path)=request[key].as_str(){if source=="radiosonde"{sondes(Path::new(path),valid)}else{surface(Path::new(path),valid)}}else{Ok(Vec::new())};
         let rows=rows.map(|mut rows|{if let Some(r)=region{rows.retain(|o|r.contains(o.lat,o.lon))}rows});
+        let rows=rows.map(|mut rows|{if hex.interior.is_some() {let before=rows.len();let stations=|rows:&[Ob]|rows.iter().map(|o|o.id.clone()).collect::<BTreeSet<_>>().len();let all=stations(&rows);
+            rows.retain(|o|hex.covers(o.lat,o.lon));kept.insert(source,json!({"reports_kept":rows.len(),"reports_outside":before-rows.len(),"stations_kept":stations(&rows),"stations_outside":all-stations(&rows)}));}rows});
         match rows {Ok(rows)=>{if let Some(path)=request[key].as_str(){output["provenance"][source]=source_identity(Path::new(path))?}let scores=score_observations(source,&rows,&hex,&refs);for key in ["metrics","paired"] {output[key].as_array_mut().unwrap().extend(scores[key].as_array().unwrap().clone())}},Err(e)=>output["failures"].as_array_mut().unwrap().push(json!({"source":source,"reason":e.to_string()}))}
     }
+    if hex.interior.is_some() {let mut footprint=hex.footprint();for (source,counts) in kept {footprint[source]=counts}output["footprint"]=footprint;}
     if request["rain"].is_array() || request["qpe"].is_object() {let rain_source=request["qpe"]["label"].as_str().unwrap_or("mrms").to_string();match score_rain(request,&hex,&refs.iter().map(|r|r.label.clone()).collect()) {
         Ok(r)=>{output["metrics"].as_array_mut().unwrap().extend(r["metrics"].as_array().unwrap().clone());output["failures"].as_array_mut().unwrap().extend(r["failures"].as_array().unwrap().clone());output[rain_source.as_str()]=r;},
         Err(e)=>output["failures"].as_array_mut().unwrap().push(json!({"source":rain_source,"reason":e.to_string()}))}}
@@ -658,6 +696,10 @@ fn main() {let args=std::env::args().collect::<Vec<_>>();let result=(||->Result<
         let region=if args.len()==9 {let v=args[5..9].iter().map(|x|x.parse::<f64>()).collect::<std::result::Result<Vec<_>,_>>()?;Some([v[0],v[1],v[2],v[3]])}else{None};
         println!("{}",igra2_station_ids(&args[2],&args[3],args[4].parse()?,region)?);return Ok(())
     }
+    if args.get(1).map(String::as_str)==Some("--footprint") && args.len()==4 {
+        let (history,init)=(Path::new(&args[2]),Path::new(&args[3]));let mut out=Hex::open(history,init,None)?.footprint();
+        out["history"]=source_identity(history)?;out["init"]=source_identity(init)?;println!("{out}");return Ok(())
+    }
     if args.get(1).map(String::as_str)==Some("--fetch-input") && args.len()==4 {
         use std::io::Read;
         let output=Path::new(&args[3]);if output.exists(){return Err("fetch destination exists; cannot overwrite a caller-owned observation".into())}
@@ -672,6 +714,20 @@ fn main() {let args=std::env::args().collect::<Vec<_>>();let result=(||->Result<
     if let Err(e)=result{eprintln!("hex_obs_scorecard: {e}");std::process::exit(2)}
 }
 #[cfg(test)] mod tests {use super::*;
+    #[test] fn limited_area_scores_only_points_whose_nearest_cell_is_interior(){
+        // THE BREAKAGE (L8-L9 hrrrv5 region, 2026-11-09): with no footprint a 120 km region scored every North American
+        // ASOS station on its nearest edge cell. A centre cell (interior) ringed by boundary cells must keep only
+        // points inside the centre cell; off-mesh points fall to a ring cell and are dropped; a global mesh keeps all.
+        let la=[36.5,37.0,36.0,36.5,36.5];let lo=[-97.5,-97.5,-97.5,-96.9,-98.1];
+        let rad=|v:&[f64]|v.iter().map(|x|x.to_radians()).collect::<Vec<_>>();
+        let mk=|interior:Option<Vec<bool>>|Hex{mesh:Mesh::new(&rad(&la),&rad(&lo)),init_mesh:Mesh::new(&rad(&la),&rad(&lo)),n:0,p:vec![],z:vec![],nz:1,
+            fields:BTreeMap::new(),interior,mask_source:"init"};
+        let lam=mk(Some(vec![true,false,false,false,false]));
+        assert!(lam.covers(36.55,-97.45));assert!(!lam.covers(36.95,-97.5));assert!(!lam.covers(41.6,-93.6));assert!(!lam.covers(33.4,-112.0));
+        let f=lam.footprint();assert_eq!((f["limited_area"].as_bool(),f["interior_cells"].as_u64(),f["boundary_cells"].as_u64()),(Some(true),Some(1),Some(4)));
+        let r=&f["region"];assert!(r["west"].as_f64().unwrap()< -97.5 && r["east"].as_f64().unwrap()> -97.5 && r["south"].as_f64().unwrap()<36.5 && r["north"].as_f64().unwrap()>36.5);
+        let global=mk(None);assert!(global.covers(41.6,-93.6)&&global.covers(-33.9,151.2));assert_eq!(global.footprint()["limited_area"].as_bool(),Some(false));
+    }
     #[test] fn spherical_nearest_wraps_and_barycentric_reproduces_constant(){let la:Vec<f64>=vec![0.,0.,0.1,1.];let lo:Vec<f64>=vec![179.9,-179.9,180.,179.];let m=Mesh::new(&la.iter().map(|v|v.to_radians()).collect::<Vec<_>>(),&lo.iter().map(|v|v.to_radians()).collect::<Vec<_>>());assert_eq!(m.nearest(xyz(0.,-179.91),1)[0].1,1);assert!((m.weights(0.01,179.98).iter().map(|p|p.1).sum::<f64>()-1.).abs()<1e-12);}
     #[test] fn igra2_snapshot_covering_the_window_with_the_latest_start_is_chosen(){
         let index=r#"<a href="IGRA_v2.2_data-por_s19050404_e20261022_c20261022_part1of4.tar">x</a><a href="IGRA_v2.2_data-y2d_s20210101_e20250615_c20250615.tar">x</a>

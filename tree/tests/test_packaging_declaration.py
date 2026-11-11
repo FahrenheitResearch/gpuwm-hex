@@ -37,8 +37,8 @@ def declaration() -> dict:
 # ---------------------------------------------------------------------------
 def test_the_version_is_stated_in_exactly_one_place(declaration: dict) -> None:
     declared = declaration["project"]["version"]
-    assert declared == "0.4.15", (
-        "0.4.15 is the candidate paired with gpuwm 2.9.12; "
+    assert declared == "0.5.0", (
+        "0.5.0 is the candidate paired with gpuwm 3.0.0; "
         "moving it is a release decision, not an edit"
     )
 
@@ -265,6 +265,11 @@ def _module_scope_third_party_imports() -> set[str]:
             for name in names:
                 top = name.split(".")[0]
                 if not top or top in sys.stdlib_module_names or top == "hexcore":
+                    continue
+                # A script directory importing its own sibling by bare name (scripts that run with their own
+                # directory on sys.path) is our own file, not a distribution.  THE BREAKAGE (2026-11-09): 66 such
+                # imports read as undeclared dependencies.
+                if (path.parent / f"{top}.py").is_file():
                     continue
                 found.add(top)
     return found

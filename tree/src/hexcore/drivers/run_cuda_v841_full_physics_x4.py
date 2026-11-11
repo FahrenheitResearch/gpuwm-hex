@@ -408,7 +408,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # pairs on conus12km and the published 30 km mesh
     # (evidence/hex-startup-20261005/).  The x4 full-physics proof and the
     # regional class mints did not re-run; their records are carried.
-    # Re-frozen 2026-10-10 (certificate gates retired, owner ruling): _validate_config no longer refuses
+    # Re-frozen 2026-10-10 (certificate gates retired): _validate_config no longer refuses
     # config_scalar_advection=False, config_positive_definite=True (which
     # runs the FCT branch, as native does) or apvm=0 for want of a native
     # ruler; the split-three refusal names the missing code path; and a
@@ -460,11 +460,11 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # the dry derecho cap450 identity (fixed step 30 min, active LTS 1 h) and
     # the ArWen physics-on exact identity in the lane receipt, and G1/G2.
     # Re-derived 2026-10-14 (H1 merged onto the H7 merge): H1's file plus the
-    # 0.4.0 release scrub of one comment line (an owner ruling in place of a
+    # 0.4.0 release scrub of one comment line (a decision in place of a
     # person).  No code line differs from the copy the H1 identities above
     # ran on.  No card run for this merge.
     "src/hexcore/cuda_driver.py": (
-        "656be62e34f0e48a7c210dc869e2449c00eece884129121b407b998a0d0582a5"
+        "98b0f786620a5e81f7e625da4c2f3727823f0d416338c64f09b7d69f3ad70a29"
     ),
     # THE BREAKAGE THIS PREVENTS: cuda_driver.py now executes host
     # preparation through hexcore.prep_cache.  Unpinned, an edit to the key
@@ -566,14 +566,14 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # x4 proof passes mpas_defaults.X4_RECORDED_SCHEDULE explicitly, so the
     # recorded configuration is unchanged.
     "src/hexcore/config_v841.py": (
-        "686740e58450f02655a54d3219490a41ac0cdb6e2aa9af07ffc31bd5255a393a"
+        "117aae79f8d7550bfccc2cd5c68bc6477935997514529f70b31879cd03a6c492"
     ),
     # Order-2 admission depends on both the keyed certificate selector and
     # its table. Moving either without this pin would change the admitted
     # schedule while a frozen-source receipt still named the older config.
     # Re-frozen 2026-10-10: the certificate table is a record
     # (step_anchor_record), no longer a gate.
-    "src/hexcore/step_anchors.py": "31201be7d3692dc07ed2c9689c2a9d0211236e3f68d7484b68df018426dc4e0e",
+    "src/hexcore/step_anchors.py": "97ffbc5fb7414269096156ee22f50a08a1806d1f87085feda441f9fdbcc59765",
     "src/hexcore/data/dycore-step-anchors.v1.json": "f9a102a3f4fd848e95bf9fabe5a5ccd0579ba01de739de9e7da8e4ed7930e62d",
     # New pin (convection ruling, 2026-08-26): the frozen config ADMITS
     # config_convection_scheme from this module and the frozen timestep
@@ -682,7 +682,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # and one comment only, measured inert by AST; no number, branch or name
     # moved.
     "src/hexcore/dt_admission.py": (
-        "a6c6b96ac32f5f1b079ce887f4be44ebb552b0c5848a3f71f0a44373a04a537c"
+        "3b667e693817320d4eac59b49f4d4fbce73f7b5526d0388e84eebb96558fd2ec"
     ),
     # New pin (surface/PBL cadence, 2026-08-26): this module decides
     # config_bldt_seconds, a knob the frozen timestep registry keys on, so
@@ -755,7 +755,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # exactly that subclass, and the receipt names the row.  The default
     # (GF and convection-off) paths are unchanged; _ADAPTER_AUTHORITY and
     # every contract digest are unchanged.
-    # Re-frozen 2026-10-10 (engine pin retired as a forecast gate, owner ruling): _verify_checkout_root no longer
+    # Re-frozen 2026-10-10 (engine pin retired as a forecast gate): _verify_checkout_root no longer
     # raises on an engine whose sixteen seam files, contract surface or
     # composed glacier unit differ from the pinned engine's; it returns the
     # tree's identity as found (engine_pin.identity_of) and the pin mapping
@@ -789,7 +789,7 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # with the keywords of before.  No card run against this pin.
     # Re-derived 2026-10-14 (H1 merged onto the H7 merge): H1's file plus the
     # 0.4.0 release scrub of two docstring lines in _verify_checkout_root (an
-    # owner ruling and a host's hardware in place of names).  No code line
+    # decision and a host's hardware in place of names).  No code line
     # differs from H1's copy.  No card run for this merge.
     # Re-frozen 2026-10-17: shared GPU surface kernels now update the ArWen
     # columns from a covering series; daily GFS words and unchanged C12
@@ -800,15 +800,19 @@ EXECUTION_SOURCE_PINS: dict[str, str | None] = {
     # Re-frozen 2026-11-06 (hex 0.4.14, ArWen-route waves on several ranks): the backend keeps the
     # lowest level's moist air density beside the LES winds only when a wave binding is attached
     # (wave_rho_air); with waves off (this proof) it stores None and nothing else moved. No card run.
+    # Re-frozen 2026-11-09 (NSSL two-moment picked over the ArWen suite): the frame-0 reflectivity view takes
+    # rho_dry and carries alt = 1/rho_dry for NSSL's diagnostic; the view is built at step 0 for the history
+    # frame only and writes nothing the step reads, so this proof's steps are unmoved. No card run of this proof.
+    # The value below is the file as merged into hex 0.5.0 (that branch's change on the 0.5.0 text).
     "src/hexcore/cuda_arwen_physics_v841.py": (
-        "6364fbdb6fc3251f2aee3db13e5e5cdb6c1d0b56743416b11a81fbf6da12cf7e"
+        "dc1a93c97ce81347e05178cf93f3c61c98233b0ecd5edffa9d600148aed3d349"
     ),
     # New pin 2026-10-05: the New Tiedtke row's seam (the frozen column-batch
     # class subclassed, driver built at cu_physics=16, raw cumulus momentum
     # added to du/dv as native todynamics does).  Executes only when the
     # constructor selects ntiedtke.
     "src/hexcore/cuda_ntiedtke_column_v841.py": (
-        "0eff93197f2e11658c48074fde13d2bc64fe2002c853966c2c4f4c08683f8465"
+        "d84d4a8090032c3eb30bd943d863140aba20a702435d9c2ed231259c91b8e621"
     ),
     "src/hexcore/cuda_seam_snapshot_v841.py": (
         "095d0d3f52c1e5bed736c8b1a2fae515d2ffec233defcb03ef2d493d8ce2c2fe"
@@ -1624,7 +1628,7 @@ def measure_execution_sources() -> dict[str, Any]:
 
     The FORECAST's call, in place of :func:`require_frozen_execution_sources`.
 
-    RETIRED 2026-10-10 as a forecast gate (owner ruling; Gate law, Refusals law): a forecast used to refuse with
+    RETIRED 2026-10-10 as a forecast gate (Gate law, Refusals law): a forecast used to refuse with
     "frozen execution source changed for <file>: <digest> != <digest>"
     whenever any of this port's own modules differed from the digest
     ``EXECUTION_SOURCE_PINS`` carries.  Two digests name no breakage; they

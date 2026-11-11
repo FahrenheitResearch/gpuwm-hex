@@ -135,7 +135,7 @@ def verify_analyses(value, state, args, env):
         if owned_init_complete(path):
             validate_reference(path, source, valid)
             return {**row, "path": str(path), "owned": True, "status": "ready"}
-        # THE BREAKAGE THIS PREVENTS (fit16-rows s2s2, a test host, 2026-11-07 05:50Z): the data disk filled while
+        # THE BREAKAGE THIS PREVENTS (fit16-rows s2s2, verification host, 2026-11-07 05:50Z): the data disk filled while
         # two ERA5 analysis inits were being written, leaving init.nc present beside a 0-byte receipt. The resume
         # took the bare init.nc as finished and then refused the whole verify stage ("analysis requires its
         # source receipt ... Expecting value"). An owned folder whose receipt does not record its finished init

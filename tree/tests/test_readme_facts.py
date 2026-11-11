@@ -50,8 +50,10 @@ def test_the_long_description_has_no_relative_links():
     text = README.read_text(encoding="utf-8")
     relative = [t for t in re.findall(r"\]\(([^)\s]+)\)", text) if not re.match(r"(https?:|mailto:|#)", t)]
     assert not relative, f"PyPI resolves these against pypi.org: {relative[:5]}"
-    pinned = set(re.findall(r"github\.com/FahrenheitResearch/gpuwm-hex/blob/(v[^/]+)/", text))
-    assert pinned == {f"v{VERSION}"}, pinned
+    # The repository moved to recastsystems (2026-11-10); a link left on the old owner works only through
+    # GitHub's redirect, which stops if a repo of the old name is ever created again.
+    pinned = set(re.findall(r"github\.com/([^/]+)/gpuwm-hex/blob/(v[^/]+)/", text))
+    assert pinned == {("recastsystems", f"v{VERSION}")}, pinned
 
 
 def test_the_cu13_extra_cannot_resolve_an_nvrtc_without_a_pack():
@@ -62,6 +64,16 @@ def test_the_cu13_extra_cannot_resolve_an_nvrtc_without_a_pack():
     assert caps and caps[0], f"gpu-cu13 must cap NVRTC at the newest pinned CUDA 13 pack: {extra}"
     newest = max((row for version, _, row in _packs() if version[0] == 13), key=lambda row: tuple(row["compiler"]["nvrtc"]))
     assert newest["compiler"]["nvrtc_package"] == f"nvidia-cuda-nvrtc=={caps[0].group(1)}", (newest["compiler"], extra)
+
+
+def test_each_gpu_extra_pulls_the_engine_extra_of_the_same_name():
+    """THE BREAKAGE (pair line, 2026-11-10): hex[gpu-cu13] required plain ``gpuwm``, so the engine's own NVRTC cap
+    (<13.5 under its gpu-cu13) did not apply and a fresh install resolved NVRTC 13.5.37, a stack the engine excludes
+    and the gate never ran (hrrrv5 differed in 8,152,918 of 37,778,553 words).  Pulling ``gpuwm[<same extra>]``
+    makes pip resolve one CUDA stack for the pair."""
+    extras = DECLARATION["project"]["optional-dependencies"]
+    for name in ("gpu-cu12", "gpu-cu13"):
+        assert f"gpuwm[{name}]" in extras[name], (name, extras[name])
 
 
 def test_the_repository_front_page_states_this_version():

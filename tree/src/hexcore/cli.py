@@ -348,7 +348,7 @@ _DOORS: tuple[tuple[tuple[str, ...], Callable[[argparse._SubParsersAction], None
 #: gpuwm.output_formats as their parsers are built, so ``gpuwm-hex --help`` in an install without the engine
 #: (the public CI packaging job installs the wheel with --no-deps) died with ModuleNotFoundError instead of
 #: listing the doors.
-ENGINE_MISSING = ("needs the gpuwm engine, which is not installed: pip install 'gpuwm>=2.9.10,<2.10' "
+ENGINE_MISSING = ("needs the gpuwm engine, which is not installed: pip install 'gpuwm>=3.0.0,<3.1' "
                   "(a dependency of gpuwm-hex, so a plain 'pip install gpuwm-hex' brings it)")
 
 
@@ -417,7 +417,7 @@ NUMERICS_HELP = (
 
 
 def _add_numerics_option(commands: argparse._SubParsersAction) -> None:
-    """``--numerics {fast,strict}`` on every door (owner ruling 2026-10-16: strict is opt-in)."""
+    """``--numerics {fast,strict}`` on every door (strict is opt-in)."""
     for sub in commands.choices.values():
         if any("--numerics" in action.option_strings for action in sub._actions):
             continue

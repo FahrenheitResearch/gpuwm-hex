@@ -4478,6 +4478,44 @@ PRECIP_ARGUMENTS = ("precipw","rainncv","rainnc","snowncv","snownc","graupelncv"
 PROFILE_ARGUMENTS = ("refl10cm","re_cloud","re_ice","re_snow")
 RADAR_ARGUMENTS = ("refl10cm_max","refl10cm_1km","refl10cm_1km_max")
 CONFIG_ARGUMENTS = ("config_tempo_aerosolaware","config_tempo_hailaware","config_tempo_ml_for_bl_nc","config_tempo_refl10cm_from_melting")
+#: TEMPO versions the slot runs (&physics_mp_tempo config_tempo_version). The default is the latest released
+#: upstream TEMPO (tempo_v325, NCAR/TEMPO tempo_v3.2.5); "v3.0.3" is this module, the RRFS 44c0849 pin every
+#: bitwise RRFS claim and the landing gate are proven against, and runs exactly as before when named.
+TEMPO_VERSIONS = ("v3.2.5", "v3.0.3")
+DEFAULT_TEMPO_VERSION = "v3.2.5"
+
+
+def tempo_version(options):
+    """The TEMPO version an option set selects (config_tempo_version, default DEFAULT_TEMPO_VERSION).
+
+    THE BREAKAGE THIS PREVENTS: a misspelt version would silently run the default; it is refused by name."""
+    value = options.get("config_tempo_version", DEFAULT_TEMPO_VERSION)
+    value = (value or DEFAULT_TEMPO_VERSION).strip() if isinstance(value, str) else value
+    if value not in TEMPO_VERSIONS:
+        raise ValueError(f"config_tempo_version must be one of {list(TEMPO_VERSIONS)}, not {value!r}")
+    return value
+
+
+#: The TEMPO both RRFS pins carry (9adf9ef); a stream without hex_tempo_version was written by it.
+PIN_TEMPO_VERSION = "v3.0.3"
+
+
+def output_attributes(config):
+    """Global attributes a run's output streams carry for its TEMPO: hex_tempo_version, hex_tempo_hailhyperaware.
+
+    Written only when the run's TEMPO is not the RRFS pin, so an exact-mode run's headers stay identical to native's;
+    a file without them came from the pin (or from hex before v3.2.5, or from native RRFS).
+    THE BREAKAGE THIS PREVENTS: rediagnosing a run's reflectivity with the other version's operator, silently
+    (tempo_refl_v303.rediagnose_file reads them)."""
+    selectors = getattr(config, "selectors", None) or {}
+    options = getattr(config, "options", None) or {}
+    if selectors.get("microphysics") != SCHEME:
+        return {}
+    version = tempo_version(options)
+    if version == PIN_TEMPO_VERSION:
+        return {}
+    hyper = bool(options.get("config_tempo_hailhyperaware", True)) and bool(options.get("config_tempo_hailaware", True))
+    return {"hex_tempo_version": version, "hex_tempo_hailhyperaware": "YES" if hyper else "NO"}
 CONSTANT_ARGUMENTS = ("R_v","R_d","rvord","P0","rcv","gravity")
 
 _MPAS = r"""
@@ -4960,7 +4998,14 @@ def run_slot(call):
     p=call.pools["tempo_v303"]
     try:
         flags=tuple(bool(call.options[n]) for n in CONFIG_ARGUMENTS)
-        result=launch_mpas(p,dt_dyn=call.dt,flags=flags,
+        launch=launch_mpas
+        if tempo_version(call.options)=="v3.2.5":
+            # tempo_v3.2.5 (default): same pools and tables; hail-hyperaware is forced off with hail-aware off
+            # (TEMPO driver:85).
+            from . import tempo_v325
+            launch=tempo_v325.launch_mpas
+            flags=flags+(bool(call.options.get("config_tempo_hailhyperaware",True)) and flags[1],)
+        result=launch(p,dt_dyn=call.dt,flags=flags,
             bucket=call.options["config_bucket_rainnc"],diagnostics=call.flags.diagnostics,
             hourly=_hourly_switch(p["do_diag_dbz_flag"]))
     except BaseException:

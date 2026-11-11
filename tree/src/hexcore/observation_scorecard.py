@@ -584,6 +584,11 @@ def markdown(card):
             f"Coverage: **{card['status']}**. Initialization: {card['configuration']['start']}. Latest measured hex lead per row; all columns use that same valid time. JSON carries every lead and missing reason.", "",
             "Radiosonde RMSE: height m / temperature K / vector wind m s-1. Counts follow each value. Analyses are secondary references and may assimilate these reports.", "",
             "| hPa | " + " | ".join(labels) + " |", "|---|" + "---|" * len(labels)]
+    footprint = card.get("footprint")
+    if footprint:
+        text[4:4] = [f"Limited-area footprint: {footprint['interior_cells']:,} interior cells of {footprint['cells']:,}. "
+                     "Only observations inside interior cells are scored; reports off the mesh and in the 7-ring boundary "
+                     "zone (relaxation rings 1-5, specified rings 6-7) are not.", ""]
     for level in LEVELS:
         text.append(f"| {level} | " + " | ".join(" / ".join(cell("radiosonde", q, label, level) for q in ("height", "temperature", "wind")) for label in labels) + " |")
     text += ["", "| ASOS RMSE | " + " | ".join(labels) + " |", "|---|" + "---|" * len(labels)]
@@ -813,7 +818,24 @@ def score(run, *, config=None, out=None, timeout=180, budget=1800, leads=None):
         abi = commands.run([native, "--abi"], json_output=False, acquisition=False).strip()
         if abi != "gpuwm-hex.native-observation-score/v1":
             raise ValueError("hex observation binary ABI differs from its scoring contract")
-        context = {"config": config, "frames": frames, "start": start, "scratch": scratch, "out": out,
+        # A limited-area run is scored only inside its own interior cells: the native scorer drops every report and
+        # precipitation lattice point whose nearest cell is off the mesh or in the 7 boundary rings. The box around
+        # those cells narrows what is fetched. THE BREAKAGE THIS PREVENTS (L8-L9 hrrrv5 region, 2026-11-09): a 120 km-
+        # radius region fetched every North American ASOS network and scored 1,235 stations on its edge cells, so its
+        # T2/Td2/wind RMSEs meant nothing. A global mesh answers limited_area false and its card is unchanged.
+        # The footprint here only narrows acquisition: the native scorer applies the mask itself on every frame, so a
+        # history it cannot read fails there by name and this call stays out of the card's outcome.
+        try:
+            footprint = commands.run([native, "--footprint", frames[0]["history"], config["init"]], acquisition=False)
+        except Exception as error:
+            footprint = {"limited_area": False}
+            card["footprint_error"] = str(error)
+        frame_config = config
+        if footprint.get("limited_area"):
+            card["footprint"] = footprint
+            if not config.get("region") and footprint.get("region"):
+                frame_config = {**config, "region": footprint["region"]}
+        context = {"config": frame_config, "frames": frames, "start": start, "scratch": scratch, "out": out,
                    "commands": commands, "native": native, "rs": rain_source(config)}
         todo = []
         for index, frame in enumerate(frames):

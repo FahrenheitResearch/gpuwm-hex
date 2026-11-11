@@ -159,6 +159,18 @@ ARWEN_SOURCE_MANIFEST: Mapping[str, str] = MappingProxyType(
 _GLACIER_CUDA_PROVENANCE = (
     "noahmp-glacier/cuda (gpuwm/core/kernels/noahmp_glacier.cu)"
 )
+#: The glacier execution paths an engine may report that are both the CUDA
+#: NOAHMP_GLACIER path.  gpuwm 2.9.x reports the kernel file; gpuwm 3.0 runs
+#: glacier columns inside its device-resident surface slab and reports
+#: ``noahmp-glacier/resident-cuda`` (gpuwm/core/noahmp_runtime.py).  A host
+#: path is still refused.  THE BREAKAGE THIS PREVENTS (hex 0.5.0 on the gpuwm
+#: 3.0.0 candidate 15370d23f9, 2026-11-10): every ArWen-route forecast
+#: stopped at step 0 with "census/provenance differs" although the column
+#: counts were equal.
+_GLACIER_CUDA_PROVENANCES = frozenset({
+    _GLACIER_CUDA_PROVENANCE,
+    "noahmp-glacier/resident-cuda",
+})
 _ISICE_TABLE = 15
 
 _LIMITATIONS = (
@@ -777,7 +789,7 @@ def _verify_checkout_root(root: Path) -> engine_pin.EngineIdentity:
     forecast door and ``doctor`` run, so the three surfaces cannot disagree
     about a tree.
 
-    RETIRED 2026-10-10 as a gate (owner ruling; Refusals law): a moved seam file used to raise "pinned Arwen
+    RETIRED 2026-10-10 as a gate (Refusals law): a moved seam file used to raise "pinned Arwen
     source hash mismatch", and a moved ``docs/mpas-seam.md`` "pinned Arwen
     contract surface hash mismatch".  Neither names a breakage -- a digest
     that differs says the engine is another build, not that it cannot run --
@@ -1000,6 +1012,7 @@ class CudaArwenDiagnosticSnapshotV841:
     gwdo: Mapping[str, Any]
     metadata: Mapping[str, Any]
     receipt: Mapping[str, Any]
+    cloud: Mapping[str, Any] = field(default_factory=dict)
 
 
 def history_cumulus_rain_rate(owner: Any, seam: Any, rainc: Any, cp: Any) -> dict[str, Any]:
@@ -1037,7 +1050,9 @@ class InitialReflectivityViewV841:
     The engine's operator (``gpuwm.da.obsop.simulated_reflectivity``) reads a
     state shaped ``(nz, 1, ncol)``: the species by their engine names (hex's
     scalar names are those names), full theta as ``thb + thp`` and pressure
-    ``p``, plus a persistent ``scratch`` slot.  This view holds exactly those,
+    ``p``, the dry specific volume ``alt`` (formed as the seam forms it for a
+    step, ``1/rho_dry``; NSSL's diagnostic takes its air density from it), plus
+    a persistent ``scratch`` slot.  This view holds exactly those,
     as read-only reshapes of the hex arrays, and its own scratch, so the
     seam's state is read for nothing and written by nothing.  The melting
     term is copied explicitly from the seam's own answer
@@ -1045,7 +1060,8 @@ class InitialReflectivityViewV841:
     honours ahead of the state's class.
     """
 
-    def __init__(self, *, theta: Any, pressure: Any, species: Mapping[str, Any], melting: bool, cp: Any) -> None:
+    def __init__(self, *, theta: Any, pressure: Any, species: Mapping[str, Any], melting: bool, cp: Any,
+                 rho_dry: Any = None) -> None:
         nz, ncol = (int(n) for n in theta.shape)
         shape = (nz, 1, ncol)
 
@@ -1057,6 +1073,12 @@ class InitialReflectivityViewV841:
         self.thp = column("theta", theta)
         self.p = column("pressure", pressure)
         self.thb = cp.zeros((nz,), dtype=cp.float32)
+        if rho_dry is not None:
+            # THE BREAKAGE THIS PREVENTS (2026-11-09, NSSL two-moment picked over the ArWen suite): the engine's
+            # NSSL reflectivity forms its density as 1/state.alt, the view carried no alt, and the forecast stopped
+            # at its first frame with "AttributeError: alt".  The same quotient the seam hands a step
+            # (gpuwm.core.mpas_column_suite: alt = 1/rho_dry), in the view's own array.
+            self.alt = cp.float32(1.0) / column("rho_dry", rho_dry)
         for name, value in species.items():
             setattr(self, name, column(name, value))
         self.refl10cm_from_melting = bool(melting)
@@ -1077,6 +1099,26 @@ class InitialReflectivityViewV841:
         if buffer is None or tuple(buffer.shape) != shape:
             buffer = self._scratch[slot] = self._cp.zeros(shape, dtype=self._cp.float32 if dtype is None else dtype)
         return buffer
+
+
+def _plain_census(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """The engine's NoahMP census with its counts as Python ints.
+
+    gpuwm 3.0 publishes the column counts as 0-d arrays (``array(10155)``);
+    2.9.x published ints.  The census goes into the step receipt, which is
+    JSON, so a 0-d array stopped every ArWen-route step at its receipt
+    ("Object of type ndarray is not JSON serializable", hex 0.5.0 on the
+    gpuwm 3.0.0 candidate, 2026-11-10).  Only integral 0-d values are
+    converted; anything else is kept as it is and compared as before.
+    """
+
+    plain: dict[str, Any] = {}
+    for key, value in raw.items():
+        kind = getattr(getattr(value, "dtype", None), "kind", "")
+        if getattr(value, "shape", None) == () and kind in ("i", "u"):
+            value = int(value)
+        plain[key] = value
+    return plain
 
 
 class PersistentTwoPhaseCudaPhysicsBackendV841:
@@ -1350,7 +1392,24 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         if not isinstance(raw, Mapping):
             raise TypeError("Arwen v2 last_noahmp_census is not a mapping")
         expected = PersistentTwoPhaseCudaPhysicsBackendV841.noahmp_routing_census(self)
-        normalized = dict(raw)
+        normalized = _plain_census(raw)
+        # Either engine's CUDA glacier label is published under the one canonical
+        # name the step receipt and require_arwen_v2_surface_execution check.
+        # THE BREAKAGE THIS PREVENTS (hex 0.5.0 on gpuwm 3.0.0,
+        # 2026-11-10T10:21Z): accepting the 3.0 label here but publishing it raw
+        # stopped every ArWen-route forecast at step 1 with "NoahMP
+        # census/provenance changed: glacier_path".
+        if normalized.get("glacier_path") in _GLACIER_CUDA_PROVENANCES:
+            normalized["glacier_path"] = _GLACIER_CUDA_PROVENANCE
+            # gpuwm 3.0 names its glacier path even when no column is glacier;
+            # 2.9.x named it only for glacier columns, and so does every check
+            # downstream.  No glacier column means no glacier execution.
+            # THE BREAKAGE THIS PREVENTS (both-routes matrix on gpuwm 3.0,
+            # 2026-11-10T11:12Z): the ArWen-route region (290 land
+            # columns, 0 glacier) stopped at step 0 on "census/provenance
+            # differs".
+            if normalized.get("glacier") == 0:
+                del normalized["glacier_path"]
         if normalized != expected:
             raise ValueError(
                 "Arwen NoahMP census/provenance differs from executed layout "
@@ -1919,7 +1978,7 @@ class PersistentTwoPhaseCudaPhysicsBackendV841:
         seam = self._seam
         view = InitialReflectivityViewV841(
             theta=prepared.th_p, pressure=prepared.pres_p, species=species,
-            melting=refl_melting_for(seam._state), cp=cp)
+            melting=refl_melting_for(seam._state), cp=cp, rho_dry=prepared.rho_dry)
         try:
             refl = simulated_reflectivity(view, seam._cfg)
         except NotImplementedError as refusal:

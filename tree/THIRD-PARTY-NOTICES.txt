@@ -10,10 +10,13 @@ Pins
 ----
   MPAS-Model     v8.4.2   f34984b2c89353cf31c235b08d3b4acd96b37bb3
   MMM-physics    20250616-MPASv8.3   a4baf7f3243d1db0dbc5f63473f895bdbdc05c30
+  MMM-physics    20260319-WRFv4.8.0  63c806deef6a (bl_gwdo.F90 only, for kim_gwdo_2026.py)
   MPAS-Data      v8.2     c57dbc7be629802c6e848770a9e44b9bc602be41 (not redistributed)
   NOAA-GSL UGWP  MPAS_20241223   c1c893edcf171af5639af60e3a3a528816f6cc2b
                  (Apache-2.0 LICENSE added upstream on 2026-11-04 at
-                 4108d491470c2576a7c1e97cc6a38bf454590193)
+                 4108d491470c2576a7c1e97cc6a38bf454590193; the default
+                 route carries that release, MPAS_20261104, with
+                 alpha_fd an input defaulting to 12, the referee value)
   RRFSx MPAS-Model fork  1d6e370e7b43a332074809f170532a216c2212fb (dynamical core and
                  physics driver layer; MPAS terms)
   rrfs-workflow  08eee4ceee301898d3cb837e03699a8da0d1cb32 (one configuration file)
@@ -36,7 +39,7 @@ Licence key
            netCDF4 wheel to decode ERA5 Zarr chunks; it is not bundled)
   UGWP     Apache-2.0, NOAA, UCAR/NCAR CU/CIRES 2026
                                           licenses/LICENSE-UGWP-Apache-2.0.txt, NOTICE section 8
-  USGOV    a work of the US Government (NOAA GSL), by the project's ruling
+  USGOV    a work of the US Government (NOAA GSL), treated as such
            of 2026-10-14                  NOTICE section 9
   NR       Numerical Recipes notice as MMM-physics preserves it (a stated
            reliance, not a licence)   NOTICE section 2
@@ -104,6 +107,8 @@ listed. Upstream paths are relative to src/core_atmosphere/physics/.
                          physics_wrf/module_bl_ugwp_gwdo.F (WRF) -- NOTICE section 8
   ugwp_ngw_v842.py       physics_noaa/UGWP/bl_ugwpv1_ngw.F, cires_ugwpv1_*.F,
                          cires_tauamf_data.F (UGWP) -- NOTICE section 8
+  kim_gwdo_2026.py       physics_mmm/bl_gwdo.F90 at 63c806deef6a (MMM);
+                         physics_wrf/module_bl_gwdo.F with MPAS PR #1409 (WRF, MPAS)
   ysu_gwdo_v842.py       physics_mmm/bl_gwdo.F90 (MMM); physics_wrf/module_bl_gwdo.F (WRF)
   ysu_v842.py            physics_mmm/bl_ysu.F90 (MMM); physics_wrf/module_bl_ysu.F (WRF)
   compile_v842.py, config_v842.py, device_pools_v842.py, diagnostics_v842.py,
@@ -239,6 +244,12 @@ Echo land and radiation integration (modified ports, 2026-10-28):
 
 RRFS rrfs-44c0849 addition (NOTICE section 9 and final pin addendum):
   rrfs/bl_mynnedmf_c6d08709.py   NCAR/MYNN-EDMF c6d08709, USGOV
+  rrfs/sf_mynnsfc_v610.py        NCAR/MYNN-SFC v6.1.0 a038a9e, Apache-2.0
+                                 (licenses/LICENSE-MYNN-SFC-Apache-2.0.txt;
+                                 the config_mynn_version suite versions)
+  rrfs/bl_mynnedmf_v611.py       NCAR/MYNN-EDMF v6.1.1 2b2da61, Apache-2.0
+                                 (licenses/LICENSE-MYNN-EDMF-Apache-2.0.txt;
+                                 the mynn-v6.1 suite version)
   data/mpasphys-framework-rrfs-44c0849 and
   data/streams_rrfs_44c0849_registry.json   RRFSx/MPAS-Model 44c0849, MPAS
 

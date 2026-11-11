@@ -2089,7 +2089,7 @@ def bind_mesh(
     except CellCoordinationAdmissionError as error:
         raise MeshBindingMismatch(str(error)) from error
     observed["cell_coordination_admission"] = coordination.as_dict()
-    # RETIRED 2026-10-10 (owner ruling):
+    # RETIRED 2026-10-10:
     # the refusal of every timestep the earned-anchor registry did not hold
     # ("this row is STABLE and merely unrunnable HERE").  Stability is the
     # physical check above; the cadences are checked below against the run's

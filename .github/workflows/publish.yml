@@ -12,7 +12,7 @@ name: publish
 # owner, repository, workflow FILENAME and environment name -- and the token
 # PyPI issues is scoped to exactly that tuple:
 #
-#     FahrenheitResearch / gpuwm-hex / publish.yml / release
+#     recastsystems / gpuwm-hex / publish.yml / release
 #
 # Renaming this file, moving the upload to another workflow, or changing the
 # environment breaks the binding and the upload is rejected with a message
@@ -89,7 +89,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: FahrenheitResearch/arwen
+          repository: recastsystems/arwen
           ref: ${{ steps.engine.outputs.tag }}
           persist-credentials: false
           path: engine-src

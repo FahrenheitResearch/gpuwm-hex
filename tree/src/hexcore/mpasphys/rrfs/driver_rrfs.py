@@ -311,6 +311,10 @@ class DriverConfig(shared.DriverConfig):
                          f"owner {gap.owner}. {gap.breakage}")
         return "\n".join(lines)
 
+    def mynn_version_line(self) -> str | None:
+        """The start-up line naming the MYNN suite version this run executes (``MYNN SUITE VERSION:``)."""
+        return _mynn_version_line(self)
+
     def receipt(self) -> dict[str, Any]:
         """Resolved fork identity; MPAS-Model-rrfs/src/core_atmosphere/physics/mpas_atmphys_control.F:133-183."""
         spec = specification(self)
@@ -325,6 +329,12 @@ class DriverConfig(shared.DriverConfig):
                 "backends": {s: str(b) for s, b in self.backends.items()}}
         if self.cpu_slots:
             result["cpu_slots"] = [item.as_dict() for item in self.cpu_slots]
+        if self.mynn_version != "pinned":
+            version = spec["mynn_versions"]["versions"][self.mynn_version]
+            result["mynn_version"] = self.mynn_version
+            result["submodule_pins"].update(version.get("submodule_pins", {}))
+            result["mynn_version_modules"] = {f"{slot}/{scheme}": entry["module"]
+                for slot, entries in version.get("cuda_entries", {}).items() for scheme, entry in entries.items()}
         if self.mode != "exact":
             result.update(physics_mode=self.mode, corrections=sorted(self.corrections),
                           correct_skip=sorted(self.correct_skip), correct_mode=self.correct_mode_record())
@@ -349,10 +359,12 @@ def resolve_namelist(text: str, *, backends: Mapping[str, str] | None = None,
     # Hex mode controls are orchestration, absent from the pristine fork Registry.
     for key in ("config_physics_mode", "config_physics_correct_skip"):
         groups.get("nhyd_model", {}).pop(key, None)
+    named = set()
     for group, keys in spec["registry_groups"].items():
         for key, value in groups.get(group, {}).items():
             if key not in keys:
                 raise ValueError(f"fork Registry has no {group} option {key!r}")
+            named.add(key)
             kind = spec["registry_defaults"][key]["type"]
             valid = ((kind == "character" and isinstance(value, str))
                      or (kind == "logical" and type(value) is bool)
@@ -361,6 +373,15 @@ def resolve_namelist(text: str, *, backends: Mapping[str, str] | None = None,
             if not valid:
                 raise ValueError(f"{key} requires fork Registry type {kind}")
             options[key] = value.rstrip() if kind == "character" else value
+    if mode == "exact":
+        # Exact mode reproduces this route's pinned native fork bit for bit, so an option whose latest-upstream
+        # default differs from what the pin runs takes the pin's value unless the run names it
+        # (exact_mode_defaults: config_tempo_version v3.0.3, the TEMPO 9adf9ef both RRFS pins carry).
+        # THE BREAKAGE THIS PREVENTS: the RRFS landing gate and every bitwise rerun hand hex the native deck's own
+        # namelist, which has no config_tempo_version, so they ran the v3.2.5 default against native's v3.0.3.
+        for key, value in spec.get("exact_mode_defaults", {}).items():
+            if key not in named:
+                options[key] = value
     suite = options["config_physics_suite"].rstrip()
     native_suite = spec["suite_routes"].get(suite, suite)
     if native_suite not in spec["suites"]:
@@ -408,6 +429,14 @@ def resolve_namelist(text: str, *, backends: Mapping[str, str] | None = None,
     explicit = set()
     backend_names = {r["backend_selector"]: s for s, r in spec["slots"].items()}
     supplied = groups.get(spec["backend_namelist_group"], {})
+    versions = spec.get("mynn_versions")
+    mynn_version = "pinned"
+    named_version = bool(versions and versions["selector"] in supplied)
+    if named_version:
+        mynn_version = str(supplied.pop(versions["selector"])).strip()
+        if mynn_version not in versions["versions"]:
+            raise ValueError(f"unknown {versions['selector']} {mynn_version!r}; this pin set offers "
+                             + ", ".join(sorted(versions["versions"])))
     # Driver-boundary services (the fork surface update), as the v8.4.2 row: a GPU route that updates
     # SST from a surface series takes the service on the GPU; module replays (library) keep native-cpu.
     services = spec.get("services", {})
@@ -441,16 +470,86 @@ def resolve_namelist(text: str, *, backends: Mapping[str, str] | None = None,
             raise ValueError(f"conflicting fork backend selections for {slot}")
         chosen[slot] = Backend(backend)
         explicit.add(slot)
+    if versions and not named_version:
+        mynn_version = _default_mynn_version(versions, selectors, chosen, library, mode)
+    if mynn_version != "pinned":
+        row = versions["versions"][mynn_version]
+        overlays = {(slot, scheme) for slot, entries in row.get("cuda_entries", {}).items() for scheme in entries}
+        for slot, scheme in [*map(tuple, row.get("requires", ())), *overlays]:
+            if selectors.get(slot) != scheme or chosen[slot] == Backend.OFF:
+                continue
+            if (slot, scheme) not in overlays:
+                # THE BREAKAGE THIS PREVENTS: a run named for this version would run the pinned port of a
+                # selected slot the version has no module for, mixing MYNN versions under the version's name.
+                raise ValueError(f"{versions['selector']}={mynn_version!r} has no ported {slot}/{scheme} yet; "
+                                 f"select one of: " + ", ".join(sorted(versions["versions"])))
+            if chosen[slot] != Backend.HEX_CUDA:
+                # THE BREAKAGE THIS PREVENTS: the native library is the 44c0849 pin, so a native-cpu slot would
+                # run the pinned scheme while the run's receipt names the version.
+                raise ValueError(f"{versions['selector']}={mynn_version!r} runs {slot}/{scheme} on hex-cuda only; "
+                                 f"this run puts it on {chosen[slot]}")
     # v8.4.2 findings must not silently change v8.3.1/GSL science. Until the
     # fork owners qualify its inventory, correct mode reports that named gap.
     gaps = () if mode == "exact" else (CorrectionInventoryGap(
         **spec["correct_mode_inventory"]),)
     config = DriverConfig(suite, MappingProxyType(selectors), MappingProxyType(options),
                           MappingProxyType(chosen), mode=mode, correct_skip=skip, gaps=gaps,
-                          service_backends=MappingProxyType(chosen_services), _table_key=table_key)
+                          service_backends=MappingProxyType(chosen_services), mynn_version=mynn_version,
+                          _table_key=table_key)
     if library:
         return config
     return _replace(config, cpu_slots=shared.cpu_slot_record(config, table_key, cpu_reasons, explicit))
+
+
+def _default_mynn_version(versions, selectors, chosen, library, mode="correct") -> str:
+    """The MYNN suite version a run that names none takes: the row's ``default`` (the latest upstream releases,
+    Defaults are the latest upstream scheme versions, pins are for bitwise proof).
+
+    "pinned" (the 44c0849 MYNN, bitwise to native, selectable by name) is taken instead when
+    - the resolution is a module replay (``library``): the native library it replays is the 44c0849 pin;
+    - the run is in exact mode, which reproduces this route's pinned native fork bit for bit, as TEMPO's
+      exact_mode_defaults row does.  THE BREAKAGE THIS PREVENTS: an exact-mode run handed the native deck's own
+      namelist (no config_mynn_version) ran MYNN v6.1 against native's 44c0849 MYNN;
+    - no slot the version overlays is selected and active: nothing would change, so the receipt names no version;
+    - a selected slot the version needs runs off hex-cuda (a run naming the native referee for a MYNN slot): the
+      native library runs the 44c0849 pin there, so the run is that pin and its receipt and start-up line say so.
+      A run that names the version itself on such a slot is still refused (``resolve_namelist``)."""
+    default = versions.get("default", "pinned")
+    if library or default == "pinned" or mode == "exact":
+        return "pinned"
+    row = versions["versions"][default]
+    overlays = {(slot, scheme) for slot, entries in row.get("cuda_entries", {}).items() for scheme in entries}
+    needed = {(slot, scheme) for slot, scheme in [*map(tuple, row.get("requires", ())), *overlays]
+              if selectors.get(slot) == scheme and chosen[slot] != Backend.OFF}
+    if (not needed & overlays or not needed <= overlays
+            or any(chosen[slot] != Backend.HEX_CUDA for slot, _ in needed)):
+        return "pinned"
+    return default
+
+
+#: The MYNN slots a suite version can overlay, and the submodule each one ports.
+MYNN_SLOTS = (("pbl", "bl_mynnedmf", "MYNN-EDMF"), ("surface_layer", "sf_mynnsfclay", "MYNN-SFC"))
+
+
+def _mynn_version_line(config) -> str | None:
+    """The start-up line naming the MYNN this run executes (it begins ``MYNN SUITE VERSION:``), or None for a
+    row with no ``mynn_versions`` or a run with no MYNN slot active."""
+    spec = specification(config)
+    versions = spec.get("mynn_versions")
+    active = [(slot, module) for slot, scheme, module in MYNN_SLOTS
+              if config.selectors.get(slot) == scheme and config.backends.get(slot) != Backend.OFF]
+    if not versions or not active:
+        return None
+    version = getattr(config, "mynn_version", "pinned")
+    pins = dict(spec["submodule_pins"])
+    pins.update(versions["versions"][version].get("submodule_pins", {}))
+    ran = ", ".join(f"{module} {pins[module][:8]} on {config.backends[slot]}" for slot, module in active)
+    if version == "pinned":
+        tail = (f"the RRFS 44c0849 pin, bitwise to native; the default is {versions['default']!r} "
+                f"(the latest upstream MYNN) wherever both MYNN slots run on hex-cuda")
+    else:
+        tail = f"{versions['versions'][version]['about']} {versions['selector']}='pinned' selects the 44c0849 referee"
+    return f"MYNN SUITE VERSION: {version} ({ran}); {tail}"
 
 
 def route_namelist(text: str, *, physics_mode: str | None = None,
@@ -768,7 +867,7 @@ class PhysicsDriver(shared.PhysicsDriver):
                         "driver" if slot is None else c.selectors[slot],
                         glue_backend if slot is None else c.backends[slot],
                         step, time, float(self.manager.scheme_dt.get(slot, self.manager.dt)),
-                        flags, pools, MappingProxyType(options))
+                        flags, pools, MappingProxyType(options), mmm=getattr(c, "mmm", None))
         self.calls.append({"operation": operation, "slot": call.slot,
                            "backend": str(call.backend), "itimestep": step, "time_seconds": time})
         return self.hooks.invoke(operation, call) if slot is None else self.registry.run(call)

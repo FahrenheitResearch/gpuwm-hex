@@ -18,7 +18,7 @@ The path is the same for all of them:
 
 There is no branch on a source id anywhere in this module.  Adding a model
 is a table row and, when its parameter codes are new, a Vtable: the
-arbitrary acceptance test (a project ruling, 2026-08-16).  A row may declare
+arbitrary acceptance test (2026-08-16).  A row may declare
 ``status: refused`` with a ``refusal`` sentence when its bytes cannot travel
 this path; asking for it refuses with that sentence.
 """
@@ -1835,6 +1835,8 @@ def add_init_source_parser(commands: Any) -> None:
     parser.add_argument("--source", help="source id or alias (see --list)")
     parser.add_argument("--physics-profile", help="profile initialization row, including verified monthly aerosols")
     parser.add_argument("--physics-suite", help="suite initialization row")
+    parser.add_argument("--physics", action="append", default=None, metavar="KEY=VALUE",
+                        help="a single scheme choice over an ArWen-route suite, repeatable; passed to the init")
     parser.add_argument("--soil-remap", choices=("auto", "on", "off"), default="auto",
                         help="table-selected cold soil conversion: auto (default) applies it where its contract "
                              "holds and otherwise keeps the source's own soil, naming why; on refuses instead; off "
@@ -2133,6 +2135,8 @@ def run_init_source_command(arguments: argparse.Namespace) -> int:
     for name in ("physics_suite", "physics_profile"):
         if getattr(arguments, name, None):
             argv += ["--" + name.replace("_", "-"), getattr(arguments, name)]
+    for override in getattr(arguments, "physics", None) or ():
+        argv += ["--physics", str(override)]
     argv += ["--soil-remap", getattr(arguments, "soil_remap", "auto")]
     argv += cold_soil_init_flags(receipt["products"], soil_policy, getattr(arguments, "soil_remap", "auto"))
     argv += surface_input_init_flags(receipt.get("surface_input"))

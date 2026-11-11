@@ -406,7 +406,7 @@ def mpas_route_surface(value: dict, surface: dict, supplied_ocean: dict) -> list
 def mpas_route_history(value: dict) -> list[str]:
     """History fields the S2S products read that MPAS-A's default output stream does not carry.
 
-    THE BREAKAGE THIS PREVENTS (hex 0.4.15 fit16-rows, a test host, 2026-11-07): a 7-day 60 km S2S run on the
+    THE BREAKAGE THIS PREVENTS (hex 0.4.15 fit16-rows, verification host, 2026-11-07): a 7-day 60 km S2S run on the
     MPAS-physics route (the hex default) finished its forecast and export, then the energy products stopped with
     'missing field ["swdown", "swdnb", "SWDOWN"]': the solar-irradiance row reads all-sky downward surface
     shortwave, which the ArWen route's history writes as swdown and MPAS-A's default output list leaves out.

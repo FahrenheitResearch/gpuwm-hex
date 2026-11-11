@@ -345,12 +345,27 @@ def native_route(arguments: Any, *, default_mode: str = 'exact'):
     return configure(config), text
 
 
+def suite_route_providers():
+    """The suites-table rows that carry MPAS suite routes, as (key, row)."""
+    return [(key,row) for key,row in load_table().items()
+            if isinstance(row,Mapping) and (row.get('backend')=='mpasphys' or row.get('backend_row')==key)
+            and 'suite_routes' in row]
+
+
+def suite_route_matches(selected, pin_set=None, providers=None):
+    """The (key, row) pairs a suite name resolves to: the row of ``pin_set`` when one is named, else the
+    suite's default row (``route_default_for``)."""
+    providers = suite_route_providers() if providers is None else providers
+    return [(key,row) for key,row in providers if selected in row['suite_routes']
+            and (row.get('pin_set') == pin_set if pin_set else route_default_for(row, selected))]
+
+
 def _native_route(arguments: Any, *, default_mode: str = 'exact'):
     """Table-selected explicit suite; mpas_atmphys_control.F:92-332.
 
     ``default_mode`` is the mode a resolved MPAS suite route takes when the run names none.  The library
     default is exact (replay and reproduction callers are unchanged); the forecast door passes correct
-    (owner ruling 2026-10-13: correct mode is the standard; coordinator 2026-10-14: the default is correct).
+    (correct mode is the standard; the default is correct).
     """
     path = getattr(arguments, 'physics_namelist', None)
     text = path.read_text() if path else ''
@@ -376,15 +391,11 @@ def _native_route(arguments: Any, *, default_mode: str = 'exact'):
         # column-provider row. Without a suite, use MPAS's Registry default
         # (bundled core_atmosphere/Registry.xml:2299). Keep an explicit suite.
         supplied = supplied or groups.get('physics', {}).get('config_physics_suite') or 'mesoscale_reference'
-    table = load_table()
-    providers = [(key,row) for key,row in table.items()
-                 if isinstance(row,Mapping) and (row.get('backend')=='mpasphys' or row.get('backend_row')==key)
-                 and 'suite_routes' in row]
+    providers = suite_route_providers()
     routes = {alias for _,row in providers for alias in row['suite_routes']}
     selected = supplied or groups.get('physics',{}).get('config_physics_suite')
     pin_set = getattr(arguments, 'physics_pin_set', None)
-    matches = [(key,row) for key,row in providers if selected in row['suite_routes']
-               and (row.get('pin_set') == pin_set if pin_set else route_default_for(row, selected))]
+    matches = suite_route_matches(selected, pin_set, providers)
     if pin_set and not matches:
         raise ValueError(f'physics pin set {pin_set!r} has no route for {selected!r}')
     if len(matches)>1:
@@ -433,6 +444,10 @@ def _native_route(arguments: Any, *, default_mode: str = 'exact'):
         # MPAS suite route would run ArWen's physics while its author believes it ran MPAS's.
         raise ValueError('--physics-default-backend applies to an explicit MPAS suite route (--physics-suite '
                          'or config_physics_suite); this run has none')
+    from . import mmm_version as _mmm
+    mmm_explicit = {}
+    from . import gwdo_version as _gwdo
+    gwdo_explicit = {}
     if config is not None and overrides:
         # Reconstruct one native physics group so parse_fortran_namelist never
         # discards a repeated group. WOOF-only selectors have no Registry row.
@@ -445,9 +460,20 @@ def _native_route(arguments: Any, *, default_mode: str = 'exact'):
             spec = matches[0][1]
             backend_options = {row['backend_selector'] for row in spec['slots'].values()}
             backend_options.update(row['backend_selector'] for row in spec.get('services', {}).values())
+            if spec.get('mynn_versions'):
+                backend_options.add(spec['mynn_versions']['selector'])
             option = key.strip().casefold()
             if option in ('tc_flux_curve', 'tc_spray'):
                 tc_surface[option] = value.strip().strip("\"'")
+                continue
+            if option in _mmm.KEYS:
+                # Engine extension (mmm_version.py): selects the MMM-physics generation, never a Registry key.
+                mmm_explicit[option] = value.strip()
+                continue
+            if option in _gwdo.KEYS:
+                # Engine extension (gwdo_version.py): the drag generation and the PR #1409 knobs, which enter the
+                # Registry only when the run selects bl_kim_gwdo (kim_gwdo_2026.prepare_registry).
+                gwdo_explicit[option] = value.strip()
                 continue
             registry_groups = spec.get('registry_groups',{})
             owners = [name for name,keys in registry_groups.items() if option in keys]
@@ -467,6 +493,9 @@ def _native_route(arguments: Any, *, default_mode: str = 'exact'):
     if config is not None and overrides and tc_surface:
         from .tc_surface import configure
         config = configure(config, tc_surface)
+    if config is not None:
+        config = _mmm.configure(config, mmm_explicit)
+        config = _gwdo.configure(config, gwdo_explicit, text)
     return config, text
 
 
@@ -763,7 +792,8 @@ def _in_defaults(element: Any) -> int:
 
 def write_default_streams(layout: Any, path: Path, *, history_minutes: float | None = None,
                           checkpoint_hours: Any = None, surface_interval: str | None = None,
-                          omit: Mapping[str, Any] | None = None, bound_inputs=(), add_output=()) -> Path:
+                          omit: Mapping[str, Any] | None = None, bound_inputs=(), add_output=(),
+                          native_state_publication: bool = False) -> Path:
     """MPAS's own default streams.atmosphere and stream_list.atmosphere.* files, from the Registry this run decoded.
 
     THE BREAKAGE THIS PREVENTS: the MPAS suite route refused every run that named no streams.atmosphere
@@ -799,7 +829,7 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
     root = ET.Element('streams')
     bound = set(bound_inputs)
     # ``add_output`` (--history-field): Registry fields a run asks to have in its default output stream as well.
-    # THE BREAKAGE IT PREVENTS (hex 0.4.15 fit16-rows, a test host, 2026-11-07): MPAS-A's default output list carries
+    # THE BREAKAGE IT PREVENTS (hex 0.4.15 fit16-rows, verification host, 2026-11-07): MPAS-A's default output list carries
     # no downward surface shortwave (swdnb), so a 7-day 60 km S2S run on the MPAS-physics route finished its
     # forecast and its energy products stopped with 'missing field ["swdown", "swdnb", "SWDOWN"]'.
     known = {f['name'] for f in layout.fields}
@@ -863,9 +893,10 @@ def write_default_streams(layout: Any, path: Path, *, history_minutes: float | N
                 attributes['packages'] = member.get('packages')
             ET.SubElement(element, member.tag, attributes)
         if name == 'output':
-            from hexcore.cycle.land_state import LAND_FIELDS
+            from hexcore.cycle.land_state import DEFAULT_HISTORY_FIELDS, LAND_FIELDS
             active = {f['name'] for f in layout.fields}
-            for field in [*(f.name for f in LAND_FIELDS), *add_output]:
+            land = tuple(f.name for f in LAND_FIELDS) if native_state_publication else DEFAULT_HISTORY_FIELDS
+            for field in [*land, *add_output]:
                 if field not in active:
                     continue
                 if separate:
@@ -1005,7 +1036,7 @@ def named_library_route(arguments: Any, config: Any) -> bool:
 
     THE BREAKAGE THIS PREVENTS: with every active slot on hex-cuda, ``runtime_v842.framework_only`` picks the
     ported framework, which runs only what its resident interface glue admits.  The RRFS fork's hrrrv5 put every
-    slot on the GPU once the UGWP ports shipped again (owner ruling 2026-10-14), so a run naming a site-built RRFS
+    slot on the GPU once the UGWP ports shipped again (2026-10-14), so a run naming a site-built RRFS
     library (``--native-physics-library`` or MPAS_NATIVE_LIBRARY), the documented RRFS route, was refused by name
     ("its resident interface glue is not in this distribution") instead of running on that library with the GPU
     slots, as it did while gwdo was native-cpu.  When the ported framework can run the selection it is still taken.
@@ -1164,6 +1195,18 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
     sources = list(dict.fromkeys((*sources,*table_bindings.values(),*startup_bindings)))
     if initial_stream != 'input':
         sources = [path for path in sources if path != initial_file] + [initial_file]
+    from . import gwdo_version as _gwdo
+    if _gwdo.selected(config):
+        # The KIM drag reads MPAS PR #1408's statistics (elvmax and the revised var2d/con/oa/ol), which no init
+        # carries: built once per mesh (hexcore.kim_gwd_static) and read LAST, over the init's own statistics.
+        from ..kim_gwd_static import ensure as _kim_statistics, mesh_file_of
+        mesh_file = mesh_file_of(arguments)
+        if mesh_file is None:
+            raise ValueError("config_gwdo_scheme='bl_kim_gwdo' reads elvmax (MPAS PR #1408), built from the run's "
+                             "mesh; this run names no --grid, --static or --init file to build it from")
+        statistics = _kim_statistics(mesh_file)
+        arguments._kim_gwd_statistics = str(statistics)
+        sources = [path for path in sources if path != statistics.resolve()] + [statistics.resolve()]
     text = apply_start_time(text, getattr(arguments, 'start_time', None))
     text = bind_limited_area(arguments, text)
     from .checkpoint_v842 import resolve_route
@@ -1241,6 +1284,7 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
         streams_path = write_default_streams(layout, scratch/'streams.atmosphere',
                                              history_minutes=getattr(arguments,'history_every_minutes',None),
                                              checkpoint_hours=None, omit=row.get('default_streams_omit'),
+                                             native_state_publication=bool(getattr(arguments, 'jedi_background', False)),
                                              bound_inputs=bindings, **timed,
                                              **({'add_output': tuple(arguments.history_field)}
                                                 if getattr(arguments, 'history_field', None) else {}))
@@ -1250,6 +1294,10 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
         module,callable_name=parser.split(':')
         tree=getattr(import_module(module),callable_name)(streams_path,library)
     streams=read_streams(streams_path,layout,getattr(arguments,'stream_list_directory',None),tree=tree)
+    if getattr(arguments, 'jedi_background', False):
+        from ..producer_cloud import publish_native_cloud
+        from ..native_geometry import publish_native_identity
+        streams = publish_native_identity(publish_native_cloud(streams, layout), layout)
     from ..forecast_start import radar_streams
     streams = radar_streams(streams, layout, out, Stream)
     defaults = {initial_stream: initial_file}
@@ -1292,6 +1340,15 @@ def run_forecast(arguments: Any, config: Any, text: str) -> int:
               pool_manifest=str(scratch/'native-pools/manifest.json'),identity_checked=False)
     if dynamics:
         plan['dynamics_overrides'] = dict(dynamics)
+    if getattr(arguments, 'jedi_background', False):
+        plan['native_state_publication'] = True
+        from .rrfs.cold_start_rrfs import load_producers
+        if (row.get('init_producer') or any(p['physics_table_key'] == getattr(config, 'table_key', '')
+                for p in load_producers()['producers'].values())):
+            from .state_roles import allocation_contract
+            plan['native_state_roles'] = allocation_contract(config.receipt(),
+                json.loads((scratch/'native-pools/manifest.json').read_text()),
+                native_init=plan['init'], start=start)
     (out/'native-physics-request.json').write_text(json.dumps(plan,indent=2)+'\n')
     if getattr(arguments,'preflight',False):
         print(json.dumps(dict(status='native-pool-preflight',identity_checked=False,request=plan)))

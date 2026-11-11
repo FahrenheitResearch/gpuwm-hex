@@ -1,7 +1,7 @@
 """--history-field adds a Registry field to MPAS's default output stream; the S2S door asks for swdnb on the
 MPAS-physics route (hex 0.4.15 fit16-rows).
 
-THE BREAKAGE THESE PIN (a test host, 2026-11-07): a 7-day 60 km S2S run on the MPAS-physics route (the hex default)
+THE BREAKAGE THESE PIN (verification host, 2026-11-07): a 7-day 60 km S2S run on the MPAS-physics route (the hex default)
 finished its forecast and export, then its energy products stopped with
 'missing field ["swdown", "swdnb", "SWDOWN"]': MPAS-A's default output list carries no downward surface shortwave.
 """

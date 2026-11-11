@@ -1,6 +1,6 @@
 """The GFS row's dated surface forecast, and the S2S door reading it from the table (hex 0.4.15 fit16-rows).
 
-THE BREAKAGE THESE PIN (global16 prove lane, a test host, 2026-11-06): a GFS-forecast SST series for the 60 km
+THE BREAKAGE THESE PIN (global16 prove lane, verification host, 2026-11-06): a GFS-forecast SST series for the 60 km
 globe stopped with "rw_sfc_series: source has no surface forecast row", and the S2S door asked any source but
 CFS for analyses at every valid time, which do not exist past the latest cycle.
 """

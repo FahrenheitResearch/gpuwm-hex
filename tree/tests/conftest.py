@@ -35,7 +35,7 @@ from typing import Iterable
 
 import pytest
 
-# Kernel numerics for the battery (owner ruling 2026-10-16: fast is the door default, strict is the opt-in).
+# Kernel numerics for the battery (fast is the door default, strict is the opt-in).
 # The battery's compile-option, oracle and replay tests pin the strict route, the one that is bitwise to
 # native MPAS, so the battery names strict, and so does every subprocess it starts.  Tests of the fast
 # default select it themselves (test_numerics.py).

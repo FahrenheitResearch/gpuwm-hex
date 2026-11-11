@@ -1,6 +1,6 @@
 """Which MPAS-route output files are written lossless-compressed, and how.
 
-Ruling 2026-10-28: "Lossless compression is the default"; 2026-10-27: Regional and hex get features together.
+Lossless compression is the default (2026-10-28); Regional and hex get features together (2026-10-27).
 ArWen's history frames are lossless NetCDF-4 since gpuwm 2.9.10, and the ArWen-physics route here already
 writes deflated frames (hexcore.history_deflate). The MPAS-physics route (the hex default) wrote its history
 and diagnostics files uncompressed through rw_mpas_stream. They are now written lossless-compressed by

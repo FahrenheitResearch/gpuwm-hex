@@ -642,6 +642,40 @@ def argv_physics_route(argv) -> str:
         return "mpas"
 
 
+def argv_physics_suite(argv) -> str | None:
+    """The MPAS suite a forecast-door argv runs, or None (the ArWen route, or an argv the door would refuse).
+
+    For the planners beside :func:`argv_physics_route`: a member is priced from its suite's own measured whole
+    runs where the suite has them (``device_admission.route_peak_rows``).  THE BREAKAGE THIS PREVENTS (hex 0.5.0):
+    an hrrrv5 member was priced from the convection_permitting curve, 72.6 GB for a 30 km run that peaks 86.8 GB."""
+    import argparse
+
+    from . import forecast_door, physics_default
+
+    tokens = [str(token) for token in argv or ()]
+    if tokens and tokens[0] == "forecast":
+        tokens = tokens[1:]
+    parser = argparse.ArgumentParser(add_help=False)
+    forecast_door.add_forecast_arguments(parser)
+    try:
+        arguments, _unknown = parser.parse_known_args(tokens)
+        physics_default.apply(arguments)
+        return member_suite(arguments, forecast_door)
+    except (Exception, SystemExit):
+        return None
+
+
+def member_suite(arguments, door) -> str | None:
+    """The MPAS suite one member's forecast flags name (the same ``native_route`` the forecast takes), or None."""
+    from .mpasphys.forecast_v842 import native_route
+
+    try:
+        config, _text = native_route(arguments, default_mode=getattr(door, "PHYSICS_MODE_DEFAULT", "correct"))
+    except ValueError:
+        return None
+    return None if config is None else getattr(config, "suite", None)
+
+
 def _member_cells(member) -> int:
     from .mesh_rows import _dimensions
 
@@ -687,7 +721,7 @@ def admit_suite_group(members, gate) -> dict | None:
     margin = None if headroom is None else int(round(float(headroom) * door.MIB))
     from .device_admission import mpas_member_increment_bytes, route_required_free_bytes
 
-    solo = route_required_free_bytes(cells, model, margin, route="mpas")
+    solo = route_required_free_bytes(cells, model, margin, route="mpas", suite=member_suite(first, door))
     # Members after the first cost the measured increment, not a whole solo price (both-routes RED 2).
     increment = mpas_member_increment_bytes(cells, levels)
     if increment is not None:

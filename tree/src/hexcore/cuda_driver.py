@@ -3132,7 +3132,7 @@ class CudaDryDycoreDriver:
                     "native split-three performs one scalar RK after flux averaging",
                     "config_split_dynamics_transport=True",
                 )
-            # RETIRED 2026-10-10 (owner ruling): three refusals that named an evidence inventory, not a
+            # RETIRED 2026-10-10: three refusals that named an evidence inventory, not a
             # breakage.  config_scalar_advection=False skips scalar transport
             # (advance_scalar_transport_cuda_v841 returns the stage
             # unchanged, as native does); config_positive_definite=True runs

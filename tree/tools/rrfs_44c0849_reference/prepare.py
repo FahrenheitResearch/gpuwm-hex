@@ -5,12 +5,12 @@ Referee (``RRFS_44C0849_REFEREE``, default ``pristine``):
 
 - ``pristine``: the pinned 44c0849 source, unchanged.
 - ``patched``: the REFERENCE OF RECORD for RRFS 44c0849 claims, always labelled patched, never pristine. It is the
-  pinned source plus exactly four owner-approved lines, each where native reads a value it never set:
-  1. two ``nullify(smoke_fine_fg, dust_fine_fg, dust_coarse_fg)`` lines in ``mpas_init_atm_cases.F`` (owner ruling
+  pinned source plus exactly four approved lines, each where native reads a value it never set:
+  1. two ``nullify(smoke_fine_fg, dust_fine_fg, dust_coarse_fg)`` lines in ``mpas_init_atm_cases.F`` (since
      2026-10-14 for fork 1d6e370e, carried to 44c0849 2026-10-29): native's case-7/9 init tests optional smoke/dust
      pointers it never nullified and crashes;
   2. two ``ilnb = 0`` lines in RUC, before ``call snowsoil`` (``module_ruc_land.F90``) and before ``call snowseaice``
-     (``module_ruc_ice.F90``) (owner ruling 2026-11-06): for snow thinner than ``snth`` (about 10 mm water
+     (``module_ruc_ice.F90``) (since 2026-11-06): for snow thinner than ``snth`` (about 10 mm water
      equivalent) native reads the uninitialised local ``ilnb`` to pick the ``tsnav`` formula, and ``tsnav`` feeds
      the next step's snow compaction. Witness: pristine native against native with these two lines reproduces the
      hex-vs-pristine-native divergence word for word (127,564 vs 127,565 words at step 8, x1.40962 hrrrv5 strict),

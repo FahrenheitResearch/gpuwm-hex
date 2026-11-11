@@ -685,7 +685,7 @@ def admit_timestep(
 ) -> dict[str, Any]:
     """Answer the timestep half of "will this run?" from the row alone.
 
-    RETIRED 2026-10-10 as an anchor gate (owner ruling).  This used to refuse every timestep the earned-anchor
+    RETIRED 2026-10-10 as an anchor gate.  This used to refuse every timestep the earned-anchor
     registry did not hold.  It now refuses only what the run cannot
     schedule -- a surface/PBL, radiation or cumulus cadence that is not a
     whole number of steps, or a timestep whose multiples are not exact in
@@ -1441,7 +1441,7 @@ def backend_pin_problem(row, checkout: Path) -> str | None:
 def seam_pin_problem(checkout: Path) -> str | None:
     """What stops the frozen row's seam from running on ``checkout``, or None.
 
-    RETIRED 2026-10-10 as a certificate gate (owner ruling; Gate law, Refusals law).  This used to refuse any engine
+    RETIRED 2026-10-10 as a certificate gate (Gate law, Refusals law).  This used to refuse any engine
     whose sixteen seam files were not, byte for byte, the pinned version's:
     "the seam is the whole physics of this model ... so running against
     moved bytes would be running physics nobody proved".  That sentence
@@ -1702,7 +1702,7 @@ def _physics_mode_fields(arguments: argparse.Namespace,
     before any input is read (hexcore.correct_mode refuses a misspelling).
 
     A run that names no mode takes its preset row's (every shipped row says
-    ``correct``, owner ruling 2026-10-13); ``--physics-mode exact`` is
+    ``correct``); ``--physics-mode exact`` is
     the matched arithmetic, byte for byte."""
 
     from . import correct_mode
@@ -1883,6 +1883,27 @@ def resolve_request(
                   + (f" (this engine lacks {', '.join(dt_selection['engine_lacks'])})"
                      if dt_selection.get("engine_lacks") else "")
                   + "; --dt SECONDS runs a step of your choosing", file=sys.stderr, flush=True)
+    if physics is not None:
+        # TEMPO picked over an ArWen-route suite goes non-physical at long steps on this engine
+        # (hexcore.global_door.microphysics_step_cap says what was measured and when it retires): a default
+        # step takes its cap and an explicit longer step is refused by name.  MPAS-A's own suites take the
+        # MPAS route, which sub-steps microphysics itself, and are not capped.
+        from .global_door import GlobalDoorError, microphysics_step_cap
+        from .physics_suites import mpas_suite_names
+
+        if physics.suite not in mpas_suite_names():
+            try:
+                micro_selection = microphysics_step_cap(
+                    dt_selection, physics.selectors, radiation_seconds=float(radiation_seconds))
+            except GlobalDoorError as error:
+                raise _refuse(str(error)) from None
+            if str(micro_selection.get("arm", "")).startswith("microphysics "):
+                print(f"gpuwm-hex: timestep {micro_selection['dt_seconds']:g} s, under the "
+                      f"{micro_selection['arm']} cap of {micro_selection['cap_seconds']:g} s on the ArWen route "
+                      f"(the default was {float(dt_selection['dt_seconds']):g} s): TEMPO over an ArWen-route "
+                      "suite goes non-physical at longer steps on this engine; --dt SECONDS at or under the cap "
+                      "runs a step of your choosing", file=sys.stderr, flush=True)
+            dt_selection = micro_selection
     fixed_selection = dt_selection
     dt_selection = lts_step(arguments, dt_selection, float(radiation_seconds))
     # The ArWen route measured the MPAS route's loss on the same mesh (HEX-LTS-REGRESSION-2026-10-27): LTS runs
@@ -2056,7 +2077,7 @@ def resolve_request(
         arguments, row, grid, static, init, collected)
     orographic_statistics = resolve_orographic_statistics(
         arguments, physics, mesh, grid, collected)
-    for problem in microphysics_problems(backend_row, init):
+    for problem in microphysics_problems(backend_row, init, door_completes_init=door_completes_init(physics)):
         if collected is None:
             raise _refuse(problem)
         collected.append(problem)
@@ -2465,7 +2486,25 @@ def namelist_dycore_problems(
             for line in dycore_disagreements(imported, run_config)]
 
 
-def microphysics_problems(backend_row, init) -> list[str]:
+def door_completes_init(physics) -> bool:
+    """Whether this door completes the init for the run's physics before the driver opens.
+
+    ``prepare_forecast_init`` does, for a run whose physics the suite table resolved (a suite, or scheme choices
+    over one) with a land model the table carries: it adds the species of the chosen microphysics and, for an
+    aerosol-aware one, nwfa and nifa from the monthly climatology.  A backend row or a namelist run has no such
+    resolution and its init is used as supplied, as is the init of an MPAS-A suite.
+    """
+
+    if physics is None:
+        return False
+    from .physics_suites import load_table, mpas_suite_names
+    if physics.suite in mpas_suite_names():
+        return False  # MPAS-A's own suites: the forecast allocates their species; their init is used as supplied
+    lsm = physics.selectors.get("config_lsm_scheme")
+    return load_table()["options"]["config_lsm_scheme"].get(lsm, {}).get("carried") is not None
+
+
+def microphysics_problems(backend_row, init, *, door_completes_init: bool = False) -> list[str]:
     """What stops the selected microphysics before the card, init first.
 
     The init check is a few reads; the table check may acquire TEMPO's pinned
@@ -2473,9 +2512,18 @@ def microphysics_problems(backend_row, init) -> list[str]:
     PREVENTS (release review M3, measured in a fresh HOME): the door downloaded
     the TEMPO tables and only then refused an init without aerosol fields.
     A run its init cannot start acquires nothing.
+
+    ``door_completes_init`` (:func:`door_completes_init`): the init supplied is
+    not the init the driver opens, because this door writes the aerosol fields
+    into its own copy first, so their absence from the supplied file stops
+    nothing.  THE BREAKAGE THIS PREVENTS (2026-11-09): TEMPO picked over the
+    ArWen suite (``--physics config_microp_scheme=mp_tempo``) on a door whose
+    cold init is built before the scheme is known (``global``, ``country``, a
+    plain ``forecast --init``) was refused here for fields the same door was
+    about to write.
     """
 
-    aerosol_problem = microphysics_init_problem(backend_row, init)
+    aerosol_problem = None if door_completes_init else microphysics_init_problem(backend_row, init)
     if aerosol_problem is not None:
         return [aerosol_problem]
     table_problem = microphysics_table_problem(backend_row)
@@ -3536,6 +3584,15 @@ def announce_cpu_slots(config: Any) -> None:
         print(warning, file=sys.stderr, flush=True)
 
 
+def announce_mynn_version(config: Any) -> None:
+    """Print, at start-up, which MYNN suite version the run executes (a line beginning ``MYNN SUITE VERSION:``;
+    hexcore.mpasphys.rrfs.driver_rrfs).  Rows without selectable MYNN versions, and runs with no MYNN slot
+    active, print nothing."""
+    line = getattr(config, "mynn_version_line", lambda: None)()
+    if line:
+        print(line, file=sys.stderr, flush=True)
+
+
 def mpas_suite_lts_refusal(arguments: argparse.Namespace, environ=None) -> str | None:
     """The refusal for a local-time-stepping switch on the MPAS suite route, or None.
 
@@ -3563,7 +3620,7 @@ def mpas_suite_lts_refusal(arguments: argparse.Namespace, environ=None) -> str |
         if any(value is not None for value in knobs.values()):
             return "the requested LTS policy would be ignored; LTS-only knobs need --fullstep-local-timestep"
         return None
-    # Retired (HEX-PHYSICS-PARITY run group 2 #8; owner ruling 2026-10-24: every hex capability works on every physics
+    # Retired (HEX-PHYSICS-PARITY run group 2 #8; every hex capability works on every physics
     # route): full-step LTS runs on this route, active (hexcore.mpasphys.lts_v842, every rate class with the MPAS
     # suite as its physics) and shadow (the ArWen route's observer on the fixed step).  What stays refused is
     # named below and in lts_v842.admission_refusal.
@@ -3593,7 +3650,7 @@ def run_forecast(arguments: argparse.Namespace) -> int:
 
 
 def _run_forecast_with_outputs(arguments: argparse.Namespace) -> int:
-    # The hex default physics (owner ruling 2026-10-25): a run that names no physics takes MPAS-A's own suite on
+    # The hex default physics (2026-10-25): a run that names no physics takes MPAS-A's own suite on
     # the MPAS route, chosen by mesh (hexcore.physics_default).  Applied before the roster split, so every member
     # and every segment process decides the same route.  --physics-suite arwen_mpas_column is the ArWen route.
     from . import physics_default
@@ -4179,7 +4236,8 @@ def admit_native_device(arguments, config) -> AdmissionVerdict:
     verdict = admission_verdict(mesh=str(arguments.mesh), cells=cells, free_bytes=free,
         total_bytes=total, headroom_bytes=margin, registry={}, model=model,
         stochastic=getattr(arguments, 'stochastic', None))
-    required = route_required_free_bytes(cells, model, margin, route='mpas') + verdict.stochastic_array_bytes
+    required = (route_required_free_bytes(cells, model, margin, route='mpas', suite=config.suite)
+                + verdict.stochastic_array_bytes)
     if required != verdict.required_bytes:
         verdict = replace(verdict, required_bytes=required, admitted=free >= required,
             predicted_bytes=required-verdict.headroom_bytes,
@@ -4209,8 +4267,8 @@ def _run_forecast(arguments: argparse.Namespace) -> int:
     except AnalysisDoorRefusal as error:
         raise _refuse(str(error)) from None
     try:
-        # An MPAS suite route that names no mode runs correct (owner ruling 2026-10-13: correct mode is the
-        # standard; coordinator 2026-10-14: default correct, gaps listed loudly, never refused).
+        # An MPAS suite route that names no mode runs correct (correct mode is the
+        # standard; the default is correct, gaps listed loudly, never refused).
         # --physics-mode exact runs native MPAS v8.4.2 bit for bit; every proof names it.
         native_config, native_text = native_route(arguments, default_mode=PHYSICS_MODE_DEFAULT)
         require_forecast_inputs(arguments, native=native_config is not None)
@@ -4259,13 +4317,14 @@ def _run_forecast(arguments: argparse.Namespace) -> int:
                 from .mpasphys.forecast_v842 import bind_door_iau
                 native_text = bind_door_iau(arguments, native_text)
             # Upstream code under restricted terms (Noah-MP v5.0: UCAR forbids sale) runs only by an opt-in that names
-            # its terms (hexcore.licence_gate; owner ruling 2026-10-14).  No default selects it.  UGWP and the RRFS
-            # fork's NOAA GSL physics are not gated (owner ruling 2026-10-14: treated as US Government code).
+            # its terms (hexcore.licence_gate).  No default selects it.  UGWP and the RRFS
+            # fork's NOAA GSL physics are not gated (treated as US Government code).
             from . import licence_gate
             native_config = licence_gate.admit(native_config, arguments)
             admit_native_device(arguments, native_config)
             announce_physics_mode(native_config, arguments)
             announce_cpu_slots(native_config)
+            announce_mynn_version(native_config)
             from .mpasphys.memory_admission import admit as admit_native_memory
             admission = admit_native_memory(arguments)
             print(json.dumps({"native_memory_admission": admission}), file=sys.stderr, flush=True)
@@ -4698,7 +4757,9 @@ def add_forecast_arguments(parser: argparse.ArgumentParser) -> None:
              "config_radt_lw_scheme, config_radt_sw_scheme, config_radt_cld_scheme), "
              "a WOOF generation selector (thompson_version, thompson_fork_snow_fall, "
              "bl_mynn_version, bl_mynn_mixlength, mynn_sfclay_variant, "
-             "rrtmg_cloud_optics_form) or config_frac_seaice. Recorded as an "
+             "rrtmg_cloud_optics_form) or config_frac_seaice; on the RRFS 44c0849 route also "
+             "config_mynn_version (mynn-v6.1, the default: MYNN-EDMF v6.1.1 + MYNN-SFC v6.1.0; "
+             "mynn-sfc-v6.1.0; pinned: the 44c0849 MYNN, bitwise to native). Recorded as an "
              "override in the receipt. With no --physics-suite it overrides the ArWen "
              "suite (arwen_mpas_column); name an MPAS suite to override on the MPAS route")
     parser.add_argument(

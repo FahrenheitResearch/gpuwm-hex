@@ -651,7 +651,7 @@ class RegionalContract:
 #: (12) 2026-10-16 (hex 0.4.1 landing batch): the composed tree of (8)-(11)
 #: together. The value below is re-derived by tools/repin_source_tables.py
 #: on that tree; not a new regional mint, archived scope unchanged.
-#: (13) 2026-10-16 (hex/fast-numerics, owner ruling: fast numerics is the
+#: (13) 2026-10-16 (hex/fast-numerics: fast numerics is the
 #: default, strict the opt-in): cuda_regional_v841.py and runtime.py take
 #: their compile options from hexcore.numerics. Under --numerics strict the
 #: options are the unit's original tuple, unchanged; no CUDA source string
@@ -801,8 +801,11 @@ class RegionalContract:
 #: DEFECT naming the loaded NVRTC (pack_defect_line); the message text only, no CUDA source string, compile
 #: request or arithmetic changed. The only changed member of this set since (39). Re-derived by
 #: tools/repin_source_tables.py; not a new mint.
+#: (41) 2026-11-11 (hex 0.5.0 re-seal): comment and docstring lines in cuda_driver.py, cuda_regional_forecast_v841.py
+#: and note (13) above reworded; no code, CUDA source string, compile request or arithmetic changed. Re-derived by
+#: tools/repin_source_tables.py; not a new mint.
 MINTED_KERNEL_SET_SHA256 = (
-    "168c03acb84cae20707f4872dc26c577c6183b705dba7f5b1c90ca6ae60bb2c6"
+    "3be7dc867d7fcd77a1ca28c79ac2d9df23ff9ff6e69fa9712d50bf9f0ae5addf"
 )
 
 _DRY_MINT_CAVEAT = (

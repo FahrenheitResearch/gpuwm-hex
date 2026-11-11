@@ -206,7 +206,8 @@ class FrameworkInitializationRRFS(FrameworkInitialization):
         for slot, scheme in self.session.config.selectors.items():
             if not self.session.config.active(slot) or provider is None:
                 continue
-            descriptor = rows.get(slot, {}).get('cuda_entries', {}).get(scheme) or {}
+            from ..driver_v842 import slot_cuda_entry
+            descriptor = slot_cuda_entry(self.session.config, rows, slot, scheme) or {}
             resource = descriptor.get('resources')
             if resource and hasattr(provider, resource['attribute']):
                 state[scheme] = getattr(provider, resource['attribute'])
@@ -739,9 +740,9 @@ class FrameworkInitializationRRFS(FrameworkInitialization):
                              resource='mpas-source-rrfs', pin_set='rrfs'):
         """Strict numerics: refuse before the run starts when a TEMPO lookup file it would read is not the strict one.
 
-        THE BREAKAGE THIS PREVENTS (hrrrv5 x1.40962, strict, a test host, 2026-11-06): the run's named table directories
+        THE BREAKAGE THIS PREVENTS (hrrrv5 x1.40962, strict, verification host, 2026-11-06): the run's named table directories
         did not hold the strict reference's lookup files, so TEMPO silently read the fork source's NOAA copies
-        (freeze_water_data_tempo_v3 sha256 4624...) where native and a test host read the strict-rebuilt 9cf5..., and the
+        (freeze_water_data_tempo_v3 sha256 4624...) where native and verification host read the strict-rebuilt 9cf5..., and the
         bitwise comparison ran against different tables.  Expected digests: the packet's ``mp_tempo.lookup_sha256``
         (a referee packet records the files its native reference ran with), else the fork manifest's pinned files
         (the NOAA files a plain install fetches).  Fast (default) runs are not checked.  ``future`` is

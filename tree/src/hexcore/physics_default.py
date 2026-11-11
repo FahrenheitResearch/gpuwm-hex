@@ -1,7 +1,7 @@
 # Modified 2026-10-28: experimental HRRR-like profile and aerosol route support.
 """The native MPAS default and observation-qualified regional cold-start recipes.
 
-Owner ruling 2026-10-25: "now that mpas physics are good those should be the default in general and on site".
+MPAS physics is the default, on the command line and on the site (since 2026-10-25).
 Fixed means default, so the default is flipped here, in code, for every door: a run that names no physics
 option runs the MPAS route (``hexcore.mpasphys``) with the suite the table
 ``data/profiles/physics-default.v1.json`` picks for the mesh's finest cell spacing (MPAS-A practice:
@@ -101,11 +101,24 @@ def _unwrap(items: Iterable[Any]) -> list[str]:
     return out
 
 
+#: ``--physics KEY=VALUE`` keys that pick a scheme GENERATION on the default suite (latest upstream or the pin),
+#: not the run's physics: ``--physics gwdo_version=v842`` alone keeps the default MPAS suite (gwdo_version.py).
+VERSION_KEYS = ("gwdo_version",)
+
+
+def _version_only(value: Any) -> bool:
+    return str(value).split("=", 1)[0].strip().casefold() in VERSION_KEYS
+
+
 def names_physics(flags: Sequence[Any] | None) -> bool:
     """Whether a forecast-flag list names the run's physics (so no default applies)."""
     items = _unwrap(flags or ())
     for index, item in enumerate(items):
         name = _flag_name(item)
+        if name == "--physics":
+            value = item.split("=", 1)[1] if "=" in item else (items[index + 1] if index + 1 < len(items) else "")
+            if _version_only(value):
+                continue
         if name in _NAMING_FLAGS:
             return True
         if name == "--convection":
@@ -130,16 +143,46 @@ def ensure(flags: Sequence[Any] | None, finest_dx_m: float | None = None, *,
             *([f"--physics-profile={rule['profile']}"] if "profile" in rule else [])]
 
 
+def physics_overrides(flags: Sequence[Any] | None) -> list[str]:
+    """Every ``--physics KEY=VALUE`` a forecast-flag list carries, in order, as ``KEY=VALUE`` (either spelling:
+    ``--physics=KEY=VALUE`` or two items; ``--physics-mode`` and the other ``--physics-*`` flags are not overrides)."""
+    items = _unwrap(flags or ())
+    found: list[str] = []
+    index = 0
+    while index < len(items):
+        flag, equals, value = items[index].partition("=")
+        if flag == "--physics":
+            if not equals:
+                if index + 1 >= len(items):
+                    break  # the forecast door refuses a flag with no value by name
+                index += 1
+                value = items[index]
+            found.append(value)
+        index += 1
+    return found
+
+
 def init_flags(flags: Sequence[Any] | None) -> list[str]:
-    """Forward the resolved recipe to cold initialization, preserving native case-7 init."""
+    """Forward the resolved recipe to cold initialization, preserving native case-7 init.
+
+    An ArWen-route suite is forwarded WITH the run's single scheme choices (``--physics KEY=VALUE``), and choices
+    named with no suite are forwarded under the suite the forecast door gives them (the ArWen suite).  THE BREAKAGE
+    THIS PREVENTS (2026-11-09, a zoom globe from ERA5 1957-12-18T12 on the ArWen suite with NSSL two-moment
+    microphysics picked): only the suite was forwarded, so the init was built for the suite's own microphysics, had
+    no variable for the picked scheme's species (NSSL's ten, P3's qib and qir, TEMPO's nwfa and nifa) and the
+    forecast refused at its physics start.  A request that names a suite and no choice forwards exactly what it did.
+    """
     from .global_door import forecast_arg_physics
-    from .physics_suites import mpas_suite_names, suite_names
+    from .physics_suites import DEFAULT_SUITE, mpas_suite_names, suite_names
     named = forecast_arg_physics(_unwrap(flags or ()))
     if named.get("profile"):
         return ["--physics-profile", named["profile"]]
     suite = named.get("suite")
+    picks = [item for override in physics_overrides(flags) for item in ("--physics", override)]
+    if suite is None and picks and not named.get("namelist"):
+        suite = DEFAULT_SUITE
     if suite and suite in suite_names() and suite not in mpas_suite_names():
-        return ["--physics-suite", suite]
+        return ["--physics-suite", suite, *picks]
     if suite and init_producer(suite):
         # A suite whose model initializes with its own producer (RRFS-MPAS: hrrrv5 and the rrfs_* suites, RUC on
         # nine soil levels).  THE BREAKAGE IT PREVENTS: `gpuwm-hex regional --forecast-arg=--physics-suite=hrrrv5`
@@ -167,7 +210,7 @@ def namespace_names_physics(arguments: Any) -> bool:
         return True
     if getattr(arguments, "physics_namelist", None) is not None:
         return True
-    if getattr(arguments, "physics", None):
+    if any(not _version_only(value) for value in (getattr(arguments, "physics", None) or ())):
         return True
     if getattr(arguments, "physics_backend", None) not in (None, DEFAULT_BACKEND):
         return True

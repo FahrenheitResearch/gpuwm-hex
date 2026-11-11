@@ -833,7 +833,7 @@ def _check_seam_bytes(installed: str) -> Finding:
         )
 
     named = installed or engine_pin.version_from_moved(inspection.moved) or "this"
-    # INFO, not a blocking gap, since 2026-10-10 (owner ruling): this finding used to say "the forecast lane
+    # INFO, not a blocking gap, since 2026-10-10: this finding used to say "the forecast lane
     # refuses at launch", and it did.  A byte difference from the measured
     # engine names no breakage, so the forecast runs and its receipt records
     # the moved files (engine_pin.identity_of).

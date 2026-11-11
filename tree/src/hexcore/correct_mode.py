@@ -10,7 +10,7 @@ The shared key of the 2026-10-13 correct-mode work (MODE-KEY):
     parity configuration names ``exact`` explicitly.
 ``"correct"``
     Every correction the run's code carries, minus ``physics.correct_skip``.
-    This is the default of every entry point hex ships (owner ruling
+    This is the default of every entry point hex ships (since
     2026-10-13: correct mode is the standard; exact stays one flag away).
 
 ONE TABLE OF FINDINGS.  :data:`FINDINGS` names every switchable finding id
@@ -23,7 +23,7 @@ the imported engine's registry when they exist, so a skip list is checked
 against one set of names whichever route runs.
 
 A CORRECTION THE RUN CANNOT APPLY IS A LOUD NAMED GAP, NEVER A REFUSAL
-(release ruling 2026-10-14 for 0.4.0).  When a correct-mode run reaches code
+(2026-10-14 for 0.4.0).  When a correct-mode run reaches code
 that does not carry a correction (an engine without ``gpuwm.correct_mode``,
 an engine seam that takes no mode keywords, an ``rw_mpas_lbc`` without
 ``--physics-mode``), the run goes ahead with the matched arithmetic for that

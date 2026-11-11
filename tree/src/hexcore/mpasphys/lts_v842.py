@@ -532,6 +532,10 @@ class LtsClassExecution:
                     board.lock.notify_all()
                 return frame
 
+            def _identity_step(self, step):
+                # The native request counts fine steps; the writer counts this class's steps.
+                return int(step) * execution.rate
+
             def _encode(self, jobs, snapshot, when, step, *extra, **options):
                 extras = extra[0] if extra else options.pop('extras', None)
                 if extras and any(stream.name in ('output', 'history') for stream, _, _ in jobs):

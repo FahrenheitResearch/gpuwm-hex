@@ -7,7 +7,7 @@ import shutil
 import xml.etree.ElementTree as ET
 import pytest
 
-# The 2026-10-14 07:45Z source-authority ruling record carries private context, so it is kept in the
+# The 2026-10-14 07:45Z source-authority record carries private context, so it is kept in the
 # reference store (each init derivative publication's REFERENCE-RULING.json), not in this tree; these tests
 # bind its exact bytes and run where RRFS_SOURCE_AUTHORITY_RULING names it (the reference hosts).
 _RULING_TESTS = {
@@ -27,7 +27,7 @@ def _ruling_record(request):
              or request.node.name == "test_published_field_recomparison_rejects_untrusted_archives[lost-derivative-label]")
     ruling = os.environ.get("RRFS_SOURCE_AUTHORITY_RULING")
     if needs and not (ruling and Path(ruling).is_file()):
-        pytest.skip("source-authority ruling record not supplied (RRFS_SOURCE_AUTHORITY_RULING)")
+        pytest.skip("source-authority record not supplied (RRFS_SOURCE_AUTHORITY_RULING)")
 
 ROOT = Path(__file__).parents[1] / 'tools/native_physics_reference/rrfs'
 spec = importlib.util.spec_from_file_location('rrfs_flags', ROOT / 'audit_flags.py')

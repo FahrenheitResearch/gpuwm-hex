@@ -443,6 +443,14 @@ class ResidentNativeCoupling:
         self.session.put('tend_physics','rthdynten',rth)
 
 
+def bound_increment_file(arguments):
+    """The increment file the run's iau stream reads when the door bound it (--stream-input iau=FILE, which
+    --iau-increment and --iau-analysis become; forecast_v842.bind_door_iau), else None."""
+    bound = [str(b).partition('=')[2] for b in (getattr(arguments, 'stream_input', None) or ())
+             if str(b).partition('=')[0] == 'iau']
+    return bound[-1] if bound else None
+
+
 class SuiteIau:
     """MPAS-A v8.4.2 incremental analysis update on the explicit suite route.
 
@@ -454,7 +462,7 @@ class SuiteIau:
     (NINT step count, IN1 and IN2 as native); correct mode applies IN1-IN3 (overlap weights, a window position).
     """
 
-    def __init__(self, *, layout, payload, config, mesh, dycore, dt, checkpoint=None):
+    def __init__(self, *, layout, payload, config, mesh, dycore, dt, checkpoint=None, increment_file=None):
         import numpy as np
         from ..iau_v842 import IAUConfig, iau_window_position
 
@@ -523,6 +531,70 @@ class SuiteIau:
         self.weight_seconds = 0.0
         from .iau_witness import IauWitness
         self.witness = IauWitness(cp)
+        self.extra_names, self.extra_index, self.extra_amb, self.extra = (), None, None, {}
+        self._bind_extra(increment_file, layout, records, payload, cp, np)
+
+    def _bind_extra(self, increment_file, layout, records, payload, cp, np):
+        """IAU-ALL (hexcore.iau_v842 says why): every non-moist state scalar ``X`` whose ``X_amb`` the increment
+        file carries is held on the device in this run's cell order and added in correct mode; what the file
+        carries and this route does not apply is named in the receipt, never dropped silently."""
+        if increment_file is None:
+            self.extra = {'file': None, 'note': 'no --stream-input iau= file binding: only the MPAS iau stream fields '
+                          'were read'}
+            return
+        from netCDF4 import Dataset
+        components = next(row['components'] for row in layout.fields
+                          if row['pool'] == 'state' and row['name'] == 'scalars')
+        ms, me = self.moist['moist_start'], self.moist['moist_end']
+        nl, width = (int(n) for n in self.increments['rho'].shape)
+        n_local = int(layout.dimensions['nCells'])
+        record = records.get(('mesh', 'indexToCellID'))
+        if record is None or not record.get('payload'):
+            raise ValueError("IAU extra increments need the mesh indexToCellID words to place file cells on this "
+                             "run's cells")
+        raw = (Path(payload) / record['payload']).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != record['sha256']:
+            raise ValueError('native payload digest differs at mesh.indexToCellID')
+        ids = np.frombuffer(raw, dtype='<i4')[:n_local].astype(np.int64) - 1
+        applied, values, slots, skipped, sizes = [], [], [], {}, {}
+        with Dataset(increment_file) as d:
+            d.set_auto_maskandscale(False)
+            carried = {n[:-len('_amb')] for n in d.variables if n.endswith('_amb')}
+            for name in components:
+                index = layout.indices.get(('state', 'index_' + name))
+                if name not in carried or not index or ms <= int(index) <= me:
+                    continue
+                v = d.variables[name + '_amb']
+                a = np.asarray(v[0] if v.dimensions[0] == 'Time' else v[:], dtype=np.float64)
+                if a.ndim != 2 or a.shape[1] != nl or ids.max() >= a.shape[0] or ids.min() < 0:
+                    raise ValueError(f'{name}_amb is {a.shape}; the increment needs (nCells, {nl}) on this mesh')
+                local = np.zeros((nl, width), np.float32)
+                local[:, :n_local] = a[ids, :].T.astype(np.float32)
+                sizes[name] = float(np.max(np.abs(a))) if a.size else 0.0
+                if not np.any(local):
+                    skipped[name] = 'zero increment'
+                    continue
+                applied.append(name); values.append(local); slots.append(int(index) - 1)
+            handled = set(components) | {'u', 'rho', 'theta'}
+            for name in sorted(carried - handled):
+                if name == 'w':
+                    peak = float(np.max(np.abs(np.asarray(d.variables['w_amb'][:], np.float64))))
+                    skipped['w'] = (f'not applied: the MPAS IAU form has no vertical-momentum forcing (max |dw| '
+                                    f'{peak:.3g} m/s); named gap, owner hex IAU')
+                    if peak > 0:
+                        print(json.dumps({'DEFECT': 'IAU w increment carried but not applied on the MPAS-suite route',
+                                          'max_abs_m_per_s': peak, 'file': str(increment_file)}), flush=True)
+                else:
+                    skipped[name] = 'not a prognostic of this route (the model diagnoses it)'
+        if not self.config.correct:
+            for name in applied:
+                skipped[name] = "exact mode: MPAS-A v8.4.2 IAU is moist-only (config_physics_mode='correct' adds it)"
+            applied, values, slots = [], [], []
+        self.extra_names = tuple(applied)
+        if applied:
+            self.extra_amb = cp.ascontiguousarray(cp.asarray(np.stack(values)))
+            self.extra_index = cp.asarray(np.asarray(slots, dtype=np.int32))
+        self.extra = {'file': str(increment_file), 'applied': list(applied), 'max_abs': sizes, 'not_applied': skipped}
 
     def checkpoint_state(self):
         from ..iau_v842 import checkpoint_window
@@ -560,10 +632,20 @@ class SuiteIau:
         witness = (self.witness.before(sources, state, saved, diagnostics, self.increments, self.zz,
             self.cells_on_edge, self.moist, (ncs, nes), weight, self.dt, self.config.correct)
             if weight > np.float32(1.0e-12) else None)
+        extra = (self.witness.before_extra(sources, state, self.increments, self.zz, self.extra_index,
+                 self.extra_names, self.extra_amb, (ncs, nes), weight)
+                 if self.extra_names and weight > np.float32(1.0e-12) else None)
         atm_add_tend_anal_incr(self.config, structs, int(itimestep), self.dt, sources.rho_u, sources.rho_theta,
                                sources.rho, cache=cache)
+        if self.extra_names:
+            from ..iau_v842 import atm_add_tend_anal_incr_extra
+            atm_add_tend_anal_incr_extra(self.config, weight, nl=nl, nc=nc, ncs=ncs, index=self.extra_index,
+                extra_amb=self.extra_amb, zz=self.zz, rho_zz=state.rho, scalars=state.scalars,
+                rho_amb=self.increments['rho'], tend_scalars=sources.scalars, cache=cache)
         if witness is not None:
             self.witness.after(witness, sources)
+        if extra is not None:
+            self.witness.after_extra(extra, sources, self.dt)
         self.calls += 1
         if weight > np.float32(1.0e-12):
             self.active_calls += 1
@@ -575,7 +657,8 @@ class SuiteIau:
                 'route': 'mpas-suite (atm_add_tend_anal_incr, hexcore.iau_v842 on CUDA)', 'mode': self.config.config_physics_mode,
                 'corrections': ['IN1', 'IN2', 'IN3'] if self.config.correct else [],
                 'option': self.config.config_IAU_option, 'window_seconds': float(self.config.config_IAU_window_length_s),
-                'window_start': self.rule, 'increments_read': self.sources_read, 'calls': self.calls,
+                'window_start': self.rule, 'increments_read': self.sources_read, 'extra_increments': self.extra,
+                'calls': self.calls,
                 'active_calls': self.active_calls, 'fraction_admitted': self.weight_seconds,
                 **({'window_position_seconds': float(self.position)} if self.config.correct else {})}
 
@@ -1911,6 +1994,8 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                 surface_record_reader=surface_record_reader,
                 **({'prehydrated': prehydrated} if prehydrated is not None else {}), **pool_options)
         session.output_config_snapshot=output_config_snapshot
+        from .rrfs.tempo_v303 import output_attributes as tempo_output_attributes
+        session.output_extra_attributes=tempo_output_attributes(config)
         if os.environ.get('GPUWM_HEX_MOVING_RESIDENT') == '1':
             receipt['physics_session_preparation'] = session.preparation_timings
         # A rank's scheme initialisation takes global extrema across ranks, as native's mpas_dmpar_min/max_real
@@ -1971,7 +2056,8 @@ def _run_native_dynamics(arguments, config, layout, payload, streams, library,
                 if getattr(config, 'mode', 'exact') == 'correct' and carried_window is None:
                     raise ValueError('checkpoint carries no IAU window state')
             coupling.iau=SuiteIau(layout=layout,payload=payload,config=config,mesh=mesh,dycore=dycore,dt=dt,
-                                  checkpoint=carried_window)
+                                  checkpoint=carried_window,
+                                  increment_file=bound_increment_file(arguments))
             session.iau_window = coupling.iau
             receipt['iau']=coupling.iau.receipt()
             print(json.dumps({'iau':receipt['iau']}),flush=True)

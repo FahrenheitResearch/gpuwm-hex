@@ -119,7 +119,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         "src/hexcore/radiation_source_sets.json": "f0357c3b4613f2cd136d62f5cd2391d034d471acc59d6f956683082cc1fdc5a2",
         "src/hexcore/data/profiles/engine-helper-sets.v1.json": "cb33bd0399b074575d5d7fa22ae6bfd7ddd628b3aa914d939ec34fc678cd2c34",
         "src/hexcore/step_anchors.py": (
-            "31201be7d3692dc07ed2c9689c2a9d0211236e3f68d7484b68df018426dc4e0e"
+            "97ffbc5fb7414269096156ee22f50a08a1806d1f87085feda441f9fdbcc59765"
         ),
         "src/hexcore/data/dycore-step-anchors.v1.json": (
             "f9a102a3f4fd848e95bf9fabe5a5ccd0579ba01de739de9e7da8e4ed7930e62d"
@@ -149,7 +149,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # Re-frozen 2026-10-05 for the startup lane (host-preparation cache);
         # the rationale lives beside the runner's pin.
         "src/hexcore/cuda_driver.py": (
-            "656be62e34f0e48a7c210dc869e2449c00eece884129121b407b998a0d0582a5"
+            "98b0f786620a5e81f7e625da4c2f3727823f0d416338c64f09b7d69f3ad70a29"
         ),
         # New pin (startup lane, 2026-10-05): the frozen driver executes host
         # preparation through this module; the rationale lives beside the
@@ -169,7 +169,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # of the two digest gates is an admission-time refusal, not a test.
         # Measured inert by AST; the rationale lives beside the runner's pin.
         "src/hexcore/config_v841.py": (
-            "686740e58450f02655a54d3219490a41ac0cdb6e2aa9af07ffc31bd5255a393a"
+            "117aae79f8d7550bfccc2cd5c68bc6477935997514529f70b31879cd03a6c492"
         ),
         # New pin (convection ruling, 2026-08-26): the frozen config admits
         # config_convection_scheme from this module and the timestep registry
@@ -206,7 +206,7 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # citations name the lab host neutrally; the rationale lives beside the
         # runner's pin.
         "src/hexcore/dt_admission.py": (
-            "a6c6b96ac32f5f1b079ce887f4be44ebb552b0c5848a3f71f0a44373a04a537c"
+            "3b667e693817320d4eac59b49f4d4fbce73f7b5526d0388e84eebb96558fd2ec"
         ),
         # New pin (surface/PBL cadence, 2026-08-26): this module decides
         # config_bldt_seconds, a knob the frozen registry keys on; the
@@ -228,12 +228,12 @@ def test_frozen_source_hashes_and_adapter_contract_are_exact() -> None:
         # export became declinable (default armed).  The rationale lives
         # beside the runner's pin.
         "src/hexcore/cuda_arwen_physics_v841.py": (
-            "6364fbdb6fc3251f2aee3db13e5e5cdb6c1d0b56743416b11a81fbf6da12cf7e"
+            "dc1a93c97ce81347e05178cf93f3c61c98233b0ecd5edffa9d600148aed3d349"
         ),
         # New pin 2026-10-05 (New Tiedtke row); the rationale lives beside the
         # runner's pin.
         "src/hexcore/cuda_ntiedtke_column_v841.py": (
-            "0eff93197f2e11658c48074fde13d2bc64fe2002c853966c2c4f4c08683f8465"
+            "d84d4a8090032c3eb30bd943d863140aba20a702435d9c2ed231259c91b8e621"
         ),
         "src/hexcore/cuda_seam_snapshot_v841.py": (
             "095d0d3f52c1e5bed736c8b1a2fae515d2ffec233defcb03ef2d493d8ce2c2fe"

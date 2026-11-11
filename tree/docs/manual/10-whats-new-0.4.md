@@ -86,7 +86,7 @@ every slot on native MPAS Fortran, the referee.
   105 million values hex does not write yet; they are counted, not hidden.
 - **Every other scheme:** Kessler, WSM6, Kain-Fritsch, Tiedtke, New Tiedtke,
   the revised MM5 surface layer, YSU, NOAA GSL's UGWP orographic drag and
-  non-stationary gravity waves (US Government code by the project's ruling;
+  non-stationary gravity waves (treated as US Government code;
   NOTICE section 8), Noah-MP (with its urban switch; private
   builds only, see below), the ocean
   mixed layer and CAM radiation are each bitwise against native on real inputs

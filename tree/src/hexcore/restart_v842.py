@@ -139,7 +139,7 @@ _SWEPT_HANDOFF_ROOTS: set = set()
 def _sweep_dead_handoffs(root: Path) -> None:
     """Remove handoff folders whose owning process is gone (once per process and root).
 
-    THE BREAKAGE THIS PREVENTS (global16 hex-fit16, a test host, 2026-11-06): a run killed mid-frame (here by the
+    THE BREAKAGE THIS PREVENTS (global16 hex-fit16, verification host, 2026-11-06): a run killed mid-frame (here by the
     host's out-of-memory killer) leaves its in-flight handoff folder on the tmpfs, 1.46 GB per history frame at
     x1.163842, and tmpfs pages are RAM. Six killed 60 km runs left 8.2 GB in /dev/shm on a 30 GB host, so every
     later run there was killed sooner. Only folders named with a PID (this writer's own naming) whose process

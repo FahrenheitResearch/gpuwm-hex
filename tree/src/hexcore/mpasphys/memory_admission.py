@@ -60,8 +60,10 @@ MPAS_COTENANT_RANK_ROWS: tuple[CoTenantRankRow, ...] = (
 )
 
 
-def cotenant_card_bytes(local_cells, levels, model):
-    """(bytes, basis) for two or more ranks sharing one card, from :data:`MPAS_COTENANT_RANK_ROWS`."""
+def cotenant_card_bytes(local_cells, levels, model, suite=None):
+    """(bytes, basis) for two or more ranks sharing one card, from :data:`MPAS_COTENANT_RANK_ROWS`.
+
+    ``suite`` prices the one-member bounds with that suite's own measured runs where it has them."""
     row = min(MPAS_COTENANT_RANK_ROWS, key=lambda r: abs(r.levels - int(levels)))
     fixed, per_column = row.terms_mib()
     # More levels than the measured row cost proportionally more, as on the one-member curve.
@@ -71,8 +73,9 @@ def cotenant_card_bytes(local_cells, levels, model):
     # Never above the ranks priced as that many whole one-member runs of their own columns: the row was measured
     # on the RRFS hrrrv5 suite, and on a lighter suite (convection_permitting, re-measured curve) two ranks of a
     # whole 120 km mesh priced from it came out above two whole members.
-    priced = min(priced, sum(int(route_required_free_bytes(int(cells), model, route="mpas")) for cells in local_cells))
-    floor = int(route_required_free_bytes(columns, model, route="mpas"))
+    priced = min(priced, sum(int(route_required_free_bytes(int(cells), model, route="mpas", suite=suite))
+                             for cells in local_cells))
+    floor = int(route_required_free_bytes(columns, model, route="mpas", suite=suite))
     basis = dict(method="co-tenant ranks from a measured row", ranks=ranks, local_cells=columns,
                  fixed_mib_per_rank=round(fixed, 1), mib_per_local_column=round(per_column, 5),
                  level_scale=round(scale, 4), margin=ROUTE_RUN_MARGIN, priced_bytes=priced,
@@ -120,6 +123,10 @@ def rank_requirements(local_cells, devices, profiles, levels, *, basis=None, sin
     11.1 GiB live / 14,492 MiB on the card over 24 h, was refused on that 16 GB card as "card 0 needs 29,930,042,163
     bytes" after the first gate had admitted it.  Rank layouts keep their measured rank rows: the compact rows were
     measured one process per card.
+
+    ``suite`` also selects the measured whole runs behind every legacy price (device_admission.route_peak_rows):
+    the 30 km hrrrv5 globe was priced from the convection_permitting curve, 72.6 GB for a run that peaks 86.8 GB
+    (hex 0.5.0, 2026-11-09).
     """
     if len(local_cells) != len(devices):
         raise ValueError("one local cell count is required per rank device")
@@ -133,16 +140,16 @@ def rank_requirements(local_cells, devices, profiles, levels, *, basis=None, sin
             compact = (single_context_model(profiles[device], levels, cells[0], configuration=configuration,
                                             suite=suite, rollback_armed=rollback_armed)
                        if single_context and qualified else None)
-            required[device] = route_required_free_bytes(cells[0], compact or model, route="mpas")
+            required[device] = route_required_free_bytes(cells[0], compact or model, route="mpas", suite=suite)
             card_basis = dict(method="one member", ranks=1, local_cells=cells[0],
                               row=("qualified compact row" if compact is not None else "legacy per-card row"))
         elif len(cells) == 1:
             # One rank alone on its card, of a member split over several cards: the measured rank-per-card row
             # (device_admission.MPAS_RANK_CARD_ROWS; both-routes RED 4), never above the one-member price.
-            required[device] = mpas_rank_card_bytes(cells[0], int(levels), model)
+            required[device] = mpas_rank_card_bytes(cells[0], int(levels), model, suite=suite)
             card_basis = dict(method="one rank per card from a measured row", ranks=1, local_cells=cells[0])
         else:
-            required[device], card_basis = cotenant_card_bytes(cells, levels, model)
+            required[device], card_basis = cotenant_card_bytes(cells, levels, model, suite)
         if basis is not None:
             basis[device] = card_basis
     return required

@@ -1,6 +1,6 @@
 """S2S products read 2 m temperature from either physics route's history (hex 0.4.15 fit16-rows).
 
-THE BREAKAGE THIS PINS (a test host, 2026-11-07): a 7-day 60 km S2S run on the MPAS-physics route (the hex default)
+THE BREAKAGE THIS PINS (verification host, 2026-11-07): a 7-day 60 km S2S run on the MPAS-physics route (the hex default)
 finished its forecast and export, then stopped in products with KeyError: 't2'; that route writes MPAS-A's t2m.
 """
 import numpy as np

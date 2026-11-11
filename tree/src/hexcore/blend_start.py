@@ -4,8 +4,8 @@
         --grid MESH.grid.nc --static MESH.static.nc --vertical-spec tc55-v1.json
 
 THE BREAKAGE THIS CLOSES.  A zoom globe (WOOF's default hex shape: 96 -> 3 km, 400 km core) needs meteorology on
-the whole sphere, and HRRR covers CONUS only, so every zoom globe over CONUS started from GFS.  The project ruling of
-2026-10-29 ("start CONUS cycles from HRRR") is measured: a GFS cold start builds a sharp low-level-jet edge and a false
+the whole sphere, and HRRR covers CONUS only, so every zoom globe over CONUS started from GFS.  Starting CONUS
+cycles from HRRR (2026-10-29) is measured: a GFS cold start builds a sharp low-level-jet edge and a false
 squall line within an hour, while a HRRR start matches HRRR.  The HRRR start door (the ``hrrr`` row) initialises a
 limited-area cull only, so before this module no global or zoom mesh could start from HRRR anywhere.
 
@@ -55,7 +55,7 @@ EARTH_RADIUS_KM = 6371.229
 CULL_RINGS = 7
 #: Degrees the cut keeps inside the inscribed box: the intermediate door's 16-point stencil (2 points of 0.025
 #: degrees) plus its 30 km margin (0.42 degrees of longitude at 50N), so the door's box over the cut lies inside
-#: the inscribed box whole and it never has to trim.  THE BREAKAGE (a test host, 2026-10-29): at a 0.2 degree inset the
+#: the inscribed box whole and it never has to trim.  THE BREAKAGE (verification host, 2026-10-29): at a 0.2 degree inset the
 #: door's box reached south of HRRR's south-west corner and its trim gave up the west side, which had no ground.
 BOX_INSET_DEG = 0.6
 MESH_DIMS = {"nCells": "Cell", "nEdges": "Edge", "nVertices": "Vertex"}
@@ -417,7 +417,7 @@ def blend_inits(outside: Path, inside: Path, out: Path, *, taper_km: float, pare
         vertical: dict[tuple[str, str], np.ndarray] = {}
         if lid_m is not None:
             # The inside source's top: its analysis is used below lid_m[0] and the outside's above lid_m[1].
-            # THE BREAKAGE (a test host, 2026-10-29, default zoom): HRRR's lid is under the 30 km top, so the init
+            # THE BREAKAGE (verification host, 2026-10-29, default zoom): HRRR's lid is under the 30 km top, so the init
             # extrapolates it there and the top level's theta sat 16 K (mean) from GFS's in full-weight cells.
             if "zgrid" not in parent.variables:
                 raise BlendRefusal(f"{outside} carries no zgrid; the lid taper is by height")
@@ -480,7 +480,7 @@ def blend_inits(outside: Path, inside: Path, out: Path, *, taper_km: float, pare
                 raise BlendRefusal(f"the inside init's {name} is not finite where it is blended in")
             if np.array_equal(base, np.round(base)) and np.array_equal(incoming, np.round(incoming)):
                 # A flag held as a float (xland 1/2, snowc 0/1, a 0/1 ice field) is never averaged: each element
-                # takes the source that weighs more.  THE BREAKAGE (a test host, 2026-10-29, default zoom): a linear
+                # takes the source that weighs more.  THE BREAKAGE (verification host, 2026-10-29, default zoom): a linear
                 # blend wrote xland 1.012 on 21 Great Lakes cells where HRRR has ice and GFS has none.
                 blended = np.where(full_weight >= 0.5, incoming, base)
                 categorical.append(name)

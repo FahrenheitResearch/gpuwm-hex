@@ -2,12 +2,12 @@
 
 THE BREAKAGES THESE PREVENT
 ---------------------------
-1. A default run executes code that cannot be sold (owner ruling 2026-10-14: the package stays Apache-2.0
+1. A default run executes code that cannot be sold (the package stays Apache-2.0
    and no default routes into code that cannot be sold or is limited).  The MPAS suites,
    their exact mode, the RRFS fork's suites and the ArWen route must resolve without one gated selection.
 2. A run selects Noah-MP v5.0 (UCAR terms: no sale) and nothing says so: the door must refuse it unless the run
    names the terms, and say so loudly and in the receipt when it does.
-2b. The owner ruling of 2026-10-14 treats UGWP and the RRFS fork's NOAA GSL physics as US Government code.  A gate
+2b. Since 2026-10-14 UGWP and the RRFS fork's NOAA GSL physics are treated as US Government code.  A gate
    left on them would refuse the fork-exact RRFS stage (hrrrv5) and UGWP by default (the stale UGWP hold did
    exactly that, and sent hrrrv5's drag to the native library); a recipe that still names a retired opt-in
    (noaa-gsl-unlicensed, ugwp-held) must run, not be refused as unknown.

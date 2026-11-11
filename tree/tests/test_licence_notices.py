@@ -13,7 +13,7 @@ THE BREAKAGES THESE PREVENT
 3. The Noah-MP v5.0 port reaches the public distribution, or a private build
    that keeps it presents it under Apache-2.0 alone.  UCAR's Noah-MP terms
    forbid selling it or any work containing it, so the public distribution
-   withholds it (owner ruling 2026-10-14: it stays Apache-2.0 and sellable), NOTICE
+   withholds it (it stays Apache-2.0 and sellable), NOTICE
    says so, and a build that keeps it carries the terms, the notices they
    require and a module header saying those terms govern it.
 4. The licence holds stop matching the tree: a hold names a path that was

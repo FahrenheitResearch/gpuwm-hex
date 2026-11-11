@@ -29,13 +29,15 @@ WHAT IT COVERS
 --------------
   gpuwm commit             5bf7ed8ca24e0b759c43f987c77fb70496405cf9
   tools/rustwx/Cargo.lock  sha256 85f14d85e51df49cb1473ea6125567db5ecd109d0fbf7609b30bd8a7206dc1ae
-  engine-bridges.json      sha256 5039be5b3069a17b622c8599e84687f6f338ae5ef579bb13030028ea3a9a2364
+  engine-bridges.json      sha256 d0fbe37e9c62354ce73f9af05b8fe107a6eff55000af76cdd55d7fbbaa7fd547
   source notice            licenses/THIRD-PARTY-LICENSES-bridge-binaries.txt at that commit,
                            sha256 c5534e416fd7e9fc1b9244ce15767776e019cfcfc30ca831437251d14120f934
 
 The source identity above is the resolved build workspace. The hashed bridge
 manifest retains each binary's own source identity and lock override;
 its top-level identity is the fallback for entries without an override.
+  scorer resolved against  gpuwm commit 19ffe5f9edc3008520f45593d656bc67feee57ca,
+                           Cargo.lock sha256 946e453d80ac753d4b885bc0207aa988fa10e48c69cbcce44e1776bafa0cd4f2
 
 The crate lists use cargo tree -e normal,no-proc-macro, with all targets
 for the engine workspace and x86_64-unknown-linux-gnu for the separate
@@ -78,6 +80,7 @@ rust/wave-products (hex-wave-products) are this project's own code (Apache-2.0).
   rusty-weather 0.1.0
   rw-fieldcmp 0.1.0
   rw-host-memory 0.1.0
+  rw-http 0.1.0
   rw-ingest 0.1.0
   rw-isobaric 0.1.0
   rw-libm 0.1.0
@@ -762,13 +765,13 @@ permissive one is taken; no copyleft branch is taken.
 Crates that vendored no licence text of their own, as the source notice
 records them:
 
-  grib-core 0.1.0                 MIT                                       first-party MIT; sealed engine NOTICE, Vendored Rust crates; release ruling 2026-10-20
+  grib-core 0.1.0                 MIT                                       first-party MIT; sealed engine NOTICE, Vendored Rust crates
   hdf5-reader 0.3.0               MIT OR Apache-2.0                         third party
   metrust 0.3.11                  MIT                                       Fahrenheit Research's own
   metrust 0.3.9                   MIT                                       Fahrenheit Research's own
   netcdf-reader 0.3.0             MIT OR Apache-2.0                         third party
   netcdf-reader 0.5.0             MIT OR Apache-2.0                         third party
-  wrf-core 0.1.0                  MIT                                       first-party MIT; sealed engine NOTICE, Vendored Rust crates; release ruling 2026-10-20
+  wrf-core 0.1.0                  MIT                                       first-party MIT; sealed engine NOTICE, Vendored Rust crates
   wx-core 0.3.10                  MIT                                       Fahrenheit Research's own
   wx-core 0.3.9                   MIT                                       Fahrenheit Research's own
   wx-field 0.3.6                  MIT                                       Fahrenheit Research's own

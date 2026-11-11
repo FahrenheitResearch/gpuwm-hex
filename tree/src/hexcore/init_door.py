@@ -871,6 +871,10 @@ def add_init_parser(commands: Any) -> None:
     parser.add_argument("--land-surface", choices=("noah", "noahmp", "ruc"), default=None,
                         help="target soil geometry; defaults to the physics suite, or Noah")
     parser.add_argument("--physics-suite", default=None, help="initialize this suite's soil and complete species row")
+    parser.add_argument("--physics", action="append", default=None, metavar="KEY=VALUE",
+                        help="a single scheme choice over an ArWen-route suite, repeatable, as the forecast door "
+                             "takes it (config_microp_scheme=mp_nssl2m): the init carries the chosen scheme's "
+                             "species and soil levels instead of the suite's own")
     parser.add_argument("--wif-climatology", type=Path, default=None, help="explicit WIF dataset; missing or invalid named input refuses")
     rrfs = parser.add_argument_group(
         "suites with their own producer (RRFS-MPAS: hrrrv5, rrfs_*)",
@@ -1021,7 +1025,8 @@ def run_init_command(arguments: argparse.Namespace) -> int:
         selection = init_selection(getattr(arguments, "physics_suite", None),
                                    getattr(arguments, "land_surface", None),
                                    profile=getattr(arguments, "physics_profile", None),
-                                   pin_set=getattr(arguments, "physics_pin_set", None))
+                                   pin_set=getattr(arguments, "physics_pin_set", None),
+                                   overrides=getattr(arguments, "physics", None))
         require_boundary_producer(getattr(arguments, "boundary_recipe", None), selection.get("producer"))
     except RrfsInitError as error:
         _refuse(str(error))

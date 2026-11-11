@@ -1530,7 +1530,8 @@
         "schemes": [
           "off",
           "bl_ysu_gwdo",
-          "bl_ugwp_gwdo"
+          "bl_ugwp_gwdo",
+          "bl_kim_gwdo"
         ],
         "native_entries": {
           "bl_ysu_gwdo": "driver_gwdo",
@@ -1547,6 +1548,12 @@
             "module": "ysu_gwdo_v842",
             "call": "forecast_callback",
             "bind": "bind_forecast"
+          },
+          "bl_kim_gwdo": {
+            "module": "kim_gwdo_2026",
+            "call": "forecast_callback",
+            "bind": "bind_forecast",
+            "source": "NCAR/MMM-physics 63c806d bl_gwdo.F90 (WRF v4.8.0 gwd_opt=1) with the MPAS-Model PR #1409 driver slice and the PR #1408 statistics; GPU only (native MPAS v8.4.2 has no KIM drag); gwdo_version=kim2026 selects it in correct mode"
           }
         }
       },
@@ -2340,7 +2347,8 @@
         "schemes": [
           "off",
           "bl_ysu_gwdo",
-          "bl_ugwp_gwdo"
+          "bl_ugwp_gwdo",
+          "bl_kim_gwdo"
         ],
         "native_entries": {
           "bl_ysu_gwdo": "driver_gwdo",
@@ -2358,6 +2366,12 @@
             "module": "ysu_gwdo_v842",
             "call": "forecast_callback",
             "bind": "bind_forecast"
+          },
+          "bl_kim_gwdo": {
+            "module": "kim_gwdo_2026",
+            "call": "forecast_callback",
+            "bind": "bind_forecast",
+            "source": "NCAR/MMM-physics 63c806d bl_gwdo.F90 (WRF v4.8.0 gwd_opt=1) with the MPAS-Model PR #1409 driver slice and the PR #1408 statistics; GPU only (native MPAS v8.4.2 has no KIM drag); gwdo_version=kim2026 selects it in correct mode"
           }
         }
       },
@@ -2963,6 +2977,14 @@
         "type": "logical",
         "value": false
       },
+      "config_tempo_version": {
+        "type": "character",
+        "value": "v3.2.5"
+      },
+      "config_tempo_hailhyperaware": {
+        "type": "logical",
+        "value": true
+      },
       "config_smoke_scheme": {
         "type": "character",
         "value": "off"
@@ -3112,6 +3134,7 @@
     "pin_set": "rrfs",
     "route_default": ["rrfs_mesoscale_reference", "rrfs_convection_permitting", "rrfs_none"],
     "model_commit": "1d6e370e7b43a332074809f170532a216c2212fb",
+    "exact_mode_defaults": {"config_tempo_version": "v3.0.3"},
     "workflow_commit": "08eee4ceee301898d3cb837e03699a8da0d1cb32",
     "dycore": {
       "variant": "mpas-v8.3.1-noaa"
@@ -3284,7 +3307,9 @@
         "config_tempo_aerosolaware",
         "config_tempo_hailaware",
         "config_tempo_ml_for_bl_nc",
-        "config_tempo_refl10cm_from_melting"
+        "config_tempo_refl10cm_from_melting",
+        "config_tempo_version",
+        "config_tempo_hailhyperaware"
       ],
       "chemistry": [
         "config_smoke_scheme",
@@ -5786,7 +5811,8 @@
         "schemes": [
           "off",
           "bl_ysu_gwdo",
-          "bl_ugwp_gwdo"
+          "bl_ugwp_gwdo",
+          "bl_kim_gwdo"
         ],
         "native_entries": {
           "bl_ysu_gwdo": "driver_gwdo",
@@ -5804,6 +5830,12 @@
             "module": "ysu_gwdo_v842",
             "call": "forecast_callback",
             "bind": "bind_forecast"
+          },
+          "bl_kim_gwdo": {
+            "module": "kim_gwdo_2026",
+            "call": "forecast_callback",
+            "bind": "bind_forecast",
+            "source": "NCAR/MMM-physics 63c806d bl_gwdo.F90 (WRF v4.8.0 gwd_opt=1) with the MPAS-Model PR #1409 driver slice and the PR #1408 statistics; GPU only (native MPAS v8.4.2 has no KIM drag); gwdo_version=kim2026 selects it in correct mode"
           }
         }
       },
@@ -6414,6 +6446,14 @@
         "type": "logical",
         "value": false
       },
+      "config_tempo_version": {
+        "type": "character",
+        "value": "v3.2.5"
+      },
+      "config_tempo_hailhyperaware": {
+        "type": "logical",
+        "value": true
+      },
       "config_smoke_scheme": {
         "type": "character",
         "value": "off"
@@ -6566,6 +6606,7 @@
     "dycore_path": "v8.4.1-noaa",
     "pin_set": "rrfs-44c0849",
     "model_commit": "44c084944e17f7098668bef6d1e353d12e3c2d1a",
+    "exact_mode_defaults": {"config_tempo_version": "v3.0.3"},
     "workflow_commit": "570c81fec5adaefe966b9dd3eec3272da150fc9e",
     "dycore": {
       "variant": "mpas-v8.4.1-noaa",
@@ -6586,6 +6627,58 @@
       "RUCLSM": "8c9f1a8bb2cfb5fb8d115440fced566361fe0f20",
       "GFL": "bf6a4b0d58f112322fbf9b11d43ed2027aeb56fa",
       "SMOKE": "5d2c71e2cf4083b6beeedbfa4d2091674b1556ea"
+    },
+    "mynn_versions": {
+      "about": "Selectable MYNN suite versions on this pin set (hex-only, never written into a native namelist). The selector picks other CUDA modules for the MYNN slots at session build; the default is 'mynn-v6.1', the latest upstream releases (MYNN-EDMF v6.1.1 + MYNN-SFC v6.1.0; defaults are the latest upstream scheme versions, pins are for bitwise proof), taken wherever both of its MYNN slots run on hex-cuda. 'pinned' is this row's own entries (MYNN-EDMF c6d08709 + MYNN-SFC v6.0.0 b66187f, bitwise to native 44c0849): the 44c0849 referee option, named explicitly by every bitwise claim and gate against native 44c0849, and taken by a module replay or by a run that puts a MYNN slot on the native library (which is the 44c0849 pin). A version overlays only the cuda_entries it names and the submodule_pins it records in the receipt. 'requires' lists the slot/scheme pairs a version must carry before it can run: a run asking for it with one of them selected but not ported is refused, so no run mixes MYNN versions under a version's name. A versioned slot runs only on hex-cuda (the native library is the 44c0849 pin). Each version module lands on a strict module replay of real native captures against the tag built standalone (tools/rrfs_mynn_v61_replay).",
+      "selector": "config_mynn_version",
+      "default": "mynn-v6.1",
+      "versions": {
+        "pinned": {
+          "about": "RRFS 44c0849's own MYNN: MYNN-EDMF c6d08709, MYNN-SFC v6.0.0 b66187f. The 44c0849 referee option: bitwise to native RRFS-MPAS 44c0849; the bitwise gates and paper reruns name it.",
+          "submodule_pins": {},
+          "cuda_entries": {}
+        },
+        "mynn-sfc-v6.1.0": {
+          "about": "MYNN-SFC v6.1.0 (NCAR/MYNN-SFC a038a9e, Apache-2.0) with the pinned MYNN-EDMF c6d08709: the surface-layer half of mynn-v6.1 on its own.",
+          "requires": [["surface_layer", "sf_mynnsfclay"]],
+          "submodule_pins": {
+            "MYNN-SFC": "a038a9ea35a12f0bf879fac8b64c99a77ffdae1c"
+          },
+          "cuda_entries": {
+            "surface_layer": {
+              "sf_mynnsfclay": {
+                "module": "rrfs.sf_mynnsfc_v610"
+              }
+            }
+          }
+        },
+        "mynn-v6.1": {
+          "about": "MYNN-EDMF v6.1.1 (NCAR/MYNN-EDMF 2b2da61, Apache-2.0) + MYNN-SFC v6.1.0 (NCAR/MYNN-SFC a038a9e, Apache-2.0).",
+          "requires": [["pbl", "bl_mynnedmf"], ["surface_layer", "sf_mynnsfclay"]],
+          "submodule_pins": {
+            "MYNN-EDMF": "2b2da61b05a8ef9f9b06795c816dc01e347e0736",
+            "MYNN-SFC": "a038a9ea35a12f0bf879fac8b64c99a77ffdae1c"
+          },
+          "cuda_entries": {
+            "pbl": {
+              "bl_mynnedmf": {
+                "module": "rrfs.bl_mynnedmf_v611",
+                "resources": {
+                  "module": "rrfs.bl_mynnedmf_v611",
+                  "call": "load_cuda_packet",
+                  "attribute": "_rrfs_mynnedmf_image",
+                  "packet_key": "bl_mynnedmf_v611"
+                }
+              }
+            },
+            "surface_layer": {
+              "sf_mynnsfclay": {
+                "module": "rrfs.sf_mynnsfc_v610"
+              }
+            }
+          }
+        }
+      }
     },
     "suites": {
       "mesoscale_reference": {
@@ -6747,7 +6840,9 @@
         "config_tempo_aerosolaware",
         "config_tempo_hailaware",
         "config_tempo_ml_for_bl_nc",
-        "config_tempo_refl10cm_from_melting"
+        "config_tempo_refl10cm_from_melting",
+        "config_tempo_version",
+        "config_tempo_hailhyperaware"
       ],
       "chemistry": [
         "config_smoke_scheme",

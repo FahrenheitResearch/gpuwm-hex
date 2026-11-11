@@ -50,7 +50,7 @@ resolver before the existing ArWen path.
 
 A selection of Noah-MP v5.0 runs only with `--licence-opt-in ucar-noahmp`
 (`hexcore.licence_gate`); UGWP and the fork's NOAA GSL physics are not gated
-(owner ruling 2026-10-14: US Government code). The library resolvers are not
+(US Government code). The library resolvers are not
 gated, so module replays are unchanged.
 
 Register a launcher with `registry.register(slot, mpas_scheme_name, 'hex-cuda',
@@ -344,6 +344,31 @@ the forecast owner. It does not claim that the real door has enforced them.
 Only a completed real-door forecast receipt may state the actual resolved
 extension settings and scientific identity. Source/orchestration unit tests
 and synthetic CUDA replays do not establish RRFS-M0.
+
+### MYNN suite version on the RRFS 44c0849 route
+
+`config_mynn_version` (in the hex backend group `&hex_mpasphys`, or
+`--physics config_mynn_version=...`) picks the MYNN code the `rrfs-44c0849`
+route runs. It is a hex option, never written into a native namelist.
+
+| value | MYNN-EDMF | MYNN-SFC | use |
+|---|---|---|---|
+| `mynn-v6.1` (default) | v6.1.1 (NCAR/MYNN-EDMF 2b2da61) | v6.1.0 (NCAR/MYNN-SFC a038a9e) | the latest upstream releases |
+| `mynn-sfc-v6.1.0` | c6d08709 (the pin) | v6.1.0 | the surface-layer half on its own |
+| `pinned` | c6d08709 | v6.0.0 b66187f | the 44c0849 referee: bitwise to native RRFS-MPAS 44c0849 |
+
+Defaults are the latest upstream scheme versions and pins are for bitwise
+proof, so every bitwise claim and gate against native 44c0849 names
+`config_mynn_version='pinned'` on the hex side. A run that names no version
+takes `pinned` where the pin is what runs anyway: a module replay (the native
+library is the 44c0849 pin), a run that puts a MYNN slot on `native-cpu`, or a
+suite with no MYNN slot active. A run that names a v6.1 version with a MYNN slot
+on `native-cpu` is refused. Each version is proven by a strict module replay
+against the upstream tag built standalone (`tools/rrfs_mynn_v61_replay`). The
+run prints one start-up line beginning `MYNN SUITE VERSION:` naming the version
+and the commits it ran. A run on any version other than `pinned` records
+`mynn_version`, `mynn_version_modules` and the version's submodule pins in its
+receipt.
 
 ## Public native forecast and hydration
 
@@ -933,7 +958,7 @@ The findings (`CORRECTIONS_V842`, clusters mpas-rad-pbl-lsm-seaice and mpas-wate
 | WB5 | WSM6 books the below-ground part of the falling cell at the flat mean while the remap moves it with a sloped profile, so column plus surface water is not conserved | Fixed in the hex-cuda WSM6 slot: the two rain-out statements use the remap's profile; whole columns equal the native correct-mode build word for word (surface precipitation changes, the atmosphere does not). Gap: native-cpu WSM6 | p2-wsm6 (select the hex-cuda slot) |
 | RP3 | Fractional sea ice loses its ice temperature (the blended skin temperature is fed back); active whenever `config_frac_seaice`, which defaults to true | Named gap on the sea-ice and surface-layer slots | p18-seaice; p9-sfclay-mm5 (`sf_monin_obukhov`, `sf_monin_obukhov_rev`); p10-sf-mynn (`sf_mynn`) |
 
-Named gaps are never refusals (coordinator ruling 2026-10-14). A finding is
+Named gaps are never refusals. A finding is
 applied whole or not at all: when any active slot it lives in has an
 implementation that does not declare it (a native-cpu slot never can; a hex-cuda
 slot declares the ids in its table descriptor's `corrections`), the run keeps the

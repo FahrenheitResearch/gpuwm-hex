@@ -516,7 +516,8 @@ def register_cuda_slots(registry,config,provider,resources=None):
         pwp = register_pwp(config, provider)
     for slot,scheme in config.selectors.items():
         if not config.active(slot) or config.backends[slot]!=Backend.HEX_CUDA:continue
-        descriptor=rows[slot].get('cuda_entries',{}).get(scheme)
+        from .driver_v842 import slot_cuda_entry
+        descriptor=slot_cuda_entry(config,rows,slot,scheme)
         if descriptor is None:
             raise RuntimeError(f'MPAS CUDA slot {slot}/{scheme} has no published callback descriptor')
         try:

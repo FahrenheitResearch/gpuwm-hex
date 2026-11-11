@@ -1,6 +1,6 @@
 {
   "schema": "gpuwm-hex.init-sources/v1",
-  "about": "Every initial-condition source hex can start from, as table rows. One path serves all of them: acquire the declared products, write one WPS intermediate through met_intermediate with the row's Vtable and map-source label, build the init through the source-agnostic init door with the row's first-guess declarations. A new source is a row here plus, when its parameter codes are new, a Vtable; no per-source code exists or may be added (the arbitrary acceptance test, a project ruling).",
+  "about": "Every initial-condition source hex can start from, as table rows. One path serves all of them: acquire the declared products, write one WPS intermediate through met_intermediate with the row's Vtable and map-source label, build the init through the source-agnostic init door with the row's first-guess declarations. A new source is a row here plus, when its parameter codes are new, a Vtable; no per-source code exists or may be added (the arbitrary acceptance test).",
   "run_switches": {
     "about": "Init switches that are properties of the run and mesh, not of the source. Identical for every row so two sources differ only in their meteorology. Every value is the one the shared GFS 30 km case was built with (its init provenance engine_argv).",
     "extrap_airtemp": "constant",

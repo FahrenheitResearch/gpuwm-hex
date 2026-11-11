@@ -39,7 +39,10 @@ def test_help_lists_every_door_without_the_engine(no_engine, capsys):
 def test_an_engine_door_refuses_by_name_without_the_engine(no_engine, capsys):
     assert cli.main(["country", "--row", "x", "--cycle", "2026-10-29T12"]) == 2
     error = capsys.readouterr().err
-    assert "country door needs the gpuwm engine" in error and "gpuwm>=2.9.10" in error
+    # The floor is the declared one (hexcore.engine_pin), not a version written here: the 2.9.10 literal
+    # stayed behind when the floor moved to gpuwm 3.0 and failed the public CI battery (sealing pass 050s1x8ee7).
+    from hexcore.engine_pin import gpuwm_floor
+    assert "country door needs the gpuwm engine" in error and f"gpuwm>={gpuwm_floor()}" in error
 
 
 def test_an_engine_free_door_still_builds_alone_without_the_engine(no_engine):

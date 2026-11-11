@@ -1,6 +1,6 @@
 """Dead runs' tmpfs stream handoff folders are swept; live and unnamed ones are left (hex 0.4.15, 20331da).
 
-THE BREAKAGE THIS PINS (global16 hex-fit16, a test host, 2026-11-06): killed 60 km runs left 1.46 GB each in
+THE BREAKAGE THIS PINS (global16 hex-fit16, verification host, 2026-11-06): killed 60 km runs left 1.46 GB each in
 /dev/shm (tmpfs is RAM), which fed the host out-of-memory kills of the next runs on a 30 GB host.
 """
 import os

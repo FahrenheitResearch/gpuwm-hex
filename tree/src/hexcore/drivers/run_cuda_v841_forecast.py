@@ -299,6 +299,60 @@ _FROZEN_CLAIM_SCHEMES = re.compile(
 )
 
 
+def refuse_pick_without_cumulus_contract(physics: Any, run_row: Any, config_scheme: str) -> None:
+    """Stop before the mesh is read when the engine has no cumulus contract for this run's microphysics.
+
+    THE BREAKAGE THIS PREVENTS (hex 0.5.0, 2026-11-10): TEMPO picked over ``arwen_mpas_column`` on a zoom
+    globe, where the resolution ruling selects Grell-Freitas, on public gpuwm 2.9.13 stopped inside the
+    engine's physics constructor with "KF has no verified phase-output contract for mp_physics=900" and no
+    word on what to do.  The contract is the engine's own (``_cumulus_optional_tendency_components``): it is asked here, not copied,
+    so this stop retires itself on an engine that carries the row (gpuwm ``fix/2913-hex-mp-picks``).
+    MPAS-A's own suites run their cumulus through the MPAS route and are not asked.
+    """
+
+    if physics is None or getattr(physics, "suite", None) is None:
+        return
+    from hexcore.physics_suites import mpas_suite_names
+    from hexcore import convection_admission as _convection
+
+    if physics.suite in mpas_suite_names():
+        return
+    try:
+        cu_physics = _convection.cu_physics_for_constructor_scheme(_convection.constructor_scheme(config_scheme))
+        cumulus = _convection.label(config_scheme)
+    except _convection.ConvectionAdmissionError:
+        return
+    if not cu_physics:
+        return
+    try:
+        from gpuwm.core.physics import _cumulus_optional_tendency_components as engine_contract
+    except ImportError:
+        return
+    from types import SimpleNamespace
+
+    try:
+        engine_contract(SimpleNamespace(cu_physics=int(cu_physics), mp_physics=int(run_row.mp_physics)))
+    except ValueError as error:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            engine = "gpuwm " + version("gpuwm")
+        except PackageNotFoundError:
+            engine = "the installed gpuwm"
+        raise ConfigurationRefusal(
+            "config_microp_scheme",
+            run_row.scheme_name,
+            (
+                f"{run_row.scheme_name} over the {physics.suite} suite runs "
+                f"{cumulus} on this mesh, and {engine} has "
+                f"no cumulus contract for it ({error}).  Update gpuwm to a release that carries the cumulus "
+                "rows for a picked microphysics (gpuwm 2.9.13 does not), or run the pick on a mesh where "
+                "the resolution ruling selects New Tiedtke or no convection"
+            ),
+            "an engine whose cumulus scheme admits this microphysics",
+        ) from None
+
+
 def claim_for_physics(claim: str, physics: Any) -> str:
     """The forecast claim with its physics named as this run resolved it.
 
@@ -987,7 +1041,7 @@ def install_capture_labels(labels: Mapping[int, str]) -> None:
 def step_admission_receipt(config: Any) -> dict[str, Any]:
     """Record the evidence for the selected schedule.  Refuses nothing.
 
-    RETIRED 2026-10-10 as a gate (owner ruling).  This used to raise unless a timestep anchor or a dycore step
+    RETIRED 2026-10-10 as a gate.  This used to raise unless a timestep anchor or a dycore step
     certificate held the configuration; it now writes, into the run's
     receipt, whether one does, and whether the run is the native x4
     reference's own schedule.  The cadences the run cannot schedule are
@@ -2077,6 +2131,7 @@ def prepare_forecast_host(
     arwen_les.validate(config)
 
     run_row = _row_for_scheme(config.config_microp_scheme)
+    refuse_pick_without_cumulus_contract(physics, run_row, config.config_convection_scheme)
     scalar_names = tuple(run_row.names())
     surface_accumulators = tuple(item.name for item in run_row.surface_accumulators)
     # The loader's dynamics mesh and evidence, served from a verified snapshot
@@ -2983,6 +3038,14 @@ def write_jedi_background(
         n_levels=int(N_LEVELS),
         soil_levels=int(soil_levels),
         valid=valid,
+        require_native_land=True,
+    )
+    if "pblh" not in snapshot["arrays"]:
+        raise jedi_contract.ContractRefusal("background requires actual committed live pblh; no init fallback")
+    jedi_contract.add_live_geometry(
+        fields, provenance, pblh=snapshot["arrays"]["pblh"],
+        zgrid=host["prepared"].vertical.zgrid,
+        n_cells=int(N_CELLS), n_levels=int(N_LEVELS),
     )
     record = jedi_contract.write_background(
         output_root / f"mpasout.{label}.nc",

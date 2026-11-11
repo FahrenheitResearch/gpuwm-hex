@@ -322,6 +322,13 @@ def prepare(spec: dict) -> None:
             if k in files and (v := getattr(arguments, k, None)) is not None}
     scratch = Path(getattr(arguments, 'scratch', None) or Path(arguments.out) / 'scratch').resolve()
     claim_prepared_scratch(scratch)
+    from ..kim_gwd_static import FILE_SUFFIX as _KIM_SUFFIX, ensure as _kim_statistics, mesh_file_of
+    if swap and any(str(s).endswith(_KIM_SUFFIX) for s in call['sources']):
+        # The KIM drag's PR #1408 statistics belong to one mesh: a moved mesh reads its own (kim_gwd_static).
+        moved = mesh_file_of(arguments)
+        if moved is not None:
+            fresh = str(_kim_statistics(moved).resolve())
+            swap.update({str(Path(s).resolve()): fresh for s in call['sources'] if str(s).endswith(_KIM_SUFFIX)})
     predicted = dict(call, sources=[Path(swap.get(str(Path(s).resolve()), str(s))) for s in call['sources']],
                      output=scratch / 'native-pools')
     key = _decode_key(predicted)

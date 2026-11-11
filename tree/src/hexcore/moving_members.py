@@ -595,7 +595,7 @@ def prepare_case(case_path: Path, casedir: Path, *, geog: Path | None = None, th
 
 
 #: The premade family mesh the start member is rotated from: the case's own concentric cap family centred here.
-#: THE BREAKAGE THIS PREVENTS (owner ruling 2026-10-23: premade meshes, no lengthy mesh creation on the start path;
+#: THE BREAKAGE THIS PREVENTS (premade meshes, no lengthy mesh creation on the start path;
 #: and the moving start-member stage of 940 s on new boxes, 2026-10-25): every storm- and setup-following run
 #: generated its start mesh on the box before the first step. The template is keyed in hex's prep store by its
 #: generator spec alone (no storm, no date), so a WOOF image carries it (the bake runs `gpuwm-hex moving template`)

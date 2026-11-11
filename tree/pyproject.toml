@@ -43,7 +43,7 @@ name = "gpuwm-hex"
 # partition-invariant, but it has no door, no demo, and no re-proof at the
 # current engine pin, so it is not what a version number should be sold on.
 # Numbers are not reserved here any more.  A minor bump names what shipped.
-version = "0.4.15"
+version = "0.5.0"
 description = "GPU global atmospheric model on unstructured Voronoi meshes: a CUDA port of the MPAS-A v8.4.2 dycore with ArWen physics, arbitrary mesh generation, and single-card mesh streaming for 12-16 GB GPUs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -186,7 +186,7 @@ dependencies = [
     "numcodecs>=0.12,<0.17",
     "netCDF4>=1.6",
     "scipy>=1.11",
-    "gpuwm>=2.9.12,<2.10",
+    "gpuwm>=3.0.0,<3.1",
 ]
 # Search terms, which is what a keyword is: the words somebody types into
 # PyPI when they are looking for this kind of thing.  `MPAS` is here as a
@@ -233,8 +233,8 @@ classifiers = [
 # The public repository this distribution is built from.  The link has to
 # resolve before or with the upload: a PyPI page whose Homepage link 404s
 # reads as an abandoned project.
-Homepage = "https://github.com/FahrenheitResearch/gpuwm-hex"
-Repository = "https://github.com/FahrenheitResearch/gpuwm-hex"
+Homepage = "https://github.com/recastsystems/gpuwm-hex"
+Repository = "https://github.com/recastsystems/gpuwm-hex"
 
 [project.optional-dependencies]
 # Install against the same MPI ABI as the selected native physics library.
@@ -243,14 +243,19 @@ mpi = ["mpi4py>=4.1"]
 # detect a CUDA major -- there is no environment marker for it -- so this
 # table does not pretend to choose; it names both and the docs tell the user
 # to match the one their driver reports.
-gpu-cu12 = ["cupy-cuda12x[ctk]>=14.0"]
+gpu-cu12 = ["cupy-cuda12x[ctk]>=14.0", "gpuwm[gpu-cu12]"]
 # NVRTC capped at the newest NVRTC that has a pinned kernel pack, to the patch release.  THE BREAKAGE (0.4.12
 # post-publish check, 2026-11-05): cupy-cuda13x[ctk] pulled NVRTC 13.5.37, published after the gate, which matched
 # no pack, so a fresh install compiled every kernel for about 100 s before its first step.  A pack is bound to the
 # library bytes, so a later patch release (13.5.x) would miss it exactly as a new minor does; the ceiling is the
 # exact version, 13.5.37 (kernel-packs-v0.4.14).  Raise it with the next pack (tools/build_kernel_packs.py;
 # tests/test_readme_facts.py holds the ceiling to the newest pinned CUDA 13 pack).
-gpu-cu13 = ["cupy-cuda13x[ctk]>=14.0", "nvidia-cuda-nvrtc>=13.0,<=13.5.37"]
+# Each GPU extra also pulls the engine's extra of the same name, so `pip install "gpuwm-hex[gpu-cu13]"` resolves
+# ONE CUDA stack for the pair.  THE BREAKAGE (pair line, 2026-11-10): gpuwm 3.0's gpu-cu13 caps NVRTC <13.5 while
+# this ceiling is 13.5.37, and with plain `gpuwm` required, hex[gpu-cu13] resolved NVRTC 13.5.37, a compiler the
+# engine's extra excludes; hrrrv5 then differed from the gated stack (13.4.92) in 8,152,918 of 37,778,553 words.
+# The intersection is the engine's ceiling (13.4.92 today, which has a pack); this ceiling stays the newest pack.
+gpu-cu13 = ["cupy-cuda13x[ctk]>=14.0", "nvidia-cuda-nvrtc>=13.0,<=13.5.37", "gpuwm[gpu-cu13]"]
 # Experimental AMD backend; ROCm 7.0 wheel, see docs/amd-backend.md.
 rocm = ['cupy-rocm-7-0==14.2.0; sys_platform == "linux" and platform_machine == "x86_64"']
 #

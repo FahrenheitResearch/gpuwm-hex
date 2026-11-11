@@ -74,12 +74,15 @@ class ResidentMynnEdmfSlot:
         # Rank-0 module scalars: tile bounds, species flags and manager intervals the host framework set at
         # physics_init (bind_native_pools reads the same words each call; none changes after initialization).
         metadata = {}
-        for name in self.module.ARGUMENTS:
-            if name.startswith('f_') or name in _DIMS:
-                value = facade.get_variable(name)
-                if value is None:
-                    raise RuntimeError('Native MYNN scalar is absent: ' + name)
-                metadata[name] = value[0].item()
+        # A module whose driver arguments are not the host's names (bl_mynnedmf_v611: f_qnc for the host's f_nc)
+        # lists the host scalars it reads (HOST_SCALARS); the pinned modules' argument names are the host's.
+        host_scalars = getattr(self.module, 'HOST_SCALARS', None) or [
+            name for name in self.module.ARGUMENTS if name.startswith('f_') or name in _DIMS]
+        for name in host_scalars:
+            value = facade.get_variable(name)
+            if value is None:
+                raise RuntimeError('Native MYNN scalar is absent: ' + name)
+            metadata[name] = value[0].item()
         for name in ('dt_pbl', 'do_chemistry', 'num_chem'):
             value = facade.get_variable(name)
             if value is None:

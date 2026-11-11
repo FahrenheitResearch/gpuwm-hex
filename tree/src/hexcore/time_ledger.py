@@ -65,7 +65,7 @@ def tree_cpu_seconds(*, clock=time.monotonic):
 
 def _cpu_attrs(attrs, phase, t_mono):
     """Every live begin/end carries attrs.cpu_s, its process tree's CPU seconds at that moment, so each stage's
-    cores = CPU / wall (owner ruling 2026-10-16: no stage on one CPU thread while cards or cores wait). Read here, not at
+    cores = CPU / wall (no stage on one CPU thread while cards or cores wait). Read here, not at
     append time, because hex holds early events until its run folder exists and replays them with their own
     clocks. ``tree_cpu_seconds`` reads /proc (live descendants and reaped children); off Linux, or with an engine
     without gpuwm.timeline.parallelism, it falls back to os.times(). No device sync, no profiler."""

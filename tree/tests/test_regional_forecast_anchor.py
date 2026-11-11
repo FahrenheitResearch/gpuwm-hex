@@ -94,7 +94,7 @@ def test_the_named_forecast_pair_is_masked_digest_identical(receipts):
 SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     "src/hexcore/cuda_driver.py": {
         "recorded": "cb6477ef2fd02ad551e9b6c8af0724c94fc4d90bdc712fff1378d218662f5d04",
-        "current": "656be62e34f0e48a7c210dc869e2449c00eece884129121b407b998a0d0582a5",
+        "current": "98b0f786620a5e81f7e625da4c2f3727823f0d416338c64f09b7d69f3ad70a29",
         "why": (
             "convection ruling, 2026-08-26: _v841_physics_cadences reports "
             "convection: None when no cumulus scheme is selected instead of "
@@ -133,7 +133,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
             "the dycore a diabatic_theta; nothing these receipts ran supplies "
             "one, so the arithmetic they measured is unchanged"
             "  Moved again 2026-10-14 by the 0.4.0 release scrub: one comment "
-            "line names an owner ruling in place of a person; comment only, no "
+            "line names a decision in place of a person; comment only, no "
             "code line moved"
             "  Moved again 2026-10-15 by rel/hex040-fix-les: the RK step calls "
             "MPAS-A v8.4.2's LES dissipation only when a driver is handed an "
@@ -145,7 +145,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
     },
     "src/hexcore/cuda_regional_forecast_v841.py": {
         "recorded": "3aa30ec3c3a11c1152a67d1fcbc8b2d470fd8ac2446ec8f7ec34906873421e88",
-        "current": "566c7f091e7510ab9eb7cbab78887853c41a38abd46f0c57bb929a91f1c7bdb1",
+        "current": "622d657e9c9cabaa8bcff5fbc3eb64c8fb6a86fad9ac8d4b5423885a88323313",
         "why": (
             "Integration 2026-10-04 adds explicit rank constructor dispatch "
             "and preserves the ordinary constructor. The twelve arithmetic "
@@ -184,7 +184,7 @@ SOURCE_DRIFT_SINCE_CAMPAIGN: dict[str, dict[str, str]] = {
             "receipt measured can differ.  Re-derived by "
             "tools/repin_source_tables.py"
             "  Moved again 2026-10-14 by the 0.4.0 release scrub: one docstring "
-            "line of open_regional_forecast_v841 names an owner ruling in place "
+            "line of open_regional_forecast_v841 names a decision in place "
             "of a person; docstring only, no code line moved"
         ),
     },

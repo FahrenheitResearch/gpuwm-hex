@@ -840,6 +840,7 @@ tests/test_mpasphys_wb5_correct_mode_v842.py
 # the one-command global run (plan, mesh fetch against a local archive, the
 # native-static refusal, status.json/events.jsonl) and the export door against
 # a stand-in converter: no card, no assets, no network
+tests/test_global_door_mesh_race.py
 tests/test_global_door.py
 
 # i5-init-sfc-update: CPU receipt/admission regressions from delivered rw-mpas source (RW_MPAS_SOURCE).
@@ -1433,6 +1434,7 @@ tests/test_restart_warm_start.py
 # same-host ranks share radiation budgets and one TEMPO blob per card; MPAS admission rows for members and ranks.
 tests/test_device_share_radiation_budget.py
 tests/test_mpas_member_and_rank_rows.py
+tests/test_mpas_suite_admission.py
 # a named --native-physics-tables folder must hold every TEMPO lookup file.
 tests/test_named_tempo_tables.py
 # same-host halo descriptor bindings retire after two idle active steps.
@@ -1459,3 +1461,29 @@ tests/test_s2s_gfs_surface_forecast.py
 tests/test_s2s_products_t2m.py
 tests/test_history_field_swdnb.py
 tests/test_stream_handoff_sweep.py
+
+# hex 0.5.0 folds, host-only (GPU cases skip by marker): MYNN v6.1 option and default, MMM-physics 550b5b4, KIM drag wiring
+# and kernel replay, TEMPO v3.2.5, UGWP alpha_fd books.
+tests/test_rrfs_mynn_version.py
+tests/test_mmm_version.py
+tests/test_arwen_census_engine_labels.py
+tests/test_kim_engine_static_builder.py
+tests/test_kim_wiring.py
+tests/test_kim_gwdo_2026.py
+tests/test_tempo_v325.py
+tests/test_ugwp_alpha_fd.py
+
+# A transient release-host answer (408/425/429/5xx) is retried on the kernel-pack and physics-resource fetches.
+tests/test_fetch_transient_retry.py
+
+# Generic native publication, allocation authority and forecast controls.
+tests/test_analysis_forecast_controls.py
+tests/test_init_clock.py
+tests/test_moving_launch_lead.py
+tests/test_native_geometry.py
+tests/test_native_geometry_source.py
+tests/test_native_state_roles.py
+tests/test_physics_refusal_transport.py
+tests/test_producer_cloud.py
+tests/test_producer_increment.py
+tests/test_pick_cumulus_contract.py

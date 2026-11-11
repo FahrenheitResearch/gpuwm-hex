@@ -10,7 +10,7 @@
   "reproducible": "Built by tools/build_engine_bridges.sh in the pinned image with sixteen Cargo jobs and eight release codegen units. All fourteen bundled files come from this complete build. Historical numerical measurements in individual rows describe their original inputs.",
   "platform": "manylinux_2_28_x86_64",
   "release_assets": {
-    "repository": "FahrenheitResearch/gpuwm-hex",
+    "repository": "recastsystems/gpuwm-hex",
     "tag": "engine-bridges-v0.4.12"
   },
   "bridges": {

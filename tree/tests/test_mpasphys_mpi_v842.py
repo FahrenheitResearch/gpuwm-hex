@@ -363,9 +363,11 @@ def test_background_copies_native_soil_and_all_species_without_dummy():
     from hexcore.jedi_contract import BACKGROUND_FIELDS
     dims = dict(nCells=4, nEdges=6, nVertices=5, nVertLevels=2, nSoilLevels=4, num_scalars=3)
     rows, data = [], {}
-    for name in BACKGROUND_FIELDS:
+    from hexcore.cycle.land_state import LAND_FIELDS
+    native_fields = tuple(dict.fromkeys((*BACKGROUND_FIELDS, *(f.name for f in LAND_FIELDS if f.required))))
+    for name in native_fields:
         entity = 'nEdges' if name == 'u' else 'nCells'
-        leading = ('num_scalars', 'nVertLevels') if name == 'scalars' else ('nSoilLevels',) if name in ('smois', 'tslb') else ()
+        leading = ('num_scalars', 'nVertLevels') if name == 'scalars' else ('nSoilLevels',) if name in ('smois', 'sh2o', 'tslb') else ()
         dimensions = [*leading, entity]
         shape = [dims[d] + int(d == entity) for d in dimensions]
         rows.append(dict(name=name, pool='pool', pool_name=name, dimensions=dimensions,
@@ -381,6 +383,35 @@ def test_background_copies_native_soil_and_all_species_without_dummy():
     data['rho'][0] = np.nan
     with pytest.raises(ValueError, match='non-finite'):
         background_fields(session, SimpleNamespace(fields=rows, dimensions=dims), ('qv', 'qc', 'tke'))
+
+
+def test_background_leaves_out_pbl_height_the_scheme_has_not_set_yet():
+    """THE BREAKAGE THIS PREVENTS (hex 0.5.0 both-routes matrix, 2026-11-09): --jedi-background on a cold start
+    stopped at its first frame on every MPAS suite, because HPBL is still its allocation default there."""
+    from hexcore.jedi_contract import BACKGROUND_FIELDS
+    from hexcore.cycle.land_state import LAND_FIELDS
+    dims = dict(nCells=4, nEdges=6, nVertices=5, nVertLevels=2, nSoilLevels=4, num_scalars=3)
+    rows, data = [], {}
+    for name in (*dict.fromkeys((*BACKGROUND_FIELDS, *(f.name for f in LAND_FIELDS if f.required))), 'hpbl'):
+        entity = 'nEdges' if name == 'u' else 'nCells'
+        leading = (('num_scalars', 'nVertLevels') if name == 'scalars'
+                   else ('nSoilLevels',) if name in ('smois', 'sh2o', 'tslb') else ())
+        dimensions = [*leading, entity]
+        shape = [dims[d] + int(d == entity) for d in dimensions]
+        rows.append(dict(name=name, pool='pool', pool_name=name, dimensions=dimensions,
+                         components=['qv', 'qc', 'tke'] if name == 'scalars' else []))
+        data[name] = np.arange(np.prod(shape), dtype=np.float32).reshape(shape) + np.float32(1)
+    session = SimpleNamespace(native=SimpleNamespace(get_field=lambda pool, name: data[name]))
+    layout = SimpleNamespace(fields=rows, dimensions=dims)
+    data['hpbl'] = np.zeros(5, np.float32)                       # cold start: the PBL scheme has not run
+    fields, provenance = background_fields(session, layout, ('qv', 'qc', 'tke'))
+    assert 'pblh' not in fields and 'pblh' not in provenance and fields['smois'].shape == (4, 4)
+    data['hpbl'] = np.array([310, 505, 1200, 80, 0], np.float32)   # set by the scheme (the last word is the dummy)
+    fields, provenance = background_fields(session, layout, ('qv', 'qc', 'tke'))
+    assert fields['pblh'].tolist() == [310, 505, 1200, 80] and 'HPBL' in provenance['pblh']
+    data['hpbl'] = np.array([310, 0, 1200, 80, 0], np.float32)     # set in part: still refused
+    with pytest.raises(ValueError, match='lacks positive scheme-owned HPBL'):
+        background_fields(session, layout, ('qv', 'qc', 'tke'))
 
 
 def test_rank_resume_continues_the_carried_clock_flags_and_owned_accumulators():

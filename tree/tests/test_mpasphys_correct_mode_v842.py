@@ -85,7 +85,7 @@ def test_correct_mode_receipt_names_its_applied_findings_and_named_gaps():
     config = resolve_namelist(deck(mode='correct', config_pbl_interval='00:12:00'))
     assert config.mode == 'correct'
     # YSU suite: no MYNN finding is active.  RP3 is active (config_frac_seaice defaults true) but its slots
-    # run native-cpu, which can never implement it: a named gap, not a refusal (coordinator 2026-10-14).
+    # run native-cpu, which can never implement it: a named gap, not a refusal (2026-10-14).
     assert config.corrections == {'RP6'}
     assert [(g.finding, g.slot, g.scheme, g.backend, g.owner) for g in config.gaps] == [
         ('RP3', 'seaice', 'sf_noah', 'native-cpu', 'p18-seaice'),
@@ -136,7 +136,7 @@ def declaring(**slots):
 def test_RP1_RP3_pristine_native_slots_are_named_gaps_not_refusals():
     config = resolve_namelist(deck('convection_permitting', mode='correct', skip='WB3'))
     # Native-cpu MYNN, sea ice and surface layer are pristine v8.4.2: RP1 and RP3 cannot be applied, so
-    # they are left out of the run whole and listed (coordinator 2026-10-14: default correct, never refuse).
+    # they are left out of the run whole and listed (2026-10-14: default correct, never refuse).
     assert config.corrections == frozenset()
     assert {(g.finding, g.slot): g.owner for g in config.gaps} == {
         ('RP1', 'pbl'): 'p12-bl-mynn', ('RP7', 'pbl'): 'p12-bl-mynn', ('RP3', 'seaice'): 'p18-seaice',

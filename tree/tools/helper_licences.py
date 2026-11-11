@@ -501,12 +501,12 @@ def main(argv: list[str] | None = None) -> int:
         notice = parse_notice(notice_bytes.decode("utf-8"))
         supplement_notice(notice, sets, engines, work)
         # The sealed engine NOTICE records both as first-party MIT despite
-        # their unchanged Cargo metadata. Release ruling 2026-10-20 accepts it.
+        # their unchanged Cargo metadata. They are accepted as first-party code.
         for name in ('grib-core', 'wrf-core'):
             key = (name, '0.1.0')
             if key in notice['inventory']:
                 notice['inventory'][key] = ('MIT', notice['inventory'][key][1])
-                notice['untexted'][key] = 'first-party MIT; sealed engine NOTICE, Vendored Rust crates; release ruling 2026-10-20'
+                notice['untexted'][key] = 'first-party MIT; sealed engine NOTICE, Vendored Rust crates'
         if '2.2' in notice['section_two']:
             notice['section_two']['2.2'] = (TREE / 'licenses/LICENSE-embedded-fonts-OFL-1.1.txt').read_text()
         text = render(engines, hashlib.sha256(notice_bytes).hexdigest(), notice, sets, work)

@@ -185,12 +185,13 @@ jobs:
         run: |
           cd /tmp
           set +e
-          out=$(/tmp/fresh/bin/gpuwm-hex render --history missing.nc --mesh missing.nc --out ./png 2>&1)
+          # Name an absent converter explicitly: whole wheels now carry the default converter.
+          out=$(/tmp/fresh/bin/gpuwm-hex render --convert-exe /tmp/absent-rw_mpas_convert --history missing.nc --mesh missing.nc --out ./png 2>&1)
           rc=$?
           set -e
           echo "$out"
           test "$rc" -eq 2 || { echo "expected rc 2 for a named refusal, got $rc"; exit 1; }
-          echo "$out" | grep -q "rw_mpas_convert not found" \
+          echo "$out" | grep -q -- "--convert-exe names /tmp/absent-rw_mpas_convert, which is not a file" \
             || { echo "the refusal did not name the missing converter"; exit 1; }
 
           set +e

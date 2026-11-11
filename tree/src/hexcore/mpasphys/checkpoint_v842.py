@@ -34,7 +34,8 @@ def persistent_names(config):
     for slot, scheme in (getattr(config, 'selectors', None) or {}).items():
         if not config.active(slot):
             continue
-        entry = (slots.get(slot, {}).get('cuda_entries') or {}).get(scheme) or {}
+        from .driver_v842 import slot_cuda_entry
+        entry = slot_cuda_entry(config, slots, slot, scheme) or {}
         if not entry.get('module'):
             continue
         declared = getattr(import_module('.' + entry['module'], __package__), 'PERSISTENT_FIELDS', None) or {}

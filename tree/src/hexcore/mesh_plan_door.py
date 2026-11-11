@@ -284,9 +284,9 @@ def add_mesh_plan_parser(commands: argparse._SubParsersAction) -> None:
 __all__ = ["add_mesh_plan_parser", "run_mesh_plan"]
 
 
-#: THE BREAKAGE THIS PREVENTS (U-H6, production run_fde6921eaf18b793, 2026-10-26; owner ruling 2026-10-23: "zoom
+#: THE BREAKAGE THIS PREVENTS (U-H6, production run_fde6921eaf18b793, 2026-10-26; zoom
 #: globes use premade circular VR meshes rotated to the user's point, never fresh mesh generation on the start
-#: path"): a zoom globe (120 -> 15 km, 2,000 km core at 40N 97W) on a new box generated its mesh with rw_mpas_mesh
+#: path): a zoom globe (120 -> 15 km, 2,000 km core at 40N 97W) on a new box generated its mesh with rw_mpas_mesh
 #: (16.6 s) because the library holds exact points only. A concentric cap family is the same mesh wherever its
 #: centre is, so the door rotates the family's template (centred at the moving door's TEMPLATE_CENTER and keyed in
 #: the prep store by its spec alone, so the bake's library runs stage it) to the point, as storm-following start

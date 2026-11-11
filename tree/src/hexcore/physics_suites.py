@@ -330,6 +330,7 @@ class PhysicsSelectionRefusal(ConfigurationRefusal):
     def __init__(self, refusals: Iterable[OptionRefusal], *, context: str) -> None:
         self.refusals = tuple(refusals)
         self._selection_context = context
+        self.context = context
         first = self.refusals[0]
         lines = "; ".join(item.line() for item in self.refusals)
         super().__init__(

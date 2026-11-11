@@ -473,7 +473,7 @@ test failed all 72 exact set comparisons; it authorizes no exclusion.
 
 At the time of that pristine witness, the adjacent
 `native-gfl-state-authority-proposal.patch` proposed initializing `ierrm(i)` beside
-`ierr(i)` in the fork's wrapper and remained unapplied pending the owner's ruling.
+`ierr(i)` in the fork's wrapper and remained unapplied until it was decided.
 The owner approved exactly that correction on 2026-10-14 07:45Z; its separately
 labelled strict authority is described below. The pristine witness remains
 unchanged. Captured-state substitution is diagnostic evidence, without
@@ -611,7 +611,7 @@ PUBLICATION SHA256
 The unchanged primary strict atmosphere completed 24 hours on MPI1 on the build host,
 March x1.2562, canonical four-soil input, 59 model levels, hrrrv5 with
 `sf_noahmp`, at the workflow's 60-second timestep and four acoustic substeps.
-All 21 selected table bodies match the pinned owner request, including its
+All 21 selected table bodies match the pinned request, including its
 GSL UGWP limb table and final strict TEMPO tables. The scientific namelist
 matches the owner; three stream ingress filename aliases are recorded.
 The actual native grid is the canonical fork soil4 static file; consume the
@@ -753,7 +753,7 @@ word is excluded.
 ### RRFS 44c0849 reference of record: the patched referee
 
 Claims against RRFS-MPAS 44c0849 use the **patched** referee, always labelled patched, never pristine: the pinned
-source and strict recipe plus exactly four owner-approved lines, each where native reads a value it never set.
+source and strict recipe plus exactly four approved lines, each where native reads a value it never set.
 
 | lines | file | ruling | why |
 |---|---|---|---|

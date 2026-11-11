@@ -1,4 +1,4 @@
-"""Correct mode at the forecast door and in the proof harness (coordinator ruling 2026-10-14).
+"""Correct mode at the forecast door and in the proof harness (2026-10-14).
 
 - A bare MPAS-suite door run resolves correct, lists its named gaps in the run record and prints them loudly.
 - ``--physics-mode exact`` gives the route, namelist text and receipt of the code before the switch.
@@ -318,7 +318,7 @@ def test_verify_mpas_runs_exact_when_the_deck_names_no_mode(tmp_path, monkeypatc
     # A proof run draws no detached map products inside the folder it compares (f073a2e1).
     assert argv[-1] == "--no-products"
     argv = argv[:-1]
-    # Every proof names strict kernel numerics (owner ruling 2026-10-16: fast is the door default).
+    # Every proof names strict kernel numerics (fast is the door default).
     assert argv[-2:] == ["--numerics", "strict"]
     argv = argv[:-2]
     # A deck naming no default backend keeps running the native referee it was written for.

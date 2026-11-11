@@ -60,6 +60,19 @@ selects YSU (`hexcore.global_door.default_step_cap`), so a bare
 `gpuwm-hex forecast` on these meshes takes 300 s on gpuwm 2.9.0 and says so on
 start; an explicit `--dt` or a namelist `config_dt` runs as given.
 
+TEMPO picked over an ArWen-route suite carries its own cap, 150 s
+(`microphysics_step_caps` in the table, `hexcore.global_door.microphysics_step_cap`).
+The forecast door's default step takes it, and an explicit `--dt` above it
+stops before the run and says why. On the 120 km globe (GFS 2026-11-09 00Z),
+TEMPO over `arwen_mpas_column` at the mesh's 600 s step stopped within 40
+minutes; at 300 s its rain water reached 0.16 kg/kg after an hour and was
+still growing; at 150 s it ran 6 h with rain water under 0.6 g/kg and
+reflectivity under 39 dBZ. The likely cause, not yet measured, is that the
+ArWen column steps TEMPO once over the whole model step where MPAS-A
+sub-steps its microphysics. The cap goes when the engine names the fix
+(`max_dt_retired_by_engine`). MPAS-A's own suites run TEMPO on the MPAS
+route and are not capped.
+
 Why: at long steps YSU puts single layers at the boundary-layer top that are
 5 to 25 K hotter than the layers above and below. On the 120 km globe over
 24 h that happened in 3.2 cells per frame at 600 s (worst +24 K), 0.5 at

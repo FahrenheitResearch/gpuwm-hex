@@ -29,12 +29,15 @@ TARGET = dict(microphysics='mp_thompson', convection='cu_grell_freitas',
 #: mp_thompson_aerosols (its native init_thompson_aerosols_forMPAS is ported in framework_init_v842),
 #: plus Kessler, the original Tiedtke and Kain-Fritsch (its cloud lifetime, update_convection_step1, is
 #: ResidentPhysicsGlue.update_convection_step1; nca = -100 and LUTAB are framework_init_v842/the slot's loader).
-#: Each was proven bitwise to native over 24 h on this glue before it entered the table.
+#: Each was proven bitwise to native over 24 h on this glue before it entered the table, except bl_kim_gwdo
+#: (MPAS PR #1409, which no MPAS release carries yet): module replay against native MMM 63c806d + PR #1409,
+#: 0 of 2,807,088 words different, plus one scored whole forecast (lanes/L2-omax-kim, 2026-11-09).
 RESIDENT_SCHEMES = dict(
     microphysics=('mp_thompson', 'mp_thompson_aerosols', 'mp_wsm6', 'mp_kessler'),
     convection=('cu_grell_freitas', 'cu_ntiedtke', 'cu_tiedtke', 'cu_kain_fritsch'),
     pbl=('bl_mynn', 'bl_ysu'),
-    gwdo=('bl_ysu_gwdo',),
+    # bl_kim_gwdo (MPAS PR #1409) runs the v8.4.2 YSU slot's resident binding (kim_gwdo_2026.bind_forecast).
+    gwdo=('bl_ysu_gwdo', 'bl_kim_gwdo'),
     radiation_lw=('rrtmg_lw',),
     radiation_sw=('rrtmg_sw',),
     cloudiness=('cld_fraction',),
